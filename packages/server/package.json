@@ -1,0 +1,11 @@
+{
+  "name": "@wowsync-dashboard/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local HTTP API: import endpoint, version-isolated character/snapshot queries, and static hosting for the built dashboard UI.",
+  "dependencies": {
+    "@wowsync-dashboard/core": "*",
+    "express": "^4.21.2"
+  }
+}
