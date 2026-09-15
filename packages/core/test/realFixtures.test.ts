@@ -29,6 +29,10 @@ const bromrikOlder = () => parseWowSyncExport(read("classic-era/bromrik-17891708
 const bromrikNewer = () => parseWowSyncExport(read("classic-era/bromrik-1789171621.wowsync.txt"));
 const ezallerOlder = () => parseWowSyncExport(read("retail/ezaller-1789477879.wowsync.txt"));
 const ezallerNewer = () => parseWowSyncExport(read("retail/ezaller-1789478317.wowsync.txt"));
+const voodanBeforeAH = () => parseWowSyncExport(read("tbc-anniversary/voodan-1789484723.wowsync.txt"));
+const voodanAfterAH = () => parseWowSyncExport(read("tbc-anniversary/voodan-1789492666.wowsync.txt"));
+const torahn = () => parseWowSyncExport(read("tbc-anniversary/torahn-1789492498.wowsync.txt"));
+const tenivard = () => parseWowSyncExport(read("tbc-anniversary/tenivard-1789492580.wowsync.txt"));
 
 // 1. Bromrik Classic Era routing
 test("[REAL] Bromrik's client (1.15.9) routes to classic-era", () => {
@@ -231,4 +235,70 @@ test("[REAL] location changes are captured as a fact", () => {
   assert.equal(diff.location.changed, true);
   assert.equal(diff.location.fromZone, "Dun Morogh");
   assert.equal(diff.location.toZone, "Anvilmar");
+});
+
+// --- Voodan before/after an Auction House run: real multi-snapshot history,
+// and the "observed fact != inferred event" principle. ---
+
+test("[REAL] Voodan's two real snapshots route to the same TBC Anniversary Dreamscythe character", () => {
+  const before = voodanBeforeAH();
+  const after = voodanAfterAH();
+  assert.equal(detectVersion(before.character), "tbc-anniversary");
+  assert.equal(before.character.realm, "Dreamscythe");
+  assert.equal(after.character.realm, "Dreamscythe");
+  assert.equal(before.character.name, after.character.name);
+});
+
+test("[REAL] Voodan's post-AH snapshot: gold, playtime, and inventory changed; level/XP/profession/trainer did not", () => {
+  const diff = diffSnapshots(voodanBeforeAH(), voodanAfterAH());
+  // Exact observed facts - not narrative labels.
+  assert.equal(diff.moneyCopper.delta, 1_101_858 - 1_065_796);
+  assert.equal(diff.playedSeconds.delta, 114_630 - 114_517);
+  assert.equal(diff.level.delta, 0);
+  assert.equal(diff.xp.delta, 0);
+  assert.equal(diff.location.changed, false); // both snapshots: Thunder Bluff
+  assert.equal(diff.professions.length, 0);
+  assert.equal(diff.trainerUnlocks.length, 0);
+  assert.equal(diff.equipment.length, 0);
+  assert.ok(diff.bagsItems.length > 0);
+});
+
+test("[REAL] Voodan's post-AH bag changes are exact quantities, not an inferred 'AH sale/purchase' label", () => {
+  const diff = diffSnapshots(voodanBeforeAH(), voodanAfterAH());
+  const byName = new Map(diff.bagsItems.map((i) => [i.name, i]));
+  assert.equal(byName.get("Small Blue Pouch")?.deltaQty, -1);
+  assert.equal(byName.get("Thin Kodo Leather")?.deltaQty, -1);
+  assert.equal(byName.get("Raptor Egg")?.deltaQty, 18);
+  assert.equal(byName.get("Robust Shoulders of Intellect")?.deltaQty, 1);
+  // The diff engine only ever reports quantities/facts - it has no concept
+  // of "purchase" or "sale" at all, so there is nothing to assert against
+  // for those (this test exists to document that the fixture drives real,
+  // asymmetric (some lost, some gained, net gold +) inventory/gold facts,
+  // exactly as WoWSync observed them).
+});
+
+// 19. Real Torahn/Tenivard recognition (previously untested - no real TBC data existed yet)
+test("[REAL] Torahn and Tenivard are recognized as real TBC Anniversary Dreamscythe characters", () => {
+  const t = torahn();
+  const n = tenivard();
+  assert.equal(detectVersion(t.character), "tbc-anniversary");
+  assert.equal(detectVersion(n.character), "tbc-anniversary");
+  assert.equal(t.character.realm, "Dreamscythe");
+  assert.equal(n.character.realm, "Dreamscythe");
+  assert.equal(t.character.name, "Torahn");
+  assert.equal(n.character.name, "Tenivard");
+});
+
+test("[REAL] Tenivard's never-observed bank/trainer stay UNKNOWN, not empty", () => {
+  const n = tenivard();
+  assert.equal(n.bank.status.state, "UNKNOWN");
+  assert.equal(n.trainer.status.state, "UNKNOWN");
+});
+
+test("[REAL] Torahn's trainer visit under an unresolved category is preserved, not discarded", () => {
+  const t = torahn();
+  assert.equal(t.trainer.status.state, "OBSERVED");
+  const unknownCategory = t.trainer.categories.find((c) => c.category === "UNKNOWN");
+  assert.ok(unknownCategory);
+  assert.equal(unknownCategory!.services.length, 7);
 });

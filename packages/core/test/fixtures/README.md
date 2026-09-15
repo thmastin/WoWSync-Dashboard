@@ -2,39 +2,52 @@
 
 ## Real gameplay fixtures
 
-`classic-era/` and `retail/` contain **real WOWSYNC v1 exports captured from
-actual WoW clients**, stored byte-for-byte as provided — nothing rewritten,
-normalized, or "corrected":
+`classic-era/`, `retail/`, and `tbc-anniversary/` contain **real WOWSYNC v1
+exports captured from actual WoW clients**, stored byte-for-byte as
+provided — nothing rewritten, normalized, or "corrected". Filenames encode
+`<character>-<Generated: unix timestamp>.wowsync.txt` so the capture order
+is obvious without opening the file.
 
-- `classic-era/bromrik-1789170870.wowsync.txt` — Bromrik, Defias Pillager,
-  Level 3, Classic Era client 1.15.9 build 69547.
-- `classic-era/bromrik-1789171621.wowsync.txt` — Bromrik, same character,
-  Level 4, captured ~12.5 minutes later. Together these are a real
-  snapshot-history pair (see `test/realFixtures.test.ts`).
-- `retail/ezaller-1789477879.wowsync.txt` — Ezaller, Kel'Thuzad, Level 78
-  Evoker, Retail client 12.1.0 build 69814.
-- `retail/ezaller-1789478317.wowsync.txt` — Ezaller, same character,
-  ~7 minutes later (gold, XP, and /played all advanced). Also a real
-  snapshot-history pair.
-- `tbc-anniversary/voodan-1789484723.wowsync.txt` — Voodan, Dreamscythe,
-  Level 16 Priest, TBC Anniversary client 2.5.6 build 69795. Pulled from a
-  live import the user made through the running app (not pasted into a
-  prompt), then saved here as the first real TBC Anniversary fixture. Its
-  `[CLASS]` trainer visit alone carries 180 observed services (all
-  `unavailable`) across 32 distinct required levels, plus three independent
-  profession trainer visits (Cooking, First Aid, Tailoring) and one
-  unresolved `[UNKNOWN]` visit — this is what drove the trainer
-  summarization work in `trainerSummary.ts` (see
-  `test/trainerSummary.test.ts`).
+- `classic-era/bromrik-{1789170870,1789171621}.wowsync.txt` — Bromrik,
+  Defias Pillager, Level 3 → 4, Classic Era client 1.15.9 build 69547.
+  ~12.5 minutes apart; a real snapshot-history pair.
+- `retail/ezaller-{1789477879,1789478317}.wowsync.txt` — Ezaller,
+  Kel'Thuzad, Level 78 Evoker, Retail client 12.1.0 build 69814. ~7 minutes
+  apart; gold/XP/`/played` all advance.
+- `retail/stoneharry-{1789486499,1789491879}.wowsync.txt` — Stoneharry,
+  **Thrall** (a different Retail realm than Ezaller's Kel'Thuzad) — real
+  proof that Retail's account-wide aggregation actually combines
+  characters across realms, not just a single-realm pass-through. Level
+  56 → 66.
+- `tbc-anniversary/voodan-{1789484723,1789492666}.wowsync.txt` — Voodan,
+  Dreamscythe, Level 16 Priest, client 2.5.6 build 69795. The second
+  snapshot was taken deliberately after an Auction House run — see
+  `test/realFixtures.test.ts` for what WoWSync actually observed changed
+  (gold +3g 60s 62c, `/played` +113s, five bag item quantity changes) and
+  what it did *not* claim (no "AH purchase/sale" label anywhere — the diff
+  engine only ever reports observed quantities). Voodan's `[CLASS]`
+  trainer visit alone carries 180 observed services across 32 required
+  levels, plus three profession trainer visits and one unresolved
+  `[UNKNOWN]` visit — this is what drove the trainer summarization work in
+  `trainerSummary.ts`.
+- `tbc-anniversary/torahn-1789492498.wowsync.txt` — Torahn, Dreamscythe,
+  Level 33 Shaman. Its `[TRAINERS]` section has a `[UNKNOWN]` category
+  with 7 services (a trainer visit whose category couldn't be resolved) —
+  preserved, not discarded.
+- `tbc-anniversary/tenivard-1789492580.wowsync.txt` — Tenivard,
+  Dreamscythe, Level 12 Mage. Bank and trainer both genuinely `UNKNOWN`
+  (never visited) — a real never-observed-storage test case.
 
-Filenames encode `<character>-<Generated: unix timestamp>.wowsync.txt` so
-the capture order is obvious without opening the file.
+All four TBC Anniversary characters are on the same realm (Dreamscythe),
+which is exactly why realm-scoped aggregation (`AccountFacts.realms`) was
+worth building — see `test/realmFacts.test.ts`, which validates realm
+isolation against this real roster and adds a synthetic second realm only
+to prove isolation (the real data alone can't demonstrate two *different*
+realms staying separate, since Dreamscythe is the only one captured so
+far).
 
-Torahn/Tenivard real fixtures are still pending — Voodan above is the only
-real TBC Anniversary character captured so far.
-
-These real fixtures already forced two genuine parser fixes that no amount
-of synthetic data had caught:
+These real fixtures already forced genuine bugs/gaps that no amount of
+synthetic data had caught:
 
 1. **Header framing.** `WoWSyncRender.lua`'s `S.Render` joins its entire
    output array — including the `WOWSYNC v1`, `Generated: …`, and
@@ -55,28 +68,27 @@ of synthetic data had caught:
    field separator, and pads a short row with unknown trailing fields
    instead of failing — a single space inside a real value ("Sinister
    Strike", "Finger 1") is never touched.
+4. **Level-linked itemRef churn** (diff engine, not the parser). See
+   `docs/ARCHITECTURE.md` — item matching keys on base item ID now, not
+   the full `itemRef`.
+5. **Profession coverage gaps.** Nothing in the real TBC roster has
+   Alchemy, Blacksmithing, Engineering, Herbalism, Jewelcrafting,
+   Leatherworking, or Tailoring... except Voodan does have Tailoring. The
+   point stands for the others: without a version-aware profession
+   catalog, "nobody has Alchemy" was indistinguishable from "we never
+   checked" — see `professionCatalog.ts` and `test/realmFacts.test.ts`.
 
 ## Synthetic fixtures
 
-`synthetic/` contains **generated, format-accurate but non-gameplay**
-fixtures, built from `fixtureBuilder.ts` (which implements the same
-escaping/field-order algorithm as `WoWSyncRender.lua`). They exist only to
-exercise code paths real fixtures don't happen to cover yet — right now,
-that's a second TBC Anniversary snapshot (for history/diff tests) since no
-real TBC capture exists. The character name (`Synthtest` on
-`PlaceholderRealm`) is deliberately not any of the user's real characters,
-so it can never be mistaken for real history.
-
-Additional synthetic exports built inline (not as files) inside
-`parser.test.ts`, `diff.test.ts`, `version.test.ts`, `identity.test.ts`,
-and `trainerSummary.test.ts` cover narrow parser/summarizer edge cases —
-unknown fields, partial/UNKNOWN combinations, malformed input,
-multi-category trainers, item variants, missing `requiredLevel`,
-Classic-Era/Retail-shaped trainer data — that are awkward or impossible to
-demonstrate with the limited real data on hand. Those are synthetic by
-construction and are treated as such; `trainerSummary.test.ts` always
-validates against the real Voodan CLASS/profession trainer data first.
-
-To regenerate the synthetic fixtures: `node test/fixtures/generate.ts`.
-Never regenerate over the real ones — there is no generator for those, by
-design.
+There is no longer a static synthetic *file* in this repo — the TBC
+Anniversary placeholder that used to stand in for missing real TBC data
+was removed once real Torahn/Voodan/Tenivard captures arrived. Synthetic
+exports now only ever exist as inline `buildWowSyncExport(...)` calls
+inside test files (`parser.test.ts`, `diff.test.ts`, `version.test.ts`,
+`identity.test.ts`, `trainerSummary.test.ts`, `accountFacts.test.ts`,
+`realmFacts.test.ts`) — used only for edge cases real data doesn't happen
+to demonstrate (a second Classic/TBC realm to prove isolation, an unknown
+`requiredLevel`, malformed input, an uncatalogued profession name, and
+similar). Character names in these are always obviously fake (e.g.
+`Ghost`, `Alpha`/`Beta`, `Odd`), never a name that could be mistaken for
+real history.

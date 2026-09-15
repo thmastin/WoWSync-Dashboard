@@ -195,7 +195,10 @@ test("[SYNTHETIC] a character whose professions were never observed is UNKNOWN, 
     const facts = store.buildAccountFacts("classic-era", FIXED_NOW);
     assert.equal(facts.professions.byCharacter[0].status, "UNKNOWN");
     assert.equal(facts.professions.byCharacter[0].professions.length, 0);
-    assert.equal(facts.professions.coverage.length, 0);
+    // Every catalog profession is "unknown" (not "none") - we can't rule out
+    // Ghost having any of them since their profession state was never observed.
+    assert.ok(facts.professions.coverage.length > 0);
+    assert.ok(facts.professions.coverage.every((c) => c.status === "unknown"));
   } finally {
     store.close();
   }
@@ -209,6 +212,10 @@ test("[SYNTHETIC] an observed-but-empty professions section is distinct from UNK
     const facts = store.buildAccountFacts("classic-era", FIXED_NOW);
     assert.equal(facts.professions.byCharacter[0].status, "OBSERVED");
     assert.equal(facts.professions.byCharacter[0].professions.length, 0);
+    // Ghost's professions WERE observed (just empty), so every catalog
+    // profession is confidently "none", not "unknown".
+    assert.ok(facts.professions.coverage.length > 0);
+    assert.ok(facts.professions.coverage.every((c) => c.status === "none"));
   } finally {
     store.close();
   }

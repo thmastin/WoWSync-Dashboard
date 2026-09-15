@@ -1,8 +1,8 @@
 // End-to-end sanity check against saved fixture files (not the in-memory
 // builder) — this is closer to what actually happens when a user pastes a
-// .txt export into the app. Uses REAL gameplay fixtures for Classic Era
-// (Bromrik) and Retail (Ezaller); TBC Anniversary uses the labeled
-// synthetic placeholder pending real captures (see fixtures/README.md).
+// .txt export into the app. Uses REAL gameplay fixtures throughout:
+// Classic Era (Bromrik), Retail (Ezaller), and TBC Anniversary
+// (Torahn/Voodan/Tenivard, all on Dreamscythe).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -69,20 +69,25 @@ test("[REAL] Bromrik (Classic Era) and Ezaller (Retail) land in isolated version
   }
 });
 
-test("[SYNTHETIC placeholder] the TBC Anniversary placeholder stays isolated from the real Classic Era/Retail data", () => {
+test("[REAL] the full real TBC Anniversary Dreamscythe roster imports cleanly and stays isolated from Classic Era/Retail", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(read("classic-era/bromrik-1789170870.wowsync.txt"));
     store.importSnapshot(read("retail/ezaller-1789477879.wowsync.txt"));
-    store.importSnapshot(read("synthetic/tbc-anniversary-placeholder-01.txt"));
-    store.importSnapshot(read("synthetic/tbc-anniversary-placeholder-02.txt"));
+    store.importSnapshot(read("tbc-anniversary/voodan-1789484723.wowsync.txt"));
+    store.importSnapshot(read("tbc-anniversary/voodan-1789492666.wowsync.txt"));
+    store.importSnapshot(read("tbc-anniversary/torahn-1789492498.wowsync.txt"));
+    store.importSnapshot(read("tbc-anniversary/tenivard-1789492580.wowsync.txt"));
 
     const tbc = store.listCharacters("tbc-anniversary");
-    assert.equal(tbc.length, 1);
-    assert.equal(tbc[0].name, "Synthtest");
-    assert.equal(tbc[0].snapshotCount, 2);
+    assert.equal(tbc.length, 3);
+    const byName = new Map(tbc.map((c) => [c.name, c]));
+    assert.equal(byName.get("Voodan")?.snapshotCount, 2);
+    assert.equal(byName.get("Torahn")?.snapshotCount, 1);
+    assert.equal(byName.get("Tenivard")?.snapshotCount, 1);
+    assert.ok(tbc.every((c) => c.realm === "Dreamscythe"));
 
-    // Real version spaces are untouched by the synthetic placeholder.
+    // Real version spaces are untouched by the TBC roster.
     assert.equal(store.listCharacters("classic-era").length, 1);
     assert.equal(store.listCharacters("retail").length, 1);
   } finally {

@@ -9,14 +9,29 @@
 // changes, and the current time) is handed in. The same input always
 // produces the same output.
 //
-// Hard rule throughout: UNKNOWN is never turned into zero/empty. A
+// Hard rule throughout: UNKNOWN is never turned into zero/empty/none. A
 // character whose bank was never observed contributes nothing to
 // inventory totals and is listed separately as "unknown", not counted as
 // having an empty bank. A profession section that is UNKNOWN is not the
-// same as "no professions" (which is what `noneMessage` represents).
+// same as "no professions" (which is what `noneMessage`/an empty entries
+// list on an OBSERVED section represents) — and a profession nobody has
+// is only ever "none" (not "unknown") once every relevant character's
+// profession state has actually been observed.
+//
+// Realm scoping: Classic Era and TBC Anniversary have no cross-realm
+// economy (no shared bank/currency between realms), so gold/playtime/
+// professions/inventory are aggregated per-realm by default for those
+// versions (`AccountFacts.realms`), never silently combined across
+// realms. Retail's account-wide totals (`AccountFacts.gold` etc. at the
+// top level) remain the primary view for Retail — see
+// REALM_PARTITIONED_VERSIONS. The top-level version-wide totals are still
+// computed for every version (a broader view is available if wanted
+// later); they just aren't the recommended default for a multi-realm
+// Classic/TBC account.
 
 import { baseItemId, type SnapshotDiff } from "./diff.ts";
 import { classifyFreshness, type Freshness } from "./freshness.ts";
+import { professionCatalogForVersion } from "./professionCatalog.ts";
 import type { ParsedSnapshot, SectionState, VersionOrUnknown } from "./types.ts";
 import type { RecentChange, StoredCharacterSummary } from "./store.ts";
 
@@ -131,14 +146,22 @@ export interface CharacterProfessions {
   professions: CharacterProfessionEntry[];
 }
 
+/**
+ * "covered": at least one character in this group has the profession.
+ * "none": every character's profession state has been observed, and none of them have it.
+ * "unknown": at least one character's profession state was never observed, so absence can't be established.
+ */
+export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
+
 export interface ProfessionCoverageEntry {
   profession: string;
+  status: ProfessionCoverageStatus;
   characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
 }
 
 export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
-  /** The same data regrouped by profession name, across all characters with known data. */
+  /** The version's full profession catalog (see professionCatalog.ts), each marked covered/none/unknown. Sorted alphabetically. Empty catalog (unknown-version) degrades to "only what's observed" — see buildProfessionCoverage. */
   coverage: ProfessionCoverageEntry[];
 }
 
@@ -165,7 +188,7 @@ export interface InventoryAggregateEntry {
 }
 
 export interface InventoryFacts {
-  /** Every distinct known item, aggregated across all characters' known (non-UNKNOWN) bags/bank. Sorted by name. */
+  /** Every distinct known item, aggregated across this group's characters' known (non-UNKNOWN) bags/bank. Sorted by name. */
   items: InventoryAggregateEntry[];
   /** Characters whose bank has never been observed — their holdings are absent from `items`, not counted as zero. */
   unknownBank: { identityKey: string; name: string }[];
@@ -213,13 +236,23 @@ export interface FreshnessSummary {
 }
 
 // ---------------------------------------------------------------------
-// Top-level AccountFacts
+// Realm grouping
 // ---------------------------------------------------------------------
 
-export interface AccountFacts {
-  version: VersionOrUnknown;
-  /** Wall-clock time these facts were computed at — the reference point freshness was classified against. Passed in, never read internally. */
-  generatedAt: number;
+/**
+ * Classic Era and TBC Anniversary realms are economically isolated from
+ * each other (no shared bank/currency, no cross-realm mail/AH) — gold,
+ * inventory, and profession coverage must never be silently combined
+ * across them. Retail's Warband-era account-wide sharing makes
+ * version-wide (not realm-partitioned) the right default there instead.
+ * `unknown-version` is treated like Retail: we don't have a confident
+ * basis for asserting realm isolation rules on a client we didn't
+ * recognize.
+ */
+const REALM_PARTITIONED_VERSIONS = new Set<VersionOrUnknown>(["classic-era", "tbc-anniversary"]);
+
+export interface RealmGroup {
+  realm: string;
   characterCount: number;
   characters: CharacterFacts[];
   gold: GoldFacts;
@@ -227,8 +260,30 @@ export interface AccountFacts {
   progression: ProgressionFacts;
   professions: ProfessionFacts;
   inventory: InventoryFacts;
+}
+
+// ---------------------------------------------------------------------
+// Top-level AccountFacts
+// ---------------------------------------------------------------------
+
+export interface AccountFacts {
+  version: VersionOrUnknown;
+  /** Wall-clock time these facts were computed at — the reference point freshness was classified against. Passed in, never read internally. */
+  generatedAt: number;
+  /** Which grouping is the safe/recommended default for this version's UI: realm-partitioned (Classic Era/TBC Anniversary) or account-wide (Retail/unknown-version). */
+  aggregationScope: "realm" | "account-wide";
+  characterCount: number;
+  characters: CharacterFacts[];
+  /** Version-wide totals (all realms combined). Always computed — a broader view stays available even when `aggregationScope` is "realm" — but for a multi-realm Classic/TBC account, prefer `realms` for anything gold/inventory-related. */
+  gold: GoldFacts;
+  playtime: PlaytimeFacts;
+  progression: ProgressionFacts;
+  professions: ProfessionFacts;
+  inventory: InventoryFacts;
   recentChanges: AccountChangeSummary[];
   freshness: FreshnessSummary;
+  /** Populated (one entry per distinct realm) for realm-partitioned versions; empty for account-wide versions. */
+  realms: RealmGroup[];
 }
 
 export interface AccountFactsInput {
@@ -262,10 +317,12 @@ function aggregateInventorySection(
   }
 }
 
-export function buildAccountFacts(input: AccountFactsInput, now: number): AccountFacts {
-  const { version, characters, latestParsed, diffs, meaningfulChanges } = input;
-
-  const characterFacts: CharacterFacts[] = characters.map((c) => {
+function buildCharacterFacts(
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+  now: number,
+): CharacterFacts[] {
+  return characters.map((c) => {
     const parsed = latestParsed.get(c.identityKey);
     const xp = parsed?.character.xp;
     const xpMax = parsed?.character.xpMax;
@@ -291,28 +348,34 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       bankStatus: parsed?.bank.status.state ?? "UNKNOWN",
     };
   });
+}
 
-  // --- Gold ---
-  const goldByCharacter: CharacterGold[] = characters.map((c) => ({
+function buildGoldFacts(characters: StoredCharacterSummary[], diffs: Map<string, SnapshotDiff>): GoldFacts {
+  const byCharacter: CharacterGold[] = characters.map((c) => ({
     identityKey: c.identityKey,
     name: c.name,
     goldCopper: c.latestMoneyCopper,
     deltaCopper: diffs.get(c.identityKey)?.moneyCopper.delta,
   }));
-  const knownGold = goldByCharacter.filter((g) => g.goldCopper !== undefined);
-  const gold: GoldFacts = {
-    totalKnownCopper: knownGold.reduce((sum, g) => sum + (g.goldCopper ?? 0), 0),
-    charactersWithKnownGold: knownGold.length,
-    charactersWithUnknownGold: characters.length - knownGold.length,
-    byCharacter: goldByCharacter,
-    largestRecentChanges: goldByCharacter
+  const known = byCharacter.filter((g) => g.goldCopper !== undefined);
+  return {
+    totalKnownCopper: known.reduce((sum, g) => sum + (g.goldCopper ?? 0), 0),
+    charactersWithKnownGold: known.length,
+    charactersWithUnknownGold: characters.length - known.length,
+    byCharacter,
+    largestRecentChanges: byCharacter
       .filter((g) => g.deltaCopper !== undefined && g.deltaCopper !== 0)
       .sort((a, b) => Math.abs(b.deltaCopper ?? 0) - Math.abs(a.deltaCopper ?? 0))
       .slice(0, 5),
   };
+}
 
-  // --- Playtime ---
-  const playtimeByCharacter: CharacterPlaytime[] = characters.map((c) => {
+function buildPlaytimeFacts(
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+  diffs: Map<string, SnapshotDiff>,
+): PlaytimeFacts {
+  const byCharacter: CharacterPlaytime[] = characters.map((c) => {
     const parsed = latestParsed.get(c.identityKey);
     const diff = diffs.get(c.identityKey);
     return {
@@ -324,15 +387,20 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       deltaLevelPlayedSeconds: diff?.levelPlayedSeconds.delta,
     };
   });
-  const knownPlaytime = playtimeByCharacter.filter((p) => p.playedSeconds !== undefined);
-  const playtime: PlaytimeFacts = {
-    totalKnownPlayedSeconds: knownPlaytime.reduce((sum, p) => sum + (p.playedSeconds ?? 0), 0),
-    charactersWithKnownPlaytime: knownPlaytime.length,
-    byCharacter: playtimeByCharacter,
+  const known = byCharacter.filter((p) => p.playedSeconds !== undefined);
+  return {
+    totalKnownPlayedSeconds: known.reduce((sum, p) => sum + (p.playedSeconds ?? 0), 0),
+    charactersWithKnownPlaytime: known.length,
+    byCharacter,
   };
+}
 
-  // --- Progression ---
-  const progressionByCharacter: CharacterProgression[] = characters.map((c) => {
+function buildProgressionFacts(
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+  diffs: Map<string, SnapshotDiff>,
+): ProgressionFacts {
+  const byCharacter: CharacterProgression[] = characters.map((c) => {
     const parsed = latestParsed.get(c.identityKey);
     const xp = parsed?.character.xp;
     const xpMax = parsed?.character.xpMax;
@@ -347,7 +415,7 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       levelDeltaSincePrevious: diffs.get(c.identityKey)?.level.delta,
     };
   });
-  const recentLevelUps: LevelUp[] = progressionByCharacter
+  const recentLevelUps: LevelUp[] = byCharacter
     .filter((p) => p.levelDeltaSincePrevious !== undefined && p.levelDeltaSincePrevious > 0 && p.level !== undefined)
     .map((p) => ({
       identityKey: p.identityKey,
@@ -355,15 +423,19 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       fromLevel: p.level! - p.levelDeltaSincePrevious!,
       toLevel: p.level!,
     }));
-  const knownXpPercent = progressionByCharacter.filter((p) => p.xpPercent !== undefined);
+  const knownXpPercent = byCharacter.filter((p) => p.xpPercent !== undefined);
   const closestToNextLevel =
     knownXpPercent.length > 0
       ? knownXpPercent.reduce((best, p) => (p.xpPercent! > best.xpPercent! ? p : best))
       : undefined;
-  const progression: ProgressionFacts = { byCharacter: progressionByCharacter, recentLevelUps, closestToNextLevel };
+  return { byCharacter, recentLevelUps, closestToNextLevel };
+}
 
-  // --- Professions ---
-  const professionsByCharacter: CharacterProfessions[] = characters.map((c) => {
+function buildProfessionsByCharacter(
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+): CharacterProfessions[] {
+  return characters.map((c) => {
     const section = latestParsed.get(c.identityKey)?.professions;
     return {
       identityKey: c.identityKey,
@@ -372,20 +444,51 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       professions: (section?.entries ?? []).map((e) => ({ name: e.name, skill: e.skill, maxSkill: e.maxSkill })),
     };
   });
-  const coverageMap = new Map<string, ProfessionCoverageEntry["characters"]>();
-  for (const cp of professionsByCharacter) {
+}
+
+/**
+ * Builds catalog-aware coverage: every profession in `catalog` is marked
+ * covered/none/unknown per the rules documented on ProfessionCoverageStatus.
+ * Any observed profession NOT in the catalog (unexpected/uncatalogued
+ * name) is still appended as "covered" — never silently dropped.
+ */
+function buildProfessionCoverage(catalog: string[], byCharacter: CharacterProfessions[]): ProfessionCoverageEntry[] {
+  const anyUnknown = byCharacter.some((c) => c.status === "UNKNOWN");
+  const byProfession = new Map<string, ProfessionCoverageEntry["characters"]>();
+  for (const cp of byCharacter) {
     for (const prof of cp.professions) {
-      const list = coverageMap.get(prof.name) ?? [];
+      const list = byProfession.get(prof.name) ?? [];
       list.push({ identityKey: cp.identityKey, name: cp.name, skill: prof.skill, maxSkill: prof.maxSkill });
-      coverageMap.set(prof.name, list);
+      byProfession.set(prof.name, list);
     }
   }
-  const coverage: ProfessionCoverageEntry[] = [...coverageMap.entries()]
-    .map(([profession, chars]) => ({ profession, characters: chars }))
-    .sort((a, b) => a.profession.localeCompare(b.profession));
-  const professions: ProfessionFacts = { byCharacter: professionsByCharacter, coverage };
+  const catalogSet = new Set(catalog);
+  const entries: ProfessionCoverageEntry[] = catalog.map((profession) => {
+    const characters = byProfession.get(profession) ?? [];
+    if (characters.length > 0) return { profession, status: "covered", characters };
+    return { profession, status: anyUnknown ? "unknown" : "none", characters: [] };
+  });
+  // Observed professions outside the catalog (e.g. an unrecognized name) are never dropped.
+  for (const [profession, characters] of byProfession) {
+    if (!catalogSet.has(profession)) entries.push({ profession, status: "covered", characters });
+  }
+  return entries.sort((a, b) => a.profession.localeCompare(b.profession));
+}
 
-  // --- Inventory ---
+function buildProfessionFacts(
+  version: VersionOrUnknown,
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+): ProfessionFacts {
+  const byCharacter = buildProfessionsByCharacter(characters, latestParsed);
+  const coverage = buildProfessionCoverage(professionCatalogForVersion(version), byCharacter);
+  return { byCharacter, coverage };
+}
+
+function buildInventoryFacts(
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+): InventoryFacts {
   const itemMap = new Map<string, InventoryAggregateEntry>();
   const unknownBank: InventoryFacts["unknownBank"] = [];
   const unknownBags: InventoryFacts["unknownBags"] = [];
@@ -403,14 +506,44 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
       aggregateInventorySection(c.identityKey, c.name, "bank", parsed.bank, itemMap);
     }
   }
-  const inventory: InventoryFacts = {
+  return {
     items: [...itemMap.values()].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")),
     unknownBank,
     unknownBags,
     hasUnknownStorage: unknownBank.length > 0 || unknownBags.length > 0,
   };
+}
 
-  // --- Recent account-level changes ---
+function buildRealmGroup(
+  realm: string,
+  version: VersionOrUnknown,
+  characters: StoredCharacterSummary[],
+  latestParsed: Map<string, ParsedSnapshot>,
+  diffs: Map<string, SnapshotDiff>,
+  now: number,
+): RealmGroup {
+  return {
+    realm,
+    characterCount: characters.length,
+    characters: buildCharacterFacts(characters, latestParsed, now),
+    gold: buildGoldFacts(characters, diffs),
+    playtime: buildPlaytimeFacts(characters, latestParsed, diffs),
+    progression: buildProgressionFacts(characters, latestParsed, diffs),
+    professions: buildProfessionFacts(version, characters, latestParsed),
+    inventory: buildInventoryFacts(characters, latestParsed),
+  };
+}
+
+export function buildAccountFacts(input: AccountFactsInput, now: number): AccountFacts {
+  const { version, characters, latestParsed, diffs, meaningfulChanges } = input;
+
+  const characterFacts = buildCharacterFacts(characters, latestParsed, now);
+  const gold = buildGoldFacts(characters, diffs);
+  const playtime = buildPlaytimeFacts(characters, latestParsed, diffs);
+  const progression = buildProgressionFacts(characters, latestParsed, diffs);
+  const professions = buildProfessionFacts(version, characters, latestParsed);
+  const inventory = buildInventoryFacts(characters, latestParsed);
+
   const recentChanges: AccountChangeSummary[] = meaningfulChanges.map((c) => ({
     identityKey: c.identityKey,
     characterName: c.characterName,
@@ -427,7 +560,6 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
     trainerUnlocked: c.diff.trainerUnlocks.length > 0,
   }));
 
-  // --- Freshness ---
   const freshnessByCharacter = characterFacts.map((c) => ({
     identityKey: c.identityKey,
     name: c.name,
@@ -441,9 +573,27 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
     byCharacter: freshnessByCharacter,
   };
 
+  const aggregationScope: AccountFacts["aggregationScope"] = REALM_PARTITIONED_VERSIONS.has(version)
+    ? "realm"
+    : "account-wide";
+
+  let realms: RealmGroup[] = [];
+  if (aggregationScope === "realm") {
+    const byRealm = new Map<string, StoredCharacterSummary[]>();
+    for (const c of characters) {
+      const list = byRealm.get(c.realm) ?? [];
+      list.push(c);
+      byRealm.set(c.realm, list);
+    }
+    realms = [...byRealm.entries()]
+      .map(([realm, realmCharacters]) => buildRealmGroup(realm, version, realmCharacters, latestParsed, diffs, now))
+      .sort((a, b) => a.realm.localeCompare(b.realm));
+  }
+
   return {
     version,
     generatedAt: now,
+    aggregationScope,
     characterCount: characters.length,
     characters: characterFacts,
     gold,
@@ -453,5 +603,6 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
     inventory,
     recentChanges,
     freshness,
+    realms,
   };
 }
