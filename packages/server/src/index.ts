@@ -87,6 +87,20 @@ app.get("/api/versions/:version/account-facts", (req, res) => {
   res.json({ facts: store.buildAccountFacts(version) });
 });
 
+// The canonical "Export Dashboard Context" payload — all three known WoW
+// versions in one deterministic JSON document. This is the exact object
+// the web UI's Copy/Download buttons serialize; there is no separate
+// representation for the API vs. the UI. `?now=<unix seconds>` is an
+// optional override (mainly for reproducible debugging/scripting) —
+// omitted, it defaults to the real wall clock.
+app.get("/api/account-context", (req, res) => {
+  const now = req.query.now !== undefined ? Number(req.query.now) : undefined;
+  if (now !== undefined && !Number.isFinite(now)) {
+    return res.status(400).json({ error: `Invalid "now" query parameter: must be a Unix timestamp in seconds.` });
+  }
+  res.json(store.buildAccountContext(now));
+});
+
 app.get("/api/characters/:identityKey", (req, res) => {
   const character = store.getCharacter(req.params.identityKey);
   if (!character) return res.status(404).json({ error: "Character not found" });
