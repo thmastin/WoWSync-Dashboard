@@ -75,16 +75,18 @@ garbage.
 
 `packages/core/test/fixtures/classic-era/`, `.../retail/`, and
 `.../tbc-anniversary/` contain real WOWSYNC v1 exports captured from actual
-clients — Classic Era (Bromrik), Retail (Ezaller), and TBC Anniversary
-(Voodan) — stored byte-for-byte. They caught genuine bugs no amount of
-synthetic data did — see `packages/core/test/fixtures/README.md` for the
-details (a header-framing bug, addon-version skew between installs,
-copy/paste whitespace mangling, and a diff-engine item-matching issue).
-Voodan's real trainer data (180 services on one class-trainer visit alone)
-is also what drove the trainer presentation redesign — see "Trainer
-presentation" below. Torahn/Tenivard real fixtures are still pending; a
-clearly-labeled synthetic placeholder (`fixtures/synthetic/`) fills any
-remaining TBC Anniversary test gaps.
+clients — Classic Era (Bromrik), Retail (Ezaller and Stoneharry, on two
+different realms), and TBC Anniversary (Torahn, Voodan, and Tenivard, all
+on Dreamscythe) — stored byte-for-byte. They caught genuine bugs no
+amount of synthetic data did — see `packages/core/test/fixtures/README.md`
+for the details (a header-framing bug, addon-version skew between
+installs, copy/paste whitespace mangling, a diff-engine item-matching
+issue, and gaps in profession coverage). Voodan's real trainer data (180
+services on one class-trainer visit alone) is also what drove the trainer
+presentation redesign — see "Trainer presentation" below. There is no
+synthetic placeholder fixture file anymore; every WoW version now has real
+captures, and any remaining synthetic data lives only as narrow inline
+edge cases inside the test files themselves.
 
 ## Trainer presentation
 
@@ -121,6 +123,24 @@ say "known total," never implying that's necessarily everything you own.
 A character not seen in a while is flagged **stale** rather than shown as
 if its last snapshot were current — see `packages/core/src/freshness.ts`
 for the (documented, 3-day) threshold.
+
+**Realm scoping.** Classic Era and TBC Anniversary characters on
+different realms don't share an economy — no shared bank, no shared
+currency — so gold/playtime/professions/inventory are scoped **per
+realm** by default there (a "Realm:" selector appears whenever a version
+has one). Retail, where Warband-era account-wide sharing is real,
+continues to aggregate across realms — confirmed with actual data: the
+real Ezaller (Kel'Thuzad) and Stoneharry (Thrall) characters, on two
+different Retail realms, correctly combine into one account-wide total.
+
+**Profession coverage** shows both what's covered *and* what isn't, using
+a version-aware profession catalog (`packages/core/src/professionCatalog.ts`)
+rather than just listing whatever happens to be observed. A profession
+nobody has is either **none** (every relevant character's professions
+were actually observed, and confirmed none of them has it) or **unknown**
+(at least one character's professions were never observed, so absence
+can't be established) — collapsed under a compact "N not covered" toggle
+so it doesn't overwhelm the page.
 
 ## Snapshot history
 

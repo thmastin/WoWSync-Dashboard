@@ -74,9 +74,13 @@ Dashboard UI                   packages/web (React/Vite)
   - `freshness.ts` — the single source of truth for the recent/stale/
     unknown convention (see "Freshness convention" below). `now` is
     always a parameter, never read from the system clock internally.
+  - `professionCatalog.ts` — the version-aware profession list used to
+    tell "nobody has this profession" (a fact) apart from "we never
+    checked" (see "None vs. unknown" below).
   - `accountFacts.ts` — the deterministic account-level facts layer (see
-    "AccountFacts" below). Pure: takes already-fetched characters/
-    snapshots/diffs and a `now` value, returns structured facts.
+    "AccountFacts" and "Realm scoping" below). Pure: takes already-fetched
+    characters/snapshots/diffs and a `now` value, returns structured
+    facts, realm-partitioned where that's the safe default.
   - `store.ts` / `sqliteStore.ts` — the storage abstraction and its
     SQLite implementation. `SnapshotStore` is the seam: another storage
     engine could implement it without touching the importer, diff
@@ -240,8 +244,10 @@ them. It covers:
 - **Progression** — per-character level/XP/XP-percent, level deltas (only
   when 2+ snapshots exist — never estimated from one), recent level-ups,
   and the character closest to its next level (by known XP percent only).
-- **Professions** — per-character list plus an account-wide view regrouped
-  by profession name across characters.
+- **Professions** — per-character list plus a *catalog-aware* coverage
+  view: every profession that actually exists in the version's ruleset
+  (`professionCatalog.ts`) is marked `covered` / `none` / `unknown` (see
+  "None vs. unknown" below), not just the ones somebody happens to have.
 - **Inventory** — every known item aggregated by base item ID (reusing
   `diff.ts`'s `baseItemId()` — never the full, level-linked `itemRef`)
   across every character's *known* bags/bank, plus a `searchInventory()`
@@ -277,6 +283,76 @@ from-the-total. This is enforced, not just intended:
 `packages/core/test/accountFacts.test.ts` has a synthetic-fixture test for
 each of these cases specifically (unknown gold, unknown bank, unknown
 professions, insufficient history), alongside the real-data tests.
+
+## None vs. unknown (profession coverage)
+
+Before this milestone, `ProfessionFacts.coverage` only ever listed
+professions somebody actually had — there was no way to tell "my TBC
+roster covers Mining/Skinning/Tailoring/Enchanting/Cooking/First Aid/
+Fishing" from "my roster also has zero Alchemists" (the latter is a real,
+useful fact; the former just silently omits Alchemy). `professionCatalog.ts`
+fixes this with a version-aware, hardcoded (not database-driven) list of
+every profession that exists in that version's ruleset — safe to hardcode
+because Classic Era and TBC Anniversary are frozen rulesets, not moving
+targets (Jewelcrafting is TBC-only, Inscription/Archaeology don't exist
+yet, First Aid is Retail-only-if-your-expansion-still-has-it — the real
+Ezaller/Stoneharry captures corroborate that modern Retail doesn't).
+
+For a given scope (a realm, or the whole account for Retail),
+`buildProfessionCoverage()` classifies every catalog profession as:
+
+- **`covered`** — at least one character in scope has it (skill/max shown,
+  every character listed, never combined into a meaningless sum).
+- **`none`** — every character in scope has an `OBSERVED`/`LAST_SEEN`
+  professions section, and none of them has it. This is a fact, not a
+  guess: we've checked everyone who could plausibly have it.
+- **`unknown`** — at least one character's professions were never
+  observed, so absence can't be established. `unknown` never quietly
+  becomes `none` just because nobody currently covers it.
+
+An observed profession *not* in the catalog (an unrecognized name) is
+still appended as `covered` — the catalog only adds facts, it never
+suppresses real data. `unknown-version` has no catalog at all (we don't
+know enough about an unrecognized client to assert "nobody has X"), so
+its coverage degrades to "only what's actually observed", matching the
+pre-catalog behavior exactly.
+
+## Realm scoping
+
+Classic Era and TBC Anniversary realms are economically isolated from
+each other — no shared bank, no shared currency, no cross-realm mail or
+auction house. Retail characters, by contrast, can genuinely share
+resources across realms today (Warband bank/currencies). `AccountFacts`
+reflects this difference directly rather than applying one rule
+everywhere:
+
+- `AccountFacts.aggregationScope` is `"realm"` for Classic Era/TBC
+  Anniversary and `"account-wide"` for Retail/`unknown-version`
+  (`REALM_PARTITIONED_VERSIONS` in `accountFacts.ts`).
+- When `"realm"`, `AccountFacts.realms` holds one `RealmGroup` per
+  distinct realm actually present in the data — each with its own gold/
+  playtime/progression/professions/inventory, computed only from that
+  realm's characters. Two characters on different Classic/TBC realms
+  never contribute to the same `RealmGroup`, even though they share a
+  `version`.
+- The top-level `gold`/`playtime`/`professions`/`inventory` fields are
+  still computed for every version (a broader, all-realms view stays
+  available if wanted later) — they're just not the recommended default
+  for a multi-realm Classic/TBC account. The web app's `scopedFacts.ts`
+  picks `realms` for realm-partitioned versions and the top-level fields
+  for account-wide ones, so every view (Overview/Characters/Economy)
+  automatically renders the correct scope without needing its own
+  per-version logic.
+
+This is validated against real, not synthetic, data on both sides: the
+real TBC Anniversary roster (Torahn/Voodan/Tenivard, all on Dreamscythe)
+proves realm-scoped totals work; the real Retail roster (Ezaller on
+Kel'Thuzad, Stoneharry on Thrall — two actually-different realms) proves
+Retail's account-wide total genuinely combines across realms rather than
+just passing a single realm through unchanged. A synthetic second
+Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
+thing today's real data can't: proving two *different* Classic/TBC realms
+stay isolated, since only one has been captured so far.
 
 ## Freshness convention
 
