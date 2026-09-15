@@ -71,14 +71,40 @@ Malformed input fails with a specific message (e.g. "missing `[END]`" or
 "missing required section: BANK") rather than silently importing partial
 garbage.
 
+## Real fixtures
+
+`packages/core/test/fixtures/classic-era/` and `.../retail/` contain real
+WOWSYNC v1 exports captured from an actual Classic Era client (Bromrik)
+and an actual Retail client (Ezaller), stored byte-for-byte. They caught
+genuine bugs no amount of synthetic data did — see
+`packages/core/test/fixtures/README.md` for the details (a header-framing
+bug, addon-version skew between installs, and copy/paste whitespace
+mangling). `tbc-anniversary/` real fixtures are pending — WoW servers were
+down while this was built, so that directory stays empty rather than being
+filled with synthetic data pretending to be real history. A clearly-labeled
+synthetic placeholder (`fixtures/synthetic/`) stands in for TBC Anniversary
+in tests until real captures arrive.
+
 ## Snapshot history
 
 Every import adds a new snapshot; nothing is overwritten. This is what
 lets the dashboard eventually answer things like "how long did it take to
 get from level 20 to 30?" using the addon's raw `PlayedSeconds` /
 `LevelPlayedSeconds` fields — the dashboard computes all derived metrics
-(time played, gold gained, skill deltas) deterministically; it never asks
-an LLM to do arithmetic.
+(time played, gold gained, XP, skill deltas, location changes) deterministically;
+it never asks an LLM to do arithmetic. A snapshot history table on each
+character's detail page shows every captured snapshot with level, gold,
+`/played`, and zone at that point in time.
+
+## Future automatic snapshot ingestion
+
+The addon may eventually capture snapshots automatically (on login, etc.)
+and write them to `SavedVariables` without a manual `/wowsync` export. This
+project doesn't implement or assume any particular future format for that
+— the core data model (`parseWowSyncExport` → `SnapshotStore.importSnapshot`)
+only depends on receiving WOWSYNC v1 text, not on *how* that text arrived.
+Manual paste, a dropped `.txt` file, and a hypothetical future
+auto-generated snapshot file all go through the exact same importer.
 
 ## LLM analysis (not implemented yet)
 
@@ -116,5 +142,5 @@ npm run build:web
 ```
 
 See `docs/ARCHITECTURE.md` for the data flow and package layout, and
-`packages/core/test/fixtures/README.md` for a note on the current
-(placeholder) test fixtures.
+`packages/core/test/fixtures/README.md` for the real vs. synthetic fixture
+split.
