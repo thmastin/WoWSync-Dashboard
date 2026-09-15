@@ -1,0 +1,232 @@
+WOWSYNC v1
+
+Generated: 1789486499
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789486499
+Name: Stoneharry
+Realm: Thrall
+Class: WARRIOR
+Level: 56
+Faction: Horde
+MoneyCopper: 98762099
+PlayedSeconds: 82046
+LevelPlayedSeconds: 130
+XP: 17491/47545
+Client: 12.1.0 build 69814
+ClientFamily: Retail
+Interface: 120100
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789486499
+Zone: Tanaan Jungle
+Subzone: The Dark Portal
+MapID: 577
+PositionPercent: 58.28,49.51
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789486499
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	item:154041::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Faceguard	54	54	ITEM_MOD_CRIT_RATING_SHORT=11; ITEM_MOD_MASTERY_RATING_SHORT=11; ITEM_MOD_STAMINA_SHORT=17; ITEM_MOD_STRENGTH_SHORT=11; RESISTANCE0_NAME=28
+2:Neck	item:154118::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Pendant	54	54	ITEM_MOD_CRIT_RATING_SHORT=16; ITEM_MOD_MASTERY_RATING_SHORT=15; ITEM_MOD_STAMINA_SHORT=9
+3:Shoulder	item:181419::::::::56:72::53:2:7192:6652:2:9:53:28:807:::::	Sapsteel Pauldrons	56	53	ITEM_MOD_CRIT_RATING_SHORT=8; ITEM_MOD_HASTE_RATING_SHORT=9; ITEM_MOD_STAMINA_SHORT=13; ITEM_MOD_STRENGTH_SHORT=9; RESISTANCE0_NAME=27
+4:Shirt	EMPTY
+5:Chest	item:154026::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Breastplate	54	54	ITEM_MOD_CRIT_RATING_SHORT=11; ITEM_MOD_HASTE_RATING_SHORT=11; ITEM_MOD_STAMINA_SHORT=17; ITEM_MOD_STRENGTH_SHORT=11; RESISTANCE0_NAME=37
+6:Waist	item:235967::::::::56:72::18:1:6710:2:9:54:28:181:::::	Mysterious Girdle	57	54	ITEM_MOD_HASTE_RATING_SHORT=5; ITEM_MOD_MASTERY_RATING_SHORT=12; ITEM_MOD_STAMINA_SHORT=13; ITEM_MOD_STRENGTH_SHORT=9; RESISTANCE0_NAME=22
+7:Legs	item:154042::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Legguards	54	54	ITEM_MOD_CRIT_RATING_SHORT=12; ITEM_MOD_MASTERY_RATING_SHORT=10; ITEM_MOD_STAMINA_SHORT=17; ITEM_MOD_STRENGTH_SHORT=11; RESISTANCE0_NAME=32
+8:Feet	item:235972::::::::56:72::20:1:6712:2:9:55:28:181:::::	Mysterious Sabatons	61	55	ITEM_MOD_CRIT_RATING_SHORT=9; ITEM_MOD_HASTE_RATING_SHORT=10; ITEM_MOD_STAMINA_SHORT=14; ITEM_MOD_STRENGTH_SHORT=10; RESISTANCE0_NAME=27
+9:Wrist	item:154050::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Armguards	54	54	ITEM_MOD_CRIT_RATING_SHORT=6; ITEM_MOD_MASTERY_RATING_SHORT=6; ITEM_MOD_STAMINA_SHORT=9; ITEM_MOD_STRENGTH_SHORT=6; RESISTANCE0_NAME=19
+10:Hands	item:154040::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Handguards	54	54	ITEM_MOD_CRIT_RATING_SHORT=8; ITEM_MOD_MASTERY_RATING_SHORT=8; ITEM_MOD_STAMINA_SHORT=12; ITEM_MOD_STRENGTH_SHORT=8; RESISTANCE0_NAME=21
+11:Finger 1	item:235977::::::::56:72::20:1:6712:2:9:54:28:181:::::	Mysterious Ring	60	54	ITEM_MOD_HASTE_RATING_SHORT=17; ITEM_MOD_STAMINA_SHORT=11; ITEM_MOD_VERSATILITY=19
+12:Finger 2	item:154114::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Ring of Might	54	54	ITEM_MOD_HASTE_RATING_SHORT=17; ITEM_MOD_MASTERY_RATING_SHORT=14; ITEM_MOD_STAMINA_SHORT=9
+13:Trinket 1	item:154117::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Stone of Battle	54	54	ITEM_MOD_MASTERY_RATING_SHORT=16; ITEM_MOD_STRENGTH_SHORT=10
+14:Trinket 2	item:154116::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Idol of Battle	54	54	ITEM_MOD_CRIT_RATING_SHORT=16; ITEM_MOD_STRENGTH_SHORT=10
+15:Back	item:235974::::::::56:72::20:1:6712:2:9:55:28:181:::::	Mysterious Cloak	61	55	ITEM_MOD_CRIT_RATING_SHORT=10; ITEM_MOD_HASTE_RATING_SHORT=5; ITEM_MOD_STAMINA_SHORT=11; ITEM_MOD_STRENGTH_SHORT=7; RESISTANCE0_NAME=8
+16:Main Hand	item:112393::::::::56:72::11:1:13617:2:28:1704:9:56:::::	Iron Horde Waraxe	56	56	ITEM_MOD_CRIT_RATING_SHORT=12; ITEM_MOD_DAMAGE_PER_SECOND_SHORT=8.6111106872559; ITEM_MOD_MASTERY_RATING_SHORT=11; ITEM_MOD_STAMINA_SHORT=17; ITEM_MOD_STRENGTH_SHORT=12
+17:Off Hand	item:154025::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Greataxe	54	54	ITEM_MOD_CRIT_RATING_SHORT=11; ITEM_MOD_DAMAGE_PER_SECOND_SHORT=8.1944446563721; ITEM_MOD_MASTERY_RATING_SHORT=11; ITEM_MOD_STAMINA_SHORT=17; ITEM_MOD_STRENGTH_SHORT=11
+18:Ranged	EMPTY
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789486499
+container	capacity	free	family	bagRef
+ContainerStorage 0: CARRIED
+0	20	0	0	-
+ContainerStorage 1: CARRIED
+1	24	0	0	item:88397::::::::56:72:::::::::
+ContainerStorage 2: CARRIED
+2	24	0	0	item:249773::::::::56:72:::::::::
+ContainerStorage 3: CARRIED
+3	24	18	0	item:249771::::::::56:72:::::::::
+ContainerStorage 4: CARRIED
+4	30	26	0	item:240995::::::::56:72:::::::::
+ContainerStorage 5: REAGENT_BAG
+5	6	6	0	item:176398::::::::56:72:::::::::
+Slots: 50 free / 128
+itemRef	name	qty	bound	vendorEachCopper
+item:2901::::::::56:72::14::1:28:783:::::	Mining Pick	1	no	24
+item:5956::::::::56:72::14::1:28:1315:::::	Blacksmith Hammer	1	no	1
+item:6948::::::::56:72:::::::::	Hearthstone	1	yes	0
+item:72988::::::::56:72:::::::::	Windwool Cloth	126	no	1750
+item:74839::::::::56:72:::::::::	Wildfowl Breast	8	no	10
+item:81231::::::::56:72:::::::::	Crumpled Bill of Sale	1	no	0
+item:81413::::::::56:72:::::::::	Skewered Peanut Chicken	3	no	1300
+item:81414::::::::56:72:::::::::	Pearl Milk Tea	1	no	1300
+item:82572::::::::56:72::11:2:3631:6700:2:9:44:28:1757:::::	Fire Camp Ring	1	yes	30330
+item:82587::::::::56:72::11:1:3631:2:9:46:28:1757:::::	Snow Boulder Manteau	1	yes	2666
+item:88072::::::::56:72::11:1:3631:2:9:47:28:1757:::::	Summit Guardian Cap	1	yes	3055
+item:88371::::::::56:72::11:1:3631:2:9:29:28:1755:::::	Watermelon Bomb	1	yes	448
+item:88379::::::::56:72:::::::::	Grummlecake	10	yes	0
+item:88382::::::::56:72:::::::::	Keenbean Kafa	1	yes	0
+item:88384::::::::56:72::11::1:28:1757:::::	Burlap Ritual Bag	1	yes	0
+item:88398::::::::56:72:::::::::	Root Veggie Stew	1	yes	0
+item:88531::::::::56:72::11::1:28:1757:::::	Lao Chin's Last Mug	1	yes	824
+item:88532::::::::56:72:::::::::	Lotus Water	5	no	0
+item:88578::::::::56:72:::::::::	Cup of Kafa	10	yes	0
+item:89112::::::::56:72:::::::::	Mote of Harmony	64	no	0
+item:112463::::::::56:72:::::::::	Battered Armor Fragments	1	no	1074
+item:112684::::::::56:72:::::::::	Damaged Weaponry	1	no	3453
+item:154025::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Greataxe	1	yes	1
+item:154035::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Axe	1	yes	1
+item:154036::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Bulwark	1	yes	1
+item:154039::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Greaves	1	yes	1
+item:154048::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Shoulderguards	1	yes	1
+item:154049::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Waistband	1	yes	1
+item:154115::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Band of Might	1	yes	0
+item:154119::::::::56:72::17:1:4790:2:9:54:28:4306:::::	Oathsworn Cloak of Battle	1	yes	1
+item:163781::::::::56:72:::::::::	Heartsbane Hexwurst	1	no	1250
+item:171375::::::::56:72::13::3:28:2142:29:36:30:40::::Player-3678-0D21DF90:	Ceremonious Sabatons	1	yes	1834
+item:171380::::::::56:72::13:1:6885:4:9:52:28:391:29:40:30:32::::Player-3678-0D21DF90:	Ceremonious Waistguard	1	yes	1254
+item:171382::::::::56:72::13::3:28:2142:29:36:30:49::::Player-3678-0D21DF90:	Ceremonious Rapier	1	yes	3590
+item:171436::::::::56:72:::::::::	Porous Sharpening Stone	10	no	1250
+item:171438::::::::56:72:::::::::	Porous Weightstone	5	no	1000
+item:171828::::::::56:72:::::::::	Laestrite Ore	18	no	650
+item:171829::::::::56:72:::::::::	Solenium Ore	6	no	650
+item:171831::::::::56:72:::::::::	Phaedrum Ore	3	no	650
+item:171833::::::::56:72:::::::::	Elethium Ore	1	no	650
+item:171840::::::::56:72:::::::::	Porous Stone	12	no	0
+item:171841::::::::56:72:::::::::	Shaded Stone	5	no	1250
+item:172052::::::::56:72:::::::::	Aethereal Meat	6	no	625
+item:172054::::::::56:72:::::::::	Raw Seraphic Wing	8	no	625
+item:172055::::::::56:72:::::::::	Phantasmal Haunch	3	no	625
+item:173202::::::::56:72:::::::::	Shrouded Cloth	78	no	2
+item:173204::::::::56:72:::::::::	Lightless Silk	11	no	3
+item:174780::::::::56:72:::::::::	Emptied First Aid Kit	1	no	10
+item:175239::::::::56:72:::::::::	Standard Issue Knapsack	1	yes	10
+item:175617::::::::56:72::11:1:6707:2:9:50:28:1707:::::	Judicious Aspirant's Gauntlets	1	yes	3039
+item:175663::::::::56:72::11:1:6707:2:9:53:28:1707:::::	Grove Warden's Greaves	1	yes	8147
+item:175676::::::::56:72::11:1:6707:2:9:53:28:1707:::::	Grove Warden's Vambraces	1	yes	3993
+item:175719::::::::56:72::11:1:6707:2:9:51:28:1707:::::	Agthia's Void-Tinged Speartip	1	yes	5357
+item:175741::::::::56:72::11:1:6707:2:9:53:28:1707:::::	Gormgris Gorget	1	yes	3554
+item:176087::::::::56:72:::::::::	Gorm Chitin	1	no	3728
+item:176771::::::::56:72:::3:6907:6652:1683:2:9:50:28:1707:::::	Glimmerhoof Gauntlets of the Peerless	1	no	2826
+item:176771::::::::56:72:::3:6907:6652:1702:2:9:50:28:1707:::::	Glimmerhoof Gauntlets of the Feverflare	1	no	2826
+item:176796::::::::56:72:::3:6908:6652:1717:2:9:52:28:1707:::::	Elysian Dory of the Harmonious	1	yes	11450
+item:178176::::::::56:72:::::::::	Tunk's Trunk	1	yes	10
+item:179314::::::::56:72:::::::::	Creeping Crawler Meat	2	no	625
+item:179315::::::::56:72:::::::::	Shadowy Shank	3	no	625
+item:179982::::::::56:72::::1:28:1318:::::	Kyrian Bell	1	yes	0
+item:180522::::::::56:72:::1:6826:2:9:52:28:1707:::::	Phaedrum Lockbox	1	no	750
+item:181605::::::::56:72::53:2:7192:6652:2:9:50:28:807:::::	Shieldguard's Breastplate	1	yes	64220
+item:181629::::::::56:72::53:2:7192:6652:2:9:51:28:807:::::	Waylight Defender	1	yes	72592
+item:181703::::::::56:72::53:3:7192:6652:7574:2:9:50:28:807:::::	Skychime Necklace	1	yes	28760
+item:181721::::::::56:72::53:3:7192:6652:7575:2:9:50:28:807:::::	Ascendent Valor Signet	1	yes	41879
+item:188213::::::::56:72:::::::::	Large Green Bag	1	yes	1
+item:188718::::::::56:72:::1:13642:2:9:54:28:4306:::::	Corroded Plate Chestpiece	1	no	26209
+item:192617::::::::56:72:::::::::	Hound Paw	3	no	6374
+item:220232::::::::56:72:::::::::	Worm-Eaten Burlap Robe	1	no	5048
+item:235701::::::::56:72:::::::::	Decaying Mecha-Scrapper Construction Kit	1	no	1
+item:235911::::::::56:72::11::1:28:1704:::::	Weathered Mysterious Satchel	1	yes	0
+item:235972::::::::56:72::18:1:6710:2:9:56:28:181:::::	Mysterious Sabatons	1	yes	85918
+item:236959::::::::56:72:::::::::	Empty Mysterious Potion	3	no	500
+item:239142::::::::56:72:::::::::	Bottle of Mysterious Wisdom	2	yes	0
+item:242711::::::::56:72:::::::::	Pungent Truffle	1	yes	0
+item:249772::::::::56:72:::::::::	Large Red Bag	1	yes	1
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789486499
+Coverage: Tracked primary/secondary professions and exposed tier; historical tier catalogue, recipes and knowledge excluded
+profession	skill	maxSkill	skillLineID	tier	expansion	category
+Blacksmithing	14	100	164	Shadowlands Blacksmithing	Unknown	PRIMARY
+Cooking	1	75	185	Shadowlands Cooking	Unknown	SECONDARY
+Fishing	1	200	356	Shadowlands Fishing	Unknown	SECONDARY
+Mining	36	150	186	Shadowlands Mining	Unknown	PRIMARY
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789486499
+Coverage: Retail player/profession spellbook and known flyouts; active spec, passives and racials; no ranks; excludes future/off-spec spells, recipe catalogues and pet spellbook
+spellID	name	rank
+100	Charge	-
+355	Taunt	-
+818	Cooking Fire	-
+1715	Hamstring	-
+1719	Recklessness	-
+2018	Blacksmithing	-
+2550	Cooking	-
+2565	Shield Block	-
+2575	Mining	-
+2656	Mining Journal	-
+5227	Touch of the Grave	-
+5308	Execute	-
+6343	Thunder Clap	-
+6544	Heroic Leap	-
+6552	Pummel	-
+6603	Auto Attack	-
+6673	Battle Shout	-
+7744	Will of the Forsaken	-
+18499	Berserker Rage	-
+20577	Cannibalize	-
+20579	Shadow Resistance	-
+23881	Bloodthirst	-
+23920	Spell Reflection	-
+23922	Shield Slam	-
+46917	Titan's Grip	-
+46968	Shockwave	-
+57755	Heroic Throw	-
+76268	Armor Skills	-
+76290	Weapon Skills	-
+76856	Mastery: Unshackled Fury	-
+79747	Languages	-
+81099	Titan's Grip: Single-Minded Fury	-
+85288	Raging Blow	-
+90265	Master Riding	-
+97462	Rallying Cry	-
+107570	Storm Bolt	-
+125439	Revive Battle Pets	-
+131474	Fishing	-
+184361	Enrage	-
+184367	Rampage	-
+190411	Whirlwind	-
+202168	Impending Victory	-
+231842	Dual Wield	-
+233368	Broken Isles Pathfinder	-
+271990	Fishing Journal	-
+278833	Battle for Azeroth Pathfinder	-
+361584	Whirling Surge	-
+372608	Surge Forward	-
+372610	Skyward Ascent	-
+376777	Skyriding Basics	-
+383359	Skyriding Charges	-
+383363	Lift Off	-
+383366	Thrill of the Skies	-
+384110	Wrecking Throw	-
+386196	Berserker Stance	-
+386208	Defensive Stance	-
+403092	Aerial Halt	-
+425782	Second Wind	-
+431280	Warband Map to Everywhere All At Once	-
+436854	Switch Flight Style	-
+460905	Warband Bank Distance Inhibitor	-
+1231411	Recuperate	-
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

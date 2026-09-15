@@ -1,0 +1,234 @@
+WOWSYNC v1
+
+Generated: 1789492498
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789492498
+Name: Torahn
+Realm: Dreamscythe
+Class: SHAMAN
+Level: 33
+Faction: Horde
+MoneyCopper: 102815
+PlayedSeconds: 183181
+LevelPlayedSeconds: 6498
+XP: 46697/48000
+Client: 2.5.6 build 69795
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789492498
+Zone: Thousand Needles
+Subzone: The Shimmering Flats
+MapID: 1441
+PositionPercent: 87.87,60.78
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789492498
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	item:3732::::::::33::::::::::	Hooded Cowl	30	0	?
+2:Neck	item:25438::::::::33::::::::::	Malachite Pendant	18	13	Agility=2
+3:Shoulder	item:14566::::::::33::::::::::	Prospector's Pads	25	20	Stamina=4; Spirit=4
+4:Shirt	item:154::::::::33::::::::::	Primitive Mantle	1	0	?
+5:Chest	item:15471::::::::33::::::::::	Brawnhide Armor	29	0	Agility=4; Stamina=9; Spirit=3
+6:Waist	item:15349::::::599:1166849152:33::::::::::	Headhunter's Belt of the Monkey	33	28	Agility=6; Stamina=6
+7:Legs	item:4831::::::::33::::::::::	Stalking Pants	26	21	Agility=6; Stamina=6
+8:Feet	item:3741::::::::33::::::::::	Stomping Boots	24	0	Strength=4; Agility=4
+9:Wrist	item:15462::::::::33::::::::::	Loamflake Bracers	25	0	Agility=5
+10:Hands	item:5299::::::::33::::::::::	Gloves of the Moon	20	0	Agility=3; Stamina=3
+11:Finger 1	item:5351::::::::33::::::::::	Bounty Hunter's Ring	20	0	Agility=3; Stamina=1
+12:Finger 2	item:25439::::::::33::::::::::	Tigerseye Band	18	13	Strength=2
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	item:16990::::::::33::::::::::	Spritekin Cloak	27	0	Agility=4; Stamina=3
+16:Main Hand	item:15464::::::::33::::::::::	Brute Hammer	28	0	Strength=4; Agility=1; Stamina=8
+17:Off Hand	EMPTY
+18:Ranged	EMPTY
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789492498
+container	capacity	free	family	bagRef
+0	20	0	0	-
+1	12	0	0	item:1725::::::::33::::::::::
+2	10	0	0	item:4245::::::::33::::::::::
+3	10	2	0	item:4245::::::::33::::::::::
+4	10	10	0	item:4245::::::::33::::::::::
+Slots: 12 free / 62
+itemRef	name	qty	bound	vendorEachCopper
+item:729::::::::33::::::::::	Stringy Vulture Meat	1	no	17
+item:929::::::::33::::::::::	Healing Potion	6	no	75
+item:1288::::::::33::::::::::	Large Venom Sac	1	no	185
+item:1701::::::::33::::::::::	Curved Basilisk Claw	5	no	376
+item:1702::::::::33::::::::::	Intact Basilisk Spine	1	no	320
+item:1708::::::::33::::::::::	Sweet Nectar	49	no	50
+item:1710::::::::33::::::::::	Greater Healing Potion	3	no	125
+item:2319::::::::33::::::::::	Medium Leather	8	no	50
+item:2459::::::::33::::::::::	Swiftness Potion	3	no	25
+item:2771::::::::33::::::::::	Tin Ore	2	no	25
+item:2836::::::::33::::::::::	Coarse Stone	4	no	15
+item:2901::::::::33::::::::::	Mining Pick	1	no	16
+item:3771::::::::33::::::::::	Wild Hog Shank	12	no	50
+item:3827::::::::33::::::::::	Mana Potion	5	no	120
+item:4093::::::::33::::::::::	Large Basilisk Tail	1	no	713
+item:4232::::::::33::::::::::	Medium Hide	1	no	125
+item:4234::::::::33::::::::::	Heavy Leather	13	no	150
+item:4235::::::::33::::::::::	Heavy Hide	2	no	200
+item:4555::::::::33::::::::::	Thick Scaly Tail	1	no	155
+item:4607::::::::33::::::::::	Delicious Cave Mold	40	no	50
+item:5175::::::::33::::::::::	Earth Totem	1	yes	0
+item:5176::::::::33::::::::::	Fire Totem	1	yes	0
+item:5178::::::::33::::::::::	Air Totem	1	yes	0
+item:5794::::::::33::::::::::	Salty Scorpid Venom	1	yes	0
+item:5795::::::::33::::::::::	Hardened Tortoise Shell	1	yes	0
+item:5798::::::::33::::::::::	Rocket Car Parts	12	yes	0
+item:5848::::::::33::::::::::	Hollow Vulture Bone	1	yes	0
+item:5853::::::::33::::::::::	Intact Silithid Carapace	3	yes	0
+item:5854::::::::33::::::::::	Silithid Talon	5	yes	0
+item:5855::::::::33::::::::::	Silithid Heart	1	yes	0
+item:5877::::::::33::::::::::	Cracked Silithid Carapace	1	yes	0
+item:6256::::::::33::::::::::	Fishing Pole	1	no	4
+item:6300::::::::33::::::::::	Husk Fragment	5	no	443
+item:6302::::::::33::::::::::	Delicate Insect Wing	5	no	628
+item:6948::::::::33::::::::::	Hearthstone	1	yes	0
+item:7005::::::::33::::::::::	Skinning Knife	1	no	16
+item:7813::::::::33::::::::::	Shard of Water	1	yes	0
+item:11386::::::::33::::::::::	Squishy Basilisk Eye	1	no	676
+item:12037::::::::33::::::::::	Mystery Meat	2	no	87
+item:15277::::::::33::::::::::	Gray Kodo	1	yes	0
+item:16659::::::::33::::::::::	Deftkin Belt	1	yes	856
+item:17030::::::::33::::::::::	Ankh	4	no	500
+item:17056::::::::33::::::::::	Light Feather	1	no	7
+item:17057::::::::33::::::::::	Shiny Fish Scales	20	no	7
+item:17058::::::::33::::::::::	Fish Oil	12	no	7
+item:19938::::::::33::::::::::	Heavy Scorpid Leg	2	no	580
+
+[BANK]
+LastVisit: 1789242708
+VisitedNPC: Randolph Montague
+VisitedZone: Undercity
+State: LAST_SEEN; complete; observed=1789242737
+SnapshotVisit: 1789242708
+PurchasedBankBagSlots: 0
+container	capacity	free	family	bagRef
+-1	28	5	0	-
+5	0	0	?	-
+6	0	0	?	-
+7	0	0	?	-
+8	0	0	?	-
+9	0	0	?	-
+10	0	0	?	-
+11	0	0	?	-
+Slots: 5 free / 28
+itemRef	name	qty	bound	vendorEachCopper
+item:3647::::::::33::::::::::	Bright Bracers	1	yes	434
+item:3739::::::::33::::::::::	Skull Ring	1	yes	1250
+item:3751::::::::33::::::::::	Mercenary Leggings	1	yes	2661
+item:3760::::::::33::::::::::	Band of the Undercity	1	yes	1500
+item:3761::::::::33::::::::::	Deadskull Shield	1	yes	3306
+item:4238::::::::33::::::::::	Linen Bag	1	no	200
+item:4443::::::::33::::::::::	Grim Pauldrons	1	yes	3472
+item:4632::::::::33::::::::::	Ornate Bronze Lockbox	1	no	50
+item:4720::::::::33::::::::::	Nightsky Sash	1	no	1234
+item:5302::::::::33::::::::::	Cobalt Buckler	1	yes	929
+item:5324::::::::33::::::::::	Engineer's Hammer	1	yes	776
+item:5357::::::::33::::::::::	Ward of the Vale	1	yes	2221
+item:5574::::::::33::::::::::	White Leather Bag	1	no	875
+item:5838::::::::33::::::::::	Kodo Skin Scroll	1	yes	0
+item:6740::::::::33::::::::::	Azure Sash	1	yes	1001
+item:13928::::::::33::::::::::	Grilled Squid	30	no	8
+item:14125::::::848:836577792:33::::::::::	Ritual Leggings of the Eagle	1	no	676
+item:15304::::::760:1276090752:33::::::::::	Grizzly Jerkin of the Owl	1	no	414
+item:15458::::::::33::::::::::	Tundra Boots	1	yes	1423
+item:15467::::::::33::::::::::	Inventor's League Ring	1	yes	8630
+item:15468::::::::33::::::::::	Windsong Drape	1	yes	1207
+item:17692::::::::33::::::::::	Horn Ring	1	yes	881
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789492498
+profession	skill	maxSkill
+Cooking	17	75
+First Aid	1	75
+Fishing	16	75
+Mining	107	150
+Skinning	242	300
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789492498
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID	name	rank
+81	Dodge	Passive
+107	Block	Passive
+131	Water Breathing	
+370	Purge	Rank 1
+421	Chain Lightning	Rank 1
+526	Cure Poison	
+546	Water Walking	
+556	Astral Recall	
+818	Basic Campfire	
+945	Lightning Shield	Rank 4
+959	Healing Wave	Rank 6
+2484	Earthbind Totem	
+2550	Cooking	Apprentice
+2580	Find Minerals	
+2645	Ghost Wolf	
+2656	Smelting	
+2870	Cure Disease	
+3273	First Aid	Apprentice
+5675	Mana Spring Totem	Rank 1
+6041	Lightning Bolt	Rank 6
+6196	Far Sight	
+6364	Searing Totem	Rank 3
+6391	Stoneclaw Totem	Rank 3
+6603	Attack	
+7620	Fishing	Apprentice
+8008	Lesser Healing Wave	Rank 2
+8024	Flametongue Weapon	Rank 1
+8046	Earth Shock	Rank 4
+8053	Flame Shock	Rank 3
+8056	Frost Shock	Rank 1
+8143	Tremor Totem	
+8155	Stoneskin Totem	Rank 3
+8160	Strength of Earth Totem	Rank 2
+8166	Poison Cleansing Totem	
+8177	Grounding Totem	
+8181	Frost Resistance Totem	Rank 1
+8190	Magma Totem	Rank 1
+8232	Windfury Weapon	Rank 1
+8498	Fire Nova Totem	Rank 2
+8512	Windfury Totem	Rank 1
+10399	Rockbiter Weapon	Rank 4
+10768	Skinning	Artisan
+18848	Spirit Weapons	Passive
+20549	War Stomp	Racial
+20550	Endurance	Racial Passive
+20551	Nature Resistance	Racial Passive
+20552	Cultivation	Racial Passive
+20608	Reincarnation	Passive
+20609	Ancestral Spirit	Rank 2
+36936	Totemic Call	
+
+[TRAINERS]
+State: OBSERVED; categories=1; observed=1789243366
+CoverageNote: Filtered/collapsed trainer list
+[UNKNOWN]
+State: LAST_SEEN; ?; observed=?
+LastVisit: 1789243292
+VisitedNPC: Siln Skychaser
+VisitedZone: Thunder Bluff
+Name: Siln Skychaser
+Type: Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=no; known=no
+MoneyAtVisitCopper: 99815
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Fire Nova Totem	Rank 3	available	32	6800	Fire Nova Totem (Rank 2) met=yes
+?	Fire Resistance Totem	Rank 1	available	28	5100	-
+?	Flametongue Totem	Rank 1	available	28	5100	-
+?	Flametongue Weapon	Rank 2	available	18	1700	Flametongue Weapon (Rank 1) met=yes
+?	Frostbrand Weapon	Rank 1	available	20	1870	-
+?	Nature Resistance Totem	Rank 1	available	30	5950	-
+?	Purge	Rank 2	available	32	6800	Purge (Rank 1) met=yes
+
+[END]

@@ -1,0 +1,125 @@
+WOWSYNC v1
+
+Generated: 1789492580
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789492580
+Name: Tenivard
+Realm: Dreamscythe
+Class: MAGE
+Level: 12
+Faction: Horde
+MoneyCopper: 50731
+PlayedSeconds: 16523
+LevelPlayedSeconds: 4145
+XP: 2014/9800
+Client: 2.5.6 build 69795
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789492580
+Zone: Silvermoon City
+Subzone: Court of the Sun
+MapID: 1954
+PositionPercent: 67.97,29.07
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789492580
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	item:6096::::::::12::::::::::	Apprentice's Shirt	1	0	?
+5:Chest	item:23399:41:::::::12::::::::::	Fallen Apprentice's Robe	10	0	Stamina=1; Intellect=1
+6:Waist	item:20998::::::::12::::::::::	Wyrm Sash	5	0	?
+7:Legs	item:21001::::::::12::::::::::	Striding Pants	5	0	?
+8:Feet	item:21008::::::::12::::::::::	Unkempt Shoes	4	1	?
+9:Wrist	item:22966:924:::::::12::::::::::	Silk Wristbands	8	0	?
+10:Hands	item:23397::::::::12::::::::::	Satin Lined Gloves	9	0	?
+11:Finger 1	EMPTY
+12:Finger 2	EMPTY
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	item:22952::::::::12::::::::::	Springpaw Hide Cloak	7	0	?
+16:Main Hand	item:9513::::::::12::::::::::	Ley Staff	13	0	Intellect=2; Spirit=2
+17:Off Hand	EMPTY
+18:Ranged	item:11287::::::::12::::::::::	Lesser Magic Wand	15	5	?
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789492580
+container	capacity	free	family	bagRef
+0	20	1	0	-
+1	8	2	0	item:5763::::::::12::::::::::
+2	8	8	0	item:5763::::::::12::::::::::
+3	8	8	0	item:5763::::::::12::::::::::
+4	8	8	0	item:5763::::::::12::::::::::
+Slots: 27 free / 52
+itemRef	name	qty	bound	vendorEachCopper
+item:117::::::::12::::::::::	Tough Jerky	2	no	1
+item:118::::::::12::::::::::	Minor Healing Potion	4	no	5
+item:774::::::::12::::::::::	Malachite	2	no	15
+item:818::::::::12::::::::::	Tigerseye	1	no	100
+item:2318::::::::12::::::::::	Light Leather	2	no	15
+item:2589::::::::12::::::::::	Linen Cloth	15	no	13
+item:2968::::::::12::::::::::	Warrior's Gloves	1	no	34
+item:6218::::::::12::::::::::	Runed Copper Rod	1	yes	24
+item:6520::::::::12::::::::::	Pioneer Cloak	1	no	33
+item:6521::::::::12::::::::::	Pioneer Gloves	1	no	47
+item:6948::::::::12::::::::::	Hearthstone	1	yes	0
+item:8181::::::::12::::::::::	Hunting Rifle	1	no	79
+item:10938::::::::12::::::::::	Lesser Magic Essence	10	no	0
+item:10939::::::::12::::::::::	Greater Magic Essence	4	no	0
+item:10978::::::::12::::::::::	Small Glimmering Shard	1	no	0
+item:10998::::::::12::::::::::	Lesser Astral Essence	2	no	0
+item:11082::::::::12::::::::::	Greater Astral Essence	1	no	0
+item:11083::::::::12::::::::::	Soul Dust	6	no	0
+item:14409::::::::12::::::::::	Stonecloth Cape	1	no	1707
+item:17056::::::::12::::::::::	Light Feather	10	no	7
+item:22735::::::::12::::::::::	Research Notes	1	yes	0
+item:22959::::::::12::::::::::	Smooth Metal Staff	1	yes	183
+item:23367::::::::12::::::::::	Light Silk Robe	1	yes	9
+item:23371::::::::12::::::::::	Velania's Walking Stick	1	yes	48
+item:27668::::::::12::::::::::	Lynx Meat	2	no	5
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789492580
+profession	skill	maxSkill
+Enchanting	71	160
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789492580
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID	name	rank
+81	Dodge	Passive
+118	Polymorph	Rank 1
+122	Frost Nova	Rank 1
+130	Slow Fall	
+145	Fireball	Rank 3
+205	Frostbolt	Rank 2
+597	Conjure Food	Rank 2
+604	Dampen Magic	Rank 1
+822	Magic Resistance	Racial Passive
+1459	Arcane Intellect	Rank 1
+2136	Fire Blast	Rank 1
+5019	Shoot	
+5143	Arcane Missiles	Rank 1
+5505	Conjure Water	Rank 2
+6603	Attack	
+7300	Frost Armor	Rank 2
+7412	Enchanting	Journeyman
+13262	Disenchant	
+28730	Arcane Torrent	Racial
+28734	Mana Tap	Racial
+28877	Arcane Affinity	Racial Passive
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

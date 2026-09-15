@@ -1,0 +1,491 @@
+WOWSYNC v1
+
+Generated: 1789492666
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789492666
+Name: Voodan
+Realm: Dreamscythe
+Class: PRIEST
+Level: 16
+Faction: Horde
+MoneyCopper: 1101858
+PlayedSeconds: 114630
+LevelPlayedSeconds: 48402
+XP: 10729/15000
+Client: 2.5.6 build 69795
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789492666
+Zone: Thunder Bluff
+MapID: 1456
+PositionPercent: 40.63,52.24
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789492666
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	item:2577::::::::16::::::::::	Blue Linen Shirt	10	0	?
+5:Chest	item:5420::::::::16::::::::::	Banshee Armor	14	0	Stamina=3
+6:Waist	item:14099::::::::16::::::::::	Native Sash	12	7	?
+7:Legs	item:1431::::::::16::::::::::	Patchwork Pants	8	3	?
+8:Feet	item:4936::::::::16::::::::::	Dirt-trodden Boots	8	0	?
+9:Wrist	item:6062:41:::::::16::::::::::	Heavy Cord Bracers	10	0	?
+10:Hands	item:5337::::::::16::::::::::	Wayfaring Gloves	16	0	Spirit=3
+11:Finger 1	EMPTY
+12:Finger 2	EMPTY
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	item:4680::::::::16::::::::::	Brackwater Cloak	13	8	?
+16:Main Hand	item:5340:1894:::::::16::::::::::	Cauldron Stirrer	15	0	Stamina=4
+17:Off Hand	EMPTY
+18:Ranged	item:11288::::::::16::::::::::	Greater Magic Wand	23	13	?
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789492666
+container	capacity	free	family	bagRef
+0	20	5	0	-
+1	10	7	0	item:857::::::::16::::::::::
+2	6	1	0	item:5572::::::::16::::::::::
+3	6	4	0	item:4238::::::::16::::::::::
+4	6	6	0	item:4238::::::::16::::::::::
+Slots: 23 free / 48
+itemRef	name	qty	bound	vendorEachCopper
+item:783::::::::16::::::::::	Light Hide	16	no	50
+item:858::::::::16::::::::::	Lesser Healing Potion	1	no	25
+item:1081::::::::16::::::::::	Crisp Spider Meat	13	no	50
+item:2251::::::::16::::::::::	Gooey Spider Leg	2	no	12
+item:2456::::::::16::::::::::	Minor Rejuvenation Potion	1	no	15
+item:2836::::::::16::::::::::	Coarse Stone	7	no	15
+item:3037::::::::16::::::::::	Whipwood Recurve Bow	1	no	4814
+item:3685::::::::16::::::::::	Raptor Egg	18	no	71
+item:3737::::::::16::::::::::	Recipe: Soothing Turtle Bisque	1	no	550
+item:4072::::::::16::::::::::	Glimmering Mail Gauntlets	1	no	1340
+item:4461::::::::16::::::::::	Raptor Hide	5	no	208
+item:5095::::::::16::::::::::	Rainbow Fin Albacore	10	no	3
+item:6218::::::::16::::::::::	Runed Copper Rod	1	yes	24
+item:6948::::::::16::::::::::	Hearthstone	1	yes	0
+item:7609::::::510:886689920:16::::::::::	Elder's Amber Stave of the Wolf	1	no	4210
+item:9832::::::599:1215043712:16::::::::::	Scaled Leather Gloves of the Monkey	1	no	1248
+item:12184::::::::16::::::::::	Raptor Flesh	9	no	87
+item:15127::::::174:2100988672:16::::::::::	Robust Shoulders of Intellect	1	no	1647
+item:15232::::::1015:1305658880:16::::::::::	Hacking Cleaver of the Whale	1	no	6112
+item:17056::::::::16::::::::::	Light Feather	41	no	7
+
+[BANK]
+LastVisit: 1789055650
+VisitedNPC: Chesmu
+VisitedZone: Thunder Bluff
+State: LAST_SEEN; complete; observed=1789055749
+SnapshotVisit: 1789055650
+PurchasedBankBagSlots: 0
+container	capacity	free	family	bagRef
+-1	28	12	0	-
+5	0	0	?	-
+6	0	0	?	-
+7	0	0	?	-
+8	0	0	?	-
+9	0	0	?	-
+10	0	0	?	-
+11	0	0	?	-
+Slots: 12 free / 28
+itemRef	name	qty	bound	vendorEachCopper
+item:1205::::::::16::::::::::	Melon Juice	10	no	25
+item:2996::::::::16::::::::::	Bolt of Linen Cloth	61	no	40
+item:4238::::::::16::::::::::	Linen Bag	2	no	200
+item:4893::::::::16::::::::::	Savannah Lion Tusk	2	yes	0
+item:4894::::::::16::::::::::	Plainstrider Kidney	5	yes	0
+item:5065::::::::16::::::::::	Harpy Lieutenant Ring	1	yes	0
+item:5068::::::::16::::::::::	Dried Seeds	1	yes	0
+item:6145::::::::16::::::::::	Clarice's Pendant	1	yes	0
+item:6256::::::::16::::::::::	Fishing Pole	1	no	4
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789492666
+profession	skill	maxSkill
+Cooking	115	150
+Enchanting	35	75
+First Aid	1	75
+Fishing	135	150
+Tailoring	54	150
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789492666
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID	name	rank
+81	Dodge	Passive
+528	Cure Disease	
+586	Fade	Rank 1
+588	Inner Fire	Rank 1
+592	Power Word: Shield	Rank 2
+594	Shadow Word: Pain	Rank 2
+598	Smite	Rank 3
+818	Basic Campfire	
+1244	Power Word: Fortitude	Rank 2
+2006	Resurrection	Rank 1
+2053	Lesser Heal	Rank 3
+2054	Heal	Rank 1
+3102	Cooking	Journeyman
+3273	First Aid	Apprentice
+3909	Tailoring	Journeyman
+5019	Shoot	
+6074	Renew	Rank 2
+6603	Attack	
+7411	Enchanting	Apprentice
+7731	Fishing	Journeyman
+8102	Mind Blast	Rank 2
+8122	Psychic Scream	Rank 1
+9035	Hex of Weakness	Rank 1
+13262	Disenchant	
+20554	Berserking	Racial
+20555	Regeneration	Racial Passive
+20557	Beast Slaying	Racial Passive
+20558	Throwing Specialization	Racial Passive
+26290	Bow Specialization	Racial Passive
+
+[TRAINERS]
+State: OBSERVED; categories=5; observed=1789268937
+CoverageNote: No visible services; completeness unknown
+[CLASS]
+State: LAST_SEEN; partial; observed=1789268874
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1789268873
+VisitedNPC: Malakai Cross
+VisitedZone: Thunder Bluff
+Name: Malakai Cross
+Type: Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 1067511
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Abolish Disease		unavailable	32	11000	-
+?	Binding Heal	Rank 1	unavailable	64	72000	-
+?	Circle of Healing	Rank 2	unavailable	56	2100	Circle of Healing (Rank 1) met=no
+?	Circle of Healing	Rank 3	unavailable	60	2300	Circle of Healing (Rank 2) met=no
+?	Circle of Healing	Rank 4	unavailable	65	2300	Circle of Healing (Rank 3) met=no
+?	Circle of Healing	Rank 5	unavailable	70	2300	Circle of Healing (Rank 4) met=no
+?	Dispel Magic	Rank 1	unavailable	18	2000	-
+?	Dispel Magic	Rank 2	unavailable	36	14000	Dispel Magic (Rank 1) met=no
+?	Divine Spirit	Rank 2	unavailable	40	900	Divine Spirit (Rank 1) met=no
+?	Divine Spirit	Rank 3	unavailable	50	1500	Divine Spirit (Rank 2) met=no
+?	Divine Spirit	Rank 4	unavailable	60	2300	Divine Spirit (Rank 3) met=no
+?	Divine Spirit	Rank 5	unavailable	70	2300	Divine Spirit (Rank 4) met=no
+?	Fade	Rank 2	unavailable	20	3000	Fade (Rank 1) met=yes
+?	Fade	Rank 3	unavailable	30	10000	Fade (Rank 2) met=no
+?	Fade	Rank 4	unavailable	40	18000	Fade (Rank 3) met=no
+?	Fade	Rank 5	unavailable	50	30000	Fade (Rank 4) met=no
+?	Fade	Rank 6	unavailable	60	46000	Fade (Rank 5) met=no
+?	Fade	Rank 7	unavailable	66	89000	Fade (Rank 6) met=no
+?	Fear Ward		unavailable	20	800	-
+?	Flash Heal	Rank 1	unavailable	20	3000	-
+?	Flash Heal	Rank 2	unavailable	26	6000	Flash Heal (Rank 1) met=no
+?	Flash Heal	Rank 3	unavailable	32	11000	Flash Heal (Rank 2) met=no
+?	Flash Heal	Rank 4	unavailable	38	16000	Flash Heal (Rank 3) met=no
+?	Flash Heal	Rank 5	unavailable	44	24000	Flash Heal (Rank 4) met=no
+?	Flash Heal	Rank 6	unavailable	50	30000	Flash Heal (Rank 5) met=no
+?	Flash Heal	Rank 7	unavailable	56	42000	Flash Heal (Rank 6) met=no
+?	Flash Heal	Rank 8	unavailable	61	53000	Flash Heal (Rank 7) met=no
+?	Flash Heal	Rank 9	unavailable	67	99000	Flash Heal (Rank 8) met=no
+?	Greater Heal	Rank 1	unavailable	40	18000	-
+?	Greater Heal	Rank 2	unavailable	46	26000	Greater Heal (Rank 1) met=no
+?	Greater Heal	Rank 3	unavailable	52	38000	Greater Heal (Rank 2) met=no
+?	Greater Heal	Rank 4	unavailable	58	44000	Greater Heal (Rank 3) met=no
+?	Greater Heal	Rank 5	unavailable	60	65000	Greater Heal (Rank 4) met=no
+?	Greater Heal	Rank 6	unavailable	63	65000	Greater Heal (Rank 5) met=no
+?	Greater Heal	Rank 7	unavailable	68	110000	Greater Heal (Rank 6) met=no
+?	Heal	Rank 2	unavailable	22	4000	Heal (Rank 1) met=yes
+?	Heal	Rank 3	unavailable	28	8000	Heal (Rank 2) met=no
+?	Heal	Rank 4	unavailable	34	12000	Heal (Rank 3) met=no
+?	Hex of Weakness	Rank 2	unavailable	20	150	Hex of Weakness (Rank 1) met=yes
+?	Hex of Weakness	Rank 3	unavailable	30	500	Hex of Weakness (Rank 2) met=no
+?	Hex of Weakness	Rank 4	unavailable	40	900	Hex of Weakness (Rank 3) met=no
+?	Hex of Weakness	Rank 5	unavailable	50	1500	Hex of Weakness (Rank 4) met=no
+?	Hex of Weakness	Rank 6	unavailable	60	2300	Hex of Weakness (Rank 5) met=no
+?	Hex of Weakness	Rank 7	unavailable	70	6500	Hex of Weakness (Rank 6) met=no
+?	Holy Fire	Rank 1	unavailable	20	3000	-
+?	Holy Fire	Rank 2	unavailable	24	5000	Holy Fire (Rank 1) met=no
+?	Holy Fire	Rank 3	unavailable	30	10000	Holy Fire (Rank 2) met=no
+?	Holy Fire	Rank 4	unavailable	36	14000	Holy Fire (Rank 3) met=no
+?	Holy Fire	Rank 5	unavailable	42	22000	Holy Fire (Rank 4) met=no
+?	Holy Fire	Rank 6	unavailable	48	28000	Holy Fire (Rank 5) met=no
+?	Holy Fire	Rank 7	unavailable	54	40000	Holy Fire (Rank 6) met=no
+?	Holy Fire	Rank 8	unavailable	60	46000	Holy Fire (Rank 7) met=no
+?	Holy Fire	Rank 9	unavailable	66	65000	Holy Fire (Rank 8) met=no
+?	Holy Nova	Rank 2	unavailable	28	400	Holy Nova (Rank 1) met=no
+?	Holy Nova	Rank 3	unavailable	36	700	Holy Nova (Rank 2) met=no
+?	Holy Nova	Rank 4	unavailable	44	1200	Holy Nova (Rank 3) met=no
+?	Holy Nova	Rank 5	unavailable	52	1900	Holy Nova (Rank 4) met=no
+?	Holy Nova	Rank 6	unavailable	60	2300	Holy Nova (Rank 5) met=no
+?	Holy Nova	Rank 7	unavailable	68	3250	Holy Nova (Rank 6) met=no
+?	Inner Fire	Rank 2	unavailable	20	3000	Inner Fire (Rank 1) met=yes
+?	Inner Fire	Rank 3	unavailable	30	10000	Inner Fire (Rank 2) met=no
+?	Inner Fire	Rank 4	unavailable	40	18000	Inner Fire (Rank 3) met=no
+?	Inner Fire	Rank 5	unavailable	50	30000	Inner Fire (Rank 4) met=no
+?	Inner Fire	Rank 6	unavailable	60	46000	Inner Fire (Rank 5) met=no
+?	Inner Fire	Rank 7	unavailable	69	65000	Inner Fire (Rank 6) met=no
+?	Levitate		unavailable	34	12000	-
+?	Lightwell	Rank 2	unavailable	50	1200	Lightwell (Rank 1) met=no
+?	Lightwell	Rank 3	unavailable	60	1500	Lightwell (Rank 2) met=no
+?	Lightwell	Rank 4	unavailable	70	1500	Lightwell (Rank 3) met=no
+?	Mana Burn	Rank 1	unavailable	24	5000	-
+?	Mana Burn	Rank 2	unavailable	32	11000	Mana Burn (Rank 1) met=no
+?	Mana Burn	Rank 3	unavailable	40	18000	Mana Burn (Rank 2) met=no
+?	Mana Burn	Rank 4	unavailable	48	28000	Mana Burn (Rank 3) met=no
+?	Mana Burn	Rank 5	unavailable	56	42000	Mana Burn (Rank 4) met=no
+?	Mana Burn	Rank 6	unavailable	63	65000	Mana Burn (Rank 5) met=no
+?	Mana Burn	Rank 7	unavailable	70	110000	Mana Burn (Rank 6) met=no
+?	Mass Dispel		unavailable	70	110000	Dispel Magic (Rank 2) met=no
+?	Mind Blast	Rank 10	unavailable	63	65000	Mind Blast (Rank 9) met=no
+?	Mind Blast	Rank 11	unavailable	69	65000	Mind Blast (Rank 10) met=no
+?	Mind Blast	Rank 3	unavailable	22	4000	Mind Blast (Rank 2) met=yes
+?	Mind Blast	Rank 4	unavailable	28	8000	Mind Blast (Rank 3) met=no
+?	Mind Blast	Rank 5	unavailable	34	12000	Mind Blast (Rank 4) met=no
+?	Mind Blast	Rank 6	unavailable	40	18000	Mind Blast (Rank 5) met=no
+?	Mind Blast	Rank 7	unavailable	46	26000	Mind Blast (Rank 6) met=no
+?	Mind Blast	Rank 8	unavailable	52	38000	Mind Blast (Rank 7) met=no
+?	Mind Blast	Rank 9	unavailable	58	44000	Mind Blast (Rank 8) met=no
+?	Mind Control	Rank 1	unavailable	30	10000	-
+?	Mind Control	Rank 2	unavailable	44	24000	Mind Control (Rank 1) met=no
+?	Mind Control	Rank 3	unavailable	58	44000	Mind Control (Rank 2) met=no
+?	Mind Flay	Rank 2	unavailable	28	400	Mind Flay (Rank 1) met=no
+?	Mind Flay	Rank 3	unavailable	36	700	Mind Flay (Rank 2) met=no
+?	Mind Flay	Rank 4	unavailable	44	1200	Mind Flay (Rank 3) met=no
+?	Mind Flay	Rank 5	unavailable	52	1900	Mind Flay (Rank 4) met=no
+?	Mind Flay	Rank 6	unavailable	60	2300	Mind Flay (Rank 5) met=no
+?	Mind Flay	Rank 7	unavailable	68	6500	Mind Flay (Rank 6) met=no
+?	Mind Soothe	Rank 1	unavailable	20	3000	-
+?	Mind Soothe	Rank 2	unavailable	36	14000	Mind Soothe (Rank 1) met=no
+?	Mind Soothe	Rank 3	unavailable	52	38000	Mind Soothe (Rank 2) met=no
+?	Mind Soothe	Rank 4	unavailable	67	99000	Mind Soothe (Rank 3) met=no
+?	Mind Vision	Rank 1	unavailable	22	4000	-
+?	Mind Vision	Rank 2	unavailable	44	24000	Mind Vision (Rank 1) met=no
+?	Power Word: Fortitude	Rank 3	unavailable	24	5000	Power Word: Fortitude (Rank 2) met=yes
+?	Power Word: Fortitude	Rank 4	unavailable	36	14000	Power Word: Fortitude (Rank 3) met=no
+?	Power Word: Fortitude	Rank 5	unavailable	48	28000	Power Word: Fortitude (Rank 4) met=no
+?	Power Word: Fortitude	Rank 6	unavailable	60	46000	Power Word: Fortitude (Rank 5) met=no
+?	Power Word: Fortitude	Rank 7	unavailable	70	65000	Power Word: Fortitude (Rank 6) met=no
+?	Power Word: Shield	Rank 10	unavailable	60	46000	Power Word: Shield (Rank 9) met=no
+?	Power Word: Shield	Rank 11	unavailable	65	80000	Power Word: Shield (Rank 10) met=no
+?	Power Word: Shield	Rank 12	unavailable	70	140000	Power Word: Shield (Rank 11) met=no
+?	Power Word: Shield	Rank 3	unavailable	18	2000	Power Word: Shield (Rank 2) met=yes
+?	Power Word: Shield	Rank 4	unavailable	24	5000	Power Word: Shield (Rank 3) met=no
+?	Power Word: Shield	Rank 5	unavailable	30	10000	Power Word: Shield (Rank 4) met=no
+?	Power Word: Shield	Rank 6	unavailable	36	14000	Power Word: Shield (Rank 5) met=no
+?	Power Word: Shield	Rank 7	unavailable	42	22000	Power Word: Shield (Rank 6) met=no
+?	Power Word: Shield	Rank 8	unavailable	48	28000	Power Word: Shield (Rank 7) met=no
+?	Power Word: Shield	Rank 9	unavailable	54	40000	Power Word: Shield (Rank 8) met=no
+?	Prayer of Fortitude	Rank 1	unavailable	48	28000	Power Word: Fortitude (Rank 5) met=no
+?	Prayer of Fortitude	Rank 2	unavailable	60	46000	Prayer of Fortitude (Rank 1) met=no
+?	Prayer of Healing	Rank 1	unavailable	30	10000	-
+?	Prayer of Healing	Rank 2	unavailable	40	18000	Prayer of Healing (Rank 1) met=no
+?	Prayer of Healing	Rank 3	unavailable	50	30000	Prayer of Healing (Rank 2) met=no
+?	Prayer of Healing	Rank 4	unavailable	60	46000	Prayer of Healing (Rank 3) met=no
+?	Prayer of Healing	Rank 5	unavailable	60	6500	Prayer of Healing (Rank 4) met=no
+?	Prayer of Healing	Rank 6	unavailable	68	110000	Prayer of Healing (Rank 5) met=no
+?	Prayer of Mending	Rank 1	unavailable	68	110000	-
+?	Prayer of Shadow Protection	Rank 1	unavailable	56	42000	Shadow Protection (Rank 3) met=no
+?	Prayer of Spirit	Rank 1	unavailable	60	2300	Divine Spirit (Rank 4) met=no
+?	Prayer of Spirit	Rank 2	unavailable	70	3400	Divine Spirit (Rank 5) met=no
+?	Psychic Scream	Rank 2	unavailable	28	8000	Psychic Scream (Rank 1) met=yes
+?	Psychic Scream	Rank 3	unavailable	42	22000	Psychic Scream (Rank 2) met=no
+?	Psychic Scream	Rank 4	unavailable	56	42000	Psychic Scream (Rank 3) met=no
+?	Renew	Rank 10	unavailable	60	6500	Renew (Rank 9) met=no
+?	Renew	Rank 11	unavailable	65	80000	Renew (Rank 10) met=no
+?	Renew	Rank 12	unavailable	70	140000	Renew (Rank 11) met=no
+?	Renew	Rank 3	unavailable	20	3000	Renew (Rank 2) met=yes
+?	Renew	Rank 4	unavailable	26	6000	Renew (Rank 3) met=no
+?	Renew	Rank 5	unavailable	32	11000	Renew (Rank 4) met=no
+?	Renew	Rank 6	unavailable	38	16000	Renew (Rank 5) met=no
+?	Renew	Rank 7	unavailable	44	24000	Renew (Rank 6) met=no
+?	Renew	Rank 8	unavailable	50	30000	Renew (Rank 7) met=no
+?	Renew	Rank 9	unavailable	56	42000	Renew (Rank 8) met=no
+?	Resurrection	Rank 2	unavailable	22	4000	Resurrection (Rank 1) met=yes
+?	Resurrection	Rank 3	unavailable	34	12000	Resurrection (Rank 2) met=no
+?	Resurrection	Rank 4	unavailable	46	26000	Resurrection (Rank 3) met=no
+?	Resurrection	Rank 5	unavailable	58	44000	Resurrection (Rank 4) met=no
+?	Resurrection	Rank 6	unavailable	68	110000	Resurrection (Rank 5) met=no
+?	Shackle Undead	Rank 1	unavailable	20	3000	-
+?	Shackle Undead	Rank 2	unavailable	40	18000	Shackle Undead (Rank 1) met=no
+?	Shackle Undead	Rank 3	unavailable	60	46000	Shackle Undead (Rank 2) met=no
+?	Shadow Protection	Rank 1	unavailable	30	10000	-
+?	Shadow Protection	Rank 2	unavailable	42	22000	Shadow Protection (Rank 1) met=no
+?	Shadow Protection	Rank 3	unavailable	56	42000	Shadow Protection (Rank 2) met=no
+?	Shadow Protection	Rank 4	unavailable	68	110000	Shadow Protection (Rank 3) met=no
+?	Shadow Word: Death	Rank 1	unavailable	62	59000	-
+?	Shadow Word: Death	Rank 2	unavailable	70	110000	Shadow Word: Death (Rank 1) met=no
+?	Shadow Word: Pain	Rank 10	unavailable	70	140000	Shadow Word: Pain (Rank 9) met=no
+?	Shadow Word: Pain	Rank 3	unavailable	18	2000	Shadow Word: Pain (Rank 2) met=yes
+?	Shadow Word: Pain	Rank 4	unavailable	26	6000	Shadow Word: Pain (Rank 3) met=no
+?	Shadow Word: Pain	Rank 5	unavailable	34	12000	Shadow Word: Pain (Rank 4) met=no
+?	Shadow Word: Pain	Rank 6	unavailable	42	22000	Shadow Word: Pain (Rank 5) met=no
+?	Shadow Word: Pain	Rank 7	unavailable	50	30000	Shadow Word: Pain (Rank 6) met=no
+?	Shadow Word: Pain	Rank 8	unavailable	58	44000	Shadow Word: Pain (Rank 7) met=no
+?	Shadow Word: Pain	Rank 9	unavailable	65	80000	Shadow Word: Pain (Rank 8) met=no
+?	Shadowfiend	Rank 1	unavailable	66	89000	-
+?	Shadowguard	Rank 1	unavailable	20	100	-
+?	Shadowguard	Rank 2	unavailable	28	400	Shadowguard (Rank 1) met=no
+?	Shadowguard	Rank 3	unavailable	36	700	Shadowguard (Rank 2) met=no
+?	Shadowguard	Rank 4	unavailable	44	1200	Shadowguard (Rank 3) met=no
+?	Shadowguard	Rank 5	unavailable	52	1900	Shadowguard (Rank 4) met=no
+?	Shadowguard	Rank 6	unavailable	60	2300	Shadowguard (Rank 5) met=no
+?	Shadowguard	Rank 7	unavailable	68	6500	Shadowguard (Rank 6) met=no
+?	Smite	Rank 10	unavailable	69	65000	Smite (Rank 9) met=no
+?	Smite	Rank 4	unavailable	22	4000	Smite (Rank 3) met=yes
+?	Smite	Rank 5	unavailable	30	10000	Smite (Rank 4) met=no
+?	Smite	Rank 6	unavailable	38	16000	Smite (Rank 5) met=no
+?	Smite	Rank 7	unavailable	46	26000	Smite (Rank 6) met=no
+?	Smite	Rank 8	unavailable	54	40000	Smite (Rank 7) met=no
+?	Smite	Rank 9	unavailable	61	53000	Smite (Rank 8) met=no
+?	Vampiric Touch	Rank 2	unavailable	60	2300	Vampiric Touch (Rank 1) met=no
+?	Vampiric Touch	Rank 3	unavailable	70	2300	Vampiric Touch (Rank 2) met=no
+[PROF_COOKING]
+State: LAST_SEEN; partial; observed=1789268487
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1789268486
+VisitedNPC: Aska Mistrunner
+VisitedZone: Thunder Bluff
+Name: Aska Mistrunner
+Type: Trade Skill Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 1067606
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Goblin Deviled Clams		unavailable	0	285	Cooking 125 met=no
+?	Spider Sausage		unavailable	0	3800	Cooking 200 met=no
+[PROF_FIRST_AID]
+State: LAST_SEEN; partial; observed=1789268835
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1789268835
+VisitedNPC: Pand Stonebinder
+VisitedZone: Thunder Bluff
+Name: Pand Stonebinder
+Type: Trade Skill Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 1067511
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Anti-Venom		unavailable	0	238	First Aid 80 met=no
+?	Heavy Linen Bandage		unavailable	0	95	First Aid 40 met=no
+?	Heavy Wool Bandage		unavailable	0	950	First Aid 115 met=no
+?	Journeyman First Aid		unavailable	0	475	First Aid 50 met=no
+?	Silk Bandage		unavailable	0	4750	First Aid 150 met=no
+?	Wool Bandage		unavailable	0	238	First Aid 80 met=no
+[PROF_TAILORING]
+State: LAST_SEEN; partial; observed=1789248956
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1789248955
+VisitedNPC: Tepa
+VisitedZone: Thunder Bluff
+Name: Tepa
+Type: Trade Skill Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 1055596
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Artisan Tailor		unavailable	35	47500	Tailoring 200 met=no
+?	Azure Silk Belt		unavailable	0	950	Tailoring 175 met=no
+?	Azure Silk Hood		unavailable	0	570	Tailoring 145 met=no
+?	Azure Silk Pants		unavailable	0	570	Tailoring 140 met=no
+?	Azure Silk Vest		unavailable	0	712	Tailoring 150 met=no
+?	Barbaric Linen Vest		unavailable	0	285	Tailoring 70 met=no
+?	Black Mageweave Boots		unavailable	0	5700	Tailoring 230 met=no
+?	Black Mageweave Gloves		unavailable	0	4750	Tailoring 215 met=no
+?	Black Mageweave Headband		unavailable	0	5700	Tailoring 230 met=no
+?	Black Mageweave Leggings		unavailable	0	3800	Tailoring 205 met=no
+?	Black Mageweave Robe		unavailable	0	3800	Tailoring 210 met=no
+?	Black Mageweave Shoulders		unavailable	0	5700	Tailoring 230 met=no
+?	Black Mageweave Vest		unavailable	0	3800	Tailoring 205 met=no
+?	Bolt of Mageweave		unavailable	0	950	Tailoring 175 met=no
+?	Bolt of Runecloth		unavailable	0	9500	Tailoring 250 met=no
+?	Bolt of Silk Cloth		unavailable	0	475	Tailoring 125 met=no
+?	Bolt of Woolen Cloth		unavailable	0	95	Tailoring 75 met=no
+?	Brightcloth Cloak		unavailable	0	11875	Tailoring 275 met=no
+?	Brightcloth Gloves		unavailable	0	9500	Tailoring 270 met=no
+?	Brightcloth Robe		unavailable	0	9500	Tailoring 270 met=no
+?	Cindercloth Boots		unavailable	0	7125	Tailoring 245 met=no
+?	Cindercloth Robe		unavailable	0	4750	Tailoring 225 met=no
+?	Crimson Silk Belt		unavailable	0	950	Tailoring 175 met=no
+?	Crimson Silk Gloves		unavailable	0	4750	Tailoring 210 met=no
+?	Crimson Silk Pantaloons		unavailable	0	2850	Tailoring 195 met=no
+?	Crimson Silk Vest		unavailable	0	2375	Tailoring 185 met=no
+?	Double-stitched Woolen Shoulders		unavailable	0	475	Tailoring 110 met=no
+?	Dreamweave Circlet		unavailable	0	7125	Tailoring 250 met=no
+?	Dreamweave Gloves		unavailable	0	4750	Tailoring 225 met=no
+?	Dreamweave Vest		unavailable	0	4750	Tailoring 225 met=no
+?	Earthen Vest		unavailable	0	855	Tailoring 170 met=no
+?	Expert Tailor		unavailable	20	4750	Tailoring 125 met=no
+?	Felcloth Boots		unavailable	0	14250	Tailoring 285 met=no
+?	Felcloth Hood		unavailable	0	14250	Tailoring 290 met=no
+?	Felcloth Robe		unavailable	0	14250	Tailoring 300 met=no
+?	Felcloth Shoulders		unavailable	0	14250	Tailoring 300 met=no
+?	Formal White Shirt		unavailable	0	475	Tailoring 170 met=no
+?	Frostweave Gloves		unavailable	0	9500	Tailoring 265 met=no
+?	Frostweave Pants		unavailable	0	14250	Tailoring 280 met=no
+?	Frostweave Tunic		unavailable	0	9500	Tailoring 255 met=no
+?	Ghostweave Belt		unavailable	0	9500	Tailoring 265 met=no
+?	Ghostweave Gloves		unavailable	0	9500	Tailoring 270 met=no
+?	Ghostweave Pants		unavailable	0	14250	Tailoring 290 met=no
+?	Ghostweave Vest		unavailable	0	11875	Tailoring 275 met=no
+?	Gloves of Meditation		unavailable	0	712	Tailoring 130 met=no
+?	Gray Woolen Shirt		unavailable	0	190	Tailoring 100 met=no
+?	Green Linen Bracers		unavailable	0	190	Tailoring 60 met=no
+?	Green Linen Shirt		unavailable	0	190	Tailoring 70 met=no
+?	Green Silken Shoulders		unavailable	0	950	Tailoring 180 met=no
+?	Green Woolen Vest		unavailable	0	285	Tailoring 85 met=no
+?	Handstitched Linen Britches		unavailable	0	285	Tailoring 70 met=no
+?	Heavy Woolen Gloves		unavailable	0	380	Tailoring 85 met=no
+?	Heavy Woolen Pants		unavailable	0	475	Tailoring 110 met=no
+?	Lesser Wizard's Robe		unavailable	0	950	Tailoring 135 met=no
+?	Linen Boots		unavailable	0	190	Tailoring 65 met=no
+?	Long Silken Cloak		unavailable	0	950	Tailoring 185 met=no
+?	Mageweave Bag		unavailable	0	4750	Tailoring 225 met=no
+?	Orange Mageweave Shirt		unavailable	0	2375	Tailoring 215 met=no
+?	Pearl-clasped Cloak		unavailable	0	380	Tailoring 90 met=no
+?	Red Mageweave Bag		unavailable	0	6175	Tailoring 235 met=no
+?	Red Swashbuckler's Shirt		unavailable	0	712	Tailoring 175 met=no
+?	Reinforced Linen Cape		unavailable	0	190	Tailoring 60 met=no
+?	Robe of Power		unavailable	0	950	Tailoring 190 met=no
+?	Runecloth Belt		unavailable	0	9500	Tailoring 255 met=no
+?	Runecloth Boots		unavailable	0	14250	Tailoring 280 met=no
+?	Runecloth Cloak		unavailable	0	9500	Tailoring 265 met=no
+?	Runecloth Gloves		unavailable	0	11875	Tailoring 275 met=no
+?	Runecloth Headband		unavailable	0	14250	Tailoring 295 met=no
+?	Runecloth Pants		unavailable	0	14250	Tailoring 285 met=no
+?	Runecloth Robe		unavailable	0	9500	Tailoring 260 met=no
+?	Runecloth Shoulders		unavailable	0	14250	Tailoring 300 met=no
+?	Runecloth Tunic		unavailable	0	9500	Tailoring 260 met=no
+?	Silk Headband		unavailable	0	712	Tailoring 160 met=no
+?	Simple Black Dress		unavailable	0	4750	Tailoring 235 met=no
+?	Simple Kilt		unavailable	0	285	Tailoring 75 met=no
+?	Small Silk Pack		unavailable	0	760	Tailoring 150 met=no
+?	Soft-soled Linen Boots		unavailable	0	285	Tailoring 80 met=no
+?	Spidersilk Boots		unavailable	0	712	Tailoring 125 met=no
+?	Stylish Red Shirt		unavailable	0	238	Tailoring 110 met=no
+?	White Swashbuckler's Shirt		unavailable	0	475	Tailoring 160 met=no
+?	White Woolen Dress		unavailable	0	238	Tailoring 110 met=no
+?	Wizardweave Leggings		unavailable	0	11875	Tailoring 275 met=no
+?	Wizardweave Robe		unavailable	0	14250	Tailoring 300 met=no
+?	Wizardweave Turban		unavailable	0	14250	Tailoring 300 met=no
+?	Woolen Bag		unavailable	0	190	Tailoring 80 met=no
+?	Woolen Boots		unavailable	0	285	Tailoring 95 met=no
+?	Woolen Cape		unavailable	0	238	Tailoring 75 met=no
+[UNKNOWN]
+State: LAST_SEEN; partial; observed=1789268937
+CoverageNote: No visible services; completeness unknown
+LastVisit: 1789245086
+VisitedNPC: Malakai Cross
+VisitedZone: Thunder Bluff
+VisitStatus: Closed before capture settled
+Name: Ansekhwa
+Type: Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 1067511
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+
+[END]
