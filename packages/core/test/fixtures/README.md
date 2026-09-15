@@ -16,16 +16,22 @@ normalized, or "corrected":
 - `retail/ezaller-1789478317.wowsync.txt` — Ezaller, same character,
   ~7 minutes later (gold, XP, and /played all advanced). Also a real
   snapshot-history pair.
+- `tbc-anniversary/voodan-1789484723.wowsync.txt` — Voodan, Dreamscythe,
+  Level 16 Priest, TBC Anniversary client 2.5.6 build 69795. Pulled from a
+  live import the user made through the running app (not pasted into a
+  prompt), then saved here as the first real TBC Anniversary fixture. Its
+  `[CLASS]` trainer visit alone carries 180 observed services (all
+  `unavailable`) across 32 distinct required levels, plus three independent
+  profession trainer visits (Cooking, First Aid, Tailoring) and one
+  unresolved `[UNKNOWN]` visit — this is what drove the trainer
+  summarization work in `trainerSummary.ts` (see
+  `test/trainerSummary.test.ts`).
 
 Filenames encode `<character>-<Generated: unix timestamp>.wowsync.txt` so
 the capture order is obvious without opening the file.
 
-**`tbc-anniversary/` real fixtures are pending.** WoW servers were down
-during this development session, so no real Torahn/Voodan/Tenivard exports
-were available yet. Do not add synthetic data there to fill the gap — the
-directory stays empty (or absent) until real captures arrive. When they do,
-add them here following the same naming convention and update
-`test/realFixtures.test.ts`.
+Torahn/Tenivard real fixtures are still pending — Voodan above is the only
+real TBC Anniversary character captured so far.
 
 These real fixtures already forced two genuine parser fixes that no amount
 of synthetic data had caught:
@@ -62,11 +68,14 @@ real TBC capture exists. The character name (`Synthtest` on
 so it can never be mistaken for real history.
 
 Additional synthetic exports built inline (not as files) inside
-`parser.test.ts`, `diff.test.ts`, `version.test.ts`, and `identity.test.ts`
-cover narrow parser edge cases — unknown fields, partial/UNKNOWN
-combinations, malformed input, multi-category trainers, item variants —
-that are awkward or impossible to demonstrate with the limited real data
-on hand. Those are synthetic by construction and are treated as such.
+`parser.test.ts`, `diff.test.ts`, `version.test.ts`, `identity.test.ts`,
+and `trainerSummary.test.ts` cover narrow parser/summarizer edge cases —
+unknown fields, partial/UNKNOWN combinations, malformed input,
+multi-category trainers, item variants, missing `requiredLevel`,
+Classic-Era/Retail-shaped trainer data — that are awkward or impossible to
+demonstrate with the limited real data on hand. Those are synthetic by
+construction and are treated as such; `trainerSummary.test.ts` always
+validates against the real Voodan CLASS/profession trainer data first.
 
 To regenerate the synthetic fixtures: `node test/fixtures/generate.ts`.
 Never regenerate over the real ones — there is no generator for those, by
