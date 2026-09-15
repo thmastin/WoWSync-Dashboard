@@ -1,4 +1,4 @@
-import type { AccountFacts, ImportResult, StoredCharacterSummary, StoredSnapshot, VersionOrUnknown } from "./types.ts";
+import type { AccountContext, AccountFacts, ImportResult, StoredCharacterSummary, StoredSnapshot, VersionOrUnknown } from "./types.ts";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -26,4 +26,9 @@ export function fetchAccountFacts(version: VersionOrUnknown) {
 
 export function importExport(text: string) {
   return request<{ result: ImportResult }>("/api/import", { method: "POST", body: JSON.stringify({ text }) });
+}
+
+/** The full "Export Dashboard Context" document. Not wrapped in a {key: ...} envelope - this is the exact JSON the developer-tool modal copies/downloads verbatim. */
+export function fetchAccountContext() {
+  return request<AccountContext>("/api/account-context");
 }

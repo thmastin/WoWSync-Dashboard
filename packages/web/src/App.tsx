@@ -4,6 +4,7 @@ import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
 import CharactersGrid from "./components/CharactersGrid.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
+import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import type { AccountFacts, VersionOrUnknown } from "./types.ts";
@@ -23,6 +24,7 @@ export default function App() {
   const [facts, setFacts] = useState<AccountFacts | null>(null);
   const [selectedRealm, setSelectedRealm] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [devExportOpen, setDevExportOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
@@ -52,9 +54,14 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark">⚔</span> WoWSync Dashboard
         </div>
-        <button className="primary-button" onClick={() => setImportOpen(true)}>
-          Import WoWSync
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
+            Developer
+          </button>
+          <button className="primary-button" onClick={() => setImportOpen(true)}>
+            Import WoWSync
+          </button>
+        </div>
       </header>
 
       <nav className="version-tabs">
@@ -127,6 +134,8 @@ export default function App() {
           }}
         />
       )}
+
+      {devExportOpen && <DeveloperExportModal onClose={() => setDevExportOpen(false)} />}
     </div>
   );
 }

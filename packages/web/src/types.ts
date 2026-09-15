@@ -391,3 +391,21 @@ export interface AccountFacts {
   freshness: FreshnessSummary;
   realms: RealmGroup[];
 }
+
+// --- AccountContext ("Export Dashboard Context" developer tool) ---
+// Deliberately a loose/partial mirror: the web app only ever reads a
+// handful of summary fields from this (for the developer modal's preview)
+// and otherwise treats it as an opaque JSON document to copy/download
+// verbatim - it never re-derives facts from it.
+
+export interface AccountContextVersionSummary {
+  version: string;
+  aggregationScope: "realm" | "account-wide";
+  characters: { name: string; realm: string }[];
+}
+
+export interface AccountContext {
+  schemaVersion: string;
+  generatedAt: number;
+  versions: Record<string, AccountContextVersionSummary>;
+}
