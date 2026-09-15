@@ -1,0 +1,82 @@
+WOWSYNC v1
+Generated: 1700100000
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1700100000
+Name: Torahn
+Realm: Faerlina
+Class: Shaman
+Level: 20
+Faction: Horde
+MoneyCopper: 25000
+PlayedSeconds: 100000
+LevelPlayedSeconds: 6000
+Client: 2.5.6 build 69546
+
+[LOCATION]
+State: OBSERVED; complete; observed=1700100000
+Zone: The Barrens
+Subzone: Southern Barrens
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1700100000
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	EMPTY
+5:Chest	EMPTY
+6:Waist	EMPTY
+7:Legs	EMPTY
+8:Feet	EMPTY
+9:Wrist	EMPTY
+10:Hands	EMPTY
+11:Finger1	EMPTY
+12:Finger2	EMPTY
+13:Trinket1	EMPTY
+14:Trinket2	EMPTY
+15:Back	EMPTY
+16:MainHand	EMPTY
+17:OffHand	EMPTY
+18:Ranged	EMPTY
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1700100000
+container	capacity	free	family	bagRef
+Slots: 0 free / 0
+itemRef	name	qty	bound	vendorEachCopper
+Items: EMPTY
+
+[BANK]
+State: OBSERVED; complete; observed=1700100000
+container	capacity	free	family	bagRef
+Slots: 0 free / 0
+itemRef	name	qty	bound	vendorEachCopper
+Items: EMPTY
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1700100000
+profession	skill	maxSkill
+Mining	60	300
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1700100000
+Coverage: Full spellbook scan
+spellID	name	rank
+
+[TRAINERS]
+State: OBSERVED; categories=1; observed=1700100000
+[CLASS]
+State: OBSERVED; complete; observed=1700100000
+Name: Grillo Rendo
+Type: class
+Coverage: Full window scan
+Filters: available=yes; unavailable=yes; known=yes
+MoneyAtVisitCopper: 0
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+8017	Frost Shock	-	available	20	500	-
+324	Lightning Shield	-	known	4	?	-
+
+[END]

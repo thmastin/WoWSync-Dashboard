@@ -1,0 +1,14 @@
+{
+  "name": "@wowsync-dashboard/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WOWSYNC v1 parser, version routing, character identity, snapshot storage, and diff engine.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  }
+}

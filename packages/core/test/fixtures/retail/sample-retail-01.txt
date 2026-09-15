@@ -1,0 +1,76 @@
+WOWSYNC v1
+Generated: 1789344996
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789344996
+Name: Retailtoon
+Realm: Area52
+Class: Mage
+Level: 80
+Faction: Horde
+MoneyCopper: 1250000
+PlayedSeconds: 500000
+LevelPlayedSeconds: 20000
+Client: 12.1.0 build 69814
+ClientFamily: Retail
+Interface: 120100
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789344996
+Zone: Elwynn Forest
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789344996
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	EMPTY
+5:Chest	EMPTY
+6:Waist	EMPTY
+7:Legs	EMPTY
+8:Feet	EMPTY
+9:Wrist	EMPTY
+10:Hands	EMPTY
+11:Finger1	EMPTY
+12:Finger2	EMPTY
+13:Trinket1	EMPTY
+14:Trinket2	EMPTY
+15:Back	EMPTY
+16:MainHand	EMPTY
+17:OffHand	EMPTY
+18:Ranged	EMPTY
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789344996
+container	capacity	free	family	bagRef
+ContainerStorage 0: CARRIED
+0	20	20	-1	-
+Slots: 20 free / 20
+itemRef	name	qty	bound	vendorEachCopper
+Items: EMPTY
+
+[BANK]
+State: OBSERVED; complete; observed=1789344996
+container	capacity	free	family	bagRef
+Slots: 0 free / 0
+itemRef	name	qty	bound	vendorEachCopper
+Items: EMPTY
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789344996
+profession	skill	maxSkill	skillLineID	tier	expansion	category
+Tailoring	100	100	197	Khaz Algar	The War Within	PRIMARY
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789344996
+Coverage: Full spellbook scan
+spellID	name	rank
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]
