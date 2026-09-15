@@ -163,15 +163,48 @@ only depends on receiving WOWSYNC v1 text, not on *how* that text arrived.
 Manual paste, a dropped `.txt` file, and a hypothetical future
 auto-generated snapshot file all go through the exact same importer.
 
+## Export Dashboard Context (developer tool)
+
+A small **Developer** button in the header (next to Import WoWSync, but
+deliberately low-key — this is a workflow/debugging tool, not a headline
+feature) opens a modal with two actions:
+
+- **Copy Account Context** — copies a complete, deterministic JSON
+  snapshot of everything the dashboard knows — all three WoW versions,
+  every character's economy/professions/profession-coverage/inventory/
+  progression/snapshot-history/trainer summary, recent changes, and
+  freshness — to your clipboard.
+- **Download JSON** — saves the same document as
+  `wowsync-account-context.json`.
+
+This exists so you can hand the dashboard's actual structured state to an
+external LLM conversation (ChatGPT, Claude, etc.) for analysis, without
+screenshots and without waiting for the eventual "Ask My Account" feature.
+**It is local-only**: the dashboard itself never contacts any LLM
+provider, never stores an API key, and never transmits your data anywhere
+— clicking Copy or Download is the only thing that happens, and pasting
+the result into another service is entirely your own explicit choice.
+
+The export doesn't reimplement any account logic — it's `AccountFacts`
+for each version embedded as-is, plus per-character snapshot history and
+trainer summaries built by reusing the same `diffSnapshots`/
+`summarizeTrainerCategory` functions the rest of the app already uses. It
+is also available directly at `GET /api/account-context` — the exact same
+JSON the UI copies/downloads, so there is one canonical export, not a
+separate API shape and UI shape. See `docs/ARCHITECTURE.md` for the full
+structure.
+
 ## LLM analysis (not implemented yet)
 
 The architecture reserves a place for an "Ask My Account" feature:
-`AccountFacts` is the deterministic factual layer an LLM would eventually
-read, and it would only ever *interpret* those facts — never serve as the
-database, and never see a raw export or the database directly. No LLM
-context builder, provider integration, or API key exists yet. The
-dashboard is fully usable with the LLM layer absent, which is its current
-state.
+`AccountFacts`/`AccountContext` are the deterministic factual layer an
+LLM would eventually read automatically, and it would only ever
+*interpret* those facts — never serve as the database, and never see a
+raw export or the database directly. "Export Dashboard Context" above
+closes the gap between "the facts exist" and "a person can hand them to
+an LLM" — manually, today. No LLM context builder, provider integration,
+API key, or chat interface exists yet. The dashboard is fully usable with
+the LLM layer absent, which is its current state.
 
 ## Privacy
 

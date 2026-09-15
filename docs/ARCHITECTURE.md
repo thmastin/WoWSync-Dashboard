@@ -33,12 +33,23 @@ AccountFacts                   packages/core/src/accountFacts.ts
         │                       changes) built from the store + diff
         │                       engine. Pure: no I/O, no clock reads.
         ▼
+AccountContext                 packages/core/src/accountContext.ts
+        │                     — all three versions' AccountFacts embedded
+        │                       wholesale, plus per-character snapshot
+        │                       history/transitions/trainer summaries.
+        │                       The canonical "Export Dashboard Context"
+        │                       JSON — GET /api/account-context and the
+        │                       web UI's Copy/Download buttons share this
+        │                       one serialization.
+        ▼
 Dashboard UI                   packages/web (React/Vite)
         │                     served by packages/server (Express)
         ▼
-   (future) LLM context builder — reads AccountFacts, never the raw
-                                   export or the database directly.
-                                   Not implemented in this milestone.
+   (future) LLM context builder — would read AccountContext/AccountFacts,
+                                   never the raw export or the database
+                                   directly. Not implemented in this
+                                   milestone — see "Export Dashboard
+                                   Context" below for what exists today.
 ```
 
 ## Package layout
@@ -80,7 +91,15 @@ Dashboard UI                   packages/web (React/Vite)
   - `accountFacts.ts` — the deterministic account-level facts layer (see
     "AccountFacts" and "Realm scoping" below). Pure: takes already-fetched
     characters/snapshots/diffs and a `now` value, returns structured
-    facts, realm-partitioned where that's the safe default.
+    facts, realm-partitioned where that's the safe default. Also exports
+    `diffToChangeSummary()`, the one `SnapshotDiff` → flat-summary mapping
+    shared by `recentChanges` and `accountContext.ts`'s per-character
+    transition history.
+  - `accountContext.ts` — the "Export Dashboard Context" developer tool's
+    canonical document (see below). Pure assembly only: embeds each
+    version's `AccountFacts` wholesale and reuses `diffSnapshots`/
+    `summarizeTrainerCategory` for per-character history — no new account
+    logic lives here.
   - `store.ts` / `sqliteStore.ts` — the storage abstraction and its
     SQLite implementation. `SnapshotStore` is the seam: another storage
     engine could implement it without touching the importer, diff
@@ -367,14 +386,87 @@ specifically so tests (and, later, any server-side caching) can pin a
 reference time instead of depending on the wall clock — see
 `packages/core/test/freshness.test.ts`.
 
+## Export Dashboard Context (the developer tool)
+
+`accountContext.ts` assembles one deterministic document covering the
+whole dashboard — every WoW version, in one JSON payload:
+
+```ts
+interface AccountContext {
+  schemaVersion: "1";
+  generatedAt: number; // the `now` this was built with
+  versions: {
+    "classic-era": VersionContext;
+    "tbc-anniversary": VersionContext;
+    retail: VersionContext;
+  };
+}
+interface VersionContext {
+  version: WowVersion;
+  aggregationScope: "realm" | "account-wide";
+  facts: AccountFacts; // embedded wholesale - the authoritative source
+  characters: CharacterContext[]; // history AccountFacts doesn't carry
+}
+```
+
+This is explicitly **not** a second implementation of account logic —
+every number in it either comes straight from an already-built
+`AccountFacts` (embedded as-is, not re-derived) or is assembled by
+reusing existing pure functions:
+
+- `CharacterContext.snapshotHistory` — every stored snapshot for that
+  character (via the existing `SnapshotStore.listSnapshots`), reshaped
+  into a compact chronological list (level/gold/XP/playtime/zone per
+  snapshot), sorted oldest-first for a natural reading order.
+- `CharacterContext.transitions` — one entry per *consecutive* snapshot
+  pair (not just the latest "meaningful" one `AccountFacts.recentChanges`
+  covers), computed by calling `diffSnapshots()` — the same function the
+  rest of the app uses — and reshaping it with the newly-extracted
+  `diffToChangeSummary()` helper, which `recentChanges` itself now also
+  calls. One mapping, two call sites, not two implementations.
+- `CharacterContext.trainer` — the character's latest snapshot's trainer
+  categories, each run through the existing `summarizeTrainerCategory()`.
+  The raw, hundreds-of-services array is deliberately never included here
+  (see "Presentation vs. data" above) — full per-service drill-down
+  remains available, unchanged, via the existing
+  `GET /api/characters/:identityKey/snapshots` endpoint.
+
+**Determinism.** `buildAccountContext()` is pure (no I/O, no clock read);
+`SqliteSnapshotStore.buildAccountContext(now?)` does the one round of
+querying and hands everything to it along with an explicit `now`
+(defaulting to the wall clock only at that boundary). The same DB state
+plus the same `now` always produces byte-identical JSON — verified
+directly with `JSON.stringify` equality in
+`packages/core/test/accountContext.test.ts`, not just "looks the same."
+
+**API.** `GET /api/account-context` returns the `AccountContext` object
+directly (no `{key: ...}` envelope) — this is the literal JSON the web
+UI's Copy/Download buttons serialize, so there is exactly one canonical
+serialization path, not one for the API and another for the UI. An
+optional `?now=<unix seconds>` override exists for reproducible
+debugging; omitted, it uses the real clock.
+
+**UI.** A small "Developer" button in the header (deliberately unstyled/
+low-emphasis next to the primary "Import WoWSync" button — this is a
+debugging/workflow tool, not a headline feature) opens a modal with
+**Copy Account Context** and **Download JSON**. Copy uses
+`navigator.clipboard.writeText`; Download creates a local `Blob` and a
+throwaway `<a download>` click — both entirely client-side. Neither
+button, nor anything else in this feature, makes a network call to
+anything other than this app's own `localhost` server.
+
 ## LLM boundary (not implemented)
 
 ```
-Structured account data  →  Deterministic AccountFacts  →  LLM context builder  →  LLM provider  →  Analysis
+Structured account data  →  AccountContext / AccountFacts  →  LLM context builder  →  LLM provider  →  Analysis
 ```
 
-`AccountFacts` is exactly that middle layer, and it now exists as a real,
-tested module — not implied by other structures. No LLM context builder,
-provider integration, API key, or "Ask My Account" UI exists yet; the
-dashboard is fully usable without them, and no external LLM dependency or
-network call has been added. This milestone stops at `AccountFacts`.
+`AccountFacts` (per-version facts) and now `AccountContext` (the full,
+exportable document) are exactly that middle layer, and both exist as
+real, tested modules — not implied by other structures. "Export Dashboard
+Context" closes the gap between "the facts exist" and "a person can
+actually hand them to an LLM conversation" — but it stops there: no LLM
+context builder, provider integration, API key, chat interface, or
+automatic prompting exists yet. Nothing this feature touches sends data
+anywhere; the user explicitly copies or downloads, and decides what to do
+with it next. The dashboard remains fully usable without any of this.
