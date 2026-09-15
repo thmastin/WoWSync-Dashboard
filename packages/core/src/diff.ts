@@ -32,13 +32,24 @@ export interface EquipmentDelta {
   to?: string;
 }
 
+export interface LocationDelta {
+  fromZone?: string;
+  toZone?: string;
+  fromSubzone?: string;
+  toSubzone?: string;
+  changed: boolean;
+}
+
 export interface SnapshotDiff {
   fromGeneratedAt?: number;
   toGeneratedAt?: number;
   level: NumericDelta;
+  xp: NumericDelta;
+  xpMax: NumericDelta;
   moneyCopper: NumericDelta;
   playedSeconds: NumericDelta;
   levelPlayedSeconds: NumericDelta;
+  location: LocationDelta;
   professions: ProfessionDelta[];
   bagsItems: ItemDelta[];
   bankItems: ItemDelta[];
@@ -50,8 +61,25 @@ function numericDelta(from: number | undefined, to: number | undefined): Numeric
   return { from, to, delta: to - from };
 }
 
+// Blizzard's itemString format embeds the observing character's level at
+// link time (e.g. "item:6171::::::::3::::::::::" vs "...::4::..." for the
+// literal same pair of gloves, one level apart — confirmed against real
+// Bromrik captures). That field is not a meaningful item "variant" the way
+// an enchant, gem, or random suffix is, so it must not fragment one
+// physical item/stack into a phantom "lost + gained" pair on every level
+// change. Cross-snapshot matching therefore keys on the base numeric item
+// ID rather than the full itemRef string. The full itemRef is still
+// preserved untouched everywhere it's stored or displayed — only the
+// "is this the same tracked item" decision uses the looser key.
+function baseItemId(itemRef: string | undefined): string | undefined {
+  if (!itemRef) return undefined;
+  const match = /^item:(\d+)/.exec(itemRef);
+  return match ? match[1] : itemRef;
+}
+
 function itemKey(item: InventoryItemRecord): string {
-  return item.itemRef ?? `name:${item.name ?? "?"}`;
+  const id = baseItemId(item.itemRef);
+  return id ? `id:${id}|${item.name ?? "?"}|${item.bound ?? "?"}` : `name:${item.name ?? "?"}`;
 }
 
 function diffInventory(from: InventorySection, to: InventorySection): ItemDelta[] {
@@ -100,6 +128,14 @@ function diffProfessions(from: ParsedSnapshot["professions"], to: ParsedSnapshot
   return deltas;
 }
 
+function diffLocation(from: ParsedSnapshot["location"], to: ParsedSnapshot["location"]): LocationDelta {
+  if (from.status.state === "UNKNOWN" || to.status.state === "UNKNOWN") {
+    return { fromZone: from.zone, toZone: to.zone, fromSubzone: from.subzone, toSubzone: to.subzone, changed: false };
+  }
+  const changed = from.zone !== to.zone || from.subzone !== to.subzone;
+  return { fromZone: from.zone, toZone: to.zone, fromSubzone: from.subzone, toSubzone: to.subzone, changed };
+}
+
 function diffEquipment(from: ParsedSnapshot["equipment"], to: ParsedSnapshot["equipment"]): EquipmentDelta[] {
   if (from.status.state === "UNKNOWN" || to.status.state === "UNKNOWN") return [];
   const fromBySlot = new Map(from.slots.map((s) => [s.slot, s]));
@@ -109,7 +145,13 @@ function diffEquipment(from: ParsedSnapshot["equipment"], to: ParsedSnapshot["eq
     const fromSlot = fromBySlot.get(slot);
     const fromRef = fromSlot?.empty ? "EMPTY" : fromSlot?.itemRef;
     const toRef = toSlot.empty ? "EMPTY" : toSlot.itemRef;
-    if (fromRef !== toRef) {
+    // Same rationale as itemKey() above: compare by base item ID, not the
+    // full itemRef, so a level-up alone doesn't flag every equipped slot
+    // as "changed". The actual observed itemRef strings are still
+    // reported below for full transparency.
+    const fromId = fromRef === "EMPTY" ? "EMPTY" : baseItemId(fromRef);
+    const toId = toRef === "EMPTY" ? "EMPTY" : baseItemId(toRef);
+    if (fromId !== toId) {
       deltas.push({ slot, slotName: toSlot.slotName, from: fromRef, to: toRef });
     }
   }
@@ -122,9 +164,12 @@ export function diffSnapshots(from: ParsedSnapshot, to: ParsedSnapshot): Snapsho
     fromGeneratedAt: from.generatedAt,
     toGeneratedAt: to.generatedAt,
     level: numericDelta(from.character.level, to.character.level),
+    xp: numericDelta(from.character.xp, to.character.xp),
+    xpMax: numericDelta(from.character.xpMax, to.character.xpMax),
     moneyCopper: numericDelta(from.character.moneyCopper, to.character.moneyCopper),
     playedSeconds: numericDelta(from.character.playedSeconds, to.character.playedSeconds),
     levelPlayedSeconds: numericDelta(from.character.levelPlayedSeconds, to.character.levelPlayedSeconds),
+    location: diffLocation(from.location, to.location),
     professions: diffProfessions(from.professions, to.professions),
     bagsItems: diffInventory(from.bags, to.bags),
     bankItems: diffInventory(from.bank, to.bank),
