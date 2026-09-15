@@ -3,7 +3,7 @@
 // itself. A delta is only reported when both sides of the comparison are
 // actually known; unknown values never get treated as zero.
 
-import type { InventoryItemRecord, InventorySection, ParsedSnapshot } from "./types.ts";
+import type { InventoryItemRecord, InventorySection, ParsedSnapshot, TrainerSection } from "./types.ts";
 
 export interface NumericDelta {
   from?: number;
@@ -40,6 +40,12 @@ export interface LocationDelta {
   changed: boolean;
 }
 
+export interface TrainerUnlock {
+  category: string;
+  ability?: string;
+  rank?: string;
+}
+
 export interface SnapshotDiff {
   fromGeneratedAt?: number;
   toGeneratedAt?: number;
@@ -54,6 +60,8 @@ export interface SnapshotDiff {
   bagsItems: ItemDelta[];
   bankItems: ItemDelta[];
   equipment: EquipmentDelta[];
+  /** Abilities that moved to statusAtVisit "available" since the previous snapshot, per trainer category. Not an elaborate history feature — just the one fact worth surfacing. */
+  trainerUnlocks: TrainerUnlock[];
 }
 
 function numericDelta(from: number | undefined, to: number | undefined): NumericDelta {
@@ -159,6 +167,31 @@ function diffEquipment(from: ParsedSnapshot["equipment"], to: ParsedSnapshot["eq
   return deltas;
 }
 
+function serviceKey(ability: string | undefined, rank: string | undefined): string {
+  return `${ability ?? "?"}|${rank ?? "?"}`;
+}
+
+function diffTrainerUnlocks(from: TrainerSection, to: TrainerSection): TrainerUnlock[] {
+  if (from.status.state === "UNKNOWN" || to.status.state === "UNKNOWN") return [];
+  const fromByCategory = new Map(from.categories.map((c) => [c.category, c]));
+  const unlocks: TrainerUnlock[] = [];
+  for (const toCategory of to.categories) {
+    const fromCategory = fromByCategory.get(toCategory.category);
+    if (!fromCategory) continue; // a brand-new category has no "before" state to compare against
+    const wasAvailable = new Set(
+      fromCategory.services
+        .filter((s) => s.statusAtVisit?.toLowerCase() === "available")
+        .map((s) => serviceKey(s.ability, s.rank)),
+    );
+    for (const service of toCategory.services) {
+      if (service.statusAtVisit?.toLowerCase() !== "available") continue;
+      if (wasAvailable.has(serviceKey(service.ability, service.rank))) continue;
+      unlocks.push({ category: toCategory.category, ability: service.ability, rank: service.rank });
+    }
+  }
+  return unlocks;
+}
+
 export function diffSnapshots(from: ParsedSnapshot, to: ParsedSnapshot): SnapshotDiff {
   return {
     fromGeneratedAt: from.generatedAt,
@@ -174,5 +207,6 @@ export function diffSnapshots(from: ParsedSnapshot, to: ParsedSnapshot): Snapsho
     bagsItems: diffInventory(from.bags, to.bags),
     bankItems: diffInventory(from.bank, to.bank),
     equipment: diffEquipment(from.equipment, to.equipment),
+    trainerUnlocks: diffTrainerUnlocks(from.trainer, to.trainer),
   };
 }
