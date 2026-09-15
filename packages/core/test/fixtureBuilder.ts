@@ -397,11 +397,14 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
     sections.push(out.join("\n"));
   }
 
-  const header = [
+  // WoWSyncRender.lua's S.Render joins its whole output array (including
+  // these three lines individually) with "\n\n" — each is its own chunk,
+  // not one three-line header block.
+  return [
     "WOWSYNC v1",
     `Generated: ${generatedAt}`,
     "Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.",
-  ].join("\n");
-
-  return [header, ...sections, "[END]"].join("\n\n");
+    ...sections,
+    "[END]",
+  ].join("\n\n");
 }

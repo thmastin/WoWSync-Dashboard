@@ -41,7 +41,12 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   BANK: "bank",
   PROFESSIONS: "professions",
   "KNOWN SPELLS": "spells",
+  // Real captures show both spellings in the wild: the current addon
+  // (WoWSyncRender.lua) renders "TRAINERS", but older installed builds
+  // (e.g. a Classic Era client not yet updated) rendered "TRAINER". Both
+  // route to the same section rather than failing on addon version skew.
   TRAINERS: "trainer",
+  TRAINER: "trainer",
 };
 
 function fail(message: string, context?: string): never {
@@ -61,11 +66,26 @@ function takeLine(lines: string[], i: number, prefix: string, required = false):
   return [undefined, i];
 }
 
+// Fields are documented as tab-separated (WOWSYNC_SCHEMA.md), but real
+// copy/paste round-trips (clipboard managers, chat boxes, editors) commonly
+// collapse tabs to runs of spaces or trim trailing whitespace entirely. A
+// literal tab is still honored first; a run of 2+ spaces is accepted as a
+// fallback delimiter. A single space is never a delimiter, so normal
+// "Sinister Strike" / "Finger 1" style values with one internal space are
+// never split apart.
+function splitFields(line: string): string[] {
+  return line.split(/\t| {2,}/);
+}
+
 function splitRow(line: string, expectedColumns: number, label: string): string[] {
-  const cols = line.split("\t");
-  if (cols.length !== expectedColumns) {
-    fail(`Expected ${expectedColumns} tab-separated columns for ${label}, found ${cols.length}`, line);
+  const cols = splitFields(line);
+  if (cols.length > expectedColumns) {
+    fail(`Expected at most ${expectedColumns} columns for ${label}, found ${cols.length}`, line);
   }
+  // Trailing columns are sometimes dropped entirely (trailing tab/space
+  // trimmed by whatever the export passed through) rather than left empty.
+  // Treat a short row as having unknown trailing fields, not a parse error.
+  while (cols.length < expectedColumns) cols.push(undefined as unknown as string);
   return cols;
 }
 
@@ -139,8 +159,14 @@ function parseCharacter(lines: string[]): CharacterSection {
   const level = fieldNumber(get("Level: "));
   const faction = fieldValue(get("Faction: "));
   const moneyCopper = fieldNumber(get("MoneyCopper: "));
-  const playedSeconds = fieldNumber(get("PlayedSeconds: "));
-  const levelPlayedSeconds = fieldNumber(get("LevelPlayedSeconds: "));
+  // PlayedSeconds/LevelPlayedSeconds were added to the schema after v1's
+  // initial release (see WOWSYNC_ACCEPTANCE.md, "Character playtime").
+  // An export captured by an older installed addon build simply omits
+  // these lines entirely — that is not the same as an unknown *value*
+  // (which would still render as "PlayedSeconds: ?"), so both are treated
+  // as absent/undefined rather than a parse error.
+  const playedSeconds = fieldNumber(get("PlayedSeconds: ", false));
+  const levelPlayedSeconds = fieldNumber(get("LevelPlayedSeconds: ", false));
 
   let xp: number | undefined;
   let xpMax: number | undefined;
@@ -212,7 +238,7 @@ function parseEquipment(lines: string[]): EquipmentSection {
 
   const slots: EquipmentSection["slots"] = [];
   while (i < lines.length) {
-    const cols = lines[i].split("\t");
+    const cols = splitFields(lines[i]);
     const [slotLabel, itemRef, name, ilvl, reqLevel, stats] = cols;
     const sep = slotLabel.indexOf(":");
     if (sep < 0) fail("Malformed equipment slot label (expected \"<n>:<SlotName>\")", lines[i]);
@@ -337,7 +363,7 @@ function parseProfessions(lines: string[]): ProfessionsSection {
   i = ci;
   const coverage = fieldValue(coverageLine);
 
-  const headerCols = (lines[i] ?? fail("Missing professions header row")).split("\t");
+  const headerCols = splitFields(lines[i] ?? fail("Missing professions header row"));
   const retailShaped = headerCols.length === 7;
   if (!retailShaped && headerCols.length !== 3) {
     fail(`Unexpected professions header column count: ${headerCols.length}`, lines[i]);
@@ -352,7 +378,7 @@ function parseProfessions(lines: string[]): ProfessionsSection {
       i++;
       break;
     }
-    const cols = lines[i].split("\t");
+    const cols = splitFields(lines[i]);
     if (retailShaped) {
       entries.push({
         name: fieldValue(cols[0]) ?? "?",
@@ -514,27 +540,27 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   }
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   const chunks = normalized.split(/\n{2,}/);
-  if (chunks.length < 3) {
+  if (chunks.length < 5) {
     fail("Export is too short to be a valid WOWSYNC v1 export (missing header, sections, or [END])");
   }
 
-  const headerLines = chunks[0].split("\n");
-  if (headerLines[0]?.trim() !== "WOWSYNC v1") {
-    fail(
-      `Export must begin with "WOWSYNC v1". This does not look like a WoWSync export.`,
-      headerLines[0]?.slice(0, 80),
-    );
+  // The canonical renderer (WoWSyncRender.lua's S.Render) joins its whole
+  // output array — including "WOWSYNC v1", "Generated: ...", and
+  // "Format: ..." — with "\n\n". So those three lines are three separate
+  // blank-line-separated chunks, not one three-line block.
+  if (chunks[0]?.trim() !== "WOWSYNC v1") {
+    fail(`Export must begin with "WOWSYNC v1". This does not look like a WoWSync export.`, chunks[0]?.slice(0, 80));
   }
-  const [generatedRaw] = takeLine(headerLines, 1, "Generated: ");
+  const [generatedRaw] = takeLine([chunks[1] ?? ""], 0, "Generated: ", true);
   const generatedAt = fieldNumber(generatedRaw);
-  const formatLine = headerLines[2];
+  const formatLine = chunks[2];
 
   const lastChunk = chunks[chunks.length - 1].trim();
   if (lastChunk !== "[END]") {
     fail('Export must end with "[END]". The export may have been truncated when copied.', lastChunk.slice(0, 80));
   }
 
-  const sectionChunks = chunks.slice(1, -1);
+  const sectionChunks = chunks.slice(3, -1);
   const result: Partial<ParsedSnapshot> = {};
   const seen = new Set<string>();
 

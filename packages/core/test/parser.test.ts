@@ -134,10 +134,26 @@ test("rejects an export missing a required section", () => {
   });
 });
 
-test("rejects a malformed row with the wrong column count", () => {
+test("rejects a row with more columns than the section defines", () => {
   const raw = buildWowSyncExport();
-  const corrupted = raw.replace("slot\titemRef\tname\tilvl\trequiredLevel\teffectiveStats", "slot\titemRef\tname");
+  const corrupted = raw.replace(
+    "slot\titemRef\tname\tilvl\trequiredLevel\teffectiveStats",
+    "slot\titemRef\tname\tilvl\trequiredLevel\teffectiveStats\textraColumn",
+  );
   assert.throws(() => parseWowSyncExport(corrupted), WowSyncParseError);
+});
+
+test("tolerates a row with fewer columns than expected (trailing whitespace trimmed by copy/paste)", () => {
+  const raw = buildWowSyncExport();
+  // A trailing tab (an empty last column) is a common casualty of pasting
+  // through chat boxes/editors that trim trailing whitespace — this must
+  // not be treated as a structural parse error.
+  const shortened = raw.replace(
+    "slot\titemRef\tname\tilvl\trequiredLevel\teffectiveStats",
+    "slot\titemRef\tname\tilvl\trequiredLevel",
+  );
+  const snapshot = parseWowSyncExport(shortened);
+  assert.equal(snapshot.equipment.status.state, "OBSERVED");
 });
 
 test("empty input is rejected with a clear message", () => {
