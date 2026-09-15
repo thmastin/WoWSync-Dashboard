@@ -167,6 +167,7 @@ function Overview({
                 <span className="muted">
                   {c.diff.level.delta ? `Level +${c.diff.level.delta} · ` : ""}
                   {c.diff.moneyCopper.delta ? `${formatCopperDelta(c.diff.moneyCopper.delta)} · ` : ""}
+                  {c.diff.location.changed ? `→ ${c.diff.location.toZone ?? "?"} · ` : ""}
                   {formatRelativeTime(c.importedAt)}
                 </span>
               </li>

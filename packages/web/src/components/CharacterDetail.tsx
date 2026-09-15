@@ -35,6 +35,10 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
           {character.class ?? "?"} · Level {character.latestLevel ?? "?"} · {character.realm}
           {character.faction ? ` · ${character.faction}` : ""}
         </div>
+        <div className="detail-subline muted small">
+          Last seen {formatRelativeTime(character.latestImportedAt)} · {character.snapshotCount} snapshot
+          {character.snapshotCount === 1 ? "" : "s"} recorded
+        </div>
       </div>
 
       {snapshots.length > 1 && (
@@ -163,16 +167,32 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
             ))}
           </section>
 
-          <section className="detail-card">
-            <h3>Snapshot history</h3>
-            <ul className="history-list">
-              {snapshots.map((s) => (
-                <li key={s.id} className={s.id === selectedId ? "active" : ""} onClick={() => setSelectedId(s.id)}>
-                  <span>{formatRelativeTime(s.importedAt)}</span>
-                  <span className="muted">Lv {s.parsed.character.level ?? "?"} · {formatCopper(s.parsed.character.moneyCopper)}</span>
-                </li>
-              ))}
-            </ul>
+          <section className="detail-card detail-card-wide">
+            <h3>Snapshot history ({snapshots.length})</h3>
+            <div className="table-scroll">
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>Captured</th>
+                    <th>Level</th>
+                    <th>Gold</th>
+                    <th>/played</th>
+                    <th>Zone</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshots.map((s) => (
+                    <tr key={s.id} className={s.id === selectedId ? "active" : ""} onClick={() => setSelectedId(s.id)}>
+                      <td>{formatAbsoluteTime(s.generatedAt)}</td>
+                      <td>{s.parsed.character.level ?? "?"}</td>
+                      <td>{formatCopper(s.parsed.character.moneyCopper)}</td>
+                      <td>{formatPlaytime(s.parsed.character.playedSeconds)}</td>
+                      <td>{s.parsed.location.zone ?? "?"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         </div>
       )}

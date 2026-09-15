@@ -100,15 +100,26 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
                 <div className="import-fact-title">Changes since previous snapshot</div>
                 <ul className="import-fact-list">
                   {result.diff?.level.delta ? <li>Level {result.diff.level.delta > 0 ? "+" : ""}{result.diff.level.delta}</li> : null}
+                  {result.diff?.xp.delta ? <li>XP {result.diff.xp.delta > 0 ? "+" : ""}{result.diff.xp.delta}</li> : null}
                   {result.diff?.moneyCopper.delta ? <li>Gold {formatCopperDelta(result.diff.moneyCopper.delta)}</li> : null}
+                  {result.diff?.playedSeconds.delta ? <li>/played +{formatPlaytime(result.diff.playedSeconds.delta)}</li> : null}
+                  {result.diff?.location.changed ? (
+                    <li>
+                      Location {result.diff.location.fromZone ?? "?"} → {result.diff.location.toZone ?? "?"}
+                    </li>
+                  ) : null}
                   {result.diff?.professions.map((p) => (
                     <li key={p.name}>
                       {p.name} {p.skill.delta ? (p.skill.delta > 0 ? "+" : "") + p.skill.delta : "unchanged"}
                     </li>
                   ))}
+                  {result.diff && result.diff.equipment.length > 0 && <li>Equipment: {result.diff.equipment.length} slot(s) changed</li>}
+                  {result.diff && result.diff.bagsItems.length > 0 && <li>Bags: {result.diff.bagsItems.length} item(s) changed</li>}
+                  {result.diff && result.diff.bankItems.length > 0 && <li>Bank: {result.diff.bankItems.length} item(s) changed</li>}
                   {result.diff &&
                     !result.diff.level.delta &&
                     !result.diff.moneyCopper.delta &&
+                    !result.diff.location.changed &&
                     result.diff.professions.length === 0 &&
                     result.diff.bagsItems.length === 0 &&
                     result.diff.bankItems.length === 0 &&

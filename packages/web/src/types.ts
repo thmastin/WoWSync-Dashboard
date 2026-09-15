@@ -57,13 +57,24 @@ export interface EquipmentDelta {
   to?: string;
 }
 
+export interface LocationDelta {
+  fromZone?: string;
+  toZone?: string;
+  fromSubzone?: string;
+  toSubzone?: string;
+  changed: boolean;
+}
+
 export interface SnapshotDiff {
   fromGeneratedAt?: number;
   toGeneratedAt?: number;
   level: NumericDelta;
+  xp: NumericDelta;
+  xpMax: NumericDelta;
   moneyCopper: NumericDelta;
   playedSeconds: NumericDelta;
   levelPlayedSeconds: NumericDelta;
+  location: LocationDelta;
   professions: ProfessionDelta[];
   bagsItems: ItemDelta[];
   bankItems: ItemDelta[];
