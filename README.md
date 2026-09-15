@@ -100,6 +100,28 @@ snapshot and the API response. An ability with no recorded required level
 goes in its own "Unknown Unlock Level" bucket — never guessed from spell
 ID, rank, or the character's current level.
 
+## Account overview, economy, and AccountFacts
+
+Beyond individual characters, each version has an **Overview** (character
+count, total *known* gold/`/played`, recently updated characters, recent
+changes, progression, profession coverage, and data freshness) and an
+**Economy** tab (per-character gold/playtime tables, a full profession
+coverage table, and a known-inventory item search). All of it is computed
+by a single deterministic layer, `AccountFacts`
+(`packages/core/src/accountFacts.ts`) — the same input always produces the
+same output, with no hidden clock reads or network calls. It's scoped to
+exactly one WoW version at a time, same as everything else in this app.
+
+"Known" is meaningful here: a character whose bank was never opened
+contributes nothing to inventory totals (and is listed separately, not
+counted as empty); gold/playtime/profession totals only ever sum over
+characters where the value was actually observed. The item search results
+say "known total," never implying that's necessarily everything you own.
+
+A character not seen in a while is flagged **stale** rather than shown as
+if its last snapshot were current — see `packages/core/src/freshness.ts`
+for the (documented, 3-day) threshold.
+
 ## Snapshot history
 
 Every import adds a new snapshot; nothing is overwritten. This is what
@@ -123,11 +145,13 @@ auto-generated snapshot file all go through the exact same importer.
 
 ## LLM analysis (not implemented yet)
 
-The architecture reserves a place for an "Ask My Account" feature: the
-deterministic diff engine produces factual context, and an LLM would only
-ever *interpret* those facts — never serve as the database, and never see
-a raw export unless a scoped, explicit feature sends it. The dashboard is
-fully usable with the LLM layer absent, which is its current state.
+The architecture reserves a place for an "Ask My Account" feature:
+`AccountFacts` is the deterministic factual layer an LLM would eventually
+read, and it would only ever *interpret* those facts — never serve as the
+database, and never see a raw export or the database directly. No LLM
+context builder, provider integration, or API key exists yet. The
+dashboard is fully usable with the LLM layer absent, which is its current
+state.
 
 ## Privacy
 

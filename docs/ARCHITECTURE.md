@@ -26,13 +26,19 @@ Diff engine                    packages/core/src/diff.ts
         │                       deltas. Never fabricates a delta from an
         │                       unknown value.
         ▼
+AccountFacts                   packages/core/src/accountFacts.ts
+        │                     — deterministic, version-scoped account
+        │                       facts (gold/playtime/progression/
+        │                       professions/inventory/freshness/recent
+        │                       changes) built from the store + diff
+        │                       engine. Pure: no I/O, no clock reads.
+        ▼
 Dashboard UI                   packages/web (React/Vite)
         │                     served by packages/server (Express)
         ▼
-   (future) LLM analysis      — reads the diff engine's factual output,
-                                 never the raw export or the database
-                                 directly. Not implemented in this
-                                 milestone.
+   (future) LLM context builder — reads AccountFacts, never the raw
+                                   export or the database directly.
+                                   Not implemented in this milestone.
 ```
 
 ## Package layout
@@ -65,6 +71,12 @@ Dashboard UI                   packages/web (React/Vite)
     carries hundreds of observed services (a real Voodan TBC Anniversary
     capture has 180 on its class trainer alone). Never mutates or drops
     anything from `services` — see "Presentation vs. data" below.
+  - `freshness.ts` — the single source of truth for the recent/stale/
+    unknown convention (see "Freshness convention" below). `now` is
+    always a parameter, never read from the system clock internally.
+  - `accountFacts.ts` — the deterministic account-level facts layer (see
+    "AccountFacts" below). Pure: takes already-fetched characters/
+    snapshots/diffs and a `now` value, returns structured facts.
   - `store.ts` / `sqliteStore.ts` — the storage abstraction and its
     SQLite implementation. `SnapshotStore` is the seam: another storage
     engine could implement it without touching the importer, diff
@@ -199,14 +211,94 @@ abilities are blocked on a prior-rank prerequisite, not on level, and stay
 `unavailable`/grouped accordingly rather than being "corrected" to
 available).
 
+## AccountFacts
+
+`buildAccountFacts()` (`packages/core/src/accountFacts.ts`) is the
+deterministic layer between the database and any future analysis. It is
+a pure function: `(AccountFactsInput, now) -> AccountFacts`, with no I/O
+and no clock reads of its own — `SqliteSnapshotStore.buildAccountFacts()`
+does the querying (latest parsed snapshot per character, a diff against
+each character's previous snapshot via a shared `allDiffs()` helper, and
+the already-filtered "meaningful changes" list) and hands it all to the
+pure builder along with `now`. The same DB state and `now` always produce
+byte-identical output — this is what makes it fit to eventually feed an
+LLM context builder: the facts are reproducible, not a live/mutable view.
+
+One `AccountFacts` is always scoped to exactly one WoW version — there is
+no code path that accepts more than one `version` value or sums across
+them. It covers:
+
+- **Characters** — per-character snapshot of level/gold/playtime/XP/bank
+  status/freshness, built from the same `StoredCharacterSummary` the rest
+  of the app already uses.
+- **Gold** — known total (sum only over characters with a known value),
+  per-character gold + delta since the previous snapshot, and the largest
+  recent changes by magnitude.
+- **Playtime** — known total, per-character total/current-level `/played`
+  and their deltas. Raw seconds throughout; formatting happens only in
+  `packages/web/src/format.ts`.
+- **Progression** — per-character level/XP/XP-percent, level deltas (only
+  when 2+ snapshots exist — never estimated from one), recent level-ups,
+  and the character closest to its next level (by known XP percent only).
+- **Professions** — per-character list plus an account-wide view regrouped
+  by profession name across characters.
+- **Inventory** — every known item aggregated by base item ID (reusing
+  `diff.ts`'s `baseItemId()` — never the full, level-linked `itemRef`)
+  across every character's *known* bags/bank, plus a `searchInventory()`
+  substring search. Characters whose bank or bags were never observed are
+  listed separately (`unknownBank`/`unknownBags`) and contribute nothing
+  to the totals — see "Known vs. unknown" below.
+- **Recent changes** — the existing meaningful-change diff list, reshaped
+  into flat booleans/deltas for the UI (level/gold/profession/equipment/
+  inventory/location/trainer-unlock changed or not).
+- **Freshness** — a per-character and account-wide recent/stale/unknown
+  breakdown (see below).
+
+## Known vs. unknown
+
+`AccountFacts` never turns "never observed" into zero, empty, or absent-
+from-the-total. This is enforced, not just intended:
+
+- A character with no `MoneyCopper` observation is excluded from
+  `gold.totalKnownCopper` and counted in `gold.charactersWithUnknownGold`
+  — never added as 0.
+- A character whose bank was never opened (`bank.status.state ===
+  "UNKNOWN"`) contributes nothing to `inventory.items`, and is listed in
+  `inventory.unknownBank` instead — the UI must show that caveat next to
+  any "total" for an item, which `hasUnknownStorage` exists to drive.
+- A character whose professions section is `UNKNOWN` (`professions.status
+  === "UNKNOWN"`) is distinct from one that's `OBSERVED` with zero
+  entries (the addon's own "None identified" case) — both are represented
+  differently in `ProfessionFacts.byCharacter[].status`.
+- Progression deltas (`levelDeltaSincePrevious`) are only present for
+  characters with 2+ snapshots; a single-snapshot character always has
+  `undefined` there, never a guessed 0.
+
+`packages/core/test/accountFacts.test.ts` has a synthetic-fixture test for
+each of these cases specifically (unknown gold, unknown bank, unknown
+professions, insufficient history), alongside the real-data tests.
+
+## Freshness convention
+
+Snapshots are point-in-time observations, not live state, so the
+dashboard must make their age obvious rather than presenting stale data
+as current. `freshness.ts` defines: **recent** (latest observation within
+3 days), **stale** (a snapshot exists but is older), **unknown** (no
+timestamp at all). The 3-day threshold is a documented constant
+(`RECENT_THRESHOLD_SECONDS`), not a magic number scattered through the
+UI. `classifyFreshness(lastObservedAt, now)` takes `now` as a parameter
+specifically so tests (and, later, any server-side caching) can pin a
+reference time instead of depending on the wall clock — see
+`packages/core/test/freshness.test.ts`.
+
 ## LLM boundary (not implemented)
 
 ```
 Structured account data  →  Deterministic AccountFacts  →  LLM context builder  →  LLM provider  →  Analysis
 ```
 
-`SnapshotDiff` and the version-scoped summaries in `store.ts` are exactly
-the "AccountFacts" layer this diagram calls for — they already exist and
-are exercised by both real and synthetic fixtures. No LLM context builder,
-provider integration, or "Ask My Account" UI exists yet; the dashboard is
-fully usable without them, and no external LLM dependency has been added.
+`AccountFacts` is exactly that middle layer, and it now exists as a real,
+tested module — not implied by other structures. No LLM context builder,
+provider integration, API key, or "Ask My Account" UI exists yet; the
+dashboard is fully usable without them, and no external LLM dependency or
+network call has been added. This milestone stops at `AccountFacts`.
