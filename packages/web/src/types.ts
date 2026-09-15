@@ -305,8 +305,11 @@ export interface CharacterProfessions {
   professions: CharacterProfessionEntry[];
 }
 
+export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
+
 export interface ProfessionCoverageEntry {
   profession: string;
+  status: ProfessionCoverageStatus;
   characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
 }
 
@@ -362,9 +365,21 @@ export interface FreshnessSummary {
   byCharacter: { identityKey: string; name: string; freshness: Freshness; lastObservedAt?: number }[];
 }
 
+export interface RealmGroup {
+  realm: string;
+  characterCount: number;
+  characters: CharacterFacts[];
+  gold: GoldFacts;
+  playtime: PlaytimeFacts;
+  progression: ProgressionFacts;
+  professions: ProfessionFacts;
+  inventory: InventoryFacts;
+}
+
 export interface AccountFacts {
   version: VersionOrUnknown;
   generatedAt: number;
+  aggregationScope: "realm" | "account-wide";
   characterCount: number;
   characters: CharacterFacts[];
   gold: GoldFacts;
@@ -374,4 +389,5 @@ export interface AccountFacts {
   inventory: InventoryFacts;
   recentChanges: AccountChangeSummary[];
   freshness: FreshnessSummary;
+  realms: RealmGroup[];
 }

@@ -1,10 +1,17 @@
 import { useState } from "react";
 import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
-import type { AccountFacts, InventoryAggregateEntry } from "../types.ts";
+import type { ScopedFacts } from "../scopedFacts.ts";
+import type { InventoryAggregateEntry } from "../types.ts";
 
-export default function AccountEconomy({ facts, onOpenCharacter }: { facts: AccountFacts; onOpenCharacter: (key: string) => void }) {
+export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
+  const facts = scoped;
+  const covered = facts.professions.coverage.filter((c) => c.status === "covered");
+  const missing = facts.professions.coverage.filter((c) => c.status !== "covered");
+
   return (
     <div className="economy">
+      <div className="scope-label detail-card-wide">{scoped.scopeLabel}</div>
+
       <section className="panel">
         <h3>Gold</h3>
         <div className="muted small" style={{ marginBottom: 8 }}>
@@ -72,25 +79,44 @@ export default function AccountEconomy({ facts, onOpenCharacter }: { facts: Acco
 
       <section className="panel detail-card-wide">
         <h3>Professions</h3>
-        {facts.professions.coverage.length === 0 && <p className="muted">No profession data observed yet.</p>}
-        <div className="table-scroll">
-          <table className="history-table">
-            <thead>
-              <tr>
-                <th>Profession</th>
-                <th>Characters</th>
-              </tr>
-            </thead>
-            <tbody>
-              {facts.professions.coverage.map((entry) => (
-                <tr key={entry.profession}>
-                  <td>{entry.profession}</td>
-                  <td>{entry.characters.map((c) => `${c.name} (${c.skill ?? "?"}/${c.maxSkill ?? "?"})`).join(", ")}</td>
+        {facts.professions.coverage.length === 0 && <p className="muted">No profession catalog for this version.</p>}
+        {covered.length > 0 && (
+          <div className="table-scroll">
+            <table className="history-table">
+              <thead>
+                <tr>
+                  <th>Profession</th>
+                  <th>Characters</th>
                 </tr>
+              </thead>
+              <tbody>
+                {covered.map((entry) => (
+                  <tr key={entry.profession}>
+                    <td>{entry.profession}</td>
+                    <td>{entry.characters.map((c) => `${c.name} — ${c.skill ?? "?"}/${c.maxSkill ?? "?"}`).join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {missing.length > 0 && (
+          <details className="coverage-missing" style={{ marginTop: covered.length > 0 ? 10 : 0 }}>
+            <summary>
+              {missing.filter((m) => m.status === "none").length} profession(s) not covered
+              {missing.some((m) => m.status === "unknown")
+                ? `, ${missing.filter((m) => m.status === "unknown").length} with unknown coverage`
+                : ""}
+            </summary>
+            <ul className="compact-list">
+              {missing.map((entry) => (
+                <li key={entry.profession} className="muted small">
+                  {entry.profession} — {entry.status === "none" ? "none observed" : "unknown (not every character's professions were observed)"}
+                </li>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </ul>
+          </details>
+        )}
         {facts.professions.byCharacter.some((c) => c.status === "UNKNOWN") && (
           <div className="muted small" style={{ marginTop: 8 }}>
             {facts.professions.byCharacter.filter((c) => c.status === "UNKNOWN").map((c) => c.name).join(", ")}: professions never observed.
@@ -98,12 +124,13 @@ export default function AccountEconomy({ facts, onOpenCharacter }: { facts: Acco
         )}
       </section>
 
-      <InventorySearch facts={facts} onOpenCharacter={onOpenCharacter} />
+      <InventorySearch scoped={scoped} onOpenCharacter={onOpenCharacter} />
     </div>
   );
 }
 
-function InventorySearch({ facts, onOpenCharacter }: { facts: AccountFacts; onOpenCharacter: (key: string) => void }) {
+function InventorySearch({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
+  const facts = scoped;
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const results: InventoryAggregateEntry[] = q.length === 0 ? [] : facts.inventory.items.filter((i) => (i.name ?? "").toLowerCase().includes(q));
@@ -121,7 +148,7 @@ function InventorySearch({ facts, onOpenCharacter }: { facts: AccountFacts; onOp
       {facts.inventory.hasUnknownStorage && (
         <div className="muted small" style={{ marginTop: 6 }}>
           Some characters' bags/bank were never observed — results below are a <strong>known total</strong>, not
-          necessarily the complete account total.
+          necessarily the complete total for this scope.
           {facts.inventory.unknownBank.length > 0 && (
             <> Bank unknown for: {facts.inventory.unknownBank.map((c) => c.name).join(", ")}.</>
           )}

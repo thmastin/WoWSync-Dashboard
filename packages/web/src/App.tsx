@@ -5,6 +5,7 @@ import AccountOverview from "./components/AccountOverview.tsx";
 import CharactersGrid from "./components/CharactersGrid.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import ImportModal from "./components/ImportModal.tsx";
+import { scopeFacts } from "./scopedFacts.ts";
 import type { AccountFacts, VersionOrUnknown } from "./types.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
@@ -20,6 +21,7 @@ export default function App() {
   const [activeVersion, setActiveVersion] = useState<VersionOrUnknown>(loadStoredVersion);
   const [view, setView] = useState<View>({ kind: "overview" });
   const [facts, setFacts] = useState<AccountFacts | null>(null);
+  const [selectedRealm, setSelectedRealm] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -29,10 +31,12 @@ export default function App() {
 
   useEffect(() => {
     setFacts(null);
+    setSelectedRealm(null);
     fetchAccountFacts(activeVersion).then((r) => setFacts(r.facts));
   }, [activeVersion, refreshTick]);
 
   const accent = VERSION_ACCENTS[activeVersion];
+  const scoped = facts ? scopeFacts(facts, selectedRealm) : null;
 
   function refresh() {
     setRefreshTick((t) => t + 1);
@@ -74,22 +78,43 @@ export default function App() {
           <CharacterDetail identityKey={view.identityKey} onBack={() => setView({ kind: "characters" })} />
         ) : (
           <>
-            <div className="view-tabs">
-              <button className={view.kind === "overview" ? "active" : ""} onClick={() => setView({ kind: "overview" })}>
-                Overview
-              </button>
-              <button className={view.kind === "characters" ? "active" : ""} onClick={() => setView({ kind: "characters" })}>
-                Characters
-              </button>
-              <button className={view.kind === "economy" ? "active" : ""} onClick={() => setView({ kind: "economy" })}>
-                Economy
-              </button>
+            <div className="scope-row">
+              <div className="view-tabs">
+                <button className={view.kind === "overview" ? "active" : ""} onClick={() => setView({ kind: "overview" })}>
+                  Overview
+                </button>
+                <button className={view.kind === "characters" ? "active" : ""} onClick={() => setView({ kind: "characters" })}>
+                  Characters
+                </button>
+                <button className={view.kind === "economy" ? "active" : ""} onClick={() => setView({ kind: "economy" })}>
+                  Economy
+                </button>
+              </div>
+
+              {scoped && scoped.isRealmScoped ? (
+                <div className="realm-selector">
+                  <span className="realm-selector-label">Realm:</span>
+                  {scoped.availableRealms.map((realm) => (
+                    <button
+                      key={realm}
+                      className={`realm-pill ${realm === scoped.scopeLabel ? "active" : ""}`}
+                      onClick={() => setSelectedRealm(realm)}
+                    >
+                      {realm}
+                    </button>
+                  ))}
+                </div>
+              ) : scoped ? (
+                <div className="realm-selector">
+                  <span className="scope-badge">Account-wide</span>
+                </div>
+              ) : null}
             </div>
 
-            {!facts && <div className="loading">Loading…</div>}
-            {facts && view.kind === "overview" && <AccountOverview facts={facts} onOpenCharacter={openCharacter} />}
-            {facts && view.kind === "characters" && <CharactersGrid characters={facts.characters} onOpenCharacter={openCharacter} />}
-            {facts && view.kind === "economy" && <AccountEconomy facts={facts} onOpenCharacter={openCharacter} />}
+            {!scoped && <div className="loading">Loading…</div>}
+            {scoped && view.kind === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
+            {scoped && view.kind === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
+            {scoped && view.kind === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}
           </>
         )}
       </main>

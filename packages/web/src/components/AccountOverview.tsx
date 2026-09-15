@@ -1,18 +1,23 @@
 import { formatCopper, formatCopperDelta, formatPlaytime, formatRelativeTime, formatXpPercent, freshnessLabel } from "../format.ts";
-import type { AccountFacts } from "../types.ts";
+import type { ScopedFacts } from "../scopedFacts.ts";
 
-export default function AccountOverview({ facts, onOpenCharacter }: { facts: AccountFacts; onOpenCharacter: (key: string) => void }) {
+export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
+  const facts = scoped;
+  const characterCount = facts.characters.length;
   const recentlyUpdated = [...facts.characters]
     .filter((c) => c.lastImportedAt !== undefined)
     .sort((a, b) => (b.lastImportedAt ?? 0) - (a.lastImportedAt ?? 0))
     .slice(0, 5);
 
   const staleOrUnknown = facts.freshness.byCharacter.filter((c) => c.freshness !== "recent");
+  const covered = facts.professions.coverage.filter((c) => c.status === "covered");
+  const missing = facts.professions.coverage.filter((c) => c.status !== "covered");
 
   return (
     <div className="overview">
+      <div className="scope-label">{scoped.scopeLabel}</div>
       <div className="stat-row">
-        <StatTile label="Characters" value={String(facts.characterCount)} />
+        <StatTile label="Characters" value={String(characterCount)} />
         <StatTile
           label="Total known gold"
           value={facts.gold.charactersWithKnownGold > 0 ? formatCopper(facts.gold.totalKnownCopper) : "?"}
@@ -22,8 +27,8 @@ export default function AccountOverview({ facts, onOpenCharacter }: { facts: Acc
           label="Total known /played"
           value={facts.playtime.charactersWithKnownPlaytime > 0 ? formatPlaytime(facts.playtime.totalKnownPlayedSeconds) : "?"}
           hint={
-            facts.playtime.charactersWithKnownPlaytime < facts.characterCount
-              ? `${facts.characterCount - facts.playtime.charactersWithKnownPlaytime} character(s) unobserved`
+            facts.playtime.charactersWithKnownPlaytime < characterCount
+              ? `${characterCount - facts.playtime.charactersWithKnownPlaytime} character(s) unobserved`
               : undefined
           }
         />
@@ -41,7 +46,7 @@ export default function AccountOverview({ facts, onOpenCharacter }: { facts: Acc
       <div className="overview-columns">
         <section className="panel">
           <h3>Recently updated</h3>
-          {recentlyUpdated.length === 0 && <p className="muted">No characters imported for this version yet.</p>}
+          {recentlyUpdated.length === 0 && <p className="muted">No characters imported for this scope yet.</p>}
           <ul className="compact-list">
             {recentlyUpdated.map((c) => (
               <li key={c.identityKey} className="clickable" onClick={() => onOpenCharacter(c.identityKey)}>
@@ -63,6 +68,7 @@ export default function AccountOverview({ facts, onOpenCharacter }: { facts: Acc
                   {c.goldDeltaCopper ? `${formatCopperDelta(c.goldDeltaCopper)} · ` : ""}
                   {c.locationChanged ? "moved · " : ""}
                   {c.professionChanged ? "profession · " : ""}
+                  {c.inventoryChanged ? "inventory · " : ""}
                   {c.trainerUnlocked ? "trainer unlock · " : ""}
                   {formatRelativeTime(c.importedAt)}
                 </span>
@@ -95,17 +101,31 @@ export default function AccountOverview({ facts, onOpenCharacter }: { facts: Acc
 
         <section className="panel">
           <h3>Professions coverage</h3>
-          {facts.professions.coverage.length === 0 && <p className="muted">No profession data observed yet.</p>}
+          {facts.professions.coverage.length === 0 && <p className="muted">No profession catalog for this version.</p>}
+          {covered.length === 0 && missing.length > 0 && <p className="muted">No professions covered yet.</p>}
           <ul className="compact-list">
-            {facts.professions.coverage.slice(0, 8).map((entry) => (
+            {covered.slice(0, 8).map((entry) => (
               <li key={entry.profession}>
                 <strong>{entry.profession}</strong>{" "}
-                <span className="muted">
-                  {entry.characters.map((c) => `${c.name} (${c.skill ?? "?"})`).join(", ")}
-                </span>
+                <span className="muted">{entry.characters.map((c) => `${c.name} (${c.skill ?? "?"})`).join(", ")}</span>
               </li>
             ))}
           </ul>
+          {missing.length > 0 && (
+            <details className="coverage-missing">
+              <summary>
+                {missing.filter((m) => m.status === "none").length} not covered
+                {missing.some((m) => m.status === "unknown") ? `, ${missing.filter((m) => m.status === "unknown").length} unknown` : ""}
+              </summary>
+              <ul className="compact-list">
+                {missing.map((entry) => (
+                  <li key={entry.profession} className="muted small">
+                    {entry.profession} — {entry.status === "none" ? "none" : "unknown coverage"}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </section>
 
         <section className="panel">
@@ -126,7 +146,7 @@ export default function AccountOverview({ facts, onOpenCharacter }: { facts: Acc
         <section className="panel">
           <h3>Account summary (LLM)</h3>
           <p className="muted">
-            Ask-my-account analysis isn't wired up yet. Once enabled, this panel will summarize this version's
+            Ask-my-account analysis isn't wired up yet. Once enabled, this panel will summarize this scope's
             account state using the deterministic facts above — never raw exports.
           </p>
         </section>
