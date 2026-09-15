@@ -1,25 +1,28 @@
 WOWSYNC v1
-Generated: 1700150000
+
+Generated: 1700200000
+
 Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
 
 [CHARACTER]
-State: OBSERVED; complete; observed=1700150000
-Name: Voodan
-Realm: Faerlina
-Class: Shaman
-Level: 19
+State: OBSERVED; complete; observed=1700200000
+Name: Synthtest
+Realm: PlaceholderRealm
+Class: Mage
+Level: 22
 Faction: Horde
-MoneyCopper: 1200
-PlayedSeconds: 60000
-LevelPlayedSeconds: 5000
+MoneyCopper: 70000
+PlayedSeconds: 118000
+LevelPlayedSeconds: 4200
 Client: 2.5.6 build 69546
 
 [LOCATION]
-State: OBSERVED; complete; observed=1700150000
-Zone: Thunder Bluff
+State: OBSERVED; complete; observed=1700200000
+Zone: The Barrens
+Subzone: Ratchet
 
 [EQUIPMENT]
-State: OBSERVED; complete; observed=1700150000
+State: OBSERVED; complete; observed=1700200000
 slot	itemRef	name	ilvl	requiredLevel	effectiveStats
 1:Head	EMPTY
 2:Neck	EMPTY
@@ -42,27 +45,26 @@ slot	itemRef	name	ilvl	requiredLevel	effectiveStats
 19:Tabard	EMPTY
 
 [BAGS]
-State: OBSERVED; complete; observed=1700150000
+State: OBSERVED; complete; observed=1700200000
 container	capacity	free	family	bagRef
 Slots: 0 free / 0
 itemRef	name	qty	bound	vendorEachCopper
 Items: EMPTY
 
 [BANK]
-State: OBSERVED; complete; observed=1700150000
+State: OBSERVED; complete; observed=1700200000
 container	capacity	free	family	bagRef
--1	24	13	-1	-
-Slots: 13 free / 24
+Slots: 0 free / 0
 itemRef	name	qty	bound	vendorEachCopper
-item:2996::::::::19:::::	Bolt of Linen Cloth	51	?	?
+Items: EMPTY
 
 [PROFESSIONS]
-State: OBSERVED; complete; observed=1700150000
+State: OBSERVED; complete; observed=1700200000
 profession	skill	maxSkill
-Professions: None identified in exposed skill lines
+Tailoring	74	300
 
 [KNOWN SPELLS]
-State: OBSERVED; complete; observed=1700150000
+State: OBSERVED; complete; observed=1700200000
 Coverage: Full spellbook scan
 spellID	name	rank
 

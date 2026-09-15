@@ -1,0 +1,88 @@
+WOWSYNC v1
+
+Generated: 1789171621
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789171621
+Name: Bromrik
+Realm: Defias Pillager
+Class: ROGUE
+Level: 4
+Faction: Alliance
+MoneyCopper: 304
+XP: 1/2100
+Client: 1.15.9 build 69547
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789171621
+Zone: Anvilmar
+MapID: 1426
+PositionPercent: 28.39,67.55
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789171621
+slot    itemRef    name    ilvl    requiredLevel    effectiveStats
+1:Head    EMPTY
+2:Neck    EMPTY
+3:Shoulder    EMPTY
+4:Shirt    item:49::::::::4::::::::::    Footpad's Shirt    1    0    ?
+5:Chest    item:1364::::::::4::::::::::    Ragged Leather Vest    5    1    ?
+6:Waist    EMPTY
+7:Legs    item:1378::::::::4::::::::::    Frayed Pants    2    1    ?
+8:Feet    item:1367::::::::4::::::::::    Ragged Leather Boots    3    1    ?
+9:Wrist    item:3365::::::::4::::::::::    Frayed Bracers    5    1    ?
+10:Hands    item:6171::::::::4::::::::::    Wolf Handler Gloves    5    0    ?
+11:Finger 1    EMPTY
+12:Finger 2    EMPTY
+13:Trinket 1    EMPTY
+14:Trinket 2    EMPTY
+15:Back    item:6185::::::::4::::::::::    Bear Shawl    5    0    ?
+16:Main Hand    item:2092::::::::4::::::::::    Worn Dagger    2    1    ?
+17:Off Hand    EMPTY
+18:Ranged    item:3111::::::::4::::::::::    Crude Throwing Axe    3    1    ?
+19:Tabard    EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789171621
+container    capacity    free    family    bagRef
+0    20    17    0    -
+1    0    0    ?    -
+2    0    0    ?    -
+3    0    0    ?    -
+4    0    0    ?    -
+Slots: 17 free / 20
+itemRef    name    qty    bound    vendorEachCopper
+item:117::::::::4::::::::::    Tough Jerky    5    no    1
+item:2187::::::::4::::::::::    A Stack of Letters    1    yes    0
+item:6948::::::::4::::::::::    Hearthstone    1    yes    0
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789171621
+profession    skill    maxSkill
+Professions: None identified in exposed skill lines
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789171621
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID    name    rank
+81    Dodge    Passive
+1752    Sinister Strike    Rank 1
+2098    Eviscerate    Rank 1
+2481    Find Treasure    Racial
+2764    Throw
+6603    Attack
+20594    Stoneform    Racial
+20595    Gun Specialization    Racial Passive
+20596    Frost Resistance    Racial Passive
+
+[TRAINER]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

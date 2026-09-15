@@ -1,25 +1,28 @@
 WOWSYNC v1
-Generated: 1700160000
+
+Generated: 1700100000
+
 Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
 
 [CHARACTER]
-State: OBSERVED; complete; observed=1700160000
-Name: Tenivard
-Realm: Faerlina
-Class: Shaman
-Level: 15
+State: OBSERVED; complete; observed=1700100000
+Name: Synthtest
+Realm: PlaceholderRealm
+Class: Mage
+Level: 20
 Faction: Horde
-MoneyCopper: 900
-PlayedSeconds: 30000
-LevelPlayedSeconds: 12000
+MoneyCopper: 25000
+PlayedSeconds: 100000
+LevelPlayedSeconds: 6000
 Client: 2.5.6 build 69546
 
 [LOCATION]
-State: OBSERVED; complete; observed=1700160000
-Zone: Durotar
+State: OBSERVED; complete; observed=1700100000
+Zone: The Barrens
+Subzone: Southern Barrens
 
 [EQUIPMENT]
-State: OBSERVED; complete; observed=1700160000
+State: OBSERVED; complete; observed=1700100000
 slot	itemRef	name	ilvl	requiredLevel	effectiveStats
 1:Head	EMPTY
 2:Neck	EMPTY
@@ -42,26 +45,26 @@ slot	itemRef	name	ilvl	requiredLevel	effectiveStats
 19:Tabard	EMPTY
 
 [BAGS]
-State: OBSERVED; complete; observed=1700160000
+State: OBSERVED; complete; observed=1700100000
 container	capacity	free	family	bagRef
 Slots: 0 free / 0
 itemRef	name	qty	bound	vendorEachCopper
 Items: EMPTY
 
 [BANK]
-State: OBSERVED; complete; observed=1700160000
+State: OBSERVED; complete; observed=1700100000
 container	capacity	free	family	bagRef
 Slots: 0 free / 0
 itemRef	name	qty	bound	vendorEachCopper
 Items: EMPTY
 
 [PROFESSIONS]
-State: OBSERVED; complete; observed=1700160000
+State: OBSERVED; complete; observed=1700100000
 profession	skill	maxSkill
-Professions: None identified in exposed skill lines
+Tailoring	60	300
 
 [KNOWN SPELLS]
-State: OBSERVED; complete; observed=1700160000
+State: OBSERVED; complete; observed=1700100000
 Coverage: Full spellbook scan
 spellID	name	rank
 

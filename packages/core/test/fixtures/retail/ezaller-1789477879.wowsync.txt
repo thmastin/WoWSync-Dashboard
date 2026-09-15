@@ -1,0 +1,173 @@
+WOWSYNC v1
+
+Generated: 1789477879
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789477879
+Name: Ezaller
+Realm: Kel'Thuzad
+Class: EVOKER
+Level: 78
+Faction: Horde
+MoneyCopper: 24205308
+PlayedSeconds: 12573
+LevelPlayedSeconds: 629
+XP: 413/72820
+Client: 12.1.0 build 69814
+ClientFamily: Retail
+Interface: 120100
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789477879
+Zone: Frostfire Ridge
+Subzone: Bladespire Citadel
+MapID: 526
+PositionPercent: 39.32,45.86
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789477879
+slot    itemRef    name    ilvl    requiredLevel    effectiveStats
+1:Head    item:235962::::::::78:1467::18:1:6710:2:9:65:28:181:::::    Mysterious Coif    68    65    ITEM_MOD_CRIT_RATING_SHORT=13; ITEM_MOD_INTELLECT_SHORT=15; ITEM_MOD_STAMINA_SHORT=23; ITEM_MOD_VERSATILITY=17; RESISTANCE0_NAME=26
+2:Neck    item:194335::::::::78:1467::26:1:8774:2:9:60:28:2150:::::    Emerald Tear Necklace    63    60    ITEM_MOD_HASTE_RATING_SHORT=15; ITEM_MOD_MASTERY_RATING_SHORT=23; ITEM_MOD_STAMINA_SHORT=11
+3:Shoulder    item:235960::::::::78:1467::18:1:6710:2:9:77:28:181:::::    Mysterious Shoulderguards    80    77    ITEM_MOD_INTELLECT_SHORT=13; ITEM_MOD_MASTERY_RATING_SHORT=10; ITEM_MOD_STAMINA_SHORT=21; ITEM_MOD_VERSATILITY=16; RESISTANCE0_NAME=27
+4:Shirt    EMPTY
+5:Chest    item:235965::::::::78:1467::18:1:6710:2:9:75:28:181:::::    Mysterious Chainmail    78    75    ITEM_MOD_HASTE_RATING_SHORT=16; ITEM_MOD_INTELLECT_SHORT=17; ITEM_MOD_STAMINA_SHORT=26; ITEM_MOD_VERSATILITY=18; RESISTANCE0_NAME=39
+6:Waist    item:235959::::::::78:1467::18:1:6710:2:9:76:28:181:::::    Mysterious Belt    79    76    ITEM_MOD_HASTE_RATING_SHORT=18; ITEM_MOD_INTELLECT_SHORT=13; ITEM_MOD_STAMINA_SHORT=20; ITEM_MOD_VERSATILITY=8; RESISTANCE0_NAME=22
+7:Legs    item:235961::::::::78:1467::18:1:6710:2:9:77:28:181:::::    Mysterious Greaves    80    77    ITEM_MOD_CRIT_RATING_SHORT=25; ITEM_MOD_INTELLECT_SHORT=18; ITEM_MOD_STAMINA_SHORT=28; ITEM_MOD_VERSATILITY=10; RESISTANCE0_NAME=35
+8:Feet    item:106168::::::::78:1467::11:1:13617:2:9:74:28:1765:::::    Frostwolf Ringmail Boots    74    74    ITEM_MOD_HASTE_RATING_SHORT=13; ITEM_MOD_INTELLECT_SHORT=13; ITEM_MOD_STAMINA_SHORT=19; ITEM_MOD_VERSATILITY=12; RESISTANCE0_NAME=23
+9:Wrist    item:235958::::::::78:1467::18:1:6710:2:9:76:28:181:::::    Mysterious Bracers    79    76    ITEM_MOD_CRIT_RATING_SHORT=7; ITEM_MOD_INTELLECT_SHORT=10; ITEM_MOD_MASTERY_RATING_SHORT=12; ITEM_MOD_STAMINA_SHORT=15; RESISTANCE0_NAME=20
+10:Hands    item:106170::::::::78:1467::11:3:13618:13615:13617:2:9:76:28:1765:::::    Frostwolf Ringmail Gauntlets    79    76    ITEM_MOD_CRIT_RATING_SHORT=14; ITEM_MOD_INTELLECT_SHORT=13; ITEM_MOD_MASTERY_RATING_SHORT=12; ITEM_MOD_STAMINA_SHORT=20; RESISTANCE0_NAME=22
+11:Finger 1    item:235977::::::::78:1467::18:1:6710:2:9:64:28:181:::::    Mysterious Ring    67    64    ITEM_MOD_HASTE_RATING_SHORT=20; ITEM_MOD_STAMINA_SHORT=13; ITEM_MOD_VERSATILITY=22
+12:Finger 2    item:235979::::::::78:1467::18:1:6710:2:9:76:28:181:::::    Mysterious Band    79    76    ITEM_MOD_CRIT_RATING_SHORT=21; ITEM_MOD_HASTE_RATING_SHORT=28; ITEM_MOD_STAMINA_SHORT=15
+13:Trinket 1    item:194333::::::::78:1467::26:1:8774:2:9:59:28:2150:::::    Ekrazathal's Colored Fang    62    59    ITEM_MOD_INTELLECT_SHORT=13
+14:Trinket 2    item:193914::::::::78:1467::26:1:8774:2:9:58:28:2150:::::    Crystalline Lapis    61    58    ITEM_MOD_INTELLECT_SHORT=12
+15:Back    item:235975::::::::78:1467::18:1:6710:2:9:74:28:181:::::    Mysterious Shawl    77    74    ITEM_MOD_INTELLECT_SHORT=10; ITEM_MOD_MASTERY_RATING_SHORT=9; ITEM_MOD_STAMINA_SHORT=15; ITEM_MOD_VERSATILITY=10; RESISTANCE0_NAME=10
+16:Main Hand    item:235935::::::::78:1467::18:1:6710:2:9:74:28:181:::::    Mysterious Ritual Knife    77    74    ITEM_MOD_CRIT_RATING_SHORT=12; ITEM_MOD_DAMAGE_PER_SECOND_SHORT=4.722222328186; ITEM_MOD_INTELLECT_SHORT=50; ITEM_MOD_MASTERY_RATING_SHORT=5; ITEM_MOD_STAMINA_SHORT=13
+17:Off Hand    item:235923::::::::78:1467::18:1:6710:2:9:77:28:181:::::    Mysterious Lantern    80    77    ITEM_MOD_CRIT_RATING_SHORT=10; ITEM_MOD_INTELLECT_SHORT=27; ITEM_MOD_STAMINA_SHORT=14; ITEM_MOD_VERSATILITY=7
+18:Ranged    EMPTY
+19:Tabard    EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1789477879
+container    capacity    free    family    bagRef
+ContainerStorage 0: CARRIED
+0    20    13    0    -
+ContainerStorage 1: CARRIED
+1    24    13    0    item:188213::::::::78:1467:::::::::
+ContainerStorage 2: CARRIED
+2    24    20    0    item:188213::::::::78:1467:::::::::
+ContainerStorage 3: CARRIED
+3    30    30    0    item:240995::::::::78:1467:::::::::
+ContainerStorage 4: CARRIED
+4    24    24    0    item:188213::::::::78:1467:::::::::
+ContainerStorage 5: REAGENT_BAG
+5    0    0    ?    -
+Slots: 100 free / 122
+itemRef    name    qty    bound    vendorEachCopper
+item:6948::::::::78:1467::75:::::::    Hearthstone    1    yes    0
+item:49397::::::::78:1467:::::::::    Half-Eaten Rat    1    no    1
+item:109136::::::::78:1467:::::::::    Raw Boar Meat    2    no    300
+item:110560::::::::78:1467::11::1:28:1765:::::    Garrison Hearthstone    1    yes    0
+item:111557::::::::78:1467:::::::::    Sumptuous Fur    9    no    1750
+item:112449::::::::78:1467:::::::::    Iron Horde Rations    9    no    0
+item:113585::::::::78:1467:::::::::    Iron Horde Rejuvenation Potion    4    no    250
+item:115008::::::::78:1467:::::::::    Enchanted Highmaul Bracer    1    yes    0
+item:124640::::::::78:1467:::::::::    Inky Black Potion    1    no    8333
+item:170170::::::::78:1467:::::::::    Fermented Deviate Fish    1    yes    100
+item:170177::::::::78:1467::11::1:28:1704:::::    Exposed Fish    1    yes    100
+item:188213::::::::78:1467:::::::::    Large Green Bag    2    yes    1
+item:188761::::::::78:1467:::::::::    Happy Fun Sphere    1    no    1
+item:190320::::::::78:1467:::::::::    Rousing Fire    3    no    200
+item:192615::::::::78:1467:::::::::    Fluorescent Fluid    36    no    6214
+item:194123::::::::78:1467:::::::::    Chromatic Dust    26    no    7500
+item:198538::::::::78:1467:::::::::    Magically Bound Message    1    yes    0
+item:202071::::::::78:1467:::::::::    Elemental Mote    2    no    4065
+item:225378::::::::78:1467:::::::::    Mohawk Grenade    1    yes    0
+item:239142::::::::78:1467:::::::::    Bottle of Mysterious Wisdom    1    yes    0
+item:242711::::::::78:1467:::::::::    Pungent Truffle    2    yes    0
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1789477879
+Coverage: Tracked primary/secondary professions and exposed tier; historical tier catalogue, recipes and knowledge excluded
+profession    skill    maxSkill    skillLineID    tier    expansion    category
+Enchanting    12    100    333    Dragon Isles Enchanting    Unknown    PRIMARY
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1789477879
+Coverage: Retail player/profession spellbook and known flyouts; active spec, passives and racials; no ranks; excludes future/off-spec spells, recipe catalogues and pet spellbook
+spellID    name    rank
+6603    Auto Attack    -
+7411    Enchanting    -
+13262    Disenchant    -
+90265    Master Riding    -
+125439    Revive Battle Pets    -
+233368    Broken Isles Pathfinder    -
+278833    Battle for Azeroth Pathfinder    -
+351239    Visage    -
+351338    Quell    -
+352372    Weapon Skills    -
+355913    Emerald Blossom    -
+356995    Disintegrate    -
+357208    Fire Breath    -
+357210    Deep Breath    -
+357211    Pyre    -
+357214    Wing Buffet    -
+358267    Hover    -
+358385    Landslide    -
+358733    Glide    -
+359073    Eternity Surge    -
+360022    Chosen Identity    -
+360995    Verdant Embrace    -
+361227    Return    -
+361469    Living Flame    -
+361584    Whirling Surge    -
+362634    Languages    -
+362969    Azure Strike    -
+362980    Mastery: Giantkiller    -
+363916    Obsidian Scales    -
+364342    Blessing of the Bronze    -
+365575    Awakened    -
+365585    Expunge    -
+366489    Discerning Eye    -
+366522    Armor Skills    -
+368970    Tail Swipe    -
+369536    Soar    -
+370553    Tip the Scales    -
+370845    Spellweaver's Dominance    -
+372048    Oppressing Roar    -
+372608    Surge Forward    -
+372610    Skyward Ascent    -
+374251    Cauterizing Flame    -
+374348    Renewing Blaze    -
+375087    Dragonrage    -
+376777    Skyriding Basics    -
+381773    Permeating Chill    -
+382499    Anomaly Detection Mark I    -
+382501    Mechanism Bypass    -
+383359    Skyriding Charges    -
+383363    Lift Off    -
+383366    Thrill of the Skies    -
+383359    Skyriding Charges    -
+390386    Fury of the Aspects    -
+396571    Tempered Scales    -
+400006    Energizing Flame    -
+403092    Aerial Halt    -
+403216    Aerial Halt    -
+425782    Second Wind    -
+431280    Warband Map to Everywhere All At Once    -
+436854    Switch Flight Style    -
+460905    Warband Bank Distance Inhibitor    -
+1231411    Recuperate    -
+1289789    Battle Visage    -
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]
