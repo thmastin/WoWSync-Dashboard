@@ -5,6 +5,7 @@
 import type { ParsedSnapshot, VersionOrUnknown } from "./types.ts";
 import type { SnapshotDiff } from "./diff.ts";
 import type { AccountFacts } from "./accountFacts.ts";
+import type { AccountContext } from "./accountContext.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -68,5 +69,7 @@ export interface SnapshotStore {
   recentChanges(version: VersionOrUnknown, limit?: number): RecentChange[];
   /** The deterministic account-level facts layer for one version space. `now` defaults to the wall clock but can be pinned for deterministic tests. */
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
+  /** The full, all-versions deterministic export used by the "Export Dashboard Context" developer tool. `now` defaults to the wall clock but can be pinned for deterministic tests. */
+  buildAccountContext(now?: number): AccountContext;
   close(): void;
 }

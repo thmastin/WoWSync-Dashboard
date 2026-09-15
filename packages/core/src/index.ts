@@ -8,5 +8,6 @@ export * from "./trainerSummary.ts";
 export * from "./freshness.ts";
 export * from "./professionCatalog.ts";
 export * from "./accountFacts.ts";
+export * from "./accountContext.ts";
 export * from "./store.ts";
 export { SqliteSnapshotStore } from "./sqliteStore.ts";

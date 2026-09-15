@@ -1,9 +1,10 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
+import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
-import type { ParsedSnapshot, VersionOrUnknown } from "./types.ts";
+import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
 import { detectVersion } from "./version.ts";
 import type {
   ImportResult,
@@ -306,6 +307,20 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const diffs = new Map(allDiffs.map((d) => [d.identityKey, d.diff]));
     const meaningfulChanges = this.recentChanges(version);
     return buildAccountFacts({ version, characters, latestParsed, diffs, meaningfulChanges }, now);
+  }
+
+  buildAccountContext(now: number = Math.floor(Date.now() / 1000)): AccountContext {
+    const KNOWN_VERSIONS: WowVersion[] = ["classic-era", "tbc-anniversary", "retail"];
+    const versionFacts = {} as Record<WowVersion, AccountFacts>;
+    const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
+    for (const version of KNOWN_VERSIONS) {
+      const facts = this.buildAccountFacts(version, now);
+      versionFacts[version] = facts;
+      for (const character of facts.characters) {
+        characterSnapshots.set(character.identityKey, this.listSnapshots(character.identityKey));
+      }
+    }
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots });
   }
 
   close(): void {

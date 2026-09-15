@@ -224,6 +224,33 @@ export interface AccountChangeSummary {
   trainerUnlocked: boolean;
 }
 
+/**
+ * Reshapes one SnapshotDiff into the flat AccountChangeSummary shape.
+ * Shared by recentChanges (the version's already-filtered "meaningful"
+ * list) and accountContext.ts's full per-character transition history —
+ * one mapping, reused, not reimplemented for the export.
+ */
+export function diffToChangeSummary(
+  diff: SnapshotDiff,
+  meta: { identityKey: string; characterName: string; importedAt: number },
+): AccountChangeSummary {
+  return {
+    identityKey: meta.identityKey,
+    characterName: meta.characterName,
+    importedAt: meta.importedAt,
+    fromLevel: diff.level.from,
+    toLevel: diff.level.to,
+    levelChanged: !!diff.level.delta,
+    goldDeltaCopper: diff.moneyCopper.delta,
+    playtimeDeltaSeconds: diff.playedSeconds.delta,
+    professionChanged: diff.professions.length > 0,
+    equipmentChanged: diff.equipment.length > 0,
+    inventoryChanged: diff.bagsItems.length > 0 || diff.bankItems.length > 0,
+    locationChanged: diff.location.changed,
+    trainerUnlocked: diff.trainerUnlocks.length > 0,
+  };
+}
+
 // ---------------------------------------------------------------------
 // Freshness summary
 // ---------------------------------------------------------------------
@@ -544,21 +571,7 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
   const professions = buildProfessionFacts(version, characters, latestParsed);
   const inventory = buildInventoryFacts(characters, latestParsed);
 
-  const recentChanges: AccountChangeSummary[] = meaningfulChanges.map((c) => ({
-    identityKey: c.identityKey,
-    characterName: c.characterName,
-    importedAt: c.importedAt,
-    fromLevel: c.diff.level.from,
-    toLevel: c.diff.level.to,
-    levelChanged: !!c.diff.level.delta,
-    goldDeltaCopper: c.diff.moneyCopper.delta,
-    playtimeDeltaSeconds: c.diff.playedSeconds.delta,
-    professionChanged: c.diff.professions.length > 0,
-    equipmentChanged: c.diff.equipment.length > 0,
-    inventoryChanged: c.diff.bagsItems.length > 0 || c.diff.bankItems.length > 0,
-    locationChanged: c.diff.location.changed,
-    trainerUnlocked: c.diff.trainerUnlocks.length > 0,
-  }));
+  const recentChanges: AccountChangeSummary[] = meaningfulChanges.map((c) => diffToChangeSummary(c.diff, c));
 
   const freshnessByCharacter = characterFacts.map((c) => ({
     identityKey: c.identityKey,
