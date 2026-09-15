@@ -81,6 +81,12 @@ app.get("/api/versions/:version/recent-changes", (req, res) => {
   res.json({ changes: store.recentChanges(version, limit) });
 });
 
+app.get("/api/versions/:version/account-facts", (req, res) => {
+  const { version } = req.params;
+  if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+  res.json({ facts: store.buildAccountFacts(version) });
+});
+
 app.get("/api/characters/:identityKey", (req, res) => {
   const character = store.getCharacter(req.params.identityKey);
   if (!character) return res.status(404).json({ error: "Character not found" });
