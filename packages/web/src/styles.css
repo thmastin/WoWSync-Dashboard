@@ -208,6 +208,12 @@ h1, h2, h3 {
   border-color: var(--accent);
   transform: translateY(-2px);
 }
+.character-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .character-card-name {
   font-family: "Cinzel", serif;
   font-weight: 700;
@@ -221,6 +227,69 @@ h1, h2, h3 {
   display: flex;
   justify-content: space-between;
   margin-top: 4px;
+}
+
+.freshness-badge {
+  font-size: 0.62rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.freshness-recent { background: rgba(76, 175, 125, 0.15); color: var(--good); }
+.freshness-stale { background: rgba(217, 168, 79, 0.15); color: var(--warn); }
+.freshness-unknown { background: rgba(217, 97, 79, 0.15); color: var(--bad); }
+.freshness-text-recent { color: var(--good); }
+.freshness-text-stale { color: var(--warn); }
+.freshness-text-unknown { color: var(--bad); }
+
+.xp-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg);
+  overflow: hidden;
+  margin-top: 8px;
+}
+.xp-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.economy {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.economy .history-table tbody tr {
+  cursor: pointer;
+}
+.economy .history-table tbody tr:hover {
+  background: var(--bg-panel);
+}
+
+.item-search-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+.inventory-result {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+.inventory-result-header {
+  margin-bottom: 4px;
+}
+
+@media (max-width: 900px) {
+  .economy { grid-template-columns: 1fr; }
 }
 
 .back-link {

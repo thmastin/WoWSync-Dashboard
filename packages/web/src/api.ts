@@ -1,11 +1,4 @@
-import type {
-  ImportResult,
-  RecentChange,
-  StoredCharacterSummary,
-  StoredSnapshot,
-  VersionOrUnknown,
-  VersionSummary,
-} from "./types.ts";
+import type { AccountFacts, ImportResult, StoredCharacterSummary, StoredSnapshot, VersionOrUnknown } from "./types.ts";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -19,24 +12,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export function fetchVersions() {
-  return request<{ versions: VersionSummary[]; labels: Record<string, string> }>("/api/versions");
-}
-
-export function fetchCharacters(version: VersionOrUnknown) {
-  return request<{ characters: StoredCharacterSummary[] }>(`/api/versions/${version}/characters`);
-}
-
-export function fetchRecentChanges(version: VersionOrUnknown, limit = 20) {
-  return request<{ changes: RecentChange[] }>(`/api/versions/${version}/recent-changes?limit=${limit}`);
-}
-
 export function fetchCharacter(identityKey: string) {
   return request<{ character: StoredCharacterSummary }>(`/api/characters/${encodeURIComponent(identityKey)}`);
 }
 
 export function fetchSnapshots(identityKey: string) {
   return request<{ snapshots: StoredSnapshot[] }>(`/api/characters/${encodeURIComponent(identityKey)}/snapshots`);
+}
+
+export function fetchAccountFacts(version: VersionOrUnknown) {
+  return request<{ facts: AccountFacts }>(`/api/versions/${version}/account-facts`);
 }
 
 export function importExport(text: string) {

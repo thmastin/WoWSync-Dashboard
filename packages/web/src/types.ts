@@ -4,16 +4,6 @@
 
 export type VersionOrUnknown = "classic-era" | "tbc-anniversary" | "retail" | "unknown-version";
 
-export interface VersionSummary {
-  version: VersionOrUnknown;
-  characterCount: number;
-  totalMoneyCopper: number;
-  charactersWithKnownGold: number;
-  totalPlayedSeconds: number;
-  charactersWithKnownPlaytime: number;
-  lastUpdatedAt?: number;
-}
-
 export interface StoredCharacterSummary {
   id: number;
   version: VersionOrUnknown;
@@ -86,16 +76,6 @@ export interface SnapshotDiff {
   bankItems: ItemDelta[];
   equipment: EquipmentDelta[];
   trainerUnlocks: TrainerUnlock[];
-}
-
-export interface RecentChange {
-  characterId: number;
-  identityKey: string;
-  characterName: string;
-  version: VersionOrUnknown;
-  snapshotId: number;
-  importedAt: number;
-  diff: SnapshotDiff;
 }
 
 export interface SectionStatus {
@@ -233,4 +213,165 @@ export interface ImportResult {
   previousSnapshot?: StoredSnapshot;
   diff?: SnapshotDiff;
   isFirstSnapshot: boolean;
+}
+
+// --- AccountFacts (Milestone 3) ---
+
+export type Freshness = "recent" | "stale" | "unknown";
+
+export interface CharacterFacts {
+  identityKey: string;
+  name: string;
+  realm: string;
+  class?: string;
+  faction?: string;
+  level?: number;
+  xp?: number;
+  xpMax?: number;
+  xpPercent?: number;
+  goldCopper?: number;
+  playedSeconds?: number;
+  levelPlayedSeconds?: number;
+  lastObservedAt?: number;
+  lastImportedAt?: number;
+  snapshotCount: number;
+  freshness: Freshness;
+  bankStatus: SectionStatus["state"];
+}
+
+export interface CharacterGold {
+  identityKey: string;
+  name: string;
+  goldCopper?: number;
+  deltaCopper?: number;
+}
+
+export interface GoldFacts {
+  totalKnownCopper: number;
+  charactersWithKnownGold: number;
+  charactersWithUnknownGold: number;
+  byCharacter: CharacterGold[];
+  largestRecentChanges: CharacterGold[];
+}
+
+export interface CharacterPlaytime {
+  identityKey: string;
+  name: string;
+  playedSeconds?: number;
+  levelPlayedSeconds?: number;
+  deltaPlayedSeconds?: number;
+  deltaLevelPlayedSeconds?: number;
+}
+
+export interface PlaytimeFacts {
+  totalKnownPlayedSeconds: number;
+  charactersWithKnownPlaytime: number;
+  byCharacter: CharacterPlaytime[];
+}
+
+export interface CharacterProgression {
+  identityKey: string;
+  name: string;
+  level?: number;
+  xp?: number;
+  xpMax?: number;
+  xpPercent?: number;
+  levelDeltaSincePrevious?: number;
+}
+
+export interface LevelUp {
+  identityKey: string;
+  name: string;
+  fromLevel: number;
+  toLevel: number;
+}
+
+export interface ProgressionFacts {
+  byCharacter: CharacterProgression[];
+  recentLevelUps: LevelUp[];
+  closestToNextLevel?: CharacterProgression;
+}
+
+export interface CharacterProfessionEntry {
+  name: string;
+  skill?: number;
+  maxSkill?: number;
+}
+
+export interface CharacterProfessions {
+  identityKey: string;
+  name: string;
+  status: SectionStatus["state"];
+  professions: CharacterProfessionEntry[];
+}
+
+export interface ProfessionCoverageEntry {
+  profession: string;
+  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
+}
+
+export interface ProfessionFacts {
+  byCharacter: CharacterProfessions[];
+  coverage: ProfessionCoverageEntry[];
+}
+
+export type StorageLocation = "bags" | "bank";
+
+export interface InventoryLocationEntry {
+  identityKey: string;
+  name: string;
+  storage: StorageLocation;
+  qty: number;
+  bound?: string;
+}
+
+export interface InventoryAggregateEntry {
+  itemKey: string;
+  name?: string;
+  totalKnownQty: number;
+  locations: InventoryLocationEntry[];
+}
+
+export interface InventoryFacts {
+  items: InventoryAggregateEntry[];
+  unknownBank: { identityKey: string; name: string }[];
+  unknownBags: { identityKey: string; name: string }[];
+  hasUnknownStorage: boolean;
+}
+
+export interface AccountChangeSummary {
+  identityKey: string;
+  characterName: string;
+  importedAt: number;
+  fromLevel?: number;
+  toLevel?: number;
+  levelChanged: boolean;
+  goldDeltaCopper?: number;
+  playtimeDeltaSeconds?: number;
+  professionChanged: boolean;
+  equipmentChanged: boolean;
+  inventoryChanged: boolean;
+  locationChanged: boolean;
+  trainerUnlocked: boolean;
+}
+
+export interface FreshnessSummary {
+  recentCharacters: number;
+  staleCharacters: number;
+  unknownCharacters: number;
+  byCharacter: { identityKey: string; name: string; freshness: Freshness; lastObservedAt?: number }[];
+}
+
+export interface AccountFacts {
+  version: VersionOrUnknown;
+  generatedAt: number;
+  characterCount: number;
+  characters: CharacterFacts[];
+  gold: GoldFacts;
+  playtime: PlaytimeFacts;
+  progression: ProgressionFacts;
+  professions: ProfessionFacts;
+  inventory: InventoryFacts;
+  recentChanges: AccountChangeSummary[];
+  freshness: FreshnessSummary;
 }

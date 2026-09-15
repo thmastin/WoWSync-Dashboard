@@ -49,3 +49,18 @@ export function formatAbsoluteTime(unixSeconds: number | undefined): string {
   if (unixSeconds === undefined) return "unknown";
   return new Date(unixSeconds * 1000).toLocaleString();
 }
+
+export function formatXpPercent(percent: number | undefined): string {
+  if (percent === undefined) return "?";
+  return `${percent.toFixed(1)}%`;
+}
+
+const FRESHNESS_LABELS: Record<string, string> = {
+  recent: "Recent",
+  stale: "Stale",
+  unknown: "Unknown",
+};
+
+export function freshnessLabel(freshness: string): string {
+  return FRESHNESS_LABELS[freshness] ?? freshness;
+}
