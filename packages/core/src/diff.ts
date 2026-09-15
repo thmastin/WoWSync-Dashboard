@@ -79,7 +79,7 @@ function numericDelta(from: number | undefined, to: number | undefined): Numeric
 // ID rather than the full itemRef string. The full itemRef is still
 // preserved untouched everywhere it's stored or displayed — only the
 // "is this the same tracked item" decision uses the looser key.
-function baseItemId(itemRef: string | undefined): string | undefined {
+export function baseItemId(itemRef: string | undefined): string | undefined {
   if (!itemRef) return undefined;
   const match = /^item:(\d+)/.exec(itemRef);
   return match ? match[1] : itemRef;

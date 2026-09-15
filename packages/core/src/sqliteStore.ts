@@ -1,4 +1,5 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
@@ -255,23 +256,16 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return row ? toStoredSnapshot(row) : undefined;
   }
 
-  recentChanges(version: VersionOrUnknown, limit = 20): RecentChange[] {
+  /** Every character in `version` with 2+ snapshots, diffed against its immediately preceding snapshot — unfiltered (includes zero-delta diffs). */
+  private allDiffs(version: VersionOrUnknown): RecentChange[] {
     const characters = many<CharacterRow>(this.stmts.charactersByVersion, version);
-    const changes: RecentChange[] = [];
+    const results: RecentChange[] = [];
     for (const character of characters) {
       const rows = many<SnapshotRow>(this.stmts.snapshotsForCharacter, character.id);
       if (rows.length < 2) continue;
       const [latest, previous] = rows;
       const diff: SnapshotDiff = diffSnapshots(toStoredSnapshot(previous).parsed, toStoredSnapshot(latest).parsed);
-      const hasChange =
-        diff.level.delta ||
-        diff.moneyCopper.delta ||
-        diff.professions.length > 0 ||
-        diff.bagsItems.length > 0 ||
-        diff.bankItems.length > 0 ||
-        diff.equipment.length > 0;
-      if (!hasChange) continue;
-      changes.push({
+      results.push({
         characterId: character.id,
         identityKey: character.identity_key,
         characterName: character.name,
@@ -281,8 +275,37 @@ export class SqliteSnapshotStore implements SnapshotStore {
         diff,
       });
     }
+    return results;
+  }
+
+  recentChanges(version: VersionOrUnknown, limit = 20): RecentChange[] {
+    const changes = this.allDiffs(version).filter(({ diff }) => {
+      return (
+        diff.level.delta ||
+        diff.moneyCopper.delta ||
+        diff.professions.length > 0 ||
+        diff.bagsItems.length > 0 ||
+        diff.bankItems.length > 0 ||
+        diff.equipment.length > 0 ||
+        diff.location.changed ||
+        diff.trainerUnlocks.length > 0
+      );
+    });
     changes.sort((a, b) => b.importedAt - a.importedAt);
     return changes.slice(0, limit);
+  }
+
+  buildAccountFacts(version: VersionOrUnknown, now: number = Math.floor(Date.now() / 1000)): AccountFacts {
+    const characters = this.listCharacters(version);
+    const latestParsed = new Map<string, ParsedSnapshot>();
+    for (const character of characters) {
+      const latestRow = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, character.id);
+      if (latestRow) latestParsed.set(character.identityKey, toStoredSnapshot(latestRow).parsed);
+    }
+    const allDiffs = this.allDiffs(version);
+    const diffs = new Map(allDiffs.map((d) => [d.identityKey, d.diff]));
+    const meaningfulChanges = this.recentChanges(version);
+    return buildAccountFacts({ version, characters, latestParsed, diffs, meaningfulChanges }, now);
   }
 
   close(): void {

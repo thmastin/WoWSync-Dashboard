@@ -5,5 +5,7 @@ export { detectVersion, WOW_VERSIONS, VERSION_LABELS } from "./version.ts";
 export { characterIdentity } from "./identity.ts";
 export * from "./diff.ts";
 export * from "./trainerSummary.ts";
+export * from "./freshness.ts";
+export * from "./accountFacts.ts";
 export * from "./store.ts";
 export { SqliteSnapshotStore } from "./sqliteStore.ts";
