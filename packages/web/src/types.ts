@@ -65,6 +65,12 @@ export interface LocationDelta {
   changed: boolean;
 }
 
+export interface TrainerUnlock {
+  category: string;
+  ability?: string;
+  rank?: string;
+}
+
 export interface SnapshotDiff {
   fromGeneratedAt?: number;
   toGeneratedAt?: number;
@@ -79,6 +85,7 @@ export interface SnapshotDiff {
   bagsItems: ItemDelta[];
   bankItems: ItemDelta[];
   equipment: EquipmentDelta[];
+  trainerUnlocks: TrainerUnlock[];
 }
 
 export interface RecentChange {
@@ -142,25 +149,63 @@ export interface ParsedSnapshot {
   spells: { status: SectionStatus; coverage?: string; entries: { spellID?: string; name?: string; rank?: string }[] };
   trainer: {
     status: SectionStatus;
-    categories: {
-      category: string;
-      status: SectionStatus;
-      name?: string;
-      trainerType?: string;
-      coverage?: string;
-      filters?: string;
-      moneyAtVisitCopper?: number;
-      services: {
-        spellID?: string;
-        ability?: string;
-        rank?: string;
-        statusAtVisit?: string;
-        requiredLevel?: string;
-        costCopper?: number;
-        requirementsAtVisit?: string;
-      }[];
-    }[];
+    categories: TrainerCategory[];
   };
+}
+
+export interface TrainerService {
+  spellID?: string;
+  ability?: string;
+  rank?: string;
+  statusAtVisit?: string;
+  requiredLevel?: string;
+  costCopper?: number;
+  requirementsAtVisit?: string;
+}
+
+export interface TrainerCategory {
+  category: string;
+  status: SectionStatus;
+  name?: string;
+  trainerType?: string;
+  coverage?: string;
+  filters?: string;
+  moneyAtVisitCopper?: number;
+  services: TrainerService[];
+  /** Computed server-side (packages/core/src/trainerSummary.ts) from `services` above — never authoritative on its own. */
+  summary?: TrainerCategorySummary;
+}
+
+export interface SummarizedAbility {
+  ability?: string;
+  rank?: string;
+  requiredLevel?: number;
+  costCopper?: number;
+  requirementsAtVisit?: string;
+}
+
+export interface RequiredLevelGroup {
+  requiredLevel: number;
+  abilities: SummarizedAbility[];
+  totalCostCopper?: number;
+  costPartial: boolean;
+}
+
+export interface NextTraining {
+  requiredLevel: number;
+  abilityCount: number;
+  totalCostCopper?: number;
+  costPartial: boolean;
+}
+
+export interface TrainerCategorySummary {
+  category: string;
+  available: SummarizedAbility[];
+  known: SummarizedAbility[];
+  upcomingByLevel: RequiredLevelGroup[];
+  unknownUnlockLevel: SummarizedAbility[];
+  nextTraining?: NextTraining;
+  totalServices: number;
 }
 
 export interface InventorySection {
@@ -178,6 +223,8 @@ export interface StoredSnapshot {
   generatedAt?: number;
   importedAt: number;
   parsed: ParsedSnapshot;
+  /** Only present on the snapshots-list endpoint: abilities that newly became trainable since the immediately preceding snapshot. */
+  trainerUnlocksSincePrevious?: TrainerUnlock[];
 }
 
 export interface ImportResult {

@@ -303,10 +303,100 @@ h1, h2, h3 {
 .status-unknown { background: rgba(217, 97, 79, 0.15); color: var(--bad); }
 
 .trainer-category {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.trainer-category:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
 }
 .trainer-category-header {
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trainer-summary-line {
+  margin-bottom: 8px;
+}
+.trainer-unlocks-banner {
+  background: rgba(76, 175, 125, 0.12);
+  border: 1px solid rgba(76, 175, 125, 0.3);
+  color: var(--good);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+.next-training {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+}
+.next-training-label {
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+}
+.trainer-block {
+  margin-bottom: 10px;
+}
+.trainer-block-title {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.ability-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ability-row {
+  padding: 3px 0;
+  font-size: 0.85rem;
+}
+.ability-name {
+  font-weight: 500;
+}
+.ability-requirement {
+  padding-left: 4px;
+}
+.trainer-drilldown {
+  margin-top: 8px;
+  font-size: 0.85rem;
+}
+.trainer-drilldown > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.8rem;
+  user-select: none;
+}
+.trainer-drilldown > summary:hover {
+  text-decoration: underline;
+}
+.level-group {
+  margin: 6px 0 6px 12px;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.level-group > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.82rem;
+  padding: 2px 0;
+}
+.level-group > summary:hover {
+  color: var(--accent);
 }
 
 .history-list {

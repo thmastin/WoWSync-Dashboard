@@ -116,6 +116,11 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
                   {result.diff && result.diff.equipment.length > 0 && <li>Equipment: {result.diff.equipment.length} slot(s) changed</li>}
                   {result.diff && result.diff.bagsItems.length > 0 && <li>Bags: {result.diff.bagsItems.length} item(s) changed</li>}
                   {result.diff && result.diff.bankItems.length > 0 && <li>Bank: {result.diff.bankItems.length} item(s) changed</li>}
+                  {result.diff && result.diff.trainerUnlocks.length > 0 && (
+                    <li>
+                      Trainer unlocked: {result.diff.trainerUnlocks.map((u) => u.ability ?? "?").join(", ")}
+                    </li>
+                  )}
                   {result.diff &&
                     !result.diff.level.delta &&
                     !result.diff.moneyCopper.delta &&
@@ -123,7 +128,8 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
                     result.diff.professions.length === 0 &&
                     result.diff.bagsItems.length === 0 &&
                     result.diff.bankItems.length === 0 &&
-                    result.diff.equipment.length === 0 && <li className="muted">No changes detected.</li>}
+                    result.diff.equipment.length === 0 &&
+                    result.diff.trainerUnlocks.length === 0 && <li className="muted">No changes detected.</li>}
                 </ul>
               </div>
             )}

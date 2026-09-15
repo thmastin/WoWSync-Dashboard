@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchCharacter, fetchSnapshots } from "../api.ts";
 import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } from "../format.ts";
 import type { StoredCharacterSummary, StoredSnapshot } from "../types.ts";
+import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
 
 function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
@@ -150,20 +151,17 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
             <h3>
               Trainers <StatusBadge state={snapshot.parsed.trainer.status.state} />
             </h3>
+            {snapshot.trainerUnlocksSincePrevious && snapshot.trainerUnlocksSincePrevious.length > 0 && (
+              <div className="trainer-unlocks-banner">
+                Trainer changes since last snapshot — unlocked:{" "}
+                {snapshot.trainerUnlocksSincePrevious
+                  .map((u) => `${u.ability ?? "?"}${u.rank && u.rank !== "-" ? ` (${u.rank})` : ""}`)
+                  .join(", ")}
+              </div>
+            )}
             {snapshot.parsed.trainer.categories.length === 0 && <p className="muted">No trainer visits recorded.</p>}
             {snapshot.parsed.trainer.categories.map((cat) => (
-              <div key={cat.category} className="trainer-category">
-                <div className="trainer-category-header">
-                  <strong>{cat.category}</strong> — {cat.name ?? "?"} <StatusBadge state={cat.status.state} />
-                </div>
-                <ul className="compact-list">
-                  {cat.services.map((svc, i) => (
-                    <li key={i}>
-                      {svc.ability ?? "?"} {svc.rank ? `(${svc.rank})` : ""} — {svc.statusAtVisit ?? "?"}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <TrainerCategoryCard key={cat.category} category={cat} />
             ))}
           </section>
 
