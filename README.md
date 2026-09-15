@@ -73,17 +73,32 @@ garbage.
 
 ## Real fixtures
 
-`packages/core/test/fixtures/classic-era/` and `.../retail/` contain real
-WOWSYNC v1 exports captured from an actual Classic Era client (Bromrik)
-and an actual Retail client (Ezaller), stored byte-for-byte. They caught
-genuine bugs no amount of synthetic data did — see
-`packages/core/test/fixtures/README.md` for the details (a header-framing
-bug, addon-version skew between installs, and copy/paste whitespace
-mangling). `tbc-anniversary/` real fixtures are pending — WoW servers were
-down while this was built, so that directory stays empty rather than being
-filled with synthetic data pretending to be real history. A clearly-labeled
-synthetic placeholder (`fixtures/synthetic/`) stands in for TBC Anniversary
-in tests until real captures arrive.
+`packages/core/test/fixtures/classic-era/`, `.../retail/`, and
+`.../tbc-anniversary/` contain real WOWSYNC v1 exports captured from actual
+clients — Classic Era (Bromrik), Retail (Ezaller), and TBC Anniversary
+(Voodan) — stored byte-for-byte. They caught genuine bugs no amount of
+synthetic data did — see `packages/core/test/fixtures/README.md` for the
+details (a header-framing bug, addon-version skew between installs,
+copy/paste whitespace mangling, and a diff-engine item-matching issue).
+Voodan's real trainer data (180 services on one class-trainer visit alone)
+is also what drove the trainer presentation redesign — see "Trainer
+presentation" below. Torahn/Tenivard real fixtures are still pending; a
+clearly-labeled synthetic placeholder (`fixtures/synthetic/`) fills any
+remaining TBC Anniversary test gaps.
+
+## Trainer presentation
+
+A single trainer visit can carry hundreds of observed abilities (mostly
+`unavailable` — things you can't train yet). The character page shows a
+compact per-category summary instead: available-now count, a "Next
+Training" callout (the lowest-level group of upcoming abilities and its
+total cost), and a collapsed drill-down that groups everything else by its
+known required level — expandable per level, and further down to each
+ability's cost and prerequisite text. Nothing is ever dropped: the full
+observed service list is still there underneath, in both the stored
+snapshot and the API response. An ability with no recorded required level
+goes in its own "Unknown Unlock Level" bucket — never guessed from spell
+ID, rank, or the character's current level.
 
 ## Snapshot history
 

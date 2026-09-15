@@ -58,6 +58,13 @@ Dashboard UI                   packages/web (React/Vite)
     versions.
   - `diff.ts` — pure functions, no storage. Only reports a delta when
     both sides of a comparison are actually known.
+  - `trainerSummary.ts` — presentation-oriented grouping of one trainer
+    category's raw `services` array (available now / grouped by known
+    `requiredLevel` / unknown unlock level / next training), used to keep
+    the default character page readable when a single trainer visit
+    carries hundreds of observed services (a real Voodan TBC Anniversary
+    capture has 180 on its class trainer alone). Never mutates or drops
+    anything from `services` — see "Presentation vs. data" below.
   - `store.ts` / `sqliteStore.ts` — the storage abstraction and its
     SQLite implementation. `SnapshotStore` is the seam: another storage
     engine could implement it without touching the importer, diff
@@ -147,14 +154,50 @@ phantom "lost 2 of the old item, gained 5 of a new one").
 
 `SnapshotDiff` reports (all facts, never estimates): `level`, `xp`/`xpMax`,
 `moneyCopper`, `playedSeconds`, `levelPlayedSeconds`, `location` (zone/
-subzone change), `professions`, `bagsItems`, `bankItems`, and `equipment`.
-Every field is only populated when both sides of the comparison are
-actually known — an `UNKNOWN` section on either side yields an empty/absent
-delta for that section rather than a fabricated one. XP deltas are reported
-raw even across a level-up (XP resets, so the raw delta can be negative) —
-the diff engine states what was observed; interpreting *why* (e.g. "this
-was a level-up reset") is left to the future LLM analysis layer, not
-invented here.
+subzone change), `professions`, `bagsItems`, `bankItems`, `equipment`, and
+`trainerUnlocks` (abilities that newly became trainable). Every field is
+only populated when both sides of the comparison are actually known — an
+`UNKNOWN` section on either side yields an empty/absent delta for that
+section rather than a fabricated one. XP deltas are reported raw even
+across a level-up (XP resets, so the raw delta can be negative) — the diff
+engine states what was observed; interpreting *why* (e.g. "this was a
+level-up reset") is left to the future LLM analysis layer, not invented
+here.
+
+## Presentation vs. data: "store everything, surface what matters"
+
+A real trainer visit can carry hundreds of observed services (Voodan's
+class trainer: 180, all `unavailable`, spread across 32 required levels).
+Showing that as a flat list is technically complete but practically
+useless. The rule this project follows: **the parser, storage, and API
+never drop or reshape data for the UI's convenience** — `TrainerService[]`
+on every category is exactly what was observed, full stop. Presentation
+logic lives in a separate, clearly-named layer:
+
+```
+TrainerCategorySnapshot.services[]   (packages/core — authoritative, untouched)
+        │
+        ▼
+summarizeTrainerCategory()           (packages/core/src/trainerSummary.ts — pure, derived)
+        │  groups by known requiredLevel; buckets missing/unparseable
+        │  levels separately (never inferred); computes "next training"
+        │  from the lowest known-level group only
+        ▼
+category.summary                     (attached by the server per-response, packages/server)
+        │
+        ▼
+TrainerCategoryCard                  (packages/web — compact by default,
+                                       <details> drill-down reveals every
+                                       group and, inside it, every ability)
+```
+
+`requiredLevel` grouping never compares against the character's *current*
+level — a service that's still `unavailable` even though the character
+has since passed its required level is left exactly where the trainer
+said it was (real Voodan data has exactly this shape: several Level 18
+abilities are blocked on a prior-rank prerequisite, not on level, and stay
+`unavailable`/grouped accordingly rather than being "corrected" to
+available).
 
 ## LLM boundary (not implemented)
 
