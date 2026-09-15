@@ -7,8 +7,32 @@ import {
   VERSION_LABELS,
   WOW_VERSIONS,
   WowSyncParseError,
+  diffSnapshots,
+  summarizeTrainerCategory,
+  type StoredSnapshot,
+  type TrainerUnlock,
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
+
+// Attaches a computed, non-authoritative `summary` to each trainer
+// category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
+// array is left completely untouched for drill-down, this only adds a
+// derived view alongside it.
+function withTrainerSummaries(snapshot: StoredSnapshot): StoredSnapshot {
+  return {
+    ...snapshot,
+    parsed: {
+      ...snapshot.parsed,
+      trainer: {
+        ...snapshot.parsed.trainer,
+        categories: snapshot.parsed.trainer.categories.map((category) => ({
+          ...category,
+          summary: summarizeTrainerCategory(category),
+        })),
+      },
+    },
+  };
+}
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = path.resolve(here, "../../../");
@@ -64,14 +88,24 @@ app.get("/api/characters/:identityKey", (req, res) => {
 });
 
 app.get("/api/characters/:identityKey/snapshots", (req, res) => {
-  const snapshots = store.listSnapshots(req.params.identityKey);
+  // Newest first. For each snapshot (other than the oldest), also compute
+  // what newly unlocked at the trainer since the immediately preceding
+  // one — a small, cheap fact, not an elaborate history feature.
+  const raw = store.listSnapshots(req.params.identityKey);
+  const snapshots = raw.map((snapshot, i) => {
+    const older = raw[i + 1];
+    const trainerUnlocksSincePrevious: TrainerUnlock[] | undefined = older
+      ? diffSnapshots(older.parsed, snapshot.parsed).trainerUnlocks
+      : undefined;
+    return { ...withTrainerSummaries(snapshot), trainerUnlocksSincePrevious };
+  });
   res.json({ snapshots });
 });
 
 app.get("/api/snapshots/:id", (req, res) => {
   const snapshot = store.getSnapshot(Number(req.params.id));
   if (!snapshot) return res.status(404).json({ error: "Snapshot not found" });
-  res.json({ snapshot });
+  res.json({ snapshot: withTrainerSummaries(snapshot) });
 });
 
 app.post("/api/import", (req, res) => {
@@ -81,7 +115,13 @@ app.post("/api/import", (req, res) => {
   }
   try {
     const result = store.importSnapshot(text);
-    res.json({ result });
+    res.json({
+      result: {
+        ...result,
+        snapshot: withTrainerSummaries(result.snapshot),
+        previousSnapshot: result.previousSnapshot ? withTrainerSummaries(result.previousSnapshot) : undefined,
+      },
+    });
   } catch (err) {
     if (err instanceof WowSyncParseError) {
       return res.status(422).json({ error: err.message });
