@@ -29,7 +29,35 @@ import { summarizeTrainerCategory, type TrainerCategorySummary } from "./trainer
 import type { ParsedSnapshot, SectionState, WowVersion } from "./types.ts";
 import type { StoredSnapshot } from "./store.ts";
 
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "1";
+// Bumped to "2": added the `currency` field, renamed the two differently-
+// scoped profession `status` fields to `observationStatus`/`coverageStatus`
+// (see accountFacts.ts), and added `AccountChangeSummary.inventoryItemChanges`
+// — all identified as concrete gaps by a real LLM-evaluation pass (a model
+// misread 102815 copper as "102.8 gold", contradicted itself on profession
+// coverage, and reported inventory item changes as absent from its context).
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "2";
+
+/**
+ * Explicit, in-band documentation of the one unit convention this document
+ * uses everywhere: every field ending in "Copper" (goldCopper, moneyCopper,
+ * deltaCopper, costCopper, totalKnownCopper, goldDeltaCopper, ...) is a raw
+ * copper integer, WoW's smallest currency unit. Embedding this in the
+ * exported JSON itself (rather than relying solely on an LLM consumer's
+ * system prompt) means the convention travels with the data to any
+ * consumer, not just the one prompt that happens to mention it.
+ */
+export interface CurrencyConvention {
+  unit: "copper";
+  conversion: string;
+  note: string;
+}
+
+const CURRENCY_CONVENTION: CurrencyConvention = {
+  unit: "copper",
+  conversion: "1 gold = 100 silver = 10000 copper",
+  note:
+    "Every field whose name ends in \"Copper\" (e.g. goldCopper, moneyCopper, deltaCopper, costCopper, totalKnownCopper) is an integer amount of copper, WoW's smallest currency unit — never gold, and never a decimal gold amount. To display as gold/silver/copper: gold = floor(copper / 10000), silver = floor((copper % 10000) / 100), remaining copper = copper % 100.",
+};
 
 export interface SnapshotHistoryEntry {
   generatedAt?: number;
@@ -78,6 +106,7 @@ export interface VersionContext {
 export interface AccountContext {
   schemaVersion: typeof ACCOUNT_CONTEXT_SCHEMA_VERSION;
   generatedAt: number;
+  currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
 }
 
@@ -158,6 +187,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
   return {
     schemaVersion: ACCOUNT_CONTEXT_SCHEMA_VERSION,
     generatedAt: now,
+    currency: CURRENCY_CONVENTION,
     versions,
   };
 }

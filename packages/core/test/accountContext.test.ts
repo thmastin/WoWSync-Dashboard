@@ -37,8 +37,10 @@ test("[REAL] AccountContext includes exactly the three known WoW versions, each 
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
-    assert.equal(ctx.schemaVersion, "1");
+    assert.equal(ctx.schemaVersion, "2");
     assert.equal(ctx.generatedAt, FIXED_NOW);
+    assert.equal(ctx.currency.unit, "copper");
+    assert.match(ctx.currency.note, /never gold/);
     assert.deepEqual(Object.keys(ctx.versions).sort(), ["classic-era", "retail", "tbc-anniversary"]);
 
     assert.equal(ctx.versions["classic-era"].characters.length, 1);
@@ -125,8 +127,8 @@ test("[REAL] profession coverage (covered/none) is preserved exactly as AccountF
     const ctx = store.buildAccountContext(FIXED_NOW);
     const coverage = ctx.versions["tbc-anniversary"].facts.realms[0].professions.coverage;
     const byName = new Map(coverage.map((c) => [c.profession, c]));
-    assert.equal(byName.get("Tailoring")?.status, "covered");
-    assert.equal(byName.get("Alchemy")?.status, "none");
+    assert.equal(byName.get("Tailoring")?.coverageStatus, "covered");
+    assert.equal(byName.get("Alchemy")?.coverageStatus, "none");
   } finally {
     store.close();
   }
@@ -139,7 +141,7 @@ test("[SYNTHETIC] a profession is 'unknown' in the export when a character's pro
     const ctx = store.buildAccountContext(FIXED_NOW);
     const coverage = ctx.versions["classic-era"].facts.realms[0].professions.coverage;
     assert.ok(coverage.length > 0);
-    assert.ok(coverage.every((c) => c.status === "unknown"));
+    assert.ok(coverage.every((c) => c.coverageStatus === "unknown"));
   } finally {
     store.close();
   }
@@ -177,8 +179,49 @@ test("[REAL] Voodan's post-AH transition matches the real observed gold/playtime
     assert.equal(t.inventoryChanged, true);
     assert.equal(t.levelChanged, false);
     assert.equal(t.professionChanged, false);
-    // Also present in the version-wide recentChanges (embedded facts).
-    assert.ok(ctx.versions["tbc-anniversary"].facts.recentChanges.some((c) => c.characterName === "Voodan"));
+    // Compact item-level inventory transition data (the concrete gap an LLM
+    // evaluation pass found missing: without this, "what changed in your
+    // bags" was unanswerable from the context even though the diff engine
+    // computes it). Verified against the real bags sections of
+    // voodan-1789484723 and voodan-1789492666 byte-for-byte: two items
+    // dropped to zero, three appeared, everything else held steady.
+    assert.deepEqual(t.inventoryItemChanges, [
+      { storage: "bags", itemKey: "3685", name: "Raptor Egg", deltaQty: 18 },
+      { storage: "bags", itemKey: "3737", name: "Recipe: Soothing Turtle Bisque", deltaQty: 1 },
+      { storage: "bags", itemKey: "15127", name: "Robust Shoulders of Intellect", deltaQty: 1 },
+      { storage: "bags", itemKey: "828", name: "Small Blue Pouch", deltaQty: -1 },
+      { storage: "bags", itemKey: "5082", name: "Thin Kodo Leather", deltaQty: -1 },
+    ]);
+    // Compact means compact: no raw fromQty/toQty/full-itemRef bloat leaks in.
+    for (const change of t.inventoryItemChanges!) {
+      assert.equal(Object.keys(change).sort().join(","), "deltaQty,itemKey,name,storage");
+    }
+    // itemKey uses the same base-item-ID convention as InventoryFacts.items,
+    // so a consumer can cross-reference a transition against current totals.
+    const raptorEggTotal = ctx.versions["tbc-anniversary"].facts.inventory.items.find((i) => i.itemKey === "3685");
+    assert.equal(raptorEggTotal?.name, "Raptor Egg");
+    // Also present in the version-wide recentChanges (embedded facts) - same
+    // diffToChangeSummary mapping, so the item-level detail flows there too.
+    const recentVoodan = ctx.versions["tbc-anniversary"].facts.recentChanges.find((c) => c.characterName === "Voodan");
+    assert.ok(recentVoodan);
+    assert.equal(recentVoodan!.inventoryItemChanges?.length, 5);
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] a transition with no inventory change has inventoryItemChanges omitted, never an empty array", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "Wanderer", realm: "R", moneyCopper: 100 } }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_600, character: { name: "Wanderer", realm: "R", moneyCopper: 250 } }));
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    const wanderer = ctx.versions["classic-era"].characters.find((c) => c.name === "Wanderer")!;
+    assert.equal(wanderer.transitions.length, 1);
+    const t = wanderer.transitions[0];
+    assert.equal(t.goldDeltaCopper, 150);
+    assert.equal(t.inventoryChanged, false);
+    assert.equal(t.inventoryItemChanges, undefined);
   } finally {
     store.close();
   }

@@ -66,21 +66,21 @@ test("[REAL] profession coverage on Dreamscythe shows both covered and unassigne
     const byName = new Map(coverage.map((c) => [c.profession, c]));
 
     // Covered, single character.
-    assert.equal(byName.get("Mining")?.status, "covered");
+    assert.equal(byName.get("Mining")?.coverageStatus, "covered");
     assert.deepEqual(byName.get("Mining")?.characters.map((c) => c.name), ["Torahn"]);
 
     // Covered, multiple characters - both listed, not combined into a total.
     const enchanting = byName.get("Enchanting")!;
-    assert.equal(enchanting.status, "covered");
+    assert.equal(enchanting.coverageStatus, "covered");
     const enchantingNames = enchanting.characters.map((c) => c.name).sort();
     assert.deepEqual(enchantingNames, ["Tenivard", "Voodan"]);
     assert.ok(enchanting.characters.every((c) => c.skill !== undefined));
 
     // Every relevant character's profession state IS observed (all OBSERVED),
     // so an uncovered profession is confidently "none", not "unknown".
-    assert.equal(byName.get("Alchemy")?.status, "none");
+    assert.equal(byName.get("Alchemy")?.coverageStatus, "none");
     assert.equal(byName.get("Alchemy")?.characters.length, 0);
-    assert.equal(byName.get("Blacksmithing")?.status, "none");
+    assert.equal(byName.get("Blacksmithing")?.coverageStatus, "none");
 
     // TBC-only profession (added after Classic Era) is present in the catalog.
     assert.ok(byName.has("Jewelcrafting"));
@@ -162,10 +162,10 @@ test("[SYNTHETIC] two TBC Anniversary realms remain fully isolated - gold, profe
     assert.equal(faerlina.gold.totalKnownCopper, 99_000);
 
     // Professions never leak between realms.
-    assert.equal(dreamscythe.professions.coverage.find((c) => c.profession === "Mining")?.status, "covered");
-    assert.equal(dreamscythe.professions.coverage.find((c) => c.profession === "Tailoring")?.status, "none");
-    assert.equal(faerlina.professions.coverage.find((c) => c.profession === "Tailoring")?.status, "covered");
-    assert.equal(faerlina.professions.coverage.find((c) => c.profession === "Mining")?.status, "none");
+    assert.equal(dreamscythe.professions.coverage.find((c) => c.profession === "Mining")?.coverageStatus, "covered");
+    assert.equal(dreamscythe.professions.coverage.find((c) => c.profession === "Tailoring")?.coverageStatus, "none");
+    assert.equal(faerlina.professions.coverage.find((c) => c.profession === "Tailoring")?.coverageStatus, "covered");
+    assert.equal(faerlina.professions.coverage.find((c) => c.profession === "Mining")?.coverageStatus, "none");
 
     // Inventory never leaks/combines between realms, even for the identical item.
     assert.equal(dreamscythe.inventory.items[0]?.totalKnownQty, 5);
@@ -199,10 +199,10 @@ test("[SYNTHETIC] a profession is 'unknown' (not 'none') on a realm where any ch
     const coverage = facts.realms[0].professions.coverage;
     const byName = new Map(coverage.map((c) => [c.profession, c]));
     // Mining is covered regardless of Ghost's unknown state.
-    assert.equal(byName.get("Mining")?.status, "covered");
+    assert.equal(byName.get("Mining")?.coverageStatus, "covered");
     // Everything else can't be ruled out because Ghost's professions are unknown.
-    assert.equal(byName.get("Tailoring")?.status, "unknown");
-    assert.equal(byName.get("Alchemy")?.status, "unknown");
+    assert.equal(byName.get("Tailoring")?.coverageStatus, "unknown");
+    assert.equal(byName.get("Alchemy")?.coverageStatus, "unknown");
   } finally {
     store.close();
   }
@@ -219,7 +219,7 @@ test("[SYNTHETIC] an uncatalogued/unexpected profession name is still surfaced a
     );
     const facts = store.buildAccountFacts("tbc-anniversary", FIXED_NOW);
     const entry = facts.realms[0].professions.coverage.find((c) => c.profession === "Some Future Profession");
-    assert.equal(entry?.status, "covered");
+    assert.equal(entry?.coverageStatus, "covered");
     assert.equal(entry?.characters[0].name, "Odd");
   } finally {
     store.close();

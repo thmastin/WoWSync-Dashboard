@@ -176,7 +176,7 @@ test("[REAL] professions are reported per character and aggregated by profession
   try {
     const tbc = store.buildAccountFacts("tbc-anniversary", FIXED_NOW);
     const voodan = tbc.professions.byCharacter[0];
-    assert.equal(voodan.status, "OBSERVED");
+    assert.equal(voodan.observationStatus, "OBSERVED");
     assert.ok(voodan.professions.some((p) => p.name === "Tailoring" && p.skill === 54));
 
     const tailoringCoverage = tbc.professions.coverage.find((c) => c.profession === "Tailoring");
@@ -193,12 +193,12 @@ test("[SYNTHETIC] a character whose professions were never observed is UNKNOWN, 
     const raw = buildWowSyncExport({ character: { name: "Ghost", realm: "R" }, professions: { unknown: true } });
     store.importSnapshot(raw);
     const facts = store.buildAccountFacts("classic-era", FIXED_NOW);
-    assert.equal(facts.professions.byCharacter[0].status, "UNKNOWN");
+    assert.equal(facts.professions.byCharacter[0].observationStatus, "UNKNOWN");
     assert.equal(facts.professions.byCharacter[0].professions.length, 0);
     // Every catalog profession is "unknown" (not "none") - we can't rule out
     // Ghost having any of them since their profession state was never observed.
     assert.ok(facts.professions.coverage.length > 0);
-    assert.ok(facts.professions.coverage.every((c) => c.status === "unknown"));
+    assert.ok(facts.professions.coverage.every((c) => c.coverageStatus === "unknown"));
   } finally {
     store.close();
   }
@@ -210,12 +210,12 @@ test("[SYNTHETIC] an observed-but-empty professions section is distinct from UNK
     const raw = buildWowSyncExport({ character: { name: "Ghost", realm: "R" }, professions: { entries: [] } });
     store.importSnapshot(raw);
     const facts = store.buildAccountFacts("classic-era", FIXED_NOW);
-    assert.equal(facts.professions.byCharacter[0].status, "OBSERVED");
+    assert.equal(facts.professions.byCharacter[0].observationStatus, "OBSERVED");
     assert.equal(facts.professions.byCharacter[0].professions.length, 0);
     // Ghost's professions WERE observed (just empty), so every catalog
     // profession is confidently "none", not "unknown".
     assert.ok(facts.professions.coverage.length > 0);
-    assert.ok(facts.professions.coverage.every((c) => c.status === "none"));
+    assert.ok(facts.professions.coverage.every((c) => c.coverageStatus === "none"));
   } finally {
     store.close();
   }

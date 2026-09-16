@@ -29,7 +29,7 @@
 // later); they just aren't the recommended default for a multi-realm
 // Classic/TBC account.
 
-import { baseItemId, type SnapshotDiff } from "./diff.ts";
+import { baseItemId, type ItemDelta, type SnapshotDiff } from "./diff.ts";
 import { classifyFreshness, type Freshness } from "./freshness.ts";
 import { professionCatalogForVersion } from "./professionCatalog.ts";
 import type { ParsedSnapshot, SectionState, VersionOrUnknown } from "./types.ts";
@@ -141,8 +141,21 @@ export interface CharacterProfessionEntry {
 export interface CharacterProfessions {
   identityKey: string;
   name: string;
-  /** Status of the professions section itself — UNKNOWN means "never observed", distinct from an OBSERVED section with zero entries ("no professions identified"). */
-  status: SectionState;
+  /**
+   * Whether this character's professions SECTION was ever observed — UNKNOWN
+   * means "never observed", distinct from an OBSERVED section with zero
+   * entries ("no professions identified"). Deliberately named
+   * `observationStatus`, not `status`, so it can never be confused with
+   * `ProfessionCoverageEntry.coverageStatus` below: the two use disjoint
+   * vocabularies (OBSERVED/LAST_SEEN/UNKNOWN vs. covered/none/unknown) and
+   * answer different questions ("did we ever look?" vs. "does anyone have
+   * this profession, account/realm-wide?") — a same-named `status` field at
+   * both levels of this document was misread by an LLM consumer in
+   * practice (it read one character's `professions` array correctly, then
+   * separately misreported the unrelated coverage status for the same
+   * profession as if it were the same field).
+   */
+  observationStatus: SectionState;
   professions: CharacterProfessionEntry[];
 }
 
@@ -155,7 +168,8 @@ export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
 
 export interface ProfessionCoverageEntry {
   profession: string;
-  status: ProfessionCoverageStatus;
+  /** See the note on CharacterProfessions.observationStatus for why this isn't named `status`. */
+  coverageStatus: ProfessionCoverageStatus;
   characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
 }
 
@@ -208,6 +222,21 @@ export function searchInventory(facts: InventoryFacts, query: string): Inventory
 // Recent account-level changes
 // ---------------------------------------------------------------------
 
+/**
+ * A compact per-item inventory delta: net quantity change only (never the
+ * full fromQty/toQty/raw-itemRef bloat of `ItemDelta`). `itemKey` uses the
+ * same base-item-ID-or-name-fallback convention as
+ * `InventoryAggregateEntry.itemKey` (see baseItemId in diff.ts) so entries
+ * here can be cross-referenced against `InventoryFacts.items` by key.
+ */
+export interface InventoryItemChange {
+  storage: StorageLocation;
+  itemKey: string;
+  name?: string;
+  /** Net change (positive = gained, negative = lost/consumed/sold/mailed away — the account context only ever records the observed delta, never a cause). */
+  deltaQty: number;
+}
+
 export interface AccountChangeSummary {
   identityKey: string;
   characterName: string;
@@ -220,8 +249,26 @@ export interface AccountChangeSummary {
   professionChanged: boolean;
   equipmentChanged: boolean;
   inventoryChanged: boolean;
+  /**
+   * Compact bags+bank item deltas backing `inventoryChanged`. Present
+   * (and non-empty) exactly when `inventoryChanged` is true; omitted
+   * entirely otherwise — never an empty array standing in for "nothing
+   * changed", consistent with this layer never fabricating a value where
+   * "not populated" is the honest state. Sorted by item name, then
+   * storage, for determinism.
+   */
+  inventoryItemChanges?: InventoryItemChange[];
   locationChanged: boolean;
   trainerUnlocked: boolean;
+}
+
+function toInventoryItemChange(storage: StorageLocation, delta: ItemDelta): InventoryItemChange {
+  return {
+    storage,
+    itemKey: baseItemId(delta.itemRef) ?? `name:${delta.name ?? "?"}`,
+    name: delta.name,
+    deltaQty: delta.deltaQty,
+  };
 }
 
 /**
@@ -234,6 +281,11 @@ export function diffToChangeSummary(
   diff: SnapshotDiff,
   meta: { identityKey: string; characterName: string; importedAt: number },
 ): AccountChangeSummary {
+  const inventoryItemChanges = [
+    ...diff.bagsItems.map((d) => toInventoryItemChange("bags", d)),
+    ...diff.bankItems.map((d) => toInventoryItemChange("bank", d)),
+  ].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "") || a.storage.localeCompare(b.storage));
+
   return {
     identityKey: meta.identityKey,
     characterName: meta.characterName,
@@ -245,7 +297,8 @@ export function diffToChangeSummary(
     playtimeDeltaSeconds: diff.playedSeconds.delta,
     professionChanged: diff.professions.length > 0,
     equipmentChanged: diff.equipment.length > 0,
-    inventoryChanged: diff.bagsItems.length > 0 || diff.bankItems.length > 0,
+    inventoryChanged: inventoryItemChanges.length > 0,
+    inventoryItemChanges: inventoryItemChanges.length > 0 ? inventoryItemChanges : undefined,
     locationChanged: diff.location.changed,
     trainerUnlocked: diff.trainerUnlocks.length > 0,
   };
@@ -467,7 +520,7 @@ function buildProfessionsByCharacter(
     return {
       identityKey: c.identityKey,
       name: c.name,
-      status: section?.status.state ?? "UNKNOWN",
+      observationStatus: section?.status.state ?? "UNKNOWN",
       professions: (section?.entries ?? []).map((e) => ({ name: e.name, skill: e.skill, maxSkill: e.maxSkill })),
     };
   });
@@ -480,7 +533,7 @@ function buildProfessionsByCharacter(
  * name) is still appended as "covered" — never silently dropped.
  */
 function buildProfessionCoverage(catalog: string[], byCharacter: CharacterProfessions[]): ProfessionCoverageEntry[] {
-  const anyUnknown = byCharacter.some((c) => c.status === "UNKNOWN");
+  const anyUnknown = byCharacter.some((c) => c.observationStatus === "UNKNOWN");
   const byProfession = new Map<string, ProfessionCoverageEntry["characters"]>();
   for (const cp of byCharacter) {
     for (const prof of cp.professions) {
@@ -492,12 +545,12 @@ function buildProfessionCoverage(catalog: string[], byCharacter: CharacterProfes
   const catalogSet = new Set(catalog);
   const entries: ProfessionCoverageEntry[] = catalog.map((profession) => {
     const characters = byProfession.get(profession) ?? [];
-    if (characters.length > 0) return { profession, status: "covered", characters };
-    return { profession, status: anyUnknown ? "unknown" : "none", characters: [] };
+    if (characters.length > 0) return { profession, coverageStatus: "covered", characters };
+    return { profession, coverageStatus: anyUnknown ? "unknown" : "none", characters: [] };
   });
   // Observed professions outside the catalog (e.g. an unrecognized name) are never dropped.
   for (const [profession, characters] of byProfession) {
-    if (!catalogSet.has(profession)) entries.push({ profession, status: "covered", characters });
+    if (!catalogSet.has(profession)) entries.push({ profession, coverageStatus: "covered", characters });
   }
   return entries.sort((a, b) => a.profession.localeCompare(b.profession));
 }
