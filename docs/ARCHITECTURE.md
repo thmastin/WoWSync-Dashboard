@@ -45,11 +45,15 @@ AccountContext                 packages/core/src/accountContext.ts
 Dashboard UI                   packages/web (React/Vite)
         │                     served by packages/server (Express)
         ▼
-   (future) LLM context builder — would read AccountContext/AccountFacts,
-                                   never the raw export or the database
-                                   directly. Not implemented in this
-                                   milestone — see "Export Dashboard
-                                   Context" below for what exists today.
+Ask My Account (POC)           packages/server/src/llm.ts, app.ts
+        │                     — POST /api/ask: fetches the SAME
+        │                       GET /api/account-context (self-loopback
+        │                       HTTP call, not a second code path), sends
+        │                       it + a system prompt + the question to
+        │                       an LLM provider, returns the answer.
+        │                       Stateless — no history, no memory.
+        ▼
+   LLM provider (OpenAI-compatible, configured via env vars)
 ```
 
 ## Package layout
@@ -455,18 +459,68 @@ throwaway `<a download>` click — both entirely client-side. Neither
 button, nor anything else in this feature, makes a network call to
 anything other than this app's own `localhost` server.
 
-## LLM boundary (not implemented)
+## LLM boundary — Ask My Account (experimental POC)
 
 ```
-Structured account data  →  AccountContext / AccountFacts  →  LLM context builder  →  LLM provider  →  Analysis
+Structured account data → AccountContext (GET /api/account-context) → POST /api/ask → LLM provider → Answer
 ```
 
-`AccountFacts` (per-version facts) and now `AccountContext` (the full,
-exportable document) are exactly that middle layer, and both exist as
-real, tested modules — not implied by other structures. "Export Dashboard
-Context" closes the gap between "the facts exist" and "a person can
-actually hand them to an LLM conversation" — but it stops there: no LLM
-context builder, provider integration, API key, chat interface, or
-automatic prompting exists yet. Nothing this feature touches sends data
-anywhere; the user explicitly copies or downloads, and decides what to do
-with it next. The dashboard remains fully usable without any of this.
+**Route.** `POST /api/ask` (`packages/server/src/app.ts`) validates the
+question (non-empty, ≤ `MAX_QUESTION_LENGTH`), confirms
+`OPENAI_API_KEY` is configured, then makes a real HTTP request to this
+same server's own `GET /api/account-context` — not a second, divergent
+serialization — before calling `askOpenAI()`
+(`packages/server/src/llm.ts`). This is deliberate: it guarantees the
+context an LLM sees can never drift from what "Export Dashboard Context"
+produces, and it means a context-build failure fails the whole request
+(no silent fallback to stale data).
+
+**Provider client.** `llm.ts` is a small `fetch`-based OpenAI Chat
+Completions client — no SDK dependency. `chatCompletionsUrl()` reads
+`OPENAI_BASE_URL` (default `https://api.openai.com/v1`), which exists
+both as a legitimate Azure-OpenAI/proxy escape hatch and as the seam
+`packages/server/test/ask.test.ts` uses to point at a local mock HTTP
+server instead of a live provider. Errors are normalized into a typed
+`AskError` (message + HTTP status) covering timeout, network failure,
+401/403 (rejected key), 429 (rate limit), 5xx (provider outage), a
+non-2xx response, an unparsable body, and a response missing
+`choices[0].message.content` — each mapped to a specific, non-leaking
+message; the raw provider error body (which can echo the key) is never
+forwarded to the client or logged.
+
+**System prompt.** `packages/server/src/systemPrompt.ts` is a fixed,
+version-controlled string (`ASK_MY_ACCOUNT_SYSTEM_PROMPT`) establishing
+the assistant's role, the OBSERVED-vs-UNKNOWN distinction (UNKNOWN is
+never zero/empty), realm/version isolation, and the
+observed-change-vs-inferred-cause distinction. It is not user-editable
+and not stored per-request.
+
+**Statelessness.** No conversation table, no session, no server-side or
+client-side history. Every `POST /api/ask` call is a fresh
+system-prompt + context + question triple; nothing from a previous
+question is carried forward.
+
+**Web UI.** `packages/web/src/components/AskAccountModal.tsx` — a
+question textarea, an Ask button (disabled while a request is in flight,
+so a fast double-click can't fire two requests), a compact
+"Context: N characters · M WoW versions" indicator (computed from a
+lightweight `GET /api/account-context` fetch on open, never rendering the
+full ~hundreds-of-KB document), and the answer rendered through
+`packages/web/src/markdownLite.tsx` — a small hand-written Markdown
+subset (headings, bold/italic/inline-code, bulleted/numbered lists) that
+only ever produces React elements from plain-text children. It never
+uses `dangerouslySetInnerHTML`, so arbitrary HTML/script content in a
+model's answer can't execute — verified by asking the mock provider to
+return `<script>`/`onerror`/`onclick` payloads and confirming zero such
+DOM nodes are created.
+
+**Testing.** `packages/server/test/ask.test.ts` runs the real Express
+route (via `createApp`) against a local `node:http` mock OpenAI server
+reached through `OPENAI_BASE_URL`, covering every error path above plus
+a check that a deliberately fake API key never appears in any response
+body or captured `console.error` output. None of this requires network
+access or a real API key, so it runs as part of `npm test`. A separate,
+opt-in live-smoke-test procedure (`packages/server/test/README-live-smoke-test.md`)
+exists for verifying real grounding behavior against the actual OpenAI
+API and real imported character data — intentionally not automated,
+since it costs money and depends on a live account.

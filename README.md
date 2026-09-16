@@ -49,8 +49,11 @@ Everything runs on your machine:
 - **Parser/diff engine:** `packages/core` — pure TypeScript, no I/O beyond
   the storage abstraction it's handed.
 
-Nothing is transmitted anywhere unless you explicitly invoke a future LLM
-feature that requires it (not implemented yet — see below).
+Nothing is transmitted anywhere unless you explicitly use **Ask My
+Account** (below), an experimental, opt-in feature that sends one
+question and the current account context to an LLM provider you
+configure. Everything else in this app makes zero outbound network
+calls.
 
 ## Import workflow
 
@@ -194,23 +197,105 @@ JSON the UI copies/downloads, so there is one canonical export, not a
 separate API shape and UI shape. See `docs/ARCHITECTURE.md` for the full
 structure.
 
-## LLM analysis (not implemented yet)
+## Ask My Account (experimental LLM POC)
 
-The architecture reserves a place for an "Ask My Account" feature:
-`AccountFacts`/`AccountContext` are the deterministic factual layer an
-LLM would eventually read automatically, and it would only ever
-*interpret* those facts — never serve as the database, and never see a
-raw export or the database directly. "Export Dashboard Context" above
-closes the gap between "the facts exist" and "a person can hand them to
-an LLM" — manually, today. No LLM context builder, provider integration,
-API key, or chat interface exists yet. The dashboard is fully usable with
-the LLM layer absent, which is its current state.
+```
+WoWSync addon → Dashboard SQLite → AccountFacts → GET /api/account-context → LLM consumer → Answer
+```
+
+A small **Ask My Account** button in the header (next to Developer)
+opens a box: type a question, click **Ask**, get an answer. This is the
+**first and only** feature in this app that talks to an external service
+— everything described above (import, overview, economy, Developer
+export) stays 100% local. Treat this feature as an experimental proof of
+concept, not a polished product surface.
+
+**Setup.** Requires an OpenAI API key. Create `.env` at the repo root
+(gitignored, never committed) with:
+
+```
+OPENAI_API_KEY=sk-...
+# Optional overrides:
+# WOWSYNC_LLM_MODEL=gpt-4o-mini        (default)
+# OPENAI_BASE_URL=https://api.openai.com/v1   (Azure/proxy-compatible override)
+```
+
+Restart the server after setting it (`process.loadEnvFile()` reads `.env`
+once at startup). Without a key configured, the button still exists and
+still opens, but asking a question returns a clear "OPENAI_API_KEY is not
+configured" error rather than crashing or silently doing nothing.
+
+**Exact data boundary.** Each request sends exactly three things to the
+configured LLM provider, once, over HTTPS:
+
+1. A fixed system prompt (`packages/server/src/systemPrompt.ts`) defining
+   the assistant's role and grounding rules.
+2. The current `GET /api/account-context` document — the same JSON the
+   Developer export's Copy/Download buttons produce. Nothing more.
+3. Your question, verbatim.
+
+Never sent: filesystem paths, the SQLite file or its location, the
+OpenAI/any API key, machine or OS info, environment variables other than
+what's needed to make the request, source code, or browser state. The
+server also never logs the full account context, the API key, or full
+prompts — only short operational messages on failure (see
+`packages/server/src/app.ts` and `llm.ts`).
+
+**How context retrieval works.** The server handling `POST /api/ask`
+makes a real HTTP call to its own `GET /api/account-context` — the exact
+same code path the Developer export uses — rather than recomputing facts
+a second way. If that call fails, the whole request fails with an error;
+it never silently answers from a stale or partial context.
+
+**Conversation model.** Fully stateless. Each question is answered
+independently with a fresh copy of the current account context; nothing
+is remembered between questions, no history is stored anywhere (not in
+the database, not in the browser), and there's no multi-turn memory.
+
+**Grounding rules.** The system prompt requires the model to:
+
+- Distinguish what was actually **observed** (present in the context)
+  from what's simply **unknown** (never seen) — unknown must never be
+  treated as zero, empty, or absent.
+- Respect realm and WoW-version boundaries exactly as the rest of the
+  dashboard does (Classic Era/TBC Anniversary are realm-scoped; Retail is
+  account-wide).
+- Distinguish an **observed change** (e.g. "gold decreased by 40s
+  between two snapshots") from an **inferred cause** (e.g. "you bought
+  something at auction") — it may speculate about a cause, but only
+  clearly labeled as a guess, never stated as fact.
+- Say what's missing rather than guess when the context doesn't answer
+  the question.
+
+**What this is not.** No autonomous agent, no tool/function calling, no
+MCP, no memory, no RAG/vector DB, no scheduled or background jobs, no
+WoW API access, no addon write-back, no gameplay automation. It answers
+one question with one provider call and stops.
+
+**Errors.** Missing/rejected API key, provider timeout/rate-limit/outage,
+a malformed provider response, an empty or oversized question, and a
+failed context fetch all produce a specific, non-leaking error message in
+the UI rather than a generic failure or a stack trace.
+
+**Testing.** `packages/server/test/ask.test.ts` covers the whole
+`/api/ask` route (valid question, empty/oversized question, missing key,
+provider 401/429/5xx, malformed/non-JSON provider response, context-fetch
+failure, and an explicit check that a fake API key never leaks into a
+response body or logged output) against a local mock HTTP server — no
+live OpenAI account is required to run `npm test`. See
+`packages/server/test/README-live-smoke-test.md` for a separate, opt-in
+procedure to exercise this against the real OpenAI API with your own key
+and real imported character data.
 
 ## Privacy
 
 - Local-first: your character data lives in a SQLite file on your disk.
-- No analytics, no telemetry, no automatic network calls.
-- WoWSync export text is never transmitted anywhere by this app today.
+- No analytics, no telemetry.
+- Every feature except **Ask My Account** (above) makes zero network
+  calls. Ask My Account is opt-in per question and sends only a system
+  prompt, the account context JSON, and your question to the provider you
+  configure — see the data boundary above for the full list of what is
+  and isn't sent.
 
 ## Development setup
 
