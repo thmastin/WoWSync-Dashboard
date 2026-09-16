@@ -7,5 +7,8 @@
   "dependencies": {
     "@wowsync-dashboard/core": "*",
     "express": "^4.21.2"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
   }
 }

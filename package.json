@@ -10,7 +10,7 @@
     "packages/web"
   ],
   "scripts": {
-    "test": "npm run test --workspace packages/core",
+    "test": "npm run test --workspaces --if-present",
     "dev:server": "node --watch packages/server/src/index.ts",
     "dev:web": "npm run dev --workspace packages/web",
     "build:web": "npm run build --workspace packages/web",
