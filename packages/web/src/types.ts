@@ -301,7 +301,8 @@ export interface CharacterProfessionEntry {
 export interface CharacterProfessions {
   identityKey: string;
   name: string;
-  status: SectionStatus["state"];
+  /** Was this character's professions section ever observed — not to be confused with ProfessionCoverageEntry.coverageStatus below (different vocabulary, different question). */
+  observationStatus: SectionStatus["state"];
   professions: CharacterProfessionEntry[];
 }
 
@@ -309,7 +310,7 @@ export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
 
 export interface ProfessionCoverageEntry {
   profession: string;
-  status: ProfessionCoverageStatus;
+  coverageStatus: ProfessionCoverageStatus;
   characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
 }
 
@@ -342,6 +343,13 @@ export interface InventoryFacts {
   hasUnknownStorage: boolean;
 }
 
+export interface InventoryItemChange {
+  storage: StorageLocation;
+  itemKey: string;
+  name?: string;
+  deltaQty: number;
+}
+
 export interface AccountChangeSummary {
   identityKey: string;
   characterName: string;
@@ -354,6 +362,7 @@ export interface AccountChangeSummary {
   professionChanged: boolean;
   equipmentChanged: boolean;
   inventoryChanged: boolean;
+  inventoryItemChanges?: InventoryItemChange[];
   locationChanged: boolean;
   trainerUnlocked: boolean;
 }

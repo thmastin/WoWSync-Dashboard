@@ -10,8 +10,8 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
     .slice(0, 5);
 
   const staleOrUnknown = facts.freshness.byCharacter.filter((c) => c.freshness !== "recent");
-  const covered = facts.professions.coverage.filter((c) => c.status === "covered");
-  const missing = facts.professions.coverage.filter((c) => c.status !== "covered");
+  const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
+  const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
 
   return (
     <div className="overview">
@@ -114,13 +114,13 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
           {missing.length > 0 && (
             <details className="coverage-missing">
               <summary>
-                {missing.filter((m) => m.status === "none").length} not covered
-                {missing.some((m) => m.status === "unknown") ? `, ${missing.filter((m) => m.status === "unknown").length} unknown` : ""}
+                {missing.filter((m) => m.coverageStatus === "none").length} not covered
+                {missing.some((m) => m.coverageStatus === "unknown") ? `, ${missing.filter((m) => m.coverageStatus === "unknown").length} unknown` : ""}
               </summary>
               <ul className="compact-list">
                 {missing.map((entry) => (
                   <li key={entry.profession} className="muted small">
-                    {entry.profession} — {entry.status === "none" ? "none" : "unknown coverage"}
+                    {entry.profession} — {entry.coverageStatus === "none" ? "none" : "unknown coverage"}
                   </li>
                 ))}
               </ul>

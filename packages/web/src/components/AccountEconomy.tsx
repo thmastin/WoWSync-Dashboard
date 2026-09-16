@@ -5,8 +5,8 @@ import type { InventoryAggregateEntry } from "../types.ts";
 
 export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
   const facts = scoped;
-  const covered = facts.professions.coverage.filter((c) => c.status === "covered");
-  const missing = facts.professions.coverage.filter((c) => c.status !== "covered");
+  const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
+  const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
 
   return (
     <div className="economy">
@@ -103,23 +103,23 @@ export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: Sc
         {missing.length > 0 && (
           <details className="coverage-missing" style={{ marginTop: covered.length > 0 ? 10 : 0 }}>
             <summary>
-              {missing.filter((m) => m.status === "none").length} profession(s) not covered
-              {missing.some((m) => m.status === "unknown")
-                ? `, ${missing.filter((m) => m.status === "unknown").length} with unknown coverage`
+              {missing.filter((m) => m.coverageStatus === "none").length} profession(s) not covered
+              {missing.some((m) => m.coverageStatus === "unknown")
+                ? `, ${missing.filter((m) => m.coverageStatus === "unknown").length} with unknown coverage`
                 : ""}
             </summary>
             <ul className="compact-list">
               {missing.map((entry) => (
                 <li key={entry.profession} className="muted small">
-                  {entry.profession} — {entry.status === "none" ? "none observed" : "unknown (not every character's professions were observed)"}
+                  {entry.profession} — {entry.coverageStatus === "none" ? "none observed" : "unknown (not every character's professions were observed)"}
                 </li>
               ))}
             </ul>
           </details>
         )}
-        {facts.professions.byCharacter.some((c) => c.status === "UNKNOWN") && (
+        {facts.professions.byCharacter.some((c) => c.observationStatus === "UNKNOWN") && (
           <div className="muted small" style={{ marginTop: 8 }}>
-            {facts.professions.byCharacter.filter((c) => c.status === "UNKNOWN").map((c) => c.name).join(", ")}: professions never observed.
+            {facts.professions.byCharacter.filter((c) => c.observationStatus === "UNKNOWN").map((c) => c.name).join(", ")}: professions never observed.
           </div>
         )}
       </section>
