@@ -397,8 +397,9 @@ whole dashboard — every WoW version, in one JSON payload:
 
 ```ts
 interface AccountContext {
-  schemaVersion: "1";
+  schemaVersion: "2";
   generatedAt: number; // the `now` this was built with
+  currency: { unit: "copper"; conversion: string; note: string }; // in-band unit documentation - see below
   versions: {
     "classic-era": VersionContext;
     "tbc-anniversary": VersionContext;
@@ -412,6 +413,40 @@ interface VersionContext {
   characters: CharacterContext[]; // history AccountFacts doesn't carry
 }
 ```
+
+**Schema v2** (bumped from v1) came directly out of a real LLM-evaluation
+pass on Ask My Account — three concrete gaps a model actually hit, fixed
+at the data layer rather than by patching the system prompt:
+
+- **`currency`** — every `*Copper` field (`goldCopper`, `moneyCopper`,
+  `deltaCopper`, `costCopper`, ...) is a raw copper integer; a model
+  reading `goldCopper: 102815` with no unit context reported it as
+  "102.8 gold" (it's 10g 28s 15c). The conversion rule now travels with
+  the document itself, not just with one prompt that happens to mention
+  it.
+- **`CharacterProfessions.status` → `observationStatus`**,
+  **`ProfessionCoverageEntry.status` → `coverageStatus`** — two fields
+  named identically (`status`) at different nesting levels of the same
+  document, with disjoint vocabularies (`OBSERVED`/`LAST_SEEN`/`UNKNOWN`
+  vs. `covered`/`none`/`unknown`, answering "was this ever observed?" vs.
+  "does anyone have this?"). A model correctly read one and then
+  self-contradicted on the other within the same answer. Renamed in
+  `accountFacts.ts` (the single source AccountContext embeds wholesale),
+  so the fix applies everywhere this data appears — the web UI's
+  Economy/Overview profession panels included.
+- **`AccountChangeSummary.inventoryItemChanges`** — `transitions`
+  previously carried only boolean flags (`inventoryChanged: true`) with
+  no item-level detail, even though `diffSnapshots()` already computes
+  full `bagsItems`/`bankItems` deltas; they were just discarded before
+  reaching the export. A model asked "what changed in your bags"
+  correctly said the detail wasn't in its context — which was true, and
+  is now fixed by adding a compact `{storage, itemKey, name, deltaQty}[]`
+  (never the full `fromQty`/`toQty`/raw-`itemRef` `ItemDelta` shape) to
+  `AccountChangeSummary`, present whenever `inventoryChanged` is true and
+  omitted (not an empty array) otherwise. Shared by both
+  `AccountFacts.recentChanges` and `AccountContext`'s per-character
+  `transitions` via the same `diffToChangeSummary()` — one mapping, both
+  consumers benefit.
 
 This is explicitly **not** a second implementation of account logic —
 every number in it either comes straight from an already-built
