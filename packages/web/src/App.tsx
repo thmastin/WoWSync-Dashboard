@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchAccountFacts } from "./api.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
+import AskAccountModal from "./components/AskAccountModal.tsx";
 import CharactersGrid from "./components/CharactersGrid.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
@@ -25,6 +26,7 @@ export default function App() {
   const [selectedRealm, setSelectedRealm] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
@@ -57,6 +59,9 @@ export default function App() {
         <div style={{ display: "flex", gap: 8 }}>
           <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
             Developer
+          </button>
+          <button className="dev-button" onClick={() => setAskOpen(true)} title="Experimental: ask an external LLM a question about your account">
+            Ask My Account
           </button>
           <button className="primary-button" onClick={() => setImportOpen(true)}>
             Import WoWSync
@@ -136,6 +141,8 @@ export default function App() {
       )}
 
       {devExportOpen && <DeveloperExportModal onClose={() => setDevExportOpen(false)} />}
+
+      {askOpen && <AskAccountModal onClose={() => setAskOpen(false)} />}
     </div>
   );
 }

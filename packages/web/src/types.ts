@@ -409,3 +409,19 @@ export interface AccountContext {
   generatedAt: number;
   versions: Record<string, AccountContextVersionSummary>;
 }
+
+// --- "Ask My Account" (LLM POC) ---
+
+export interface AskAccountUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface AskAccountResponse {
+  answer: string;
+  model: string;
+  contextGeneratedAt: number;
+  contextSummary: { characterCount: number; versions: string[] };
+  usage?: AskAccountUsage;
+}
