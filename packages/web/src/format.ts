@@ -1,22 +1,7 @@
-export function formatCopper(copper: number | undefined): string {
-  if (copper === undefined) return "?";
-  const negative = copper < 0;
-  const abs = Math.abs(copper);
-  const gold = Math.floor(abs / 10000);
-  const silver = Math.floor((abs % 10000) / 100);
-  const bronze = abs % 100;
-  const parts: string[] = [];
-  if (gold > 0) parts.push(`${gold}g`);
-  if (silver > 0 || gold > 0) parts.push(`${silver}s`);
-  parts.push(`${bronze}c`);
-  return (negative ? "-" : "") + parts.join(" ");
-}
-
-export function formatCopperDelta(delta: number | undefined): string {
-  if (delta === undefined) return "";
-  if (delta === 0) return "±0c";
-  return (delta > 0 ? "+" : "") + formatCopper(delta);
-}
+// The single implementation lives in @wowsync-dashboard/core (shared with
+// the LLM-facing projection, llmContext.ts) - re-exported here rather than
+// duplicated, per this project's "never duplicate business logic" rule.
+export { formatCopper, formatCopperDelta } from "@wowsync-dashboard/core/currency.ts";
 
 export function formatPlaytime(seconds: number | undefined): string {
   if (seconds === undefined) return "?";

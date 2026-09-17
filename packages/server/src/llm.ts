@@ -3,7 +3,7 @@
 // built-in fetch and AbortSignal.timeout. No retries, no streaming, no
 // tool calling, no conversation state.
 import { ASK_MY_ACCOUNT_SYSTEM_PROMPT } from "./systemPrompt.ts";
-import type { AccountContext } from "@wowsync-dashboard/core";
+import { buildLlmContext, type AccountContext } from "@wowsync-dashboard/core";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 export const MAX_QUESTION_LENGTH = 2000;
@@ -45,9 +45,14 @@ export interface AskResult {
 }
 
 function buildUserMessage(context: AccountContext, question: string): string {
-  // Structured JSON, not prose - the model is told explicitly (in the
-  // system prompt) that this block is authoritative for account facts.
-  return `ACCOUNT CONTEXT:\n${JSON.stringify(context)}\n\nUSER QUESTION:\n${question}`;
+  // Project the canonical AccountContext down to the compact, per-character
+  // atomic LlmContext immediately before serializing - the model never sees
+  // the full AccountContext (redundant historical transitions, the full
+  // current-inventory-by-item aggregate, full trainer detail). This is the
+  // one and only place that projection happens; GET /api/account-context
+  // and every other consumer keep reading the canonical document untouched.
+  const llmContext = buildLlmContext(context);
+  return `ACCOUNT CONTEXT:\n${JSON.stringify(llmContext)}\n\nUSER QUESTION:\n${question}`;
 }
 
 export async function askOpenAI(
