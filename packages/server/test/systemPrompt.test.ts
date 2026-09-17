@@ -47,6 +47,22 @@ test("instructs the model to use the supplied formatted gold strings rather than
   assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /10,000 copper = 1 gold/);
 });
 
+test("declares goldFormatted/goldDeltaFormatted/totalKnownFormatted authoritative and instructs copying them directly rather than recalculating", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"goldFormatted"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"goldDeltaFormatted"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"totalKnownFormatted"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /authoritative, ready-to-use display values/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /copy the applicable supplied formatted value directly/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /rather than recalculating or reformatting/i);
+});
+
+test("clarifies that omitting one requested gold value must not cause unrelated gold values to be recalculated", () => {
+  // Regression guard for the isolated Test B finding: "Do not calculate a
+  // total" triggered the model to also recompute unrelated per-character
+  // gold values instead of copying the supplied goldFormatted strings.
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /regardless of which other gold values the user asks you to include or omit/i);
+});
+
 test("instructs the model to use latestTransitionIndex as the complete qualifying set for 'which characters...' questions, and not to rediscover it by scanning", () => {
   assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"latestTransitionIndex"/);
   assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"goldChanged"/);

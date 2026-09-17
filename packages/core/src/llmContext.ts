@@ -104,9 +104,33 @@ export interface LlmCharacter {
   latestTransition?: LlmLatestTransition;
 }
 
+/**
+ * A projection of the version's already-computed AccountFacts.gold total -
+ * not a second calculation. `totalKnownCopper` is read directly from
+ * `facts.gold.totalKnownCopper`; nothing here sums LlmCharacter.goldCopper
+ * independently.
+ *
+ * Scope note: this mirrors exactly what the canonical field already means
+ * for that version - it does not invent new aggregation semantics. For
+ * Retail (`aggregationScope: "account-wide"`), that's a real account-wide
+ * total. For Classic Era / TBC Anniversary (`aggregationScope: "realm"`),
+ * the canonical `facts.gold.totalKnownCopper` is already a cross-realm sum
+ * (AccountFacts computes this version-wide total unconditionally, as a
+ * broader view, even though `realms[]` is the recommended figure for a
+ * realm-partitioned version, since those realms share no real economy) -
+ * this projection carries that same cross-realm sum forward unchanged, it
+ * does not restrict it to a single realm or add a new realm-scoped total.
+ */
+export interface LlmGoldSummary {
+  /** Absent (not 0) when no character's gold was ever observed - a sum over zero known values is not a meaningful "0c" total. */
+  totalKnownCopper?: number;
+  totalKnownFormatted?: string;
+}
+
 export interface LlmVersionSummary {
   version: WowVersion;
   aggregationScope: "realm" | "account-wide";
+  goldSummary: LlmGoldSummary;
   characters: LlmCharacter[];
 }
 
@@ -185,6 +209,16 @@ function buildInventoryChange(
     // deltaQty === 0 never occurs - diffSnapshots only reports a delta when fromQty !== toQty.
   }
   return { gained, lost };
+}
+
+function buildGoldSummary(gold: AccountContext["versions"][WowVersion]["facts"]["gold"]): LlmGoldSummary {
+  // A sum over zero known contributors is not a meaningful total - never
+  // surface it as "0c", which would read as a confirmed observed zero.
+  if (gold.charactersWithKnownGold === 0) return {};
+  return {
+    totalKnownCopper: gold.totalKnownCopper,
+    totalKnownFormatted: formatCopper(gold.totalKnownCopper),
+  };
 }
 
 function buildLatestTransitionIndex(allCharacters: LlmCharacter[]): LlmLatestTransitionIndex {
@@ -288,6 +322,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
     versions[version] = {
       version,
       aggregationScope: versionContext.aggregationScope,
+      goldSummary: buildGoldSummary(versionContext.facts.gold),
       characters,
     };
     allCharacters.push(...characters);

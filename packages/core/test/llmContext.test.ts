@@ -368,6 +368,103 @@ test("[SYNTHETIC] index arrays preserve the same canonical order as the versions
   }
 });
 
+// --- goldSummary: the missing-aggregate experiment ---
+//
+// Live testing found individual character goldCopper/goldFormatted were
+// always correct, but asked for a "total Retail gold" figure with no
+// deterministic aggregate supplied, the model invented one - and its
+// invented total exactly equalled its (also invented) figure for one
+// character. goldSummary carries the canonical, already-computed
+// facts.gold.totalKnownCopper into LlmContext unchanged - not a second
+// calculation path.
+
+test("[SYNTHETIC] goldSummary.totalKnownCopper is the canonical facts.gold.totalKnownCopper, projected unchanged", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Alpha", realm: "R", moneyCopper: 100 } }));
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Beta", realm: "R", moneyCopper: 250 } }));
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    const llm = buildLlmContext(ctx);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, ctx.versions["classic-era"].facts.gold.totalKnownCopper);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 350);
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] goldSummary.totalKnownFormatted is the correct deterministic formatting of that exact value", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Rich", realm: "R", moneyCopper: 92113121 } }));
+    const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 92113121);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownFormatted, "9211g 31s 21c");
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] when no character's gold was ever observed, goldSummary is unknown - not a misleading '0c' total", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Ghost", realm: "R", moneyCopper: undefined } }));
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    assert.equal(ctx.versions["classic-era"].facts.gold.charactersWithKnownGold, 0);
+    const llm = buildLlmContext(ctx);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, undefined);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownFormatted, undefined);
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] the projection never independently sums character gold - it carries the canonical total as-is, even if deliberately inconsistent with it", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Alpha", realm: "R", moneyCopper: 100 } }));
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Beta", realm: "R", moneyCopper: 250 } }));
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    // Naively summing the two characters' goldCopper would give 350.
+    // Deliberately desync the canonical total from that sum to prove
+    // buildLlmContext reads facts.gold.totalKnownCopper verbatim rather
+    // than recomputing it from the projected characters.
+    ctx.versions["classic-era"].facts.gold.totalKnownCopper = 999999;
+    const llm = buildLlmContext(ctx);
+    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 999999);
+    assert.notEqual(llm.versions["classic-era"].goldSummary.totalKnownCopper, 350);
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] adding goldSummary leaves individual character goldCopper/goldFormatted unchanged", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Alpha", realm: "R", moneyCopper: 92113121 } }));
+    const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
+    const alpha = llm.versions["classic-era"].characters.find((c) => c.name === "Alpha")!;
+    assert.equal(alpha.goldCopper, 92113121);
+    assert.equal(alpha.goldFormatted, "9211g 31s 21c");
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] adding goldSummary leaves latestTransitionIndex behavior unchanged", () => {
+  const store = buildIndexFixture();
+  try {
+    const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
+    const idx = llm.latestTransitionIndex;
+    const key = (name: string, realm: string) => `retail::${realm.toLowerCase()}::${name.toLowerCase()}`;
+    const changed = [key("Voodan", "Cairne"), key("Ciao", "Cairne"), key("Squashpot", "Cairne"), key("Stoneharry", "Thrall")];
+    assert.deepEqual(new Set(idx.goldChanged), new Set(changed));
+    assert.deepEqual(new Set(idx.inventoryChanged), new Set(changed));
+    assert.ok(llm.versions["retail"].goldSummary); // still present alongside the unchanged index
+  } finally {
+    store.close();
+  }
+});
+
 // --- Bloat regression ---
 //
 // Ceiling chosen deliberately generous, not a tight budget: measured
