@@ -227,6 +227,76 @@ test("[SYNTHETIC] a transition with no inventory change has inventoryItemChanges
   }
 });
 
+// --- Chronology tie-breaking when snapshots share generatedAt ---
+//
+// snapshotSortKey() only orders by generatedAt (falling back to
+// importedAt when generatedAt is absent). When two snapshots share an
+// identical generatedAt, Array.prototype.sort's stability preserves
+// their relative order from the *input* array - which is
+// listSnapshots()'s newest-first order, not oldest-first. That silently
+// builds the transition as diffSnapshots(newer, older) instead of
+// diffSnapshots(older, newer), reversing every directional delta.
+
+test("[SYNTHETIC] snapshots with identical generatedAt still produce an oldest-to-newest transition, never reversed", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const tiedGeneratedAt = 1_700_000_000;
+    store.importSnapshot(
+      buildWowSyncExport({
+        generatedAt: tiedGeneratedAt,
+        character: { name: "Chrono", realm: "R", moneyCopper: 100 },
+        bags: { containers: [{ id: 0, capacity: 16, free: 15, items: [{ itemRef: "item:2589", name: "Linen Cloth", qty: 2 }] }] },
+      }),
+    );
+    store.importSnapshot(
+      buildWowSyncExport({
+        generatedAt: tiedGeneratedAt,
+        character: { name: "Chrono", realm: "R", moneyCopper: 300 },
+        bags: { containers: [{ id: 0, capacity: 16, free: 15, items: [{ itemRef: "item:2589", name: "Linen Cloth", qty: 9 }] }] },
+      }),
+    );
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    const chrono = ctx.versions["classic-era"].characters.find((c) => c.name === "Chrono")!;
+
+    assert.equal(chrono.snapshotHistory.length, 2);
+    assert.equal(chrono.snapshotHistory[0].moneyCopper, 100);
+    assert.equal(chrono.snapshotHistory[1].moneyCopper, 300);
+
+    assert.equal(chrono.transitions.length, 1);
+    const t = chrono.transitions[0];
+    // Gold went 100 -> 300: must be a +200 gain, never -200.
+    assert.equal(t.goldDeltaCopper, 200);
+    // Linen Cloth went 2 -> 9: must be a +7 gain, never -7.
+    assert.equal(t.inventoryItemChanges?.length, 1);
+    assert.equal(t.inventoryItemChanges?.[0].deltaQty, 7);
+  } finally {
+    store.close();
+  }
+});
+
+test("[SYNTHETIC] three snapshots sharing the same generatedAt still order oldest-to-newest, transitively", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const tiedGeneratedAt = 1_700_000_000;
+    for (const money of [100, 200, 300]) {
+      store.importSnapshot(buildWowSyncExport({ generatedAt: tiedGeneratedAt, character: { name: "Trio", realm: "R", moneyCopper: money } }));
+    }
+    const ctx = store.buildAccountContext(FIXED_NOW);
+    const trio = ctx.versions["classic-era"].characters.find((c) => c.name === "Trio")!;
+
+    assert.deepEqual(
+      trio.snapshotHistory.map((h) => h.moneyCopper),
+      [100, 200, 300],
+    );
+    assert.deepEqual(
+      trio.transitions.map((t) => t.goldDeltaCopper),
+      [100, 100],
+    );
+  } finally {
+    store.close();
+  }
+});
+
 test("[REAL] a character with only one snapshot has no transitions - never fabricated", () => {
   const store = seededRealStore();
   try {

@@ -122,6 +122,24 @@ function snapshotSortKey(s: StoredSnapshot): number {
   return s.generatedAt ?? s.importedAt;
 }
 
+// generatedAt (or its importedAt fallback) is not guaranteed unique - two
+// snapshots can legitimately share the same value (same-second imports,
+// or an addon export whose in-game clock didn't tick between them).
+// Array.prototype.sort is stable, so a comparator that returns 0 for tied
+// keys preserves the *input* array's relative order for that pair - and
+// the input here (SqliteSnapshotStore.listSnapshots) is newest-first, not
+// oldest-first, so an unbroken tie would silently reverse that pair's
+// chronology (and therefore every directional delta the transition
+// reports). `id` is the snapshots table's AUTOINCREMENT primary key: an
+// existing, already-persisted signal that is unique per row and strictly
+// increasing in true insertion order, so it's an exact, transitive
+// tie-breaker - no new persisted field needed.
+function compareSnapshotsChronologically(a: StoredSnapshot, b: StoredSnapshot): number {
+  const byObservedTime = snapshotSortKey(a) - snapshotSortKey(b);
+  if (byObservedTime !== 0) return byObservedTime;
+  return a.id - b.id;
+}
+
 function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHistoryEntry {
   return {
     generatedAt: parsed.generatedAt,
@@ -138,7 +156,7 @@ function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHis
 }
 
 function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[]): CharacterContext {
-  const chronological = [...snapshots].sort((a, b) => snapshotSortKey(a) - snapshotSortKey(b));
+  const chronological = [...snapshots].sort(compareSnapshotsChronologically);
 
   const snapshotHistory = chronological.map((s) => toHistoryEntry(s.parsed, s.importedAt));
 
