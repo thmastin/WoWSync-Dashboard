@@ -26,6 +26,7 @@
 import type { AccountContext, CurrencyConvention } from "./accountContext.ts";
 import { formatCopper, formatCopperDelta } from "./currency.ts";
 import type { Freshness } from "./freshness.ts";
+import { professionEntryIsEvidence } from "./professionCatalog.ts";
 import type { SectionState, WowVersion } from "./types.ts";
 
 export const LLM_CONTEXT_SCHEMA_VERSION = "llm-1";
@@ -80,6 +81,15 @@ export interface LlmProfession {
   name: string;
   skill?: number;
   maxSkill?: number;
+  /**
+   * Present (as true) only when this entry is NOT evidence the character has
+   * learned the profession - currently Forever's skill 0 / maxSkill 0 rows,
+   * which the Forever addon emits for every player profession slot whether
+   * or not it is learned (and possibly for not-yet-hydrated data). Absent
+   * for every other entry and every other version. It marks the entry as
+   * indeterminate; it never means "confirmed not learned".
+   */
+  indeterminate?: true;
 }
 
 export interface LlmCharacter {
@@ -97,6 +107,14 @@ export interface LlmCharacter {
   playedSeconds?: number;
   freshness: Freshness;
   bankStatus: SectionState;
+  /**
+   * Whether this character's professions section was ever observed.
+   * UNKNOWN means never observed - `professions: []` then does NOT mean
+   * "no professions". (Same meaning as AccountFacts'
+   * CharacterProfessions.observationStatus; unrelated to profession
+   * coverage status.)
+   */
+  professionsObservationStatus: SectionState;
   professions: LlmProfession[];
   snapshotCount: number;
   comparisonStatus: ComparisonStatus;
@@ -292,10 +310,12 @@ export function buildLlmContext(context: AccountContext): LlmContext {
         };
       }
 
-      const professions = (professionsByKey.get(cf.identityKey)?.professions ?? []).map((p) => ({
+      const characterProfessions = professionsByKey.get(cf.identityKey);
+      const professions: LlmProfession[] = (characterProfessions?.professions ?? []).map((p) => ({
         name: p.name,
         skill: p.skill,
         maxSkill: p.maxSkill,
+        ...(professionEntryIsEvidence(version, p) ? {} : { indeterminate: true as const }),
       }));
 
       return {
@@ -312,6 +332,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
         playedSeconds: cf.playedSeconds,
         freshness: cf.freshness,
         bankStatus: cf.bankStatus,
+        professionsObservationStatus: characterProfessions?.observationStatus ?? "UNKNOWN",
         professions,
         snapshotCount: cf.snapshotCount,
         comparisonStatus,

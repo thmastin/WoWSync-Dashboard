@@ -165,7 +165,7 @@ export interface ParsedSnapshot {
 }
 
 /** WoW version spaces. Data must never be aggregated across these. */
-export type WowVersion = "classic-era" | "tbc-anniversary" | "retail";
+export type WowVersion = "classic-era" | "tbc-anniversary" | "retail" | "forever";
 
 /** A version that could not be confidently routed; quarantined rather than guessed. */
 export const UNKNOWN_VERSION = "unknown-version" as const;

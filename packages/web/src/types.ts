@@ -2,7 +2,7 @@
 // standalone copy (rather than importing the core package) so the browser
 // bundle never has to reason about the server-only SQLite storage code.
 
-export type VersionOrUnknown = "classic-era" | "tbc-anniversary" | "retail" | "unknown-version";
+export type VersionOrUnknown = "classic-era" | "tbc-anniversary" | "retail" | "forever" | "unknown-version";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -18,6 +18,15 @@ export interface StoredCharacterSummary {
   latestGeneratedAt?: number;
   latestImportedAt?: number;
   snapshotCount: number;
+}
+
+/** What DELETE /api/characters/:identityKey reports it removed. */
+export interface DeleteCharacterResult {
+  identityKey: string;
+  version: VersionOrUnknown;
+  realm: string;
+  name: string;
+  snapshotsDeleted: number;
 }
 
 export interface NumericDelta {

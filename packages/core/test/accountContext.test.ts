@@ -33,7 +33,7 @@ function seededRealStore() {
 
 // --- 1, 2. All three versions present; version isolation ---
 
-test("[REAL] AccountContext includes exactly the three known WoW versions, each correctly populated", () => {
+test("[REAL] AccountContext includes exactly the four known WoW versions, each correctly populated", () => {
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
@@ -41,7 +41,10 @@ test("[REAL] AccountContext includes exactly the three known WoW versions, each 
     assert.equal(ctx.generatedAt, FIXED_NOW);
     assert.equal(ctx.currency.unit, "copper");
     assert.match(ctx.currency.note, /never gold/);
-    assert.deepEqual(Object.keys(ctx.versions).sort(), ["classic-era", "retail", "tbc-anniversary"]);
+    assert.deepEqual(Object.keys(ctx.versions).sort(), ["classic-era", "forever", "retail", "tbc-anniversary"]);
+    // The real seed data has no Forever character: the version is present but empty, never absent.
+    assert.equal(ctx.versions["forever"].characters.length, 0);
+    assert.equal(ctx.versions["forever"].facts.characterCount, 0);
 
     assert.equal(ctx.versions["classic-era"].characters.length, 1);
     assert.equal(ctx.versions["classic-era"].characters[0].name, "Bromrik");

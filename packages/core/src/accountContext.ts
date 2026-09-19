@@ -1,12 +1,12 @@
 // AccountContext: a single, deterministic, LLM-readable snapshot of the
-// whole dashboard (all three known WoW versions) for hand-off to an
+// whole dashboard (every known WoW version) for hand-off to an
 // external LLM conversation. This is explicitly NOT a second
 // implementation of account logic — it is a thin, pure assembly layer
 // over things that already exist:
 //
 //   - AccountFacts (one per version, embedded wholesale — already
-//     realm-scoped for Classic Era/TBC Anniversary, account-wide for
-//     Retail, already carries gold/playtime/professions/inventory/
+//     realm-scoped for Classic Era/TBC Anniversary/Forever, account-wide
+//     for Retail, already carries gold/playtime/professions/inventory/
 //     recentChanges/freshness with full UNKNOWN-vs-NONE-vs-zero fidelity)
 //   - diffSnapshots (reused, via diffToChangeSummary, to build a
 //     transition entry between every consecutive pair of snapshots, not
@@ -28,6 +28,7 @@ import { diffSnapshots } from "./diff.ts";
 import { summarizeTrainerCategory, type TrainerCategorySummary } from "./trainerSummary.ts";
 import type { ParsedSnapshot, SectionState, WowVersion } from "./types.ts";
 import type { StoredSnapshot } from "./store.ts";
+import { WOW_VERSIONS } from "./version.ts";
 
 // Bumped to "2": added the `currency` field, renamed the two differently-
 // scoped profession `status` fields to `observationStatus`/`coverageStatus`
@@ -112,7 +113,7 @@ export interface AccountContext {
 
 export interface AccountContextInput {
   now: number;
-  /** One AccountFacts per known WoW version (classic-era, tbc-anniversary, retail) — already built via SqliteSnapshotStore.buildAccountFacts. */
+  /** One AccountFacts per known WoW version (WOW_VERSIONS: classic-era, tbc-anniversary, retail, forever) — already built via SqliteSnapshotStore.buildAccountFacts. */
   versionFacts: Record<WowVersion, AccountFacts>;
   /** Every stored snapshot for every character appearing in any versionFacts, keyed by identityKey. Newest-first or any order — sorted internally. */
   characterSnapshots: Map<string, StoredSnapshot[]>;
@@ -187,8 +188,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
   const { now, versionFacts, characterSnapshots } = input;
 
   const versions = {} as Record<WowVersion, VersionContext>;
-  const order: WowVersion[] = ["classic-era", "tbc-anniversary", "retail"];
-  for (const version of order) {
+  for (const version of WOW_VERSIONS) {
     const facts = versionFacts[version];
     const characters = [...facts.characters]
       .sort((a, b) => a.realm.localeCompare(b.realm) || a.name.localeCompare(b.name))

@@ -30,6 +30,22 @@ is obvious without opening the file.
   levels, plus three profession trainer visits and one unresolved
   `[UNKNOWN]` visit — this is what drove the trainer summarization work in
   `trainerSummary.ts`.
+- `forever/hallo-{1789693144,1789731867}.wowsync.txt` — Hallo Emberstone,
+  Hunter, Alliance, **Classic Beta PvP 2** (Forever, client 1.60.1,
+  `ClientFamily: Forever`, interface 16001). Real captures read from the
+  Forever addon's saved data (the addon repo was only read, never
+  modified): a level-4 capture (build 69893; equipment/bags/professions
+  all UNKNOWN — the addon did not observe them yet) and a level-7 capture
+  (build 69913; 291 copper, equipment/bags/professions observed-but-partial,
+  Engineering 20/75 and Mining 22/75 with the other player professions at
+  0/0). Both leave bank, known spells, and trainers UNKNOWN, and
+  PlayedSeconds `?`. The level-4 file was extracted byte-for-byte from the
+  addon's Lua test fixture; the level-7 file is the addon's
+  `latestExport.text` decoded from its Lua string. The 9,206s /played
+  capture reported for a later level-7 export was not available on disk, so
+  `test/forever.test.ts` exercises playtime with a clearly labelled
+  `[DERIVED]` test (this real text with those two user-reported values
+  substituted) rather than an invented fixture file.
 - `tbc-anniversary/torahn-1789492498.wowsync.txt` — Torahn, Dreamscythe,
   Level 33 Shaman. Its `[TRAINERS]` section has a `[UNKNOWN]` category
   with 7 services (a trainer visit whose category couldn't be resolved) —

@@ -59,8 +59,8 @@ export default function DeveloperExportModal({ onClose }: { onClose: () => void 
         </div>
 
         <p className="modal-hint">
-          A complete, deterministic snapshot of everything the dashboard currently knows — all three WoW
-          versions, characters, economy, professions, inventory, snapshot history, and trainer summaries — as
+          A complete, deterministic snapshot of everything the dashboard currently knows — every WoW
+          version, characters, economy, professions, inventory, snapshot history, and trainer summaries — as
           JSON, for pasting into an external LLM conversation. This is <strong>local-only</strong>: nothing is
           sent anywhere by this dashboard. You choose what to do with the copied/downloaded file.
         </p>

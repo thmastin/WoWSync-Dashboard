@@ -125,7 +125,7 @@ test("a valid question returns a successful answer with the expected response sh
     assert.equal(typeof body.contextGeneratedAt, "number");
     assert.ok(body.contextSummary);
     assert.ok(Array.isArray(body.contextSummary.versions));
-    assert.equal(body.contextSummary.versions.length, 3);
+    assert.deepEqual(body.contextSummary.versions, ["classic-era", "tbc-anniversary", "retail", "forever"]);
     assert.equal(body.usage.totalTokens, 1290);
   });
 });

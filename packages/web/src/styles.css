@@ -751,3 +751,57 @@ h1, h2, h3 {
   .overview-columns, .detail-grid { grid-template-columns: 1fr; }
   .stat-row { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Character deletion (confirmation dialog + the low-key "danger zone" on the detail page) */
+.danger-button {
+  background: transparent;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.danger-button:hover:not(:disabled) {
+  background: var(--bad);
+  color: #1a0c09;
+}
+.danger-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.danger-zone {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.delete-summary {
+  list-style: none;
+  padding: 10px 14px;
+  margin: 14px 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-weight: 600;
+}
+.delete-confirm-label {
+  display: block;
+  margin-top: 16px;
+  font-size: 0.9rem;
+}
+.delete-confirm-input {
+  width: 100%;
+  margin-top: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 0.95rem;
+}

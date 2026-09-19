@@ -1,0 +1,116 @@
+WOWSYNC v1
+
+Generated: 1789731867
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; partial; observed=1789731865
+CoverageNote: Playtime unverified on Forever; capture deferred
+Name: Hallo Emberstone
+Realm: Classic Beta PvP 2
+Class: HUNTER
+Level: 7
+Faction: Alliance
+MoneyCopper: 291
+PlayedSeconds: ?
+LevelPlayedSeconds: ?
+XP: 1850/4500
+Client: 1.60.1 build 69913
+ClientFamily: Forever
+Interface: 16001
+
+[LOCATION]
+State: OBSERVED; complete; observed=1789731865
+Zone: Dun Morogh
+Subzone: Steelgrill's Depot
+MapID: 1426
+PositionPercent: 50.01,50.43
+
+[EQUIPMENT]
+State: OBSERVED; partial; observed=1789731865
+CoverageNote: Equipment slot 10 effective stats await Forever runtime validation; Equipment slot 15 effective stats await Forever runtime validation; Equipment slot 16 effective stats await Forever runtime validation; Equipment slot 18 effective stats await Forever runtime validation; Equipment slot 4 effective stats await Forever runtime validation; Equipment slot 5 effective stats await Forever runtime validation; Equipment slot 6 effective stats await Forever runtime validation; Equipment slot 7 effective stats await Forever runtime validation; Equipment slot 8 effective stats await Forever runtime validation
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:	EMPTY
+2:	EMPTY
+3:	EMPTY
+4:	item:148::::::::7:1485::75:::::::	Rugged Trapper's Shirt	1	0	?
+5:	item:1364::::::::7:1485:::::::::	Ragged Leather Vest	5	1	?
+6:	item:1369::::::::7:1485:::::::::	Ragged Leather Belt	5	1	?
+7:	item:61::::::::7:1485::11:::::::	Dwarven Leather Pants	5	0	?
+8:	item:1374::::::::7:1485:::::::::	Frayed Shoes	4	1	?
+9:	EMPTY
+10:	item:6171::::::::7:1485::11:::::::	Wolf Handler Gloves	5	0	?
+11:	EMPTY
+12:	EMPTY
+13:	EMPTY
+14:	EMPTY
+15:	item:6185::::::::7:1485::11:::::::	Bear Shawl	5	0	?
+16:	item:2195::::::::7:1485::11:::::::	Anvilmar Knife	5	0	?
+17:	EMPTY
+18:	item:2508::::::::7:1485::75:::::::	Old Blunderbuss	2	1	?
+19:	EMPTY
+
+[BAGS]
+State: OBSERVED; partial; observed=1789731867
+CoverageNote: Bag 4 family unknown; Bag 5 family unknown
+container	capacity	free	family	bagRef
+0	20	4	0	-
+1	6	0	2	item:2102::::::::7:1485:::::::::
+2	6	6	0	item:277977::::::::7:1485:::::::::
+3	6	2	0	item:5572::::::::7:1485:::::::::
+4	0	0	?	-
+5	0	0	?	-
+Slots: 12 free / 38
+itemRef	name	qty	bound	vendorEachCopper
+item:117::::::::7:1485:::::::::	Tough Jerky	14	no	1
+item:159::::::::7:1485:::::::::	Refreshing Spring Water	3	no	1
+item:1210::::::::7:1485:::::::::	Shadowgem	1	no	250
+item:2516::::::::7:1485:::::::::	Light Shot	587	no	0
+item:2589::::::::7:1485:::::::::	Linen Cloth	8	no	13
+item:2681::::::::7:1485:::::::::	Roasted Boar Meat	3	no	6
+item:2770::::::::7:1485:::::::::	Copper Ore	17	no	5
+item:2835::::::::7:1485:::::::::	Rough Stone	1	no	2
+item:2886::::::::7:1485:::::::::	Crag Boar Rib	1	no	5
+item:2888::::::::7:1485:::::::::	Beer Basted Boar Ribs	5	no	10
+item:2889::::::::7:1485::11:::::::	Recipe: Beer Basted Boar Ribs	1	no	60
+item:2901::::::::7:1485::14:::::::	Mining Pick	1	no	2
+item:3171::::::::7:1485:::::::::	Broken Boar Tusk	1	no	6
+item:4357::::::::7:1485:::::::::	Rough Blasting Powder	13	no	4
+item:4471::::::::7:1485:::::::::	Flint and Tinder	1	no	33
+item:4813::::::::7:1485:::::::::	Small Leather Collar	1	no	33
+item:6948::::::::7:1485::75:::::::	Hearthstone	1	yes	0
+item:7073::::::::7:1485:::::::::	Broken Fang	1	no	6
+item:7074::::::::7:1485:::::::::	Chipped Claw	1	no	4
+item:8067::::::::7:1485:::::::::	Crafted Light Shot	600	no	0
+item:279960::::::::7:1485:::::::::	Lodestone	3	no	0
+item:286355::::::::7:1485:::::::::	Crate of Candles	1	yes	0
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; partial; observed=1789731867
+CoverageNote: Excluded 2 unrecognized non-player profession skill line(s)
+Coverage: Forever player profession enums; current and maximum skill from C_TradeSkillUI
+profession	skill	maxSkill
+Alchemy	0	0
+Blacksmithing	0	0
+Enchanting	0	0
+Engineering	20	75
+Herbalism	0	0
+Leatherworking	0	0
+Mining	22	75
+Skinning	0	0
+Tailoring	0	0
+
+[KNOWN SPELLS]
+State: UNKNOWN
+Reason: Not implemented in Forever Phase 1
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

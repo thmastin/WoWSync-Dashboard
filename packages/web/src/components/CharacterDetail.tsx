@@ -1,15 +1,28 @@
 import { useEffect, useState } from "react";
 import { fetchCharacter, fetchSnapshots } from "../api.ts";
+import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCatalog.ts";
 import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } from "../format.ts";
 import type { StoredCharacterSummary, StoredSnapshot } from "../types.ts";
+import { VERSION_LABELS } from "../versions.ts";
+import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
 
 function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
 }
 
-export default function CharacterDetail({ identityKey, onBack }: { identityKey: string; onBack: () => void }) {
+export default function CharacterDetail({
+  identityKey,
+  onBack,
+  onDeleted,
+}: {
+  identityKey: string;
+  onBack: () => void;
+  /** Called after this character was permanently deleted; the caller refreshes and leaves this (now empty) page. */
+  onDeleted: () => void;
+}) {
   const [character, setCharacter] = useState<StoredCharacterSummary | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<StoredSnapshot[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -70,6 +83,18 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
               <dd>
                 {snapshot.parsed.character.clientVersion ?? "?"} build {snapshot.parsed.character.clientBuild ?? "?"}
               </dd>
+              {snapshot.parsed.character.clientFamily && (
+                <>
+                  <dt>Client family</dt>
+                  <dd>{snapshot.parsed.character.clientFamily}</dd>
+                </>
+              )}
+              {snapshot.parsed.character.interface && (
+                <>
+                  <dt>Interface</dt>
+                  <dd>{snapshot.parsed.character.interface}</dd>
+                </>
+              )}
             </dl>
           </section>
 
@@ -109,16 +134,20 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
             <h3>
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
-            <ul className="compact-list">
-              {snapshot.parsed.equipment.slots
-                .filter((s) => !s.empty)
-                .map((s) => (
-                  <li key={s.slot}>
-                    <span className="muted">{s.slotName}:</span> {s.name ?? s.itemRef ?? "?"}
-                  </li>
-                ))}
-              {snapshot.parsed.equipment.slots.every((s) => s.empty) && <li className="muted">Nothing equipped.</li>}
-            </ul>
+            {snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
+              <p className="muted">Never observed.</p>
+            ) : (
+              <ul className="compact-list">
+                {snapshot.parsed.equipment.slots
+                  .filter((s) => !s.empty)
+                  .map((s) => (
+                    <li key={s.slot}>
+                      <span className="muted">{s.slotName || `Slot ${s.slot}`}:</span> {s.name ?? s.itemRef ?? "?"}
+                    </li>
+                  ))}
+                {snapshot.parsed.equipment.slots.every((s) => s.empty) && <li className="muted">Nothing equipped.</li>}
+              </ul>
+            )}
           </section>
 
           <InventoryCard title="Bags" inv={snapshot.parsed.bags} />
@@ -128,23 +157,40 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
             <h3>
               Professions <StatusBadge state={snapshot.parsed.professions.status.state} />
             </h3>
-            <ul className="compact-list">
-              {snapshot.parsed.professions.entries.map((p) => (
-                <li key={p.name}>
-                  {p.name}: {p.skill ?? "?"}/{p.maxSkill ?? "?"}
-                </li>
-              ))}
-              {snapshot.parsed.professions.entries.length === 0 && (
-                <li className="muted">{snapshot.parsed.professions.noneMessage ?? "None observed."}</li>
-              )}
-            </ul>
+            {snapshot.parsed.professions.status.state === "UNKNOWN" ? (
+              <p className="muted">Never observed.</p>
+            ) : (
+              <ul className="compact-list">
+                {snapshot.parsed.professions.entries.map((p) => (
+                  <li key={p.name}>
+                    {p.name}: {p.skill ?? "?"}/{p.maxSkill ?? "?"}
+                    {!professionEntryIsEvidence(character.version, p) && (
+                      <span
+                        className="muted small"
+                        title="Forever reports 0/0 for professions that are not learned, and possibly for data that has not loaded yet"
+                      >
+                        {" "}
+                        — not confirmed learned
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {snapshot.parsed.professions.entries.length === 0 && (
+                  <li className="muted">{snapshot.parsed.professions.noneMessage ?? "None observed."}</li>
+                )}
+              </ul>
+            )}
           </section>
 
           <section className="detail-card">
             <h3>
               Known Spells <StatusBadge state={snapshot.parsed.spells.status.state} />
             </h3>
-            <div className="muted small">{snapshot.parsed.spells.entries.length} spells known</div>
+            {snapshot.parsed.spells.status.state === "UNKNOWN" ? (
+              <p className="muted">Never observed.</p>
+            ) : (
+              <div className="muted small">{snapshot.parsed.spells.entries.length} spells known</div>
+            )}
           </section>
 
           <section className="detail-card detail-card-wide">
@@ -159,7 +205,11 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
                   .join(", ")}
               </div>
             )}
-            {snapshot.parsed.trainer.categories.length === 0 && <p className="muted">No trainer visits recorded.</p>}
+            {snapshot.parsed.trainer.categories.length === 0 && (
+              <p className="muted">
+                {snapshot.parsed.trainer.status.state === "UNKNOWN" ? "Never observed." : "No trainer visits recorded."}
+              </p>
+            )}
             {snapshot.parsed.trainer.categories.map((cat) => (
               <TrainerCategoryCard key={cat.category} category={cat} />
             ))}
@@ -193,6 +243,33 @@ export default function CharacterDetail({ identityKey, onBack }: { identityKey: 
             </div>
           </section>
         </div>
+      )}
+
+      <div className="danger-zone">
+        <div className="muted small">
+          Remove this character and its {character.snapshotCount} stored snapshot{character.snapshotCount === 1 ? "" : "s"} from the
+          local database — for example, a test or mistaken import.
+        </div>
+        <button className="danger-button" onClick={() => setDeleteOpen(true)}>
+          Delete character…
+        </button>
+      </div>
+
+      {deleteOpen && (
+        <DeleteCharacterModal
+          target={{
+            identityKey: character.identityKey,
+            name: character.name,
+            realm: character.realm,
+            versionLabel: VERSION_LABELS[character.version] ?? character.version,
+            snapshotCount: character.snapshotCount,
+          }}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => {
+            setDeleteOpen(false);
+            onDeleted();
+          }}
+        />
       )}
     </div>
   );

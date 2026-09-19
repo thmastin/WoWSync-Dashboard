@@ -111,7 +111,7 @@ export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: Sc
             <ul className="compact-list">
               {missing.map((entry) => (
                 <li key={entry.profession} className="muted small">
-                  {entry.profession} — {entry.coverageStatus === "none" ? "none observed" : "unknown (not every character's professions were observed)"}
+                  {entry.profession} — {entry.coverageStatus === "none" ? "none observed" : "unknown (not every character's professions were observed, or only a 0/0 skill was reported)"}
                 </li>
               ))}
             </ul>

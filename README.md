@@ -24,14 +24,17 @@ WoW  →  WoWSync addon  →  WOWSYNC v1 export  →  WoWSync Dashboard
 
 ## Supported WoW versions
 
-Three completely isolated data spaces, selected by a version tab in the UI:
+Four completely isolated data spaces, selected by a version tab in the UI:
 
 - **Classic Era**
 - **TBC Anniversary**
 - **Retail**
+- **Forever** (the Classic beta client — `ClientFamily: Forever`, e.g. 1.60.1)
 
 The client identified in each export (`Client:` / `ClientFamily:` fields)
-routes the import into the matching version space. Characters, gold,
+routes the import into the matching version space. Forever's client number
+starts with `1.` just like Classic Era's, so `ClientFamily` is always
+checked first — a Forever export is never routed into Classic Era. Characters, gold,
 inventory, and history are **never aggregated across versions** — see
 `packages/core/src/version.ts`. An export from a client we don't recognize
 is quarantined into an `unknown-version` space rather than guessed.
@@ -74,13 +77,39 @@ Malformed input fails with a specific message (e.g. "missing `[END]`" or
 "missing required section: BANK") rather than silently importing partial
 garbage.
 
+## Deleting a character (local data cleanup)
+
+Open a character and use **Delete character…** at the bottom of its page
+to remove a test or mistaken import. The dialog names exactly what will be
+removed (the character, its realm and version, and how many stored
+snapshots) and only enables **Delete permanently** once you type the
+character's exact name. Cancel is the default.
+
+- **Scope:** exactly one character and its entire snapshot history, in one
+  atomic database transaction. Other characters, realms, and versions —
+  including an identically named character in another version — are
+  untouched. There is deliberately no "delete everything" or bulk delete.
+- **Everything derived follows automatically.** AccountFacts, the
+  Characters/Economy/Overview views, recent changes, inventory and
+  profession coverage, freshness, `GET /api/account-context`, and Ask My
+  Account's context are all computed from the rows that remain, so nothing
+  further needs cleaning up.
+- **API:** `DELETE /api/characters/:identityKey` with a JSON body
+  `{"confirmIdentityKey": "<same identity key>"}`. Missing/malformed body
+  or a non-matching confirmation → 400 (nothing deleted); unknown or
+  already-deleted character → 404; success → 200 with what was removed.
+  The key is matched exactly — never as a pattern.
+- Re-importing an export afterwards starts a fresh history for that
+  character.
+
 ## Real fixtures
 
 `packages/core/test/fixtures/classic-era/`, `.../retail/`, and
 `.../tbc-anniversary/` contain real WOWSYNC v1 exports captured from actual
 clients — Classic Era (Bromrik), Retail (Ezaller and Stoneharry, on two
-different realms), and TBC Anniversary (Torahn, Voodan, and Tenivard, all
-on Dreamscythe) — stored byte-for-byte. They caught genuine bugs no
+different realms), TBC Anniversary (Torahn, Voodan, and Tenivard, all
+on Dreamscythe), and Forever (two captures of Hallo Emberstone on Classic
+Beta PvP 2) — stored byte-for-byte. They caught genuine bugs no
 amount of synthetic data did — see `packages/core/test/fixtures/README.md`
 for the details (a header-framing bug, addon-version skew between
 installs, copy/paste whitespace mangling, a diff-engine item-matching
@@ -127,7 +156,7 @@ A character not seen in a while is flagged **stale** rather than shown as
 if its last snapshot were current — see `packages/core/src/freshness.ts`
 for the (documented, 3-day) threshold.
 
-**Realm scoping.** Classic Era and TBC Anniversary characters on
+**Realm scoping.** Classic Era, TBC Anniversary, and Forever characters on
 different realms don't share an economy — no shared bank, no shared
 currency — so gold/playtime/professions/inventory are scoped **per
 realm** by default there (a "Realm:" selector appears whenever a version
@@ -173,7 +202,7 @@ deliberately low-key — this is a workflow/debugging tool, not a headline
 feature) opens a modal with two actions:
 
 - **Copy Account Context** — copies a complete, deterministic JSON
-  snapshot of everything the dashboard knows — all three WoW versions,
+  snapshot of everything the dashboard knows — every WoW version (Classic Era, TBC Anniversary, Retail, Forever),
   every character's economy/professions/profession-coverage/inventory/
   progression/snapshot-history/trainer summary, recent changes, and
   freshness — to your clipboard.

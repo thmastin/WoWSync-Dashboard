@@ -34,7 +34,7 @@ AccountFacts                   packages/core/src/accountFacts.ts
         │                       engine. Pure: no I/O, no clock reads.
         ▼
 AccountContext                 packages/core/src/accountContext.ts
-        │                     — all three versions' AccountFacts embedded
+        │                     — every version's AccountFacts embedded
         │                       wholesale, plus per-character snapshot
         │                       history/transitions/trainer summaries.
         │                       The canonical "Export Dashboard Context"
@@ -67,10 +67,15 @@ Ask My Account (POC)           packages/server/src/llm.ts, app.ts
     `\n`, `\\`) and treats `?` as "unknown", never as a default value.
   - `version.ts` — routes a parsed character into a WoW version space.
     Classic Era / TBC Anniversary are inferred from the client version
-    number (`1.x` / `2.x`); Retail is only ever inferred from the
-    addon's `ClientFamily: Retail` field (the schema documents this as
-    Retail-exclusive as of today). Anything else is quarantined as
+    number (`1.x` / `2.x`) when no `ClientFamily` is present; Retail
+    and Forever are only ever identified by the addon's `ClientFamily:`
+    field (`Retail` / `Forever`, case-insensitive). `ClientFamily` is
+    checked first because Forever's client number (1.60.x) would otherwise
+    be mistaken for Classic Era's. Anything else is quarantined as
     `unknown-version` rather than guessed into a real space.
+    `WOW_VERSIONS` (same file) is the single list the store, AccountContext,
+    and the API iterate; `VERSION_LABELS` is typed `Record<VersionOrUnknown,
+    string>` so a version without a label is a compile error.
   - `identity.ts` — stable character identity. WOWSYNC v1's text export
     does not include a GUID (see `WoWSyncRender.lua` — the renderer never
     emits one), so identity is `(version, realm, name)`. This still
@@ -340,9 +345,43 @@ know enough about an unrecognized client to assert "nobody has X"), so
 its coverage degrades to "only what's actually observed", matching the
 pre-catalog behavior exactly.
 
+## Forever (Classic beta client)
+
+Forever (`ClientFamily: Forever`, client 1.60.x, product `wow_classic_beta`)
+is a first-class version, added without a Forever-only export format or
+parallel code path — it goes through the same parser, store, AccountFacts,
+AccountContext, and LlmContext as every other version. Decisions specific
+to it, each grounded in what its real exports contain:
+
+- **Scope: realm-partitioned.** Nothing in a Forever export establishes
+  account-wide/warband sharing, so it follows Classic Era/TBC
+  (`REALM_PARTITIONED_VERSIONS`), never Retail's model.
+- **Profession coverage has no hardcoded catalog.** Forever is a
+  still-evolving beta ruleset, and its addon only exports the player
+  profession enums (no Cooking/Fishing/First Aid rows), so applying the
+  Classic/TBC list would assert "nobody has Cooking" for something the
+  export cannot observe. Coverage is built from what exports contain; a
+  profession absent from every export is not listed — never "none".
+- **0/0 profession rows are indeterminate.** The Forever addon lists every
+  player profession, reporting skill 0 / maxSkill 0 for professions that
+  are not learned *and* (per the addon's own docs) possibly for data not
+  yet loaded — the API cannot tell them apart. `professionEntryIsEvidence()`
+  (`professionCatalog.ts`, a no-op for every other version) makes only a
+  positive skill/maxSkill count as "covered"; a Forever profession seen
+  only at 0/0 is coverage `unknown`. The character's own raw entries are
+  preserved unchanged; LlmContext marks such entries `indeterminate: true`;
+  the character page labels them "not confirmed learned".
+- **UNKNOWN stays UNKNOWN.** Current Forever exports leave bank, known
+  spells, and trainers UNKNOWN (and playtime `?` in some captures). None
+  of it is defaulted: bank shows up in `inventory.unknownBank`, playtime
+  as unobserved, and the character page says "Never observed."
+- **Client metadata is preserved** in the stored snapshot (`ClientFamily`,
+  `Interface`, build) — no schema change; the parsed snapshot JSON already
+  carried these fields.
+
 ## Realm scoping
 
-Classic Era and TBC Anniversary realms are economically isolated from
+Classic Era, TBC Anniversary, and Forever realms are economically isolated from
 each other — no shared bank, no shared currency, no cross-realm mail or
 auction house. Retail characters, by contrast, can genuinely share
 resources across realms today (Warband bank/currencies). `AccountFacts`
@@ -350,7 +389,7 @@ reflects this difference directly rather than applying one rule
 everywhere:
 
 - `AccountFacts.aggregationScope` is `"realm"` for Classic Era/TBC
-  Anniversary and `"account-wide"` for Retail/`unknown-version`
+  Anniversary/Forever and `"account-wide"` for Retail/`unknown-version`
   (`REALM_PARTITIONED_VERSIONS` in `accountFacts.ts`).
 - When `"realm"`, `AccountFacts.realms` holds one `RealmGroup` per
   distinct realm actually present in the data — each with its own gold/
@@ -376,6 +415,30 @@ just passing a single realm through unchanged. A synthetic second
 Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
 thing today's real data can't: proving two *different* Classic/TBC realms
 stay isolated, since only one has been captured so far.
+
+## Deleting a character
+
+`SnapshotStore.deleteCharacter(identityKey)` removes one character and all
+of its snapshots in a single `BEGIN IMMEDIATE` … `COMMIT` transaction
+(children first: the `snapshots.character_id` foreign key is declared but
+SQLite does not enforce it unless `PRAGMA foreign_keys` is on, so the
+delete is explicit rather than relying on cascade). A failure part-way rolls
+everything back. It returns what was removed, or `undefined` for an unknown
+key (a safe no-op). The key is matched with `=` as data, so wildcards and
+injection-shaped strings match nothing; the key embeds version + realm +
+name, which is what keeps version/realm isolation intact.
+
+No cache or derived table exists to invalidate — AccountFacts, AccountContext,
+LlmContext, recent changes, inventory and profession aggregation, and
+freshness are all computed on demand from the remaining rows. That is tested
+directly: a store after deleting X produces a byte-identical AccountContext
+and LlmContext to one that never imported X.
+
+HTTP: `DELETE /api/characters/:identityKey` requires a JSON body
+`{"confirmIdentityKey"}` equal to the URL's key (400 otherwise, 404 if the
+character does not exist). The UI additionally requires typing the
+character's exact name (`packages/web/src/deleteConfirmation.ts`, unit
+tested). There is no bulk/"delete all" operation.
 
 ## Freshness convention
 
@@ -404,6 +467,7 @@ interface AccountContext {
     "classic-era": VersionContext;
     "tbc-anniversary": VersionContext;
     retail: VersionContext;
+    forever: VersionContext; // present (possibly with zero characters) whenever the others are
   };
 }
 interface VersionContext {

@@ -87,7 +87,14 @@ export default function App() {
 
       <main className="app-main">
         {view.kind === "detail" ? (
-          <CharacterDetail identityKey={view.identityKey} onBack={() => setView({ kind: "characters" })} />
+          <CharacterDetail
+            identityKey={view.identityKey}
+            onBack={() => setView({ kind: "characters" })}
+            onDeleted={() => {
+              refresh();
+              setView({ kind: "characters" });
+            }}
+          />
         ) : (
           <>
             <div className="scope-row">

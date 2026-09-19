@@ -59,8 +59,28 @@ export interface ImportResult {
   isFirstSnapshot: boolean;
 }
 
+/** What a successful character deletion removed. Counts are read from the rows actually deleted, not estimated. */
+export interface DeleteCharacterResult {
+  identityKey: string;
+  version: VersionOrUnknown;
+  realm: string;
+  name: string;
+  snapshotsDeleted: number;
+}
+
 export interface SnapshotStore {
   importSnapshot(raw: string): ImportResult;
+  /**
+   * Permanently removes one character and every snapshot stored for it
+   * (atomically - all or nothing). Returns what was removed, or undefined
+   * when no character has that identity key (already deleted / never
+   * existed) - a safe no-op, never an error. Identity keys embed
+   * version+realm+name, so other versions/realms/characters are untouched.
+   * Everything derived (AccountFacts, AccountContext, recent changes, ...)
+   * is computed from the remaining rows, so it reflects the deletion on
+   * its next computation with nothing further to invalidate.
+   */
+  deleteCharacter(identityKey: string): DeleteCharacterResult | undefined;
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   getCharacter(identityKey: string): StoredCharacterSummary | undefined;

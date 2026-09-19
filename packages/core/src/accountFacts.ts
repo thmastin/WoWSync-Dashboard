@@ -18,7 +18,7 @@
 // is only ever "none" (not "unknown") once every relevant character's
 // profession state has actually been observed.
 //
-// Realm scoping: Classic Era and TBC Anniversary have no cross-realm
+// Realm scoping: Classic Era, TBC Anniversary, and Forever have no cross-realm
 // economy (no shared bank/currency between realms), so gold/playtime/
 // professions/inventory are aggregated per-realm by default for those
 // versions (`AccountFacts.realms`), never silently combined across
@@ -27,11 +27,11 @@
 // REALM_PARTITIONED_VERSIONS. The top-level version-wide totals are still
 // computed for every version (a broader view is available if wanted
 // later); they just aren't the recommended default for a multi-realm
-// Classic/TBC account.
+// Classic/TBC/Forever account.
 
 import { baseItemId, type ItemDelta, type SnapshotDiff } from "./diff.ts";
 import { classifyFreshness, type Freshness } from "./freshness.ts";
-import { professionCatalogForVersion } from "./professionCatalog.ts";
+import { professionCatalogForVersion, professionEntryIsEvidence } from "./professionCatalog.ts";
 import type { ParsedSnapshot, SectionState, VersionOrUnknown } from "./types.ts";
 import type { RecentChange, StoredCharacterSummary } from "./store.ts";
 
@@ -175,7 +175,7 @@ export interface ProfessionCoverageEntry {
 
 export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
-  /** The version's full profession catalog (see professionCatalog.ts), each marked covered/none/unknown. Sorted alphabetically. Empty catalog (unknown-version) degrades to "only what's observed" — see buildProfessionCoverage. */
+  /** The version's full profession catalog (see professionCatalog.ts), each marked covered/none/unknown. Sorted alphabetically. Empty catalog (unknown-version, forever) degrades to "only what's observed" — see buildProfessionCoverage. */
   coverage: ProfessionCoverageEntry[];
 }
 
@@ -320,16 +320,19 @@ export interface FreshnessSummary {
 // ---------------------------------------------------------------------
 
 /**
- * Classic Era and TBC Anniversary realms are economically isolated from
- * each other (no shared bank/currency, no cross-realm mail/AH) — gold,
- * inventory, and profession coverage must never be silently combined
- * across them. Retail's Warband-era account-wide sharing makes
- * version-wide (not realm-partitioned) the right default there instead.
- * `unknown-version` is treated like Retail: we don't have a confident
- * basis for asserting realm isolation rules on a client we didn't
- * recognize.
+ * Classic Era, TBC Anniversary, and Forever realms are economically
+ * isolated from each other (no shared bank/currency, no cross-realm
+ * mail/AH) — gold, inventory, and profession coverage must never be
+ * silently combined across them. Forever is a Classic-ruleset client with
+ * ordinary per-realm characters (nothing in its exports establishes any
+ * account-wide/warband sharing), so it is realm-partitioned by default
+ * rather than assumed account-wide the way Retail is. Retail's
+ * Warband-era account-wide sharing makes version-wide (not
+ * realm-partitioned) the right default there instead. `unknown-version`
+ * is treated like Retail: we don't have a confident basis for asserting
+ * realm isolation rules on a client we didn't recognize.
  */
-const REALM_PARTITIONED_VERSIONS = new Set<VersionOrUnknown>(["classic-era", "tbc-anniversary"]);
+const REALM_PARTITIONED_VERSIONS = new Set<VersionOrUnknown>(["classic-era", "tbc-anniversary", "forever"]);
 
 export interface RealmGroup {
   realm: string;
@@ -532,11 +535,25 @@ function buildProfessionsByCharacter(
  * Any observed profession NOT in the catalog (unexpected/uncatalogued
  * name) is still appended as "covered" — never silently dropped.
  */
-function buildProfessionCoverage(catalog: string[], byCharacter: CharacterProfessions[]): ProfessionCoverageEntry[] {
+function buildProfessionCoverage(
+  version: VersionOrUnknown,
+  catalog: string[],
+  byCharacter: CharacterProfessions[],
+): ProfessionCoverageEntry[] {
   const anyUnknown = byCharacter.some((c) => c.observationStatus === "UNKNOWN");
+  // Only entries that are positive evidence of having the profession count
+  // toward "covered" (see professionEntryIsEvidence: a no-op for every
+  // version except Forever, whose 0/0 rows are indeterminate). Names seen
+  // only as non-evidence are remembered separately so they can be reported
+  // as "unknown" — never dropped, never "none", never "covered".
   const byProfession = new Map<string, ProfessionCoverageEntry["characters"]>();
+  const indeterminate = new Set<string>();
   for (const cp of byCharacter) {
     for (const prof of cp.professions) {
+      if (!professionEntryIsEvidence(version, prof)) {
+        indeterminate.add(prof.name);
+        continue;
+      }
       const list = byProfession.get(prof.name) ?? [];
       list.push({ identityKey: cp.identityKey, name: cp.name, skill: prof.skill, maxSkill: prof.maxSkill });
       byProfession.set(prof.name, list);
@@ -546,11 +563,20 @@ function buildProfessionCoverage(catalog: string[], byCharacter: CharacterProfes
   const entries: ProfessionCoverageEntry[] = catalog.map((profession) => {
     const characters = byProfession.get(profession) ?? [];
     if (characters.length > 0) return { profession, coverageStatus: "covered", characters };
-    return { profession, coverageStatus: anyUnknown ? "unknown" : "none", characters: [] };
+    return {
+      profession,
+      coverageStatus: anyUnknown || indeterminate.has(profession) ? "unknown" : "none",
+      characters: [],
+    };
   });
-  // Observed professions outside the catalog (e.g. an unrecognized name) are never dropped.
+  // Observed professions outside the catalog (e.g. an unrecognized name, or every Forever profession, which has no catalog) are never dropped.
   for (const [profession, characters] of byProfession) {
     if (!catalogSet.has(profession)) entries.push({ profession, coverageStatus: "covered", characters });
+  }
+  for (const profession of indeterminate) {
+    if (!catalogSet.has(profession) && !byProfession.has(profession)) {
+      entries.push({ profession, coverageStatus: "unknown", characters: [] });
+    }
   }
   return entries.sort((a, b) => a.profession.localeCompare(b.profession));
 }
@@ -561,7 +587,7 @@ function buildProfessionFacts(
   latestParsed: Map<string, ParsedSnapshot>,
 ): ProfessionFacts {
   const byCharacter = buildProfessionsByCharacter(characters, latestParsed);
-  const coverage = buildProfessionCoverage(professionCatalogForVersion(version), byCharacter);
+  const coverage = buildProfessionCoverage(version, professionCatalogForVersion(version), byCharacter);
   return { byCharacter, coverage };
 }
 

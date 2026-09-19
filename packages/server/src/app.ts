@@ -86,8 +86,8 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json({ facts: store.buildAccountFacts(version) });
   });
 
-  // The canonical "Export Dashboard Context" payload — all three known WoW
-  // versions in one deterministic JSON document. This is the exact object
+  // The canonical "Export Dashboard Context" payload — every known WoW
+  // version in one deterministic JSON document. This is the exact object
   // the web UI's Copy/Download buttons serialize; there is no separate
   // representation for the API vs. the UI. `?now=<unix seconds>` is an
   // optional override (mainly for reproducible debugging/scripting) —
@@ -167,6 +167,33 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json({ character });
   });
 
+  // Permanently deletes ONE character and its entire snapshot history.
+  //
+  // Deliberately hard to trigger by accident: the request must carry a JSON
+  // body whose `confirmIdentityKey` exactly equals the identity key in the
+  // URL, so a stray/replayed/mistyped DELETE can never remove anything - a
+  // caller has to state, twice, which character it means. There is no
+  // bulk/wildcard form (the key is matched exactly, as data - never as a
+  // pattern), so this can only ever affect a single character.
+  //   400 - missing/malformed body or a confirmation that doesn't match
+  //   404 - no such character (already deleted, or never existed)
+  //   200 - { deleted: { identityKey, version, realm, name, snapshotsDeleted } }
+  app.delete("/api/characters/:identityKey", (req, res) => {
+    const { identityKey } = req.params;
+    const confirm: unknown = req.body?.confirmIdentityKey;
+    if (typeof confirm !== "string" || confirm.length === 0) {
+      return res.status(400).json({
+        error: 'Deleting a character requires confirmation: send {"confirmIdentityKey": "<identity key>"} in the request body, matching the key in the URL.',
+      });
+    }
+    if (confirm !== identityKey) {
+      return res.status(400).json({ error: "Confirmation does not match the character being deleted. Nothing was deleted." });
+    }
+    const deleted = store.deleteCharacter(identityKey);
+    if (!deleted) return res.status(404).json({ error: "Character not found (it may already have been deleted)." });
+    res.json({ deleted });
+  });
+
   app.get("/api/characters/:identityKey/snapshots", (req, res) => {
     // Newest first. For each snapshot (other than the oldest), also compute
     // what newly unlocked at the trainer since the immediately preceding
@@ -209,6 +236,15 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
       console.error(err);
       res.status(500).json({ error: "Unexpected error while importing the export." });
     }
+  });
+
+  // A request body that isn't valid JSON is a client error (400), reported as
+  // JSON like every other API error - not Express's default HTML error page.
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const type = (err as { type?: string } | null)?.type;
+    if (type === "entity.parse.failed") return res.status(400).json({ error: "Request body is not valid JSON." });
+    if (type === "entity.too.large") return res.status(413).json({ error: "Request body is too large." });
+    next(err);
   });
 
   if (webDistDir && existsSync(webDistDir)) {

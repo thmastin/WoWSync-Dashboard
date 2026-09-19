@@ -91,3 +91,34 @@ test("no longer references structures the LlmContext projection does not send (s
   assert.doesNotMatch(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"recentChanges"/);
   assert.doesNotMatch(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"largestRecentChanges"/);
 });
+
+test("explains that Forever is a distinct client/version, realm-scoped, and never to be treated as (or merged with) Classic Era", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"forever"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /Forever/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /NOT Classic Era/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /Classic Era, TBC Anniversary, and Forever, characters and economic data .*scoped per realm/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /never combine data across different versions/i);
+});
+
+test("documents the copper convention in-band: Copper-suffixed fields are raw copper integers, 1 gold = 100 silver = 10,000 copper", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /ends in "Copper"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /raw copper integer/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /1 gold = 100 silver = 10,000 copper/);
+});
+
+test("distinguishes a character's professions observation status from a profession's coverage status, and never reads UNKNOWN as none/zero", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"professionsObservationStatus"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /different concept from a profession coverage status/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /does NOT mean the character has no professions/i);
+});
+
+test("explains Forever's indeterminate 0/0 profession rows", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"indeterminate": true/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /NOT evidence the character has that profession/);
+});
+
+test("forbids inferring events or causes from state differences, and keeps the pre-existing grounding rules", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /must not be inferred into events or causes/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /authoritative source/i);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /do not invent facts/i);
+});

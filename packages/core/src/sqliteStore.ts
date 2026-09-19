@@ -5,8 +5,9 @@ import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
-import { detectVersion } from "./version.ts";
+import { WOW_VERSIONS, detectVersion } from "./version.ts";
 import type {
+  DeleteCharacterResult,
   ImportResult,
   RecentChange,
   SnapshotStore,
@@ -112,6 +113,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
         "SELECT * FROM snapshots WHERE character_id = ? ORDER BY imported_at DESC, id DESC",
       ),
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
+      deleteSnapshotsForCharacter: this.db.prepare("DELETE FROM snapshots WHERE character_id = ?"),
+      deleteCharacterById: this.db.prepare("DELETE FROM characters WHERE id = ?"),
     };
   }
 
@@ -168,6 +171,33 @@ export class SqliteSnapshotStore implements SnapshotStore {
       diff,
       isFirstSnapshot: !previousSnapshot,
     };
+  }
+
+  deleteCharacter(identityKey: string): DeleteCharacterResult | undefined {
+    const row = one<CharacterRow>(this.stmts.findCharacterByKey, identityKey);
+    if (!row) return undefined;
+    // The snapshots.character_id foreign key is declared but SQLite does
+    // not enforce it unless PRAGMA foreign_keys is on, so children are
+    // deleted explicitly, first, inside one transaction: a failure part-way
+    // rolls everything back rather than leaving orphaned snapshots (which
+    // would no longer be reachable through any character) or a character
+    // with a partial history.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const snapshotsDeleted = Number(this.stmts.deleteSnapshotsForCharacter.run(row.id).changes);
+      this.stmts.deleteCharacterById.run(row.id);
+      this.db.exec("COMMIT");
+      return {
+        identityKey: row.identity_key,
+        version: row.version as VersionOrUnknown,
+        realm: row.realm,
+        name: row.name,
+        snapshotsDeleted,
+      };
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
   }
 
   private summarize(characterId: number): StoredCharacterSummary | undefined {
@@ -310,10 +340,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
   }
 
   buildAccountContext(now: number = Math.floor(Date.now() / 1000)): AccountContext {
-    const KNOWN_VERSIONS: WowVersion[] = ["classic-era", "tbc-anniversary", "retail"];
     const versionFacts = {} as Record<WowVersion, AccountFacts>;
     const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
-    for (const version of KNOWN_VERSIONS) {
+    for (const version of WOW_VERSIONS) {
       const facts = this.buildAccountFacts(version, now);
       versionFacts[version] = facts;
       for (const character of facts.characters) {

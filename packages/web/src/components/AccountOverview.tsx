@@ -101,7 +101,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
 
         <section className="panel">
           <h3>Professions coverage</h3>
-          {facts.professions.coverage.length === 0 && <p className="muted">No profession catalog for this version.</p>}
+          {facts.professions.coverage.length === 0 && <p className="muted">No profession data observed for this version yet.</p>}
           {covered.length === 0 && missing.length > 0 && <p className="muted">No professions covered yet.</p>}
           <ul className="compact-list">
             {covered.slice(0, 8).map((entry) => (

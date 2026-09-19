@@ -1,0 +1,54 @@
+WOWSYNC v1
+
+Generated: 1789693144
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; partial; observed=1789693144
+CoverageNote: Playtime unverified on Forever; capture deferred
+Name: Hallo Emberstone
+Realm: Classic Beta PvP 2
+Class: HUNTER
+Level: 4
+Faction: Alliance
+MoneyCopper: 55
+PlayedSeconds: ?
+LevelPlayedSeconds: ?
+XP: 1117/2100
+Client: 1.60.1 build 69893
+ClientFamily: Forever
+Interface: 16001
+
+[LOCATION]
+State: OBSERVED; partial; observed=1789693144
+CoverageNote: Subzone unknown
+Zone: Anvilmar
+MapID: 1426
+PositionPercent: 29.16,67.54
+
+[EQUIPMENT]
+State: UNKNOWN
+Reason: Not implemented in Forever Phase 1
+
+[BAGS]
+State: UNKNOWN
+Reason: Not implemented in Forever Phase 1
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: UNKNOWN
+Reason: Not implemented in Forever Phase 1
+
+[KNOWN SPELLS]
+State: UNKNOWN
+Reason: Not implemented in Forever Phase 1
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]
