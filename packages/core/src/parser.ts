@@ -8,6 +8,7 @@
 
 import { fieldNumber, fieldValue } from "./escape.ts";
 import type {
+  AccountBankSection,
   CharacterSection,
   ContainerRecord,
   EquipmentSection,
@@ -39,6 +40,7 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   EQUIPMENT: "equipment",
   BAGS: "bags",
   BANK: "bank",
+  "ACCOUNT BANK": "accountBank",
   PROFESSIONS: "professions",
   "KNOWN SPELLS": "spells",
   // Real captures show both spellings in the wild: the current addon
@@ -354,6 +356,25 @@ function parseBank(lines: string[]): InventorySection {
   return { status, coverage, snapshotVisit, purchasedBankBagSlots, purchasedBankTabs, ...body };
 }
 
+function parseAccountBank(lines: string[]): AccountBankSection {
+  const { status, next } = parseSectionStatus(lines, 0);
+  let i = next;
+  if (status.state === "UNKNOWN") return { status, ownerScope: "ACCOUNT_WARBAND", containers: [], itemsKnownEmpty: false, items: [] };
+
+  const get = (prefix: string) => {
+    const [v, ni] = takeLine(lines, i, prefix);
+    i = ni;
+    return v;
+  };
+  const scope = fieldValue(get("Scope: "));
+  if (scope !== "ACCOUNT_WARBAND") fail("Unsupported account-bank scope", scope);
+  const coverage = fieldValue(get("Coverage: "));
+  const snapshotVisit = fieldNumber(get("SnapshotVisit: "));
+  const purchasedBankTabs = fieldNumber(get("PurchasedBankTabs: "));
+  const body = parseInventoryBody(lines, i);
+  return { status, ownerScope: "ACCOUNT_WARBAND", coverage, snapshotVisit, purchasedBankTabs, ...body };
+}
+
 function parseProfessions(lines: string[]): ProfessionsSection {
   const { status, next } = parseSectionStatus(lines, 0);
   let i = next;
@@ -529,6 +550,7 @@ const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   equipment: parseEquipment,
   bags: parseBags,
   bank: parseBank,
+  accountBank: parseAccountBank,
   professions: parseProfessions,
   spells: parseSpells,
   trainer: parseTrainer,
@@ -592,6 +614,9 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   if (missing.length > 0) {
     fail(`Export is missing required section(s): ${missing.map((m) => m.toUpperCase()).join(", ")}`);
   }
+  if (result.accountBank && result.character?.clientFamily?.toLowerCase() !== "retail") {
+    fail("[ACCOUNT BANK] is only valid for a Retail export");
+  }
 
   return {
     raw,
@@ -602,6 +627,7 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     equipment: result.equipment!,
     bags: result.bags!,
     bank: result.bank!,
+    accountBank: result.accountBank,
     professions: result.professions!,
     spells: result.spells!,
     trainer: result.trainer!,
