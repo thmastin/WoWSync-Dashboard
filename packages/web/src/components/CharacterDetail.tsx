@@ -172,6 +172,13 @@ export default function CharacterDetail({
 
           <InventoryCard title="Bags" inv={snapshot.parsed.bags} />
           <InventoryCard title="Bank" inv={snapshot.parsed.bank} />
+          {snapshot.parsed.accountBank && (
+            <InventoryCard
+              title="Warband Bank (account-scoped)"
+              inv={snapshot.parsed.accountBank}
+              note="Observed from this export as account state. It is not part of this character’s bank and is excluded from account totals until account-scope reconciliation is implemented."
+            />
+          )}
 
           <section className="detail-card">
             <h3>
@@ -295,12 +302,13 @@ export default function CharacterDetail({
   );
 }
 
-function InventoryCard({ title, inv }: { title: string; inv: import("../types.ts").InventorySection }) {
+function InventoryCard({ title, inv, note }: { title: string; inv: import("../types.ts").InventorySection; note?: string }) {
   return (
     <section className="detail-card">
       <h3>
         {title} <StatusBadge state={inv.status.state} />
       </h3>
+      {note && <p className="muted small">{note}</p>}
       {inv.status.state === "UNKNOWN" && <p className="muted">Never observed.</p>}
       {inv.status.state !== "UNKNOWN" && (
         <>

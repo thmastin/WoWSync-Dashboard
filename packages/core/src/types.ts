@@ -94,6 +94,13 @@ export interface InventorySection {
   items: InventoryItemRecord[];
 }
 
+/** Retail-only account/Warband storage.  This is deliberately separate from
+ * the per-character bank section: its contents must never be attributed to
+ * the character that happened to export it. */
+export interface AccountBankSection extends InventorySection {
+  ownerScope: "ACCOUNT_WARBAND";
+}
+
 export interface ProfessionEntry {
   name: string;
   skill?: number;
@@ -159,6 +166,8 @@ export interface ParsedSnapshot {
   equipment: EquipmentSection;
   bags: InventorySection;
   bank: InventorySection;
+  /** Optional additive Retail section; absent from all legacy exports. */
+  accountBank?: AccountBankSection;
   professions: ProfessionsSection;
   spells: SpellsSection;
   trainer: TrainerSection;

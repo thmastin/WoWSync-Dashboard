@@ -129,6 +129,8 @@ export interface ParsedSnapshot {
   };
   bags: InventorySection;
   bank: InventorySection;
+  /** Account/Warband storage is separate from the exporting character's bank. */
+  accountBank?: InventorySection & { ownerScope: "ACCOUNT_WARBAND" };
   professions: {
     status: SectionStatus;
     coverage?: string;

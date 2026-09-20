@@ -57,6 +57,46 @@ test("an observed-but-empty bank is EMPTY, distinct from UNKNOWN", () => {
   assert.equal(snapshot.bank.items.length, 0);
 });
 
+test("an observed Retail Warband Bank is parsed separately from the character bank", () => {
+  const base = buildWowSyncExport({ character: { clientFamily: "Retail" }, bank: { unknown: true } });
+  const account = [
+    "[ACCOUNT BANK]",
+    "State: OBSERVED; complete; observed=1700000000",
+    "Scope: ACCOUNT_WARBAND",
+    "Coverage: ACCOUNT/Warband purchased tabs only",
+    "SnapshotVisit: 1700000000",
+    "PurchasedBankTabs: 1",
+    "container\tcapacity\tfree\tfamily\tbagRef",
+    "ContainerStorage 12: ACCOUNT_WARBAND",
+    "12\t98\t96\t0\t-",
+    "Slots: 96 free / 98",
+    "itemRef\tname\tqty\tbound\tvendorEachCopper",
+    "item:123\tWarband Widget\t2\tyes\t10",
+  ].join("\n");
+  const snapshot = parseWowSyncExport(base.replace("\n\n[PROFESSIONS]", `\n\n${account}\n\n[PROFESSIONS]`));
+  assert.equal(snapshot.bank.status.state, "UNKNOWN");
+  assert.equal(snapshot.accountBank?.ownerScope, "ACCOUNT_WARBAND");
+  assert.equal(snapshot.accountBank?.items[0]?.name, "Warband Widget");
+});
+
+test("an unknown Warband Bank stays unknown rather than becoming an empty character bank", () => {
+  const base = buildWowSyncExport({ character: { clientFamily: "Retail" } });
+  const account = ["[ACCOUNT BANK]", "State: UNKNOWN", "Reason: Not observed"].join("\n");
+  const snapshot = parseWowSyncExport(base.replace("\n\n[PROFESSIONS]", `\n\n${account}\n\n[PROFESSIONS]`));
+  assert.equal(snapshot.accountBank?.status.state, "UNKNOWN");
+  assert.equal(snapshot.accountBank?.itemsKnownEmpty, false);
+  assert.equal(snapshot.bank.itemsKnownEmpty, true);
+});
+
+test("an Account Bank extension is rejected for non-Retail exports", () => {
+  const base = buildWowSyncExport();
+  const account = ["[ACCOUNT BANK]", "State: UNKNOWN", "Reason: Not observed"].join("\n");
+  assert.throws(
+    () => parseWowSyncExport(base.replace("\n\n[PROFESSIONS]", `\n\n${account}\n\n[PROFESSIONS]`)),
+    WowSyncParseError,
+  );
+});
+
 test("an unvisited trainer renders UNKNOWN with a reason", () => {
   const raw = buildWowSyncExport({ trainer: { unknown: true } });
   const snapshot = parseWowSyncExport(raw);
