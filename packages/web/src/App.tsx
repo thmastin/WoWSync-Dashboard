@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchAccountFacts } from "./api.ts";
+import ErrorNotice from "./components/ErrorNotice.tsx";
+import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
 import AskAccountModal from "./components/AskAccountModal.tsx";
@@ -8,7 +10,7 @@ import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
-import type { AccountFacts, VersionOrUnknown } from "./types.ts";
+import type { VersionOrUnknown } from "./types.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
 type View = { kind: "overview" } | { kind: "characters" } | { kind: "economy" } | { kind: "detail"; identityKey: string };
@@ -22,7 +24,6 @@ function loadStoredVersion(): VersionOrUnknown {
 export default function App() {
   const [activeVersion, setActiveVersion] = useState<VersionOrUnknown>(loadStoredVersion);
   const [view, setView] = useState<View>({ kind: "overview" });
-  const [facts, setFacts] = useState<AccountFacts | null>(null);
   const [selectedRealm, setSelectedRealm] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
@@ -33,11 +34,19 @@ export default function App() {
     localStorage.setItem("wowsync.activeVersion", activeVersion);
   }, [activeVersion]);
 
+  // A different version drops the old facts at once; a refresh (after an
+  // import/delete) reloads the same version in place. Slow replies to a
+  // superseded request are ignored, and a failure is shown with Retry -
+  // never an endless "Loading…" or another version's facts under this tab.
+  const factsLoad = useAsync((signal) => fetchAccountFacts(activeVersion, signal).then((r) => r.facts), activeVersion, refreshTick);
+  const loaded = factsLoad.state.data;
+  const facts = loaded && loaded.version === activeVersion ? loaded : null;
+
+  // The realm choice belongs to a version. (It used to reset on every refresh, so
+  // each import snapped the view back to the first realm.)
   useEffect(() => {
-    setFacts(null);
     setSelectedRealm(null);
-    fetchAccountFacts(activeVersion).then((r) => setFacts(r.facts));
-  }, [activeVersion, refreshTick]);
+  }, [activeVersion]);
 
   const accent = VERSION_ACCENTS[activeVersion];
   const scoped = facts ? scopeFacts(facts, selectedRealm) : null;
@@ -89,6 +98,7 @@ export default function App() {
         {view.kind === "detail" ? (
           <CharacterDetail
             identityKey={view.identityKey}
+            refreshTick={refreshTick}
             onBack={() => setView({ kind: "characters" })}
             onDeleted={() => {
               refresh();
@@ -130,7 +140,8 @@ export default function App() {
               ) : null}
             </div>
 
-            {!scoped && <div className="loading">Loading…</div>}
+            {factsLoad.state.status === "error" && <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />}
+            {!scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && view.kind === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
             {scoped && view.kind === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
             {scoped && view.kind === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}

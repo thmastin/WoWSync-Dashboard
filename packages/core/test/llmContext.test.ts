@@ -11,7 +11,7 @@
 //     instead of the correct second-to-latest snapshot's gold.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildLlmContext } from "../src/llmContext.ts";
+import { buildLlmContext, type LlmGoldSummary, type LlmRealmGold } from "../src/llmContext.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 
@@ -374,19 +374,35 @@ test("[SYNTHETIC] index arrays preserve the same canonical order as the versions
 // always correct, but asked for a "total Retail gold" figure with no
 // deterministic aggregate supplied, the model invented one - and its
 // invented total exactly equalled its (also invented) figure for one
-// character. goldSummary carries the canonical, already-computed
-// facts.gold.totalKnownCopper into LlmContext unchanged - not a second
-// calculation path.
+// character. goldSummary therefore carries an already-computed total into
+// LlmContext - never a second calculation path. Realm-partitioned versions
+// (Classic Era / TBC Anniversary / Forever) get one entry PER REALM (each
+// realm's own RealmGroup.gold) and no version-wide total, because a
+// cross-realm sum contradicted the prompt's "never combine realms" rule;
+// account-wide Retail keeps a single total. The realm-scope cases live in
+// realmGoldContext.test.ts; the tests here are the classic-era projections
+// that used to read the version-wide total.
 
-test("[SYNTHETIC] goldSummary.totalKnownCopper is the canonical facts.gold.totalKnownCopper, projected unchanged", () => {
+/** The per-realm gold entries of a realm-scoped summary (fails the test for any other shape). */
+function realmEntries(summary: LlmGoldSummary): LlmRealmGold[] {
+  assert.equal(summary.scope, "realm", "a realm-partitioned version must never carry a single version-wide gold total");
+  if (summary.scope !== "realm") throw new Error("unreachable");
+  return summary.byRealm;
+}
+
+test("[SYNTHETIC] goldSummary's realm total is that realm's canonical RealmGroup gold, projected unchanged", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(buildWowSyncExport({ character: { name: "Alpha", realm: "R", moneyCopper: 100 } }));
     store.importSnapshot(buildWowSyncExport({ character: { name: "Beta", realm: "R", moneyCopper: 250 } }));
     const ctx = store.buildAccountContext(FIXED_NOW);
     const llm = buildLlmContext(ctx);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, ctx.versions["classic-era"].facts.gold.totalKnownCopper);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 350);
+    const entries = realmEntries(llm.versions["classic-era"].goldSummary);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].realm, "R");
+    assert.equal(entries[0].totalKnownCopper, ctx.versions["classic-era"].facts.realms[0].gold.totalKnownCopper);
+    assert.equal(entries[0].totalKnownCopper, 350);
+    assert.equal(entries[0].charactersWithKnownGold, 2);
   } finally {
     store.close();
   }
@@ -397,8 +413,9 @@ test("[SYNTHETIC] goldSummary.totalKnownFormatted is the correct deterministic f
   try {
     store.importSnapshot(buildWowSyncExport({ character: { name: "Rich", realm: "R", moneyCopper: 92113121 } }));
     const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 92113121);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownFormatted, "9211g 31s 21c");
+    const [realm] = realmEntries(llm.versions["classic-era"].goldSummary);
+    assert.equal(realm.totalKnownCopper, 92113121);
+    assert.equal(realm.totalKnownFormatted, "9211g 31s 21c");
   } finally {
     store.close();
   }
@@ -411,27 +428,35 @@ test("[SYNTHETIC] when no character's gold was ever observed, goldSummary is unk
     const ctx = store.buildAccountContext(FIXED_NOW);
     assert.equal(ctx.versions["classic-era"].facts.gold.charactersWithKnownGold, 0);
     const llm = buildLlmContext(ctx);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, undefined);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownFormatted, undefined);
+    const [realm] = realmEntries(llm.versions["classic-era"].goldSummary);
+    assert.equal(realm.totalKnownCopper, undefined);
+    assert.equal(realm.totalKnownFormatted, undefined);
+    assert.equal("totalKnownCopper" in JSON.parse(JSON.stringify(realm)), false, "absent from the serialised payload, not null or 0");
+    assert.equal(realm.charactersWithKnownGold, 0);
+    assert.equal(realm.charactersWithUnknownGold, 1);
   } finally {
     store.close();
   }
 });
 
-test("[SYNTHETIC] the projection never independently sums character gold - it carries the canonical total as-is, even if deliberately inconsistent with it", () => {
+test("[SYNTHETIC] the projection never independently sums character gold - it carries the realm's canonical total as-is, even if deliberately inconsistent with it", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(buildWowSyncExport({ character: { name: "Alpha", realm: "R", moneyCopper: 100 } }));
     store.importSnapshot(buildWowSyncExport({ character: { name: "Beta", realm: "R", moneyCopper: 250 } }));
     const ctx = store.buildAccountContext(FIXED_NOW);
     // Naively summing the two characters' goldCopper would give 350.
-    // Deliberately desync the canonical total from that sum to prove
-    // buildLlmContext reads facts.gold.totalKnownCopper verbatim rather
+    // Deliberately desync the realm's canonical total from that sum to prove
+    // buildLlmContext reads RealmGroup.gold.totalKnownCopper verbatim rather
     // than recomputing it from the projected characters.
-    ctx.versions["classic-era"].facts.gold.totalKnownCopper = 999999;
+    ctx.versions["classic-era"].facts.realms[0].gold.totalKnownCopper = 999999;
+    // ...and poison the version-wide figure to prove it is never read for a realm-scoped version.
+    ctx.versions["classic-era"].facts.gold.totalKnownCopper = 123456789;
     const llm = buildLlmContext(ctx);
-    assert.equal(llm.versions["classic-era"].goldSummary.totalKnownCopper, 999999);
-    assert.notEqual(llm.versions["classic-era"].goldSummary.totalKnownCopper, 350);
+    const [realm] = realmEntries(llm.versions["classic-era"].goldSummary);
+    assert.equal(realm.totalKnownCopper, 999999);
+    assert.notEqual(realm.totalKnownCopper, 350);
+    assert.equal(JSON.stringify(llm).includes("123456789"), false);
   } finally {
     store.close();
   }

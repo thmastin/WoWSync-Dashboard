@@ -24,19 +24,26 @@
 // `now` always produces byte-identical JSON.
 
 import { diffToChangeSummary, type AccountChangeSummary, type AccountFacts } from "./accountFacts.ts";
+import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots } from "./diff.ts";
 import { summarizeTrainerCategory, type TrainerCategorySummary } from "./trainerSummary.ts";
 import type { ParsedSnapshot, SectionState, WowVersion } from "./types.ts";
 import type { StoredSnapshot } from "./store.ts";
 import { WOW_VERSIONS } from "./version.ts";
 
+// Bumped to "3" (additive, on top of the v2 changes below): gold/playtime
+// totals gained freshness fields (staleCharactersWith*/oldest*ObservedAt),
+// change summaries gained `observedAt`, realm-partitioned versions gained an
+// in-band `scopeNote`, and the `currency` note now states that a total over
+// zero observed values is not zero.
+//
 // Bumped to "2": added the `currency` field, renamed the two differently-
 // scoped profession `status` fields to `observationStatus`/`coverageStatus`
 // (see accountFacts.ts), and added `AccountChangeSummary.inventoryItemChanges`
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "2";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "3";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -57,8 +64,20 @@ const CURRENCY_CONVENTION: CurrencyConvention = {
   unit: "copper",
   conversion: "1 gold = 100 silver = 10000 copper",
   note:
-    "Every field whose name ends in \"Copper\" (e.g. goldCopper, moneyCopper, deltaCopper, costCopper, totalKnownCopper) is an integer amount of copper, WoW's smallest currency unit — never gold, and never a decimal gold amount. To display as gold/silver/copper: gold = floor(copper / 10000), silver = floor((copper % 10000) / 100), remaining copper = copper % 100.",
+    "Every field whose name ends in \"Copper\" (e.g. goldCopper, moneyCopper, deltaCopper, costCopper, totalKnownCopper) is an integer amount of copper, WoW's smallest currency unit — never gold, and never a decimal gold amount. To display as gold/silver/copper: gold = floor(copper / 10000), silver = floor((copper % 10000) / 100), remaining copper = copper % 100. A total whose known-character count is 0 (charactersWithKnownGold / charactersWithKnownPlaytime) is a sum over nothing observed - it means unknown, NOT zero gold. Totals are sums of each character's last observed value (not live balances); staleCharactersWith* and oldest*ObservedAt say how old the contributions are.",
 };
+
+/**
+ * In-band explanation attached to realm-partitioned versions (Classic Era,
+ * TBC Anniversary, Forever). The version-wide totals in `facts` (gold,
+ * playtime, inventory, ...) are computed for every version, but across
+ * separate realm economies they are DERIVED sums that no player could spend
+ * as one balance. The note travels with the data so a consumer that never
+ * sees a system prompt (a pasted developer export) is still told which view
+ * to use.
+ */
+export const REALM_SCOPE_NOTE =
+  "This version is realm-partitioned: characters on different realms do not share an economy. The version-wide totals in facts (gold, playtime, inventory, profession coverage) are DERIVED sums across separate realms, kept for completeness only - use facts.realms[] (one entry per realm) for any per-realm or economic question, and never present a cross-realm sum as one account balance.";
 
 export interface SnapshotHistoryEntry {
   generatedAt?: number;
@@ -98,6 +117,8 @@ export interface CharacterContext {
 export interface VersionContext {
   version: WowVersion;
   aggregationScope: AccountFacts["aggregationScope"];
+  /** Present only when aggregationScope is "realm": says the version-wide totals are derived cross-realm sums and that facts.realms[] is the per-realm view. */
+  scopeNote?: string;
   /** The full, authoritative AccountFacts for this version — embedded wholesale, not re-derived. */
   facts: AccountFacts;
   /** Per-character history/trainer detail AccountFacts itself doesn't carry (it only has "latest + one diff"). Same character set and order as facts.characters. */
@@ -119,8 +140,11 @@ export interface AccountContextInput {
   characterSnapshots: Map<string, StoredSnapshot[]>;
 }
 
+// The one chronology rule (see chronology.ts) - shared with the SQLite
+// queries behind "latest"/"previous", so the store, AccountFacts and this
+// document always describe the same snapshot pairs.
 function snapshotSortKey(s: StoredSnapshot): number {
-  return s.generatedAt ?? s.importedAt;
+  return snapshotObservedAt(s.generatedAt, s.importedAt);
 }
 
 // generatedAt (or its importedAt fallback) is not guaranteed unique - two
@@ -166,7 +190,14 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
     const from = chronological[i - 1];
     const to = chronological[i];
     const diff = diffSnapshots(from.parsed, to.parsed);
-    transitions.push(diffToChangeSummary(diff, { identityKey, characterName: name, importedAt: to.importedAt }));
+    transitions.push(
+      diffToChangeSummary(diff, {
+        identityKey,
+        characterName: name,
+        importedAt: to.importedAt,
+        observedAt: snapshotObservedAt(to.generatedAt, to.importedAt),
+      }),
+    );
   }
 
   const latest = chronological[chronological.length - 1];
@@ -197,6 +228,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
     versions[version] = {
       version,
       aggregationScope: facts.aggregationScope,
+      ...(facts.aggregationScope === "realm" ? { scopeNote: REALM_SCOPE_NOTE } : {}),
       facts,
       characters,
     };

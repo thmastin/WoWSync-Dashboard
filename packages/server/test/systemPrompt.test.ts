@@ -122,3 +122,40 @@ test("forbids inferring events or causes from state differences, and keeps the p
   assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /authoritative source/i);
   assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /do not invent facts/i);
 });
+
+// --- goldSummary scope (realm-partitioned versions have no version-wide total) ---
+
+test("explains that goldSummary is scope-shaped: per-realm byRealm for realm versions, one total for Retail", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"goldSummary"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"goldSummary\.byRealm"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /deliberately NO version-wide total/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"account-wide"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /Classic Era, TBC Anniversary, and Forever its "scope" is "realm"/);
+});
+
+test("says a missing total means unobserved (never zero), and that the total covers only the counted characters", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /missing "totalKnownCopper" means no gold was observed there - never zero/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"charactersWithKnownGold"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"charactersWithUnknownGold"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /excluded, not counted as 0/);
+});
+
+test("says totals are last-observed values (staleness fields explained), not live balances", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"staleCharactersWithKnownGold"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"oldestKnownGoldObservedAt"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /not a live balance/);
+});
+
+test("without a named realm the model lists each realm; a combined figure only on request, labelled as arithmetic across separate economies", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /without naming a realm, list each realm's figure separately/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /explicitly asks for a combined figure across realms/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /arithmetic across separate economies that are not one balance/);
+});
+
+test("the formatted-total 'authoritative' rule is scoped: a realm's total is never presented as another realm's or the version's", () => {
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /"totalKnownFormatted"/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /authoritative, ready-to-use display values for the scope they belong to/);
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /Never present one realm's "totalKnownFormatted" as another realm's, or as the whole version's/);
+  // The pre-existing "combine realms" prohibition is unchanged and no longer contradicted by the payload.
+  assert.match(ASK_MY_ACCOUNT_SYSTEM_PROMPT, /never combine totals across two different realms/);
+});

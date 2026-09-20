@@ -1,13 +1,16 @@
 import { useState } from "react";
-import { ApiError, deleteCharacter } from "../api.ts";
+import { deleteCharacter } from "../api.ts";
 import { describeDeletion, isDeleteConfirmed, requiredConfirmationText, type DeleteTarget } from "../deleteConfirmation.ts";
+import { performDelete } from "../deleteFlow.ts";
 
 /**
  * Confirmation dialog for permanently deleting one character and its
  * snapshot history. Cancel is the safe/default path: the destructive button
  * stays disabled until the character's exact name has been typed, and
  * clicking the backdrop or pressing Cancel closes without doing anything.
- * All the rules (what to say, when to enable) come from deleteConfirmation.ts.
+ * All the rules (what to say, when to enable) come from deleteConfirmation.ts;
+ * what a server reply MEANS comes from deleteFlow.ts, so a failed deletion
+ * can never look like a successful one.
  */
 export default function DeleteCharacterModal({
   target,
@@ -16,33 +19,52 @@ export default function DeleteCharacterModal({
 }: {
   target: DeleteTarget;
   onClose: () => void;
-  /** Called after the character is gone (including "was already gone"), so the caller can refresh and leave the now-empty page. */
+  /** Called only after the character is confirmed gone (deleted, or the server itself said it no longer exists), so the caller can refresh and leave the page. */
   onDeleted: () => void;
 }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [alreadyGone, setAlreadyGone] = useState<string | null>(null);
   const confirmed = isDeleteConfirmed(typed, target);
 
   async function handleDelete() {
     if (!confirmed || busy) return;
     setBusy(true);
     setError(null);
-    try {
-      await deleteCharacter(target.identityKey);
+    const outcome = await performDelete(target.identityKey, deleteCharacter);
+    if (outcome.kind === "deleted") {
       onDeleted();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        // Already deleted elsewhere: the desired end state is reached.
-        onDeleted();
-        return;
-      }
-      setError(err instanceof Error ? err.message : String(err));
-      setBusy(false);
+      return;
     }
+    setBusy(false);
+    if (outcome.kind === "already-gone") {
+      // Honest about it: this action removed nothing. The user acknowledges, then the page refreshes.
+      setAlreadyGone(outcome.message);
+      return;
+    }
+    setError(outcome.message); // a failed deletion is shown as a failure - the dialog stays open
   }
 
   const [character, realm, version, ...explanation] = describeDeletion(target);
+
+  if (alreadyGone) {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-character-title">
+          <div className="modal-header">
+            <h2 id="delete-character-title">Character already gone</h2>
+          </div>
+          <p className="modal-hint">{alreadyGone}</p>
+          <div className="modal-actions">
+            <button className="primary-button" onClick={onDeleted} autoFocus>
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="modal-backdrop" onClick={busy ? undefined : onClose}>
@@ -79,7 +101,11 @@ export default function DeleteCharacterModal({
           disabled={busy}
         />
 
-        {error && <div className="import-error">{error}</div>}
+        {error && (
+          <div className="import-error" role="alert">
+            {error}
+          </div>
+        )}
 
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose} disabled={busy} autoFocus>

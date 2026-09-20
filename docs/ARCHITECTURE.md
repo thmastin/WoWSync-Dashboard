@@ -416,6 +416,60 @@ Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
 thing today's real data can't: proving two *different* Classic/TBC realms
 stay isolated, since only one has been captured so far.
 
+## Snapshot chronology and idempotent import
+
+One rule orders snapshots everywhere (`packages/core/src/chronology.ts`):
+**observation time** = `COALESCE(generated_at, imported_at)`, then row id.
+The SQLite queries behind "latest"/"previous" (`ORDER BY` in
+`sqliteStore.ts`), recent changes, `listVersions().lastUpdatedAt`, and
+`accountContext.ts`'s transition history all use it, so the store, AccountFacts and
+the LLM context can never describe different snapshot pairs. (Previously the
+queries ordered by `imported_at` while AccountContext used `generatedAt`, so an
+older export imported late became "current" and produced a reversed diff.) No
+schema change or migration: it is an `ORDER BY` only.
+
+`importSnapshot` runs in one `BEGIN IMMEDIATE` transaction (shared `inTransaction`
+helper with `deleteCharacter`; re-entrant via `db.isTransaction`):
+1. find or create the character; 2. **duplicate check** — a snapshot of the same
+character with the same `generated_at` (`IS ?`, so NULL matches NULL) whose export
+text is equal after CRLF/trailing-whitespace normalisation is a duplicate: nothing
+is inserted, updated or reordered and `ImportResult.isDuplicate` is true; 3. insert;
+4. locate the new row in chronological order — its **predecessor** (not merely "the
+previous import") is `previousSnapshot`, so the diff always runs forward in time;
+`isLatest` says whether it became current state, and class/faction are only updated
+when it did. The check is by content, never by `generated_at` alone (one-second
+resolution: two different exports can share it) and never via a UNIQUE index (an
+existing database may already contain duplicates, which would make the index fail
+at startup). Rows already duplicated by older versions are left untouched.
+
+## Freshness-aware totals
+
+`GoldFacts`/`PlaytimeFacts` (version-wide and per `RealmGroup`) gained
+`staleCharactersWithKnownGold`/`…Playtime` and `oldestKnown…ObservedAt`, derived from
+the already-computed `CharacterFacts` (same `classifyFreshness` rule, same
+`lastObservedAt`; no second freshness implementation, no configurable threshold).
+`totalKnownCopper` stays a number but is documented as meaningful only alongside
+its known-count (0 known = a sum over nothing = unknown, not zero); `VersionSummary`
+totals are absent (not 0) when nothing is known. `LlmContext` ("llm-2") projects a
+scope-shaped `goldSummary`: `{scope:"realm", byRealm:[…]}` for realm-partitioned
+versions (each entry read from its `RealmGroup.gold`; **no** version-wide total),
+`{scope:"account-wide", …}` for Retail. AccountContext is schema "3" (additive).
+
+## Server network configuration
+
+`packages/server/src/net.ts` (pure helpers, tested by really listening on sockets):
+`resolveHost` (`WOWSYNC_HOST` only; empty → 127.0.0.1 because an empty string
+binds every interface; `localhost` → 127.0.0.1 because Node 24 resolves it to
+`::1` first), `resolvePort`, `listenOnce` (friendly EADDRINUSE/EACCES/EADDRNOTAVAIL
+errors), `loopbackOrigin` (`/api/ask`'s request to its own `/api/account-context`
+uses the real bind address), and `hostGuard` (Host/Origin allow-list, enabled for
+loopback binds). Every API failure is JSON — unknown `/api/*` paths are a JSON 404,
+a final error handler returns `{error}` without stack traces, invalid
+`recent-changes?limit` is a 400. The web client (`api.ts`) turns every failure
+into a classified `ApiError` (`network | http | parse | shape`), `asyncState.ts`
+ignores replies to superseded requests, and `deleteFlow.ts` only treats the
+server's own `CHARACTER_NOT_FOUND` 404 as "already gone".
+
 ## Deleting a character
 
 `SnapshotStore.deleteCharacter(identityKey)` removes one character and all
@@ -460,7 +514,7 @@ whole dashboard — every WoW version, in one JSON payload:
 
 ```ts
 interface AccountContext {
-  schemaVersion: "2";
+  schemaVersion: "3"; // v3: freshness fields, observedAt, scopeNote (additive over v2)
   generatedAt: number; // the `now` this was built with
   currency: { unit: "copper"; conversion: string; note: string }; // in-band unit documentation - see below
   versions: {

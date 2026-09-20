@@ -34,10 +34,19 @@ export interface StoredSnapshot {
 export interface VersionSummary {
   version: VersionOrUnknown;
   characterCount: number;
-  totalMoneyCopper: number;
+  /**
+   * Sum of the known latest gold values across the version's characters.
+   * ABSENT (not 0) when `charactersWithKnownGold` is 0: a sum over nothing
+   * observed is "unknown", and only a character whose gold was actually
+   * observed as 0 copper makes a real 0 total. Also a version-wide sum across
+   * realms - for realm-partitioned versions prefer AccountFacts.realms[].
+   */
+  totalMoneyCopper?: number;
   charactersWithKnownGold: number;
-  totalPlayedSeconds: number;
+  /** Absent (not 0) when `charactersWithKnownPlaytime` is 0 - see totalMoneyCopper. */
+  totalPlayedSeconds?: number;
   charactersWithKnownPlaytime: number;
+  /** The most recent OBSERVATION time (the export's Generated value, falling back to import time) among the version's latest snapshots. */
   lastUpdatedAt?: number;
 }
 
@@ -48,15 +57,25 @@ export interface RecentChange {
   version: VersionOrUnknown;
   snapshotId: number;
   importedAt: number;
+  /** When the latest snapshot's game state existed (export Generated time, else import time). Recent changes are ranked by this, not by import time. */
+  observedAt: number;
   diff: SnapshotDiff;
 }
 
 export interface ImportResult {
   character: StoredCharacterSummary;
+  /** The stored snapshot for this export. For a duplicate, the EXISTING snapshot - nothing new was stored. */
   snapshot: StoredSnapshot;
+  /** The chronologically preceding snapshot (older observation), if any. Absent for a duplicate and when this export is the oldest observation. */
   previousSnapshot?: StoredSnapshot;
+  /** Diff from `previousSnapshot` to this snapshot, forward in time. Absent (never a reversed or "no change" placeholder) when there is nothing older to compare. */
   diff?: SnapshotDiff;
+  /** True only when the character had no snapshots at all before this import. */
   isFirstSnapshot: boolean;
+  /** True when this exact export (same character, same Generated value, same text) was already stored: nothing was inserted or changed. */
+  isDuplicate: boolean;
+  /** Whether this snapshot is now the character's current (newest-observed) state. False when an older export was imported after a newer one. */
+  isLatest: boolean;
 }
 
 /** What a successful character deletion removed. Counts are read from the rows actually deleted, not estimated. */
@@ -69,6 +88,12 @@ export interface DeleteCharacterResult {
 }
 
 export interface SnapshotStore {
+  /**
+   * Imports one export. Idempotent: the same export twice is a no-op
+   * (`isDuplicate`). Snapshots are ordered by observation time, so an older
+   * export imported later becomes history, not current state. Atomic: a
+   * failure leaves neither a partial snapshot nor a snapshot-less character.
+   */
   importSnapshot(raw: string): ImportResult;
   /**
    * Permanently removes one character and every snapshot stored for it

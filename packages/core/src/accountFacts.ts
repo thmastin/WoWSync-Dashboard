@@ -29,6 +29,7 @@
 // later); they just aren't the recommended default for a multi-realm
 // Classic/TBC/Forever account.
 
+import { snapshotObservedAt } from "./chronology.ts";
 import { baseItemId, type ItemDelta, type SnapshotDiff } from "./diff.ts";
 import { classifyFreshness, type Freshness } from "./freshness.ts";
 import { professionCatalogForVersion, professionEntryIsEvidence } from "./professionCatalog.ts";
@@ -71,10 +72,29 @@ export interface CharacterGold {
 }
 
 export interface GoldFacts {
-  /** Sum of goldCopper across characters where it's actually known. Never assumes 0 for an unknown character. */
+  /**
+   * Sum of goldCopper across characters where it's actually known. Never
+   * assumes 0 for an unknown character. Read it TOGETHER with the counts
+   * below: when `charactersWithKnownGold` is 0 this is a sum over nothing
+   * (no gold was observed) and is NOT "0 gold"; only a known count > 0 makes
+   * 0 a real observed total. It is also a sum of each character's LAST
+   * observed value, not a live balance - see the staleness fields.
+   */
   totalKnownCopper: number;
+  /** Contributors: characters whose gold was observed. */
   charactersWithKnownGold: number;
+  /** Characters whose gold was never observed. They contribute nothing to the total (and are never "stale" - they are unknown). */
   charactersWithUnknownGold: number;
+  /**
+   * How many of the known-gold contributors were last observed more than the
+   * fixed freshness window ago (see freshness.ts - the same rule as
+   * CharacterFacts.freshness; deliberately not configurable). A stale
+   * contributor still counts in the total - staleness is stated, never
+   * subtracted or hidden. Always <= charactersWithKnownGold.
+   */
+  staleCharactersWithKnownGold: number;
+  /** Observation time (unix seconds) of the OLDEST known-gold contribution - "this total is as old as": undefined when no character's gold is known. */
+  oldestKnownGoldObservedAt?: number;
   byCharacter: CharacterGold[];
   /** Characters with the largest known gold change since their previous snapshot, sorted by magnitude descending. */
   largestRecentChanges: CharacterGold[];
@@ -94,8 +114,13 @@ export interface CharacterPlaytime {
 }
 
 export interface PlaytimeFacts {
+  /** Same unknown-vs-zero rule as GoldFacts.totalKnownCopper: only meaningful alongside `charactersWithKnownPlaytime`. */
   totalKnownPlayedSeconds: number;
   charactersWithKnownPlaytime: number;
+  /** Known-playtime contributors last observed more than the fixed freshness window ago (see GoldFacts.staleCharactersWithKnownGold). */
+  staleCharactersWithKnownPlaytime: number;
+  /** Observation time of the oldest known-playtime contribution; undefined when none is known. */
+  oldestKnownPlaytimeObservedAt?: number;
   byCharacter: CharacterPlaytime[];
 }
 
@@ -241,6 +266,8 @@ export interface AccountChangeSummary {
   identityKey: string;
   characterName: string;
   importedAt: number;
+  /** When the later snapshot's game state existed (export Generated time, else import time). Prefer this over importedAt to say how old a change is. */
+  observedAt?: number;
   fromLevel?: number;
   toLevel?: number;
   levelChanged: boolean;
@@ -279,7 +306,7 @@ function toInventoryItemChange(storage: StorageLocation, delta: ItemDelta): Inve
  */
 export function diffToChangeSummary(
   diff: SnapshotDiff,
-  meta: { identityKey: string; characterName: string; importedAt: number },
+  meta: { identityKey: string; characterName: string; importedAt: number; observedAt?: number },
 ): AccountChangeSummary {
   const inventoryItemChanges = [
     ...diff.bagsItems.map((d) => toInventoryItemChange("bags", d)),
@@ -290,6 +317,7 @@ export function diffToChangeSummary(
     identityKey: meta.identityKey,
     characterName: meta.characterName,
     importedAt: meta.importedAt,
+    observedAt: meta.observedAt,
     fromLevel: diff.level.from,
     toLevel: diff.level.to,
     levelChanged: !!diff.level.delta,
@@ -410,7 +438,11 @@ function buildCharacterFacts(
     const xp = parsed?.character.xp;
     const xpMax = parsed?.character.xpMax;
     const xpPercent = xp !== undefined && xpMax !== undefined && xpMax > 0 ? (xp / xpMax) * 100 : undefined;
-    const lastObservedAt = c.latestGeneratedAt ?? c.latestImportedAt;
+    // The same observation time the snapshot ordering uses (see chronology.ts), so
+    // "how fresh" and "which is latest" can never disagree - a future-dated export
+    // does not read as fresh.
+    const lastObservedAt =
+      c.latestImportedAt !== undefined ? snapshotObservedAt(c.latestGeneratedAt, c.latestImportedAt) : c.latestGeneratedAt;
     return {
       identityKey: c.identityKey,
       name: c.name,
@@ -433,7 +465,26 @@ function buildCharacterFacts(
   });
 }
 
-function buildGoldFacts(characters: StoredCharacterSummary[], diffs: Map<string, SnapshotDiff>): GoldFacts {
+/**
+ * Freshness of the characters that actually contributed a known value to a
+ * total: how many are stale, and when the oldest contribution was observed.
+ * Derived from the already-computed CharacterFacts (same classifyFreshness
+ * rule, same lastObservedAt) - never a second freshness implementation.
+ */
+function summarizeContributors(contributors: CharacterFacts[]): { stale: number; oldestObservedAt?: number } {
+  const observed = contributors.map((c) => c.lastObservedAt).filter((t): t is number => t !== undefined);
+  return {
+    // A known value implies a snapshot exists, so "unknown" freshness cannot occur here; anything not "recent" is counted.
+    stale: contributors.filter((c) => c.freshness !== "recent").length,
+    oldestObservedAt: observed.length > 0 ? Math.min(...observed) : undefined,
+  };
+}
+
+function buildGoldFacts(
+  characters: StoredCharacterSummary[],
+  diffs: Map<string, SnapshotDiff>,
+  characterFacts: CharacterFacts[],
+): GoldFacts {
   const byCharacter: CharacterGold[] = characters.map((c) => ({
     identityKey: c.identityKey,
     name: c.name,
@@ -441,10 +492,13 @@ function buildGoldFacts(characters: StoredCharacterSummary[], diffs: Map<string,
     deltaCopper: diffs.get(c.identityKey)?.moneyCopper.delta,
   }));
   const known = byCharacter.filter((g) => g.goldCopper !== undefined);
+  const freshness = summarizeContributors(characterFacts.filter((c) => c.goldCopper !== undefined));
   return {
     totalKnownCopper: known.reduce((sum, g) => sum + (g.goldCopper ?? 0), 0),
     charactersWithKnownGold: known.length,
     charactersWithUnknownGold: characters.length - known.length,
+    staleCharactersWithKnownGold: freshness.stale,
+    oldestKnownGoldObservedAt: freshness.oldestObservedAt,
     byCharacter,
     largestRecentChanges: byCharacter
       .filter((g) => g.deltaCopper !== undefined && g.deltaCopper !== 0)
@@ -457,6 +511,7 @@ function buildPlaytimeFacts(
   characters: StoredCharacterSummary[],
   latestParsed: Map<string, ParsedSnapshot>,
   diffs: Map<string, SnapshotDiff>,
+  characterFacts: CharacterFacts[],
 ): PlaytimeFacts {
   const byCharacter: CharacterPlaytime[] = characters.map((c) => {
     const parsed = latestParsed.get(c.identityKey);
@@ -471,9 +526,12 @@ function buildPlaytimeFacts(
     };
   });
   const known = byCharacter.filter((p) => p.playedSeconds !== undefined);
+  const freshness = summarizeContributors(characterFacts.filter((c) => c.playedSeconds !== undefined));
   return {
     totalKnownPlayedSeconds: known.reduce((sum, p) => sum + (p.playedSeconds ?? 0), 0),
     charactersWithKnownPlaytime: known.length,
+    staleCharactersWithKnownPlaytime: freshness.stale,
+    oldestKnownPlaytimeObservedAt: freshness.oldestObservedAt,
     byCharacter,
   };
 }
@@ -628,12 +686,13 @@ function buildRealmGroup(
   diffs: Map<string, SnapshotDiff>,
   now: number,
 ): RealmGroup {
+  const characterFacts = buildCharacterFacts(characters, latestParsed, now);
   return {
     realm,
     characterCount: characters.length,
-    characters: buildCharacterFacts(characters, latestParsed, now),
-    gold: buildGoldFacts(characters, diffs),
-    playtime: buildPlaytimeFacts(characters, latestParsed, diffs),
+    characters: characterFacts,
+    gold: buildGoldFacts(characters, diffs, characterFacts),
+    playtime: buildPlaytimeFacts(characters, latestParsed, diffs, characterFacts),
     progression: buildProgressionFacts(characters, latestParsed, diffs),
     professions: buildProfessionFacts(version, characters, latestParsed),
     inventory: buildInventoryFacts(characters, latestParsed),
@@ -644,8 +703,8 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
   const { version, characters, latestParsed, diffs, meaningfulChanges } = input;
 
   const characterFacts = buildCharacterFacts(characters, latestParsed, now);
-  const gold = buildGoldFacts(characters, diffs);
-  const playtime = buildPlaytimeFacts(characters, latestParsed, diffs);
+  const gold = buildGoldFacts(characters, diffs, characterFacts);
+  const playtime = buildPlaytimeFacts(characters, latestParsed, diffs, characterFacts);
   const progression = buildProgressionFacts(characters, latestParsed, diffs);
   const professions = buildProfessionFacts(version, characters, latestParsed);
   const inventory = buildInventoryFacts(characters, latestParsed);

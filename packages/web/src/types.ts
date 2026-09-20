@@ -218,10 +218,18 @@ export interface StoredSnapshot {
 
 export interface ImportResult {
   character: StoredCharacterSummary;
+  /** For a duplicate, the EXISTING snapshot - nothing new was stored. */
   snapshot: StoredSnapshot;
+  /** The chronologically preceding (older) snapshot, if any. */
   previousSnapshot?: StoredSnapshot;
+  /** Forward-in-time diff from previousSnapshot; absent when there is nothing older to compare (never a placeholder). */
   diff?: SnapshotDiff;
+  /** The character had no snapshots at all before this import. */
   isFirstSnapshot: boolean;
+  /** This exact export was already stored; nothing was inserted or changed. */
+  isDuplicate: boolean;
+  /** This snapshot is now the character's current (newest-observed) state. False when an older export was imported after a newer one. */
+  isLatest: boolean;
 }
 
 // --- AccountFacts (Milestone 3) ---
@@ -256,9 +264,14 @@ export interface CharacterGold {
 }
 
 export interface GoldFacts {
+  /** Meaningful only alongside charactersWithKnownGold: with 0 known characters this is a sum over nothing (unknown), NOT zero gold. */
   totalKnownCopper: number;
   charactersWithKnownGold: number;
   charactersWithUnknownGold: number;
+  /** Known-gold contributors last observed more than the fixed freshness window ago (still counted in the total). */
+  staleCharactersWithKnownGold: number;
+  /** Observation time (unix seconds) of the oldest known-gold contribution; absent when none is known. */
+  oldestKnownGoldObservedAt?: number;
   byCharacter: CharacterGold[];
   largestRecentChanges: CharacterGold[];
 }
@@ -273,8 +286,11 @@ export interface CharacterPlaytime {
 }
 
 export interface PlaytimeFacts {
+  /** Meaningful only alongside charactersWithKnownPlaytime (see GoldFacts.totalKnownCopper). */
   totalKnownPlayedSeconds: number;
   charactersWithKnownPlaytime: number;
+  staleCharactersWithKnownPlaytime: number;
+  oldestKnownPlaytimeObservedAt?: number;
   byCharacter: CharacterPlaytime[];
 }
 
@@ -363,6 +379,8 @@ export interface AccountChangeSummary {
   identityKey: string;
   characterName: string;
   importedAt: number;
+  /** When the later snapshot's game state existed (export Generated time, else import time). Use this to say how old a change is. */
+  observedAt?: number;
   fromLevel?: number;
   toLevel?: number;
   levelChanged: boolean;

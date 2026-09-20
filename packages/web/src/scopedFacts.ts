@@ -6,6 +6,8 @@
 import type { AccountFacts, FreshnessSummary } from "./types.ts";
 
 export interface ScopedFacts {
+  /** The facts' own generation time (unix seconds): the "now" every age in the UI is measured against, never the browser clock. */
+  now: number;
   scopeLabel: string;
   isRealmScoped: boolean;
   availableRealms: string[];
@@ -22,6 +24,7 @@ export interface ScopedFacts {
 export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): ScopedFacts {
   if (facts.aggregationScope === "account-wide" || facts.realms.length === 0) {
     return {
+      now: facts.generatedAt,
       scopeLabel: "Account-wide",
       isRealmScoped: false,
       availableRealms: [],
@@ -41,6 +44,7 @@ export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): S
   const freshnessByCharacter = facts.freshness.byCharacter.filter((c) => realmIdentityKeys.has(c.identityKey));
 
   return {
+    now: facts.generatedAt,
     scopeLabel: realm.realm,
     isRealmScoped: true,
     availableRealms: facts.realms.map((r) => r.realm),

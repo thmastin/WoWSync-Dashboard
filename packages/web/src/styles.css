@@ -805,3 +805,24 @@ h1, h2, h3 {
   padding: 10px;
   font-size: 0.95rem;
 }
+
+/* Failed loads (ErrorNotice) and stale-total emphasis */
+.error-notice {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(217, 97, 79, 0.4);
+  background: rgba(217, 97, 79, 0.1);
+  border-radius: 6px;
+}
+.error-notice-message {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.error-notice-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.stat-hint-stale {
+  color: var(--warn);
+}

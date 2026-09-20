@@ -18,6 +18,7 @@ import {
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
 import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.ts";
+import { hostGuard } from "./net.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -43,8 +44,26 @@ function isKnownVersion(v: string): v is VersionOrUnknown {
   return (WOW_VERSIONS as readonly string[]).includes(v) || v === "unknown-version";
 }
 
-export function createApp(store: SnapshotStore, port: number, webDistDir?: string): Express {
+export interface CreateAppOptions {
+  /**
+   * Where THIS server can reach itself (used by /api/ask to fetch its own
+   * /api/account-context). Defaults to http://127.0.0.1:<port>; index.ts derives
+   * it from the actual bind address (see net.ts loopbackOrigin).
+   */
+  selfOrigin?: string;
+  /**
+   * When set, only requests whose Host header (and, for state-changing
+   * requests, Origin header) name one of these hostnames are served - a
+   * DNS-rebinding guard for loopback binds (see net.ts hostGuard). Leave
+   * unset when deliberately listening beyond loopback.
+   */
+  allowedHosts?: readonly string[];
+}
+
+export function createApp(store: SnapshotStore, port: number, webDistDir?: string, options: CreateAppOptions = {}): Express {
   const app = express();
+  const selfOrigin = options.selfOrigin ?? `http://127.0.0.1:${port}`;
+  if (options.allowedHosts) app.use(hostGuard(options.allowedHosts));
   app.use(express.json({ limit: "10mb" }));
 
   app.get("/api/versions", (_req, res) => {
@@ -53,14 +72,12 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     const all = [...WOW_VERSIONS, "unknown-version" as const].map((version) => {
       const existing = byVersion.get(version);
       return (
+        // A version with no characters has no gold/playtime totals at all - not "0" (see VersionSummary).
         existing ?? {
           version,
           characterCount: 0,
-          totalMoneyCopper: 0,
           charactersWithKnownGold: 0,
-          totalPlayedSeconds: 0,
           charactersWithKnownPlaytime: 0,
-          lastUpdatedAt: undefined,
         }
       );
     });
@@ -76,7 +93,15 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   app.get("/api/versions/:version/recent-changes", (req, res) => {
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
-    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    // An invalid limit must be an error, not a silently empty or truncated list.
+    let limit: number | undefined;
+    if (req.query.limit !== undefined) {
+      const raw = req.query.limit;
+      limit = typeof raw === "string" ? Number(raw) : NaN; // limit[]=1 / limit[a]=1 are arrays/objects, not a number
+      if (typeof raw !== "string" || !/^\d+$/.test(raw) || limit < 1 || limit > 500) {
+        return res.status(400).json({ error: 'Invalid "limit" query parameter: expected an integer from 1 to 500.' });
+      }
+    }
     res.json({ changes: store.recentChanges(version, limit) });
   });
 
@@ -93,7 +118,9 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   // optional override (mainly for reproducible debugging/scripting) —
   // omitted, it defaults to the real wall clock.
   app.get("/api/account-context", (req, res) => {
-    const now = req.query.now !== undefined ? Number(req.query.now) : undefined;
+    const rawNow = req.query.now;
+    // An empty value ("?now=") would otherwise become 0 (the epoch), and an array/object is not a timestamp.
+    const now = rawNow !== undefined ? (typeof rawNow === "string" && rawNow.trim() !== "" ? Number(rawNow) : NaN) : undefined;
     if (now !== undefined && !Number.isFinite(now)) {
       return res.status(400).json({ error: `Invalid "now" query parameter: must be a Unix timestamp in seconds.` });
     }
@@ -130,7 +157,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
 
     let context: AccountContext;
     try {
-      const contextRes = await fetch(`http://127.0.0.1:${port}/api/account-context`);
+      const contextRes = await fetch(`${selfOrigin}/api/account-context`);
       if (!contextRes.ok) throw new Error(`account-context request returned HTTP ${contextRes.status}`);
       context = (await contextRes.json()) as AccountContext;
     } catch (err) {
@@ -163,7 +190,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
 
   app.get("/api/characters/:identityKey", (req, res) => {
     const character = store.getCharacter(req.params.identityKey);
-    if (!character) return res.status(404).json({ error: "Character not found" });
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
     res.json({ character });
   });
 
@@ -190,7 +217,12 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
       return res.status(400).json({ error: "Confirmation does not match the character being deleted. Nothing was deleted." });
     }
     const deleted = store.deleteCharacter(identityKey);
-    if (!deleted) return res.status(404).json({ error: "Character not found (it may already have been deleted)." });
+    // The code lets a client tell "this server says the character is gone" from any other 404 (wrong server, proxy, old build).
+    if (!deleted) {
+      return res
+        .status(404)
+        .json({ error: "Character not found (it may already have been deleted).", code: "CHARACTER_NOT_FOUND" });
+    }
     res.json({ deleted });
   });
 
@@ -238,13 +270,11 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     }
   });
 
-  // A request body that isn't valid JSON is a client error (400), reported as
-  // JSON like every other API error - not Express's default HTML error page.
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const type = (err as { type?: string } | null)?.type;
-    if (type === "entity.parse.failed") return res.status(400).json({ error: "Request body is not valid JSON." });
-    if (type === "entity.too.large") return res.status(413).json({ error: "Request body is too large." });
-    next(err);
+  // Unknown API paths are JSON 404s like every other API error - never
+  // Express's default HTML page (which the web client cannot tell from a
+  // real answer).
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "Not found.", code: "NOT_FOUND" });
   });
 
   if (webDistDir && existsSync(webDistDir)) {
@@ -253,6 +283,22 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
       res.sendFile(path.join(webDistDir, "index.html"));
     });
   }
+
+  // Final error handler: every failure is JSON, and never leaks a stack
+  // trace or filesystem path (Express's default page includes both).
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    const e = err as { type?: string; status?: number; statusCode?: number; message?: string } | null;
+    if (e?.type === "entity.parse.failed") return res.status(400).json({ error: "Request body is not valid JSON." });
+    if (e?.type === "entity.too.large") return res.status(413).json({ error: "Request body is too large." });
+    const status = e?.status ?? e?.statusCode;
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      // e.g. a malformed percent-encoded URL: the client's mistake, said briefly.
+      return res.status(status).json({ error: "Bad request." });
+    }
+    console.error("Unhandled server error:", e?.message ?? String(err));
+    res.status(500).json({ error: "Internal server error." });
+  });
 
   return app;
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { importExport } from "../api.ts";
 import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
+import { classifyImport, hasAnyChange } from "../importOutcome.ts";
 import type { ImportResult } from "../types.ts";
 import { VERSION_LABELS } from "../versions.ts";
 
@@ -25,7 +26,7 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
   }
 
   function handleFile(file: File) {
-    file.text().then(setText);
+    file.text().then(setText, () => setError("Could not read that file. Paste the export text instead."));
   }
 
   return (
@@ -81,10 +82,16 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
         {result && (
           <div className="import-result">
             <p>
-              Imported <strong>{result.character.name}</strong>
+              {classifyImport(result) === "duplicate" ? "Already imported" : "Imported"} <strong>{result.character.name}</strong>
               <br />
               <span className="muted">{VERSION_LABELS[result.character.version]}</span>
             </p>
+            {classifyImport(result) === "older" && (
+              <p className="muted">
+                This is an older observation than one already stored, so it was added to the history and the character's current state is
+                unchanged.
+              </p>
+            )}
             <div className="import-fact-block">
               <div className="import-fact-title">Snapshot</div>
               <ul className="import-fact-list">
@@ -93,12 +100,19 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
                 <li>/played {formatPlaytime(result.snapshot.parsed.character.playedSeconds)}</li>
               </ul>
             </div>
-            {result.isFirstSnapshot ? (
+            {classifyImport(result) === "duplicate" ? (
+              <p className="muted">
+                This exact export was already imported, so nothing was changed. Export again in-game to record new progress.
+              </p>
+            ) : classifyImport(result) === "first" ? (
               <p className="muted">This is the first snapshot for this character — no history to compare yet.</p>
             ) : (
               <div className="import-fact-block">
-                <div className="import-fact-title">Changes since previous snapshot</div>
+                <div className="import-fact-title">
+                  {classifyImport(result) === "older" ? "Changes from the previous (older) snapshot" : "Changes since previous snapshot"}
+                </div>
                 <ul className="import-fact-list">
+                  {!result.diff && <li className="muted">No earlier snapshot to compare against.</li>}
                   {result.diff?.level.delta ? <li>Level {result.diff.level.delta > 0 ? "+" : ""}{result.diff.level.delta}</li> : null}
                   {result.diff?.xp.delta ? <li>XP {result.diff.xp.delta > 0 ? "+" : ""}{result.diff.xp.delta}</li> : null}
                   {result.diff?.moneyCopper.delta ? <li>Gold {formatCopperDelta(result.diff.moneyCopper.delta)}</li> : null}
@@ -121,15 +135,7 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
                       Trainer unlocked: {result.diff.trainerUnlocks.map((u) => u.ability ?? "?").join(", ")}
                     </li>
                   )}
-                  {result.diff &&
-                    !result.diff.level.delta &&
-                    !result.diff.moneyCopper.delta &&
-                    !result.diff.location.changed &&
-                    result.diff.professions.length === 0 &&
-                    result.diff.bagsItems.length === 0 &&
-                    result.diff.bankItems.length === 0 &&
-                    result.diff.equipment.length === 0 &&
-                    result.diff.trainerUnlocks.length === 0 && <li className="muted">No changes detected.</li>}
+                  {result.diff && !hasAnyChange(result.diff) && <li className="muted">No changes detected.</li>}
                 </ul>
               </div>
             )}

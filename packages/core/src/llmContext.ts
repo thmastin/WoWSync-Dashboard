@@ -29,7 +29,9 @@ import type { Freshness } from "./freshness.ts";
 import { professionEntryIsEvidence } from "./professionCatalog.ts";
 import type { SectionState, WowVersion } from "./types.ts";
 
-export const LLM_CONTEXT_SCHEMA_VERSION = "llm-1";
+// "llm-2": goldSummary is now scope-shaped (per-realm for realm-partitioned
+// versions, with known/unknown/stale counts) instead of one version-wide sum.
+export const LLM_CONTEXT_SCHEMA_VERSION = "llm-2";
 
 /**
  * Whether a character has two or more observed snapshots to compare.
@@ -123,27 +125,46 @@ export interface LlmCharacter {
 }
 
 /**
- * A projection of the version's already-computed AccountFacts.gold total -
- * not a second calculation. `totalKnownCopper` is read directly from
- * `facts.gold.totalKnownCopper`; nothing here sums LlmCharacter.goldCopper
- * independently.
- *
- * Scope note: this mirrors exactly what the canonical field already means
- * for that version - it does not invent new aggregation semantics. For
- * Retail (`aggregationScope: "account-wide"`), that's a real account-wide
- * total. For Classic Era / TBC Anniversary (`aggregationScope: "realm"`),
- * the canonical `facts.gold.totalKnownCopper` is already a cross-realm sum
- * (AccountFacts computes this version-wide total unconditionally, as a
- * broader view, even though `realms[]` is the recommended figure for a
- * realm-partitioned version, since those realms share no real economy) -
- * this projection carries that same cross-realm sum forward unchanged, it
- * does not restrict it to a single realm or add a new realm-scoped total.
+ * The observed-gold facts for ONE scope, every field read directly from an
+ * already-computed AccountFacts `GoldFacts` (the version's for account-wide
+ * versions, one `RealmGroup.gold` per realm for realm-partitioned ones) -
+ * nothing here sums LlmCharacter.goldCopper independently.
  */
-export interface LlmGoldSummary {
-  /** Absent (not 0) when no character's gold was ever observed - a sum over zero known values is not a meaningful "0c" total. */
+export interface LlmGoldTotals {
+  /** Absent (not 0) when no character's gold in this scope was ever observed - a sum over zero known values is not a meaningful "0c" total. A real observed 0 copper is present as 0. */
   totalKnownCopper?: number;
+  /** Deterministically formatted; present exactly when totalKnownCopper is. */
   totalKnownFormatted?: string;
+  /** The total covers ONLY these characters (whose gold was observed). */
+  charactersWithKnownGold: number;
+  /** Characters whose gold was never observed - excluded from the total, never treated as 0. */
+  charactersWithUnknownGold: number;
+  /** Of the contributing characters, how many were last observed more than the fixed freshness window ago. Their gold is still in the total - it is a last-observed value, not a live balance. */
+  staleCharactersWithKnownGold: number;
+  /** Observation time (unix seconds) of the oldest contribution; absent when no gold is known. */
+  oldestKnownGoldObservedAt?: number;
 }
+
+export interface LlmRealmGold extends LlmGoldTotals {
+  /** Same string as LlmCharacter.realm. */
+  realm: string;
+}
+
+/**
+ * Gold summary for a version, shaped by that version's own scope - the model
+ * is never handed a total that mixes separate economies:
+ *
+ * - "account-wide" (Retail, and unknown-version): ONE total, because Retail
+ *   gold is genuinely account-wide.
+ * - "realm" (Classic Era, TBC Anniversary, Forever): NO version-wide total at
+ *   all - only `byRealm`, one entry per realm, because realms do not share an
+ *   economy. (A cross-realm sum used to be provided here, marked
+ *   authoritative, while the system prompt said never to combine realms;
+ *   removing the number is the only robust fix - a labelled-but-present
+ *   figure still gets copied.) A single-realm version still uses `byRealm`
+ *   with one entry, so the shape never changes when a second realm appears.
+ */
+export type LlmGoldSummary = ({ scope: "account-wide" } & LlmGoldTotals) | { scope: "realm"; byRealm: LlmRealmGold[] };
 
 export interface LlmVersionSummary {
   version: WowVersion;
@@ -229,14 +250,34 @@ function buildInventoryChange(
   return { gained, lost };
 }
 
-function buildGoldSummary(gold: AccountContext["versions"][WowVersion]["facts"]["gold"]): LlmGoldSummary {
-  // A sum over zero known contributors is not a meaningful total - never
-  // surface it as "0c", which would read as a confirmed observed zero.
-  if (gold.charactersWithKnownGold === 0) return {};
-  return {
-    totalKnownCopper: gold.totalKnownCopper,
-    totalKnownFormatted: formatCopper(gold.totalKnownCopper),
+type GoldFacts = AccountContext["versions"][WowVersion]["facts"]["gold"];
+
+function buildGoldTotals(gold: GoldFacts): LlmGoldTotals {
+  const totals: LlmGoldTotals = {
+    charactersWithKnownGold: gold.charactersWithKnownGold,
+    charactersWithUnknownGold: gold.charactersWithUnknownGold,
+    staleCharactersWithKnownGold: gold.staleCharactersWithKnownGold,
   };
+  // A sum over zero known contributors is not a meaningful total - never
+  // surface it as "0c", which would read as a confirmed observed zero. Only
+  // a known-count of 0 omits it: a character observed at exactly 0 copper is
+  // a real, known 0.
+  if (gold.charactersWithKnownGold > 0) {
+    totals.totalKnownCopper = gold.totalKnownCopper;
+    totals.totalKnownFormatted = formatCopper(gold.totalKnownCopper);
+  }
+  if (gold.oldestKnownGoldObservedAt !== undefined) totals.oldestKnownGoldObservedAt = gold.oldestKnownGoldObservedAt;
+  return totals;
+}
+
+function buildGoldSummary(versionContext: AccountContext["versions"][WowVersion]): LlmGoldSummary {
+  const { facts } = versionContext;
+  if (versionContext.aggregationScope === "realm") {
+    // Per realm, straight from each RealmGroup's already-computed gold. The
+    // version-wide `facts.gold` (a cross-realm sum) is deliberately NOT read.
+    return { scope: "realm", byRealm: facts.realms.map((r) => ({ realm: r.realm, ...buildGoldTotals(r.gold) })) };
+  }
+  return { scope: "account-wide", ...buildGoldTotals(facts.gold) };
 }
 
 function buildLatestTransitionIndex(allCharacters: LlmCharacter[]): LlmLatestTransitionIndex {
@@ -343,7 +384,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
     versions[version] = {
       version,
       aggregationScope: versionContext.aggregationScope,
-      goldSummary: buildGoldSummary(versionContext.facts.gold),
+      goldSummary: buildGoldSummary(versionContext),
       characters,
     };
     allCharacters.push(...characters);

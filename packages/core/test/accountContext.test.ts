@@ -7,7 +7,7 @@
 // in accountFacts.test.ts / realmFacts.test.ts already).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
@@ -37,7 +37,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
-    assert.equal(ctx.schemaVersion, "2");
+    assert.equal(ctx.schemaVersion, "3");
     assert.equal(ctx.generatedAt, FIXED_NOW);
     assert.equal(ctx.currency.unit, "copper");
     assert.match(ctx.currency.note, /never gold/);
@@ -344,6 +344,10 @@ test("[REAL] a character whose trainer was never visited has an empty trainer ar
 // --- 13. Freshness (from embedded AccountFacts) ---
 
 test("[SYNTHETIC] freshness classification in the export matches the existing freshness layer", () => {
+  // The exports below claim to have been generated 1h / 30d before FIXED_NOW, so they
+  // must be imported AT FIXED_NOW: a snapshot cannot have been observed after it was
+  // imported (see chronology.ts), and FIXED_NOW is later than the machine's real clock.
+  mock.timers.enable({ apis: ["Date"], now: FIXED_NOW * 1000 });
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(buildWowSyncExport({ generatedAt: FIXED_NOW - 3600, character: { name: "Fresh", realm: "R" } }));
@@ -353,6 +357,7 @@ test("[SYNTHETIC] freshness classification in the export matches the existing fr
     assert.equal(byName.get("Fresh"), "recent");
     assert.equal(byName.get("Old"), "stale");
   } finally {
+    mock.timers.reset();
     store.close();
   }
 });

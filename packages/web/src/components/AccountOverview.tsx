@@ -1,13 +1,17 @@
-import { formatCopper, formatCopperDelta, formatPlaytime, formatRelativeTime, formatXpPercent, freshnessLabel } from "../format.ts";
+import { formatCopperDelta, formatRelativeTime, formatXpPercent, freshnessLabel } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
+import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
 
 export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
   const facts = scoped;
   const characterCount = facts.characters.length;
+  // Ordered by when each character's state was OBSERVED (its export time), not when it happened to be imported.
   const recentlyUpdated = [...facts.characters]
-    .filter((c) => c.lastImportedAt !== undefined)
-    .sort((a, b) => (b.lastImportedAt ?? 0) - (a.lastImportedAt ?? 0))
+    .filter((c) => c.lastObservedAt !== undefined)
+    .sort((a, b) => (b.lastObservedAt ?? 0) - (a.lastObservedAt ?? 0))
     .slice(0, 5);
+  const goldTotal = describeGoldTotal(facts.gold, facts.now);
+  const playtimeTotal = describePlaytimeTotal(facts.playtime, characterCount, facts.now);
 
   const staleOrUnknown = facts.freshness.byCharacter.filter((c) => c.freshness !== "recent");
   const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
@@ -18,20 +22,8 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
       <div className="scope-label">{scoped.scopeLabel}</div>
       <div className="stat-row">
         <StatTile label="Characters" value={String(characterCount)} />
-        <StatTile
-          label="Total known gold"
-          value={facts.gold.charactersWithKnownGold > 0 ? formatCopper(facts.gold.totalKnownCopper) : "?"}
-          hint={facts.gold.charactersWithUnknownGold > 0 ? `${facts.gold.charactersWithUnknownGold} character(s) unobserved` : undefined}
-        />
-        <StatTile
-          label="Total known /played"
-          value={facts.playtime.charactersWithKnownPlaytime > 0 ? formatPlaytime(facts.playtime.totalKnownPlayedSeconds) : "?"}
-          hint={
-            facts.playtime.charactersWithKnownPlaytime < characterCount
-              ? `${characterCount - facts.playtime.charactersWithKnownPlaytime} character(s) unobserved`
-              : undefined
-          }
-        />
+        <StatTile label="Total known gold" value={goldTotal.value} hint={goldTotal.basis} emphasize={goldTotal.hasStale} />
+        <StatTile label="Total known /played" value={playtimeTotal.value} hint={playtimeTotal.basis} emphasize={playtimeTotal.hasStale} />
         <StatTile
           label="Data freshness"
           value={`${facts.freshness.recentCharacters} recent`}
@@ -50,7 +42,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
           <ul className="compact-list">
             {recentlyUpdated.map((c) => (
               <li key={c.identityKey} className="clickable" onClick={() => onOpenCharacter(c.identityKey)}>
-                <strong>{c.name}</strong> <span className="muted">Lv {c.level ?? "?"} · {formatRelativeTime(c.lastImportedAt)}</span>
+                <strong>{c.name}</strong> <span className="muted">Lv {c.level ?? "?"} · synced {formatRelativeTime(c.lastObservedAt)}</span>
               </li>
             ))}
           </ul>
@@ -70,7 +62,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
                   {c.professionChanged ? "profession · " : ""}
                   {c.inventoryChanged ? "inventory · " : ""}
                   {c.trainerUnlocked ? "trainer unlock · " : ""}
-                  {formatRelativeTime(c.importedAt)}
+                  {formatRelativeTime(c.observedAt ?? c.importedAt)}
                 </span>
               </li>
             ))}
@@ -155,12 +147,12 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
   );
 }
 
-function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function StatTile({ label, value, hint, emphasize }: { label: string; value: string; hint?: string; emphasize?: boolean }) {
   return (
     <div className="stat-tile">
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
-      {hint && <div className="stat-hint">{hint}</div>}
+      {hint && <div className={`stat-hint${emphasize ? " stat-hint-stale" : ""}`}>{hint}</div>}
     </div>
   );
 }

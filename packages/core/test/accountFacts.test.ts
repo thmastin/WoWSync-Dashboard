@@ -4,7 +4,7 @@
 // (unknown gold, unknown professions, unknown bank, insufficient history).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { searchInventory } from "../src/accountFacts.ts";
@@ -316,6 +316,9 @@ test("[SYNTHETIC] item search finds items by case-insensitive substring", () => 
 // --- 7. Freshness: recent, stale, unknown (integration) ---
 
 test("[SYNTHETIC] freshness is classified against the character's latest observation timestamp", () => {
+  // Imported AT FIXED_NOW: the exports claim to be 1h / 30d old at that moment, and a
+  // snapshot cannot have been observed after it was imported (see chronology.ts).
+  mock.timers.enable({ apis: ["Date"], now: FIXED_NOW * 1000 });
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(buildWowSyncExport({ generatedAt: FIXED_NOW - 3600, character: { name: "Recent", realm: "R" } }));
@@ -327,6 +330,7 @@ test("[SYNTHETIC] freshness is classified against the character's latest observa
     assert.equal(facts.freshness.recentCharacters, 1);
     assert.equal(facts.freshness.staleCharacters, 1);
   } finally {
+    mock.timers.reset();
     store.close();
   }
 });

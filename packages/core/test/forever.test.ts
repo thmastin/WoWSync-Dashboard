@@ -452,7 +452,7 @@ test("[REAL] AccountContext carries a forever version alongside the others, embe
     assert.equal(hallo.transitions[0].inventoryChanged, false);
     // Trainer view reuses the existing summarizer; Forever has observed no trainer categories.
     assert.deepEqual(hallo.trainer, []);
-    assert.equal(ctx.schemaVersion, "2");
+    assert.equal(ctx.schemaVersion, "3");
     assert.ok(ctx.currency.note.includes("Copper"));
   } finally {
     store.close();
@@ -475,9 +475,14 @@ test("[REAL] LlmContext (Ask My Account's payload) projects Forever with raw + f
     const fv = llm.versions["forever"];
     assert.equal(fv.version, "forever");
     assert.equal(fv.aggregationScope, "realm");
-    assert.equal(fv.goldSummary.totalKnownCopper, 291);
-    assert.equal(fv.goldSummary.totalKnownFormatted, formatCopper(291));
-    assert.equal(fv.goldSummary.totalKnownFormatted, "2s 91c");
+    // Forever is realm-partitioned: per-realm gold, never a version-wide total.
+    assert.equal(fv.goldSummary.scope, "realm");
+    if (fv.goldSummary.scope !== "realm") throw new Error("unreachable");
+    assert.deepEqual(fv.goldSummary.byRealm.map((r) => r.realm), ["Classic Beta PvP 2"]);
+    const [pvp] = fv.goldSummary.byRealm;
+    assert.equal(pvp.totalKnownCopper, 291);
+    assert.equal(pvp.totalKnownFormatted, formatCopper(291));
+    assert.equal(pvp.totalKnownFormatted, "2s 91c");
 
     const hallo = fv.characters[0];
     assert.equal(hallo.goldCopper, 291);
@@ -513,7 +518,11 @@ test("[SYNTHETIC] with no Forever data at all, AccountContext/LlmContext still c
     assert.deepEqual(ctx.versions["forever"].facts.realms, []);
     const llm = buildLlmContext(ctx);
     assert.deepEqual(llm.versions["forever"].characters, []);
-    assert.deepEqual(llm.versions["forever"].goldSummary, {}, "no known gold -> no total, never '0c'");
+    assert.deepEqual(
+      llm.versions["forever"].goldSummary,
+      { scope: "realm", byRealm: [] },
+      "no Forever realms -> no entries at all; never a '0c' total",
+    );
     // buildAccountContext (pure) stays independent of the store.
     assert.equal(typeof buildAccountContext, "function");
   } finally {

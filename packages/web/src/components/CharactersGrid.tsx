@@ -40,7 +40,7 @@ export default function CharactersGrid({
             <span>
               {c.snapshotCount} snapshot{c.snapshotCount === 1 ? "" : "s"}
             </span>
-            <span>{formatRelativeTime(c.lastImportedAt)}</span>
+            <span>synced {formatRelativeTime(c.lastObservedAt)}</span>
           </div>
         </div>
       ))}

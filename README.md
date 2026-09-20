@@ -77,6 +77,27 @@ Malformed input fails with a specific message (e.g. "missing `[END]`" or
 "missing required section: BANK") rather than silently importing partial
 garbage.
 
+## What the totals mean (unknown, zero, and stale)
+
+Gold and `/played` totals sum each character's **last observed** value; they
+are not live balances. Every total says what it is made of:
+
+- **Unknown is not zero.** A character whose gold was never observed
+  contributes nothing and is listed as "not observed (not counted)". If *no*
+  character's gold is known the headline is `?`, never `0c`. A character
+  observed at exactly 0 copper is a real, known 0.
+- **Stale contributions are stated, not hidden.** A total reports how many of
+  its contributors were last synced more than 3 days ago (the fixed freshness
+  window — deliberately not configurable) and how old the oldest one is. A
+  stale character's gold is still in the sum; the total just tells you so.
+- **Realms are separate economies** (Classic Era, TBC Anniversary, Forever).
+  The Overview and Economy views scope to one realm at a time. Ask My Account
+  is given gold **per realm** for those versions, with no version-wide total it
+  could mistake for a single balance; Retail, which shares gold account-wide,
+  keeps one total. The developer export (`GET /api/account-context`, schema
+  "3") still contains the cross-realm sums under `facts`, and says in-band
+  (`scopeNote`) that `facts.realms[]` is the per-realm view.
+
 ## Deleting a character (local data cleanup)
 
 Open a character and use **Delete character…** at the bottom of its page
@@ -176,7 +197,7 @@ so it doesn't overwhelm the page.
 
 ## Snapshot history
 
-Every import adds a new snapshot; nothing is overwritten. This is what
+Every new export adds a snapshot; nothing is overwritten. This is what
 lets the dashboard eventually answer things like "how long did it take to
 get from level 20 to 30?" using the addon's raw `PlayedSeconds` /
 `LevelPlayedSeconds` fields — the dashboard computes all derived metrics
@@ -184,6 +205,29 @@ get from level 20 to 30?" using the addon's raw `PlayedSeconds` /
 it never asks an LLM to do arithmetic. A snapshot history table on each
 character's detail page shows every captured snapshot with level, gold,
 `/played`, and zone at that point in time.
+
+**Which snapshot is "latest"?** The one whose game state existed most
+recently — the export's own `Generated` timestamp — not the one imported
+most recently (an export with no `Generated` value falls back to its import
+time; ties go to the later import). A state cannot have been observed after
+it was imported, so an export whose `Generated` value lies in the future (a
+wrong clock) is treated as observed when it was imported — otherwise one such
+export would outrank every real export after it. So importing an older export after a
+newer one adds it to the history without making it the current state, and
+the import summary says so instead of showing a reversed "change".
+"Recent changes", "last synced", and the current level/gold all follow the
+same rule.
+
+**Importing the same export twice is harmless.** An export that was already
+imported (same character, same `Generated` value, same text — line-ending
+and trailing-whitespace differences from copy/paste are ignored) is reported
+as "already imported" and changes nothing. Two *different* exports that
+happen to share a `Generated` second are both kept (an export with no
+`Generated` value, imported twice unchanged, also counts as a duplicate). Imports are atomic: a
+failure never leaves a half-imported character. Databases created before
+this rule keep working with no migration; a duplicate that was stored by an
+older version stays as it was (delete the character and re-import if it
+bothers you).
 
 ## Future automatic snapshot ingestion
 
@@ -326,6 +370,43 @@ and real imported character data.
   configure — see the data boundary above for the full list of what is
   and isn't sent.
 
+## Network exposure
+
+**The server listens on this machine only by default** (`127.0.0.1`).
+WoWSync has no authentication — it is a personal, local-first tool — so
+anything that can reach the port can read your character data, import or
+**delete** characters, and use Ask My Account (spending your
+`OPENAI_API_KEY`). Keeping the server on loopback is the security model.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORT` | `4173` | Port to listen on (integer 1–65535; anything else is an error, not a random port). |
+| `WOWSYNC_HOST` | `127.0.0.1` | Address to bind. Empty/unset means loopback. `localhost` is treated as `127.0.0.1`. |
+
+To reach the dashboard from another device (a phone, another PC, a
+container/port-forward setup), set `WOWSYNC_HOST=0.0.0.0` (all interfaces) or a
+specific address, e.g. in `.env` or the shell:
+
+```sh
+WOWSYNC_HOST=0.0.0.0 npm start      # PowerShell: $env:WOWSYNC_HOST="0.0.0.0"; npm start
+```
+
+**Doing that exposes the whole API to your local network with no
+protection.** Only do it on a network you trust; the server prints a warning
+at startup when the bind is not loopback. An invalid `WOWSYNC_HOST` makes the
+server refuse to start rather than guess a wider bind. (Only `WOWSYNC_HOST`
+is read — never the generic `HOST`/`HOSTNAME` variables.)
+
+**Upgrading from an older build:** stop any running WoWSync server first. Older
+builds listened on every network interface, and the new server refuses to start
+while another process answers on its port (rather than silently running beside
+it) — but until you stop the old one, it keeps serving your data to the network.
+
+On a loopback bind the server additionally rejects requests whose `Host` (or,
+for state-changing requests, `Origin`) is not `localhost`/`127.0.0.1`/`::1`,
+which blocks "DNS rebinding" attacks from web pages you visit. This is not
+authentication: any program running on your machine can still call the API.
+
 ## Development setup
 
 Requires Node.js 24+ (uses `node:sqlite` and native TypeScript execution —
@@ -340,7 +421,7 @@ npm test
 # run the API server (reads/writes data/wowsync.sqlite)
 npm run start        # or: node packages/server/src/index.ts
 
-# frontend dev server (proxies /api to the server above on :4173)
+# frontend dev server (proxies /api to the server above on 127.0.0.1:$PORT, default 4173)
 npm run dev:web
 
 # build the frontend once, then `npm start` serves it from the same port

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { fetchCharacter, fetchSnapshots } from "../api.ts";
+import { useAsync } from "../useAsync.ts";
+import ErrorNotice from "./ErrorNotice.tsx";
 import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCatalog.ts";
 import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } from "../format.ts";
-import type { StoredCharacterSummary, StoredSnapshot } from "../types.ts";
+
 import { VERSION_LABELS } from "../versions.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
@@ -13,33 +15,51 @@ function StatusBadge({ state }: { state: string }) {
 
 export default function CharacterDetail({
   identityKey,
+  refreshTick,
   onBack,
   onDeleted,
 }: {
   identityKey: string;
+  /** Changes after an import/delete elsewhere, so this page reloads instead of showing pre-import data. */
+  refreshTick: number;
   onBack: () => void;
   /** Called after this character was permanently deleted; the caller refreshes and leaves this (now empty) page. */
   onDeleted: () => void;
 }) {
-  const [character, setCharacter] = useState<StoredCharacterSummary | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [snapshots, setSnapshots] = useState<StoredSnapshot[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
+  // The character and its snapshots load TOGETHER, so the page never renders a
+  // header without its cards (which would read as an empty character), and a
+  // failure of either shows one error with Retry instead of a spinner forever.
+  const load = useAsync(
+    async (signal) => {
+      const [c, s] = await Promise.all([fetchCharacter(identityKey, signal), fetchSnapshots(identityKey, signal)]);
+      return { character: c.character, snapshots: s.snapshots };
+    },
+    identityKey,
+    refreshTick,
+  );
+  const character = load.state.data?.character ?? null;
+  const snapshots = load.state.data?.snapshots ?? [];
+
+  // Keep the chosen snapshot across a refresh if it still exists; otherwise the newest.
   useEffect(() => {
-    fetchCharacter(identityKey).then((r) => setCharacter(r.character));
-    fetchSnapshots(identityKey).then((r) => {
-      setSnapshots(r.snapshots);
-      setSelectedId(r.snapshots[0]?.id ?? null);
-    });
-  }, [identityKey]);
+    if (!load.state.data) return;
+    const list = load.state.data.snapshots;
+    setSelectedId((prev) => (list.some((s) => s.id === prev) ? prev : (list[0]?.id ?? null)));
+  }, [load.state.data]);
 
   const snapshot = snapshots.find((s) => s.id === selectedId) ?? snapshots[0];
 
-  if (!character) return <div className="loading">Loading…</div>;
+  if (!character) {
+    if (load.state.status === "error") return <ErrorNotice error={load.state.error} onRetry={load.retry} onBack={onBack} />;
+    return <div className="loading">Loading…</div>;
+  }
 
   return (
     <div className="character-detail">
+      {load.state.status === "error" && <ErrorNotice error={load.state.error} onRetry={load.retry} />}
       <button className="back-link" onClick={onBack}>
         ← Back to characters
       </button>
@@ -50,7 +70,7 @@ export default function CharacterDetail({
           {character.faction ? ` · ${character.faction}` : ""}
         </div>
         <div className="detail-subline muted small">
-          Last seen {formatRelativeTime(character.latestImportedAt)} · {character.snapshotCount} snapshot
+          Last synced {formatRelativeTime(character.latestGeneratedAt ?? character.latestImportedAt)} · {character.snapshotCount} snapshot
           {character.snapshotCount === 1 ? "" : "s"} recorded
         </div>
       </div>

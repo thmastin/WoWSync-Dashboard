@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
 import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
+import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } from "./chronology.ts";
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
@@ -103,14 +104,18 @@ export class SqliteSnapshotStore implements SnapshotStore {
           (character_id, generated_at, imported_at, level, money_copper, played_seconds, level_played_seconds, raw_text, parsed_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
+      // "Latest"/"previous" follow OBSERVATION time (see chronology.ts), never import time.
       latestSnapshotForCharacter: this.db.prepare(
-        "SELECT * FROM snapshots WHERE character_id = ? ORDER BY imported_at DESC, id DESC LIMIT 1",
+        `SELECT * FROM snapshots WHERE character_id = ? ORDER BY ${SNAPSHOTS_NEWEST_FIRST_SQL} LIMIT 1`,
+      ),
+      snapshotsWithSameGeneratedAt: this.db.prepare(
+        "SELECT * FROM snapshots WHERE character_id = ? AND generated_at IS ? ORDER BY id",
       ),
       snapshotCountForCharacter: this.db.prepare("SELECT COUNT(*) as n FROM snapshots WHERE character_id = ?"),
       charactersByVersion: this.db.prepare("SELECT * FROM characters WHERE version = ? ORDER BY name"),
       allCharacters: this.db.prepare("SELECT * FROM characters ORDER BY version, name"),
       snapshotsForCharacter: this.db.prepare(
-        "SELECT * FROM snapshots WHERE character_id = ? ORDER BY imported_at DESC, id DESC",
+        `SELECT * FROM snapshots WHERE character_id = ? ORDER BY ${SNAPSHOTS_NEWEST_FIRST_SQL}`,
       ),
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
       deleteSnapshotsForCharacter: this.db.prepare("DELETE FROM snapshots WHERE character_id = ?"),
@@ -118,59 +123,118 @@ export class SqliteSnapshotStore implements SnapshotStore {
     };
   }
 
+  /**
+   * Runs `fn` in one transaction (all or nothing). Re-entrant: inside an
+   * already-open transaction it just runs `fn`, since SQLite does not nest
+   * BEGINs.
+   */
+  private inTransaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // A ROLLBACK that itself fails must not replace the error that caused it.
+      }
+      throw err;
+    }
+  }
+
   importSnapshot(raw: string): ImportResult {
+    // Parse first: a malformed export throws before anything is written.
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
     const identity = characterIdentity(version, parsed.character);
-
-    let characterRow = one<CharacterRow>(this.stmts.findCharacterByKey, identity.key);
     const now = Math.floor(Date.now() / 1000);
-    if (!characterRow) {
-      const result = this.stmts.insertCharacter.run(
-        version,
-        identity.realm,
-        identity.name,
-        identity.key,
-        parsed.character.class ?? null,
-        parsed.character.faction ?? null,
-        now,
-      );
-      characterRow = one<CharacterRow>(this.stmts.findCharacterByKey, identity.key)!;
-      void result;
-    } else if (parsed.character.class || parsed.character.faction) {
-      this.stmts.updateCharacterAttrs.run(
-        parsed.character.class ?? characterRow.class,
-        parsed.character.faction ?? characterRow.faction,
+
+    return this.inTransaction((): ImportResult => {
+      let characterRow = one<CharacterRow>(this.stmts.findCharacterByKey, identity.key);
+      const isNewCharacter = !characterRow;
+
+      if (characterRow) {
+        // Idempotency: the same export (same character, same Generated value,
+        // same text modulo copy/paste whitespace) is never stored twice. Only
+        // content equality counts - two DIFFERENT exports can legitimately
+        // share a Generated timestamp (one-second resolution) and both are
+        // real observations. A duplicate changes nothing at all.
+        const wanted = normalizeExportText(raw);
+        const existing = many<SnapshotRow>(this.stmts.snapshotsWithSameGeneratedAt, characterRow.id, parsed.generatedAt ?? null).find(
+          (row) => normalizeExportText(row.raw_text) === wanted,
+        );
+        if (existing) {
+          const newest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterRow.id);
+          return {
+            character: this.summarize(characterRow.id)!,
+            snapshot: toStoredSnapshot(existing),
+            previousSnapshot: undefined,
+            diff: undefined,
+            isFirstSnapshot: false,
+            isDuplicate: true,
+            isLatest: newest?.id === existing.id,
+          };
+        }
+      } else {
+        this.stmts.insertCharacter.run(
+          version,
+          identity.realm,
+          identity.name,
+          identity.key,
+          parsed.character.class ?? null,
+          parsed.character.faction ?? null,
+          now,
+        );
+        characterRow = one<CharacterRow>(this.stmts.findCharacterByKey, identity.key)!;
+      }
+
+      const insertResult = this.stmts.insertSnapshot.run(
         characterRow.id,
+        parsed.generatedAt ?? null,
+        now,
+        parsed.character.level ?? null,
+        parsed.character.moneyCopper ?? null,
+        parsed.character.playedSeconds ?? null,
+        parsed.character.levelPlayedSeconds ?? null,
+        raw,
+        JSON.stringify(parsed),
       );
-    }
+      const newId = Number(insertResult.lastInsertRowid);
 
-    const previousRow = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterRow.id);
-    const previousSnapshot = previousRow ? toStoredSnapshot(previousRow) : undefined;
+      // Where did the new snapshot land in chronological (observation) order?
+      // Newest first: [0] is current state; the NEXT element is its predecessor.
+      const rows = many<SnapshotRow>(this.stmts.snapshotsForCharacter, characterRow.id);
+      const index = rows.findIndex((row) => row.id === newId);
+      const isLatest = index === 0;
+      const predecessorRow = rows[index + 1];
+      const snapshot = toStoredSnapshot(rows[index]);
+      const previousSnapshot = predecessorRow ? toStoredSnapshot(predecessorRow) : undefined;
+      const diff = previousSnapshot ? diffSnapshots(previousSnapshot.parsed, parsed) : undefined;
 
-    const insertResult = this.stmts.insertSnapshot.run(
-      characterRow.id,
-      parsed.generatedAt ?? null,
-      now,
-      parsed.character.level ?? null,
-      parsed.character.moneyCopper ?? null,
-      parsed.character.playedSeconds ?? null,
-      parsed.character.levelPlayedSeconds ?? null,
-      raw,
-      JSON.stringify(parsed),
-    );
-    const snapshotRow = one<SnapshotRow>(this.stmts.snapshotById, insertResult.lastInsertRowid)!;
-    const snapshot = toStoredSnapshot(snapshotRow);
+      // Class/faction describe the character's CURRENT state, so only the
+      // newest observation may change them - an older export imported later
+      // must not overwrite what a newer one said.
+      if (!isNewCharacter && isLatest && (parsed.character.class || parsed.character.faction)) {
+        this.stmts.updateCharacterAttrs.run(
+          parsed.character.class ?? characterRow.class,
+          parsed.character.faction ?? characterRow.faction,
+          characterRow.id,
+        );
+      }
 
-    const diff = previousSnapshot ? diffSnapshots(previousSnapshot.parsed, parsed) : undefined;
-
-    return {
-      character: this.summarize(characterRow.id)!,
-      snapshot,
-      previousSnapshot,
-      diff,
-      isFirstSnapshot: !previousSnapshot,
-    };
+      return {
+        character: this.summarize(characterRow.id)!,
+        snapshot,
+        previousSnapshot,
+        diff,
+        isFirstSnapshot: rows.length === 1,
+        isDuplicate: false,
+        isLatest,
+      };
+    });
   }
 
   deleteCharacter(identityKey: string): DeleteCharacterResult | undefined {
@@ -182,11 +246,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
     // rolls everything back rather than leaving orphaned snapshots (which
     // would no longer be reachable through any character) or a character
     // with a partial history.
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.inTransaction(() => {
       const snapshotsDeleted = Number(this.stmts.deleteSnapshotsForCharacter.run(row.id).changes);
       this.stmts.deleteCharacterById.run(row.id);
-      this.db.exec("COMMIT");
       return {
         identityKey: row.identity_key,
         version: row.version as VersionOrUnknown,
@@ -194,10 +256,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         name: row.name,
         snapshotsDeleted,
       };
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    });
   }
 
   private summarize(characterId: number): StoredCharacterSummary | undefined {
@@ -247,16 +306,18 @@ export class SqliteSnapshotStore implements SnapshotStore {
           totalPlayedSeconds += latest.played_seconds;
           charactersWithKnownPlaytime++;
         }
-        if (latest && (lastUpdatedAt === undefined || latest.imported_at > lastUpdatedAt)) {
-          lastUpdatedAt = latest.imported_at;
+        if (latest) {
+          const observedAt = snapshotObservedAt(latest.generated_at, latest.imported_at);
+          if (lastUpdatedAt === undefined || observedAt > lastUpdatedAt) lastUpdatedAt = observedAt;
         }
       }
       summaries.push({
         version: version as VersionOrUnknown,
         characterCount: chars.length,
-        totalMoneyCopper,
+        // A sum over zero observed values is "unknown", not 0 (see VersionSummary).
+        totalMoneyCopper: charactersWithKnownGold > 0 ? totalMoneyCopper : undefined,
         charactersWithKnownGold,
-        totalPlayedSeconds,
+        totalPlayedSeconds: charactersWithKnownPlaytime > 0 ? totalPlayedSeconds : undefined,
         charactersWithKnownPlaytime,
         lastUpdatedAt,
       });
@@ -303,6 +364,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         version: character.version as VersionOrUnknown,
         snapshotId: latest.id,
         importedAt: latest.imported_at,
+        observedAt: snapshotObservedAt(latest.generated_at, latest.imported_at),
         diff,
       });
     }
@@ -322,7 +384,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
         diff.trainerUnlocks.length > 0
       );
     });
-    changes.sort((a, b) => b.importedAt - a.importedAt);
+    // Newest OBSERVATION first (an old export imported late must not rank as "just now").
+    changes.sort((a, b) => b.observedAt - a.observedAt || a.identityKey.localeCompare(b.identityKey));
     return changes.slice(0, limit);
   }
 

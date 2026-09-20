@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
+import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
 import type { InventoryAggregateEntry } from "../types.ts";
 
 export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
   const facts = scoped;
+  const goldTotal = describeGoldTotal(facts.gold, facts.now);
+  const playtimeTotal = describePlaytimeTotal(facts.playtime, facts.characters.length, facts.now);
   const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
   const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
 
@@ -15,10 +18,8 @@ export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: Sc
       <section className="panel">
         <h3>Gold</h3>
         <div className="muted small" style={{ marginBottom: 8 }}>
-          Total known gold: <strong>{formatCopper(facts.gold.totalKnownCopper)}</strong>
-          {facts.gold.charactersWithUnknownGold > 0 && (
-            <> — {facts.gold.charactersWithUnknownGold} character(s) not observed; not counted as zero.</>
-          )}
+          Total known gold: <strong>{goldTotal.value}</strong> — {goldTotal.basis}
+          {goldTotal.known && <>. A sum of each character's last observed gold, not a live balance.</>}
         </div>
         <div className="table-scroll">
           <table className="history-table">
@@ -51,7 +52,7 @@ export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: Sc
       <section className="panel">
         <h3>Playtime</h3>
         <div className="muted small" style={{ marginBottom: 8 }}>
-          Total known /played: <strong>{formatPlaytime(facts.playtime.totalKnownPlayedSeconds)}</strong>
+          Total known /played: <strong>{playtimeTotal.value}</strong> — {playtimeTotal.basis}
         </div>
         <div className="table-scroll">
           <table className="history-table">
