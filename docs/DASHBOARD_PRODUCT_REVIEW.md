@@ -7,11 +7,18 @@ Date: 2026-09-19. Basis: `main` at `797fc3d` (Forever support + character deleti
 > basis above and has deliberately not been edited since. Some of them have since
 > been implemented (for example the trust-hardening wave: unknown-is-not-zero,
 > freshness-aware totals, observation-time ordering, idempotent imports, per-realm
-> LLM gold, classified API errors, localhost binding) and Warband/Guild Bank
-> parsing has been added. Read its "current" statements as describing the
-> repository at that basis, not today's. In particular the review's remarks that the Warband bank is not shown or is
-> excluded describe that basis: shared storage (Warband and Guild Banks) now has its own account-level Shared Storage
-> view (see docs/ROADMAP.md, shared-storage checkpoint C5); it is still not part of any total, search or AI context.
+> LLM gold, classified API errors, localhost binding). Read its "current" statements
+> as describing the repository at that basis, not today's; the roadmap
+> (docs/ROADMAP.md) is the current TODO.
+>
+> **Shared Storage status (Warband and Guild Banks), as of the shared-storage milestone close.**
+> The review treated the Warband bank as unexported and excluded from every total. The addon now exports it and the
+> Dashboard has an **owner-level Shared Storage view** (docs/ARCHITECTURE.md, "Shared storage"), which resolves
+> that gap: one card per owner (never per character), the observation time and
+> freshness, completeness, the exports that carried it, unknown-is-not-empty, and explicit clearing. It is
+> **not yet implemented**: shared storage in account totals, in global item search, in recent changes, in AccountContext
+> or Ask My Account; richer item metadata; per-tab Guild Bank item attribution (the export does not carry it); and hash
+> routing (the Shared Storage view is a tab, not an addressable route).
 
 **Evidence legend.** `[REPO]` = read in the source or the local API by the review team
 and, for the items in "Verified by the lead" below, re-checked by the lead.

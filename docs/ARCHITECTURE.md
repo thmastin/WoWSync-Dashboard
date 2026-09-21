@@ -416,149 +416,144 @@ Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
 thing today's real data can't: proving two *different* Classic/TBC realms
 stay isolated, since only one has been captured so far.
 
-## Shared storage (Warband + Guild Bank): reconciled journal
+## Shared storage (Warband + Guild Bank)
 
-Retail's addon exports three storage scopes: the character's own `[BANK]`, the account's
-`[ACCOUNT BANK]` (Warband, `Scope: ACCOUNT_WARBAND`), and the guild's `[GUILD BANK]`
-(`Scope: GUILD`, identified by `GuildClubID`). Current Retail exports **always** contain
-the latter two, as `State: UNKNOWN` when never observed - so the parser must accept both
-(before Guild Bank support, an unknown `[GUILD BANK]` section made every Retail export fail
-to import). `parseGuildBank` keeps the trust states verbatim: UNKNOWN (no tabs, no items,
-not "known empty"), OBSERVED (complete or partial), LAST_SEEN (a prior complete observation,
-original `observed=` time kept), per-tab OBSERVED / UNKNOWN / INACCESSIBLE (an inaccessible
-tab is never an empty tab), and the club ID as **text** (identifiers can exceed 2^53).
+Retail's addon exports three storage scopes: the character's own `[BANK]`, the account's `[ACCOUNT BANK]`
+(Warband, `Scope: ACCOUNT_WARBAND`) and the guild's `[GUILD BANK]` (`Scope: GUILD`, `GuildClubID`). Current Retail
+exports **always** contain the latter two (as `State: UNKNOWN` when never observed), so the parser accepts both.
+It keeps the trust states verbatim: UNKNOWN (no tabs, no items, not "known empty"), OBSERVED (complete or partial),
+LAST_SEEN (a prior observation, original `observed=` time kept), per-tab OBSERVED / UNKNOWN / INACCESSIBLE, and the
+club id as **text**. The sections stay in the exporting character's snapshot exactly as delivered; the design below
+is what the Dashboard builds from them.
 
-**Ownership is not transport.** The character whose export delivers a shared section is only
-its *carrier*. The owner is the Warband or one guild:
+### Ownership
+
+The character whose export delivers a shared section is only its **carrier** (provenance), never its owner.
 
 | Storage | Owner | Key |
 | --- | --- | --- |
 | Character Bank | the character (unchanged; stays in its snapshot, outside this model) | `identity_key` |
 | Warband | the **installation-local** Retail account scope | `retail::warband::local` |
-| Guild Bank | one guild | `retail::guild::<GuildClubID text>` |
+| Guild Bank | one guild, by its **opaque** `GuildClubID` text | `retail::guild::<GuildClubID>` |
 
-`local` is *not* a Battle.net account id. The export carries no verified account identifier, so
-two accounts imported into one Dashboard cannot be told apart and would be reconciled as one
-(a known limitation; the owner type has a reserved extension point for a real discriminator, which
-has to come from the addon). The guild id is opaque text: never parsed as a number, never
-case-folded.
+`installation-local` is this Dashboard's single, undifferentiated Retail account scope. It is **not** a Battle.net
+account id: the export carries no verified account identifier, so two accounts imported into one Dashboard cannot be
+told apart (a known limit; the owner type has an extension point for a real discriminator, which must come from the
+addon). The guild id is never parsed as a number (it can exceed 2^53), never case-folded, and never inferred from the
+guild name, which is display data only.
 
-**Immutable journal + read-time projection.** `packages/core/src/sharedStorage.ts` is the pure
-domain model; `sqliteStore.ts` only persists it (tables `shared_observations` and
-`shared_observation_sources`, plus `store_meta`). An *observation* is one fact - "this owner's
-storage looked like this at time T" - with identity `(owner, claimed observed time, content hash)`.
-The carrier state (OBSERVED / LAST_SEEN), the carrying export, `SnapshotVisit` and other transport
-noise are deliberately **not** part of the identity, so a LAST_SEEN replay of one record (which is
-how most observations first arrive: the bank is closed by the time `/wowsync` runs) is the same
-observation with another *source*, never a new observation. UNKNOWN, unattributable (a guild without
-a `GuildClubID`) and unanchored (no `observed=`) sections are never journaled, so they cannot erase
-anything. Nothing about the *current* state is stored: `projectJournal` selects it on read (newest
-informative complete observation; a newer partial or informationless capture never displaces it; a
-newer narrower guild observation leaves the earlier broader one exposed as `broaderCoverageEarlier`;
-same-second different content is reported as a conflict; effective time is clamped by the carrying
-export's time). The projection is DERIVED - it selects one observation and never splices several,
-so it can never claim a composite as OBSERVED. `ImportResult.sharedStorage` reports per section
-what an import did (`recorded`, `source-added`, `already-known`, `skipped` + reason, `becameCurrent`).
+### Evidence: an immutable journal
 
-**Persistence rules.**
+`packages/core/src/sharedStorage.ts` is the pure domain model; `sqliteStore.ts` only persists it. An **observation**
+is one fact: "this owner's storage looked like this at time T", identified by `(owner, claimed observed time, canonical
+content hash)`. The carrier state (OBSERVED / LAST_SEEN), the carrying export, `SnapshotVisit` and other transport noise
+are deliberately **not** part of that identity, so a LAST_SEEN replay of one record (how most observations first
+arrive, because the bank is closed by the time `/wowsync` runs) is the same observation with another **source**, never a
+new observation, and a carrier's export time never replaces the observation time. Each observation stores its
+content-hash **version** (a changed canonicalization needs a version bump and an explicit re-hash migration).
+UNKNOWN, unattributable (a guild without a `GuildClubID`) and unanchored (no `observed=`) sections are never journaled,
+so they can never erase anything. Sources (`shared_observation_sources`) keep provenance: the carrying export, carrier
+state, visit metadata, and a denormalized character label.
+
+### Selection: a read-time DERIVED projection
+
+Nothing about the *current* state is stored; `projectJournal` selects it on read, deterministically and independent of
+import order:
+- `current` is the newest **informative complete** observation (else the newest informative partial).
+- A **newer partial** never displaces a complete one; it is exposed as `latestPartial`.
+- An **informationless** capture (nothing scanned, e.g. every guild tab inaccessible) is recorded but can never be
+  current; an owner with only such captures has no `current` (contents unknown, not empty).
+- A newer **narrower** guild observation stays current; an earlier **broader** one is exposed as
+  `broaderCoverageEarlier`. Observations are never spliced, so no synthetic composite is ever produced or called OBSERVED.
+- Same-time observations with different content are a reported **conflict**; the tie-break is by content, not arrival.
+- Effective time is `min(claimed, every carrying export's own time)`, so a section cannot be observed after the export
+  that carries it.
+
+"Derived" therefore means "the Dashboard chose which real observation is current"; it never means guessed contents.
+
+### Persistence
+
+- Additive tables only (`shared_observations`, `shared_observation_sources`, `shared_owner_clears`, `store_meta`),
+  created with `IF NOT EXISTS`; no migration framework. The journal references neither `characters` nor `snapshots`.
 - Import admits shared sections **in the same transaction** as the snapshot: both are stored or neither.
-- The journal tables reference neither `characters` nor `snapshots`. A source keeps a historical
-  `snapshot_id` (AUTOINCREMENT ids are never reused, so it cannot come to mean another snapshot) and a
-  denormalized character label, so **deleting a character (or, later, a snapshot) never deletes a shared
-  observation or its provenance**. Shared history is removed only by an explicit, owner-scoped operation
-  (next section).
-- Each observation stores the content-hash **version** (`SHARED_CONTENT_HASH_VERSION`). A changed
-  canonicalization needs a version bump and an explicit re-hash migration; observations under another
-  version still load (only their hash cannot be re-verified).
-- Schema evolution is additive `CREATE TABLE IF NOT EXISTS` (no migration framework). Existing databases are
-  backfilled once by an idempotent pass (`backfillSharedStorage`, guarded by a `store_meta` marker) that runs
-  the *same* admission code over stored snapshots; it never edits snapshots, never relabels LAST_SEEN as
-  OBSERVED, never advances an observation time, and never removes journal rows (the journal can be the only copy
-  after a character deletion, so it is never rebuilt from snapshots). It also honors explicit owner deletion
-  (see the cutoff below).
-- `SnapshotStore.loadSharedJournal()` / `projectSharedStorage()` are the read seam for later work.
+- An existing database is backfilled **once** by an idempotent pass (`backfillSharedStorage`, guarded by a `store_meta`
+  marker) that runs the same admission code over stored snapshots. It never edits snapshots, never relabels LAST_SEEN
+  as OBSERVED, never advances an observation time, and never removes journal rows.
+- **Deleting a character never deletes a shared observation or its provenance** (the journal can be the only copy).
 
-**Deleting shared storage.** Two operations, deliberately different:
+### Deletion
 
 | Operation | Shared observations | Provenance | Snapshots / characters |
 | --- | --- | --- | --- |
-| Delete a **character** (`deleteCharacter`) | **kept** | **kept**, including that character's label | that character's are deleted |
-| Delete an **owner** (`deleteSharedStorageOwner(owner)`) | that owner's all deleted | that owner's all deleted | **never touched** |
+| Delete a **character** | **kept** | **kept** (including that character's label) | that character's are deleted |
+| Delete an **owner** (explicit) | that owner's all deleted | that owner's all deleted | **never touched** |
 
-`deleteSharedStorageOwner` takes the typed owner (the Warband's installation-local scope, or one guild by its
-opaque `GuildClubID`), runs in one transaction (all of the owner's observations and provenance, or nothing),
-matches the owner key as data, rejects a malformed owner (an empty or whitespace-padded club id) before touching
-anything, and returns `{ownerKey, existed, observationsDeleted, sourcesDeleted}`; an owner with no history is a
-no-op. It never parses journal content, so it also clears an owner whose rows are corrupt (reads of a corrupt
-journal still fail loudly with `SharedStorageIntegrityError`). Nothing else implies it: not deleting a character
-or snapshot, a character changing guild, or a newer UNKNOWN / partial / inaccessible section. It is exposed over HTTP
-(next section); there is no UI for it yet.
+Owner deletion (`deleteSharedStorageOwner(owner)`) takes the typed owner, is one transaction, matches the key as data,
+rejects a malformed owner, and never parses journal content. Nothing else implies it: not a character or snapshot
+deletion, a character changing guild, or a newer UNKNOWN / partial / inaccessible section. It is **not a tombstone**:
+a later export carrying a valid observation admits it normally and recreates the owner (the addon keeps replaying what
+it last saw, so cleared history can reappear with the next export; an already-stored export is a duplicate and restores
+nothing). What must not happen is **automatic resurrection from snapshots that were already stored**, because the
+backfill re-scans every snapshot each time it runs. Each deletion therefore records, per owner, a cutoff in
+`shared_owner_clears`: the highest snapshot id ever allocated (`sqlite_sequence` survives deleted snapshots; ids are
+never reused). Backfill skips that owner's admissions from snapshots at or below it; import never consults it.
 
-*New evidence vs. stored history.* An owner deletion is **not a tombstone**. An export imported afterwards that
-carries a valid observation for the owner admits it normally and the journal starts again from that evidence
-(a LAST_SEEN replay the addon still holds counts: the addon keeps replaying its record in every export, so
-deleted history reappears with the next export that carries it). What must not happen is the *automatic*
-resurrection of history from snapshots that were **already stored**: `backfillSharedStorage` re-scans every
-snapshot each time it runs and is documented as safe to re-run, so a plain row delete would be undone by it (a test
-proves this). Each deletion therefore records, in `shared_owner_clears`, one row per owner: the highest snapshot
-id ever allocated at that moment (`sqlite_sequence`, which survives deleted snapshots; ids are never reused).
-Backfill skips, for that owner only, snapshots with an id at or below the cutoff; the import path never consults
-it. So "stored before the deletion" stays deleted and "imported after" is ordinary evidence. Importing the exact
-text of an already-stored export is a duplicate and is not new evidence.
+### Integrity
 
-**HTTP API** (`packages/server/src/sharedStorageRoutes.ts`; the response types and the pure serializer are in
-`packages/core/src/sharedStorageApi.ts`, mirrored in `packages/web/src/types.ts` with client functions in `api.ts`).
-The server reconciles nothing and queries no tables: it serializes `store.projectSharedStorage()` and calls the typed
-`store.deleteSharedStorageOwner(owner)`.
-- `GET /api/shared-storage` returns `{schema: "shared-storage-1", asOf, warband, guilds[]}`. Empty is a normal
-  answer (`warband: null`, `guilds: []`, never a 404). Each owner has an `owner` identity (Warband:
-  `accountScope: "installation-local"`, which is **not** a Battle.net account id; guild: the exact opaque
-  `guildClubId` string, plus a `guildName` that is display data only), `basis: "DERIVED"`, and
-  `current` / `latestPartial` / `broaderCoverageEarlier` / `conflict` (each `null` when absent) and
-  `observationCount`. An observation view is ONE real observation: claimed and effective time, `ageSeconds` and
-  `freshness` by the Dashboard's single freshness rule, completeness, `informative`, `liveAtExport`,
-  `carrierStates`, `coverage` (observed / inaccessible / unconfirmed tabs), the `content` (an UNKNOWN scalar is an
-  omitted key, never 0), and bounded `provenance`: exact `totalSources` and `totalCharacters`, the newest 10
-  `sources` (character label, realm, carrier state, export time, visit) and `truncated`. No database ids appear;
-  `?now=` pins ages like `/api/account-context`.
-- A damaged journal is never skipped: `GET` answers **500** with `code: "SHARED_STORAGE_INTEGRITY"` and
-  `damagedOwners` (owner key, kind, guild id), with no stack or SQL. An import that touches a damaged owner is
-  refused with the same code (the whole import is rolled back); an import with nothing to reconcile still works.
-- `DELETE /api/shared-storage/warband` and `DELETE /api/shared-storage/guilds/:guildClubId` **clear stored
-  shared-storage history; a later WoWSync export may add it again** (the addon keeps carrying what it last saw, and
-  a genuinely new export is new evidence; an already-stored export is a duplicate and restores nothing). Modeled on the
-  character delete: a JSON body `{"confirmOwnerKey": "<the owner's key from GET>"}` must match the owner the URL
-  names (a non-JSON body never confirms; a display guild name is ignored) - **400** `CONFIRMATION_REQUIRED` /
-  `CONFIRMATION_MISMATCH` / `INVALID_GUILD_CLUB_ID`; **404** `SHARED_OWNER_NOT_FOUND` when the owner has no stored
-  history (nothing deleted); **200** `{deleted: {owner, existed: true, observationsDeleted, sourcesDeleted}}`. The
-  guild id is taken exactly as decoded from the URL (never `Number`/`BigInt`); empty, whitespace-padded,
-  control-character and over-long ids are rejected rather than changed. Owners are built server-side from the fixed
-  route; a client never supplies an owner key as identity.
-- Security is the existing baseline, unchanged: the app-wide Host guard (Host on every request, Origin on
-  state-changing ones), no CORS headers, default loopback bind. Tests cover the new routes under each.
+Corrupt journal rows **fail loudly** (`SharedStorageIntegrityError`, naming every damaged owner); they are never
+skipped or partially shown. An import that touches a damaged owner is refused and rolled back; an import with nothing
+to reconcile still works. Because deletion never parses content, a damaged owner can still be explicitly cleared.
 
-**Presentation** (`packages/web/src/sharedStorage.ts` holds every wording and trust decision as pure, unit-tested
-functions; the components only render them). Shared storage is shown on the account level: a **Shared Storage** tab on
-the Retail view, one card per owner, never inside a character. A card says what the owner's reconciled state is (the
-"Derived" tag means the Dashboard chose the current observation; the observation itself is real evidence), when it was
-observed and its freshness (the age of the observation, independent of how it was carried: "recent" and "last seen"
-are not contradictory), how complete it was, and which exports carried it ("one observation, carried by N exports").
-Unknown stays unknown: no readable observation, an inaccessible tab or an unconfirmed tab is "contents unknown", never
-empty. A newer partial, an earlier broader observation and a same-time conflict are each surfaced and openable as
-separately labelled observations, never merged. The character page keeps showing what each export carried, retitled
-"... carried by this export" and linking to the owner view: the snapshot is historical evidence, the owner card is the
-reconciled state. Clearing an owner's history is an explicit dialog (typed "Warband" or the exact GuildClubID) carrying the
-reappearance sentence, and a damaged journal has its own screen with a recovery action per damaged owner.
+### HTTP API
 
-**Still not consumed.** Shared storage is deliberately **not** in AccountFacts inventory/totals, item
-search, snapshot diffs, AccountContext or the LLM context (tests pin this, including byte-identical facts and
-LLM context with and without shared sections). The character page still shows each export's own copy as a
-transitional card. Later work must count each owner exactly once (one projection per owner key, regardless of
-how many characters carried it) and label shared totals as asynchronous observations.
+(`packages/server/src/sharedStorageRoutes.ts`; response types and the pure serializer in `packages/core/src/sharedStorageApi.ts`,
+mirrored in `packages/web/src/types.ts` with client functions in `api.ts`.) The server reconciles nothing and queries no
+tables: it serializes `store.projectSharedStorage()` and calls the typed `deleteSharedStorageOwner`.
+- `GET /api/shared-storage` -> `{schema: "shared-storage-1", asOf, warband, guilds[]}`; empty is a normal answer
+  (`warband: null`, `guilds: []`). Each owner has `owner` (Warband: `accountScope: "installation-local"`; guild: the exact
+  `guildClubId` string plus a display-only `guildName`), `basis: "DERIVED"`, `current` / `latestPartial` /
+  `broaderCoverageEarlier` / `conflict` (each `null` when absent) and `observationCount`. An observation view is ONE real
+  observation: claimed and effective time, `ageSeconds` and `freshness` by the single freshness rule, completeness,
+  `informative`, `liveAtExport`, `carrierStates`, `coverage`, `content` (an UNKNOWN scalar is an omitted key, never 0)
+  and bounded `provenance` (exact totals, the newest 10 sources, `truncated`). No database ids.
+- A damaged journal answers **500** `SHARED_STORAGE_INTEGRITY` with `damagedOwners`; no stack or SQL.
+- `DELETE /api/shared-storage/warband` and `DELETE /api/shared-storage/guilds/:guildClubId` **clear stored history; a later
+  export may add it again**. A JSON body `{"confirmOwnerKey": "<key from GET>"}` must match the owner the URL names:
+  400 (`CONFIRMATION_REQUIRED` / `CONFIRMATION_MISMATCH` / `INVALID_GUILD_CLUB_ID`), 404 `SHARED_OWNER_NOT_FOUND` when
+  there is nothing to clear, 200 with counts. The guild id is used exactly as decoded (never `Number`/`BigInt`); empty,
+  padded, control-character and over-long ids are rejected, not changed. Owners are built server-side from the route.
+- Security is the existing baseline, unchanged: Host guard on every request, Origin guard on state-changing ones, no CORS,
+  default loopback bind.
 
-**Not done yet** (see the roadmap): the owner-level UI (navigation, freshness/provenance display), the deletion
-controls and their confirmation wording; per-tab Guild Bank merging is blocked on the addon (item rows carry no tab
-attribution).
+### UI
+
+`packages/web/src/sharedStorage.ts` holds every wording and trust decision as pure, unit-tested functions; the
+components only render them.
+- **Account level:** a **Shared Storage** tab on the Retail view, one card per owner, never inside a character. A card
+  states when the storage was observed and its freshness (the age of the observation, independent of how it was
+  carried; "recent" and "last seen" are not contradictory), its completeness, which exports carried it ("one
+  observation, carried by N exports"), capacity, contents, guild tab coverage, and bounded provenance.
+- **Unknown stays unknown:** no readable observation, an inaccessible tab or an unconfirmed tab is "contents unknown",
+  never empty. A newer partial, an earlier broader observation and a conflict are each surfaced and openable as
+  separately labelled observations, never merged. Item rows are aggregated, and the UI says no tab is implied.
+- **Character pages** show what each export *carried* ("Warband Bank carried by this export"), as historical evidence,
+  with a link to the owner view.
+- **Clearing** an owner's history is an explicit dialog (typed "Warband" or the exact GuildClubID) carrying "Clears stored
+  shared-storage history. A later WoWSync export may add it again."; a damaged journal has its own screen with a recovery
+  action per damaged owner.
+
+### Exclusions and known limits
+
+Shared storage is deliberately **not** in AccountFacts inventory/totals, global item search, snapshot diffs,
+AccountContext or the LLM / Ask My Account context (tests pin byte-identical facts and LLM context with and without
+shared sections). A future consumer must count each owner exactly once (one projection per owner key, however many
+characters carried it) and label shared totals as asynchronous observations.
+
+Known limits: the Warband scope is installation-local (no stable account discriminator); whether `GuildClubID` alone is
+unique across regions is open; item rows carry no tab attribution, so there is no per-tab item reconciliation; an owner
+with only informationless observations exposes a display name but no tab detail; the import dialog does not yet surface
+`ImportResult.sharedStorage`; and there is no "delete all Dashboard data" operation (it would have to clear the journal
+and `shared_owner_clears` together).
 
 ## Snapshot chronology and idempotent import
 

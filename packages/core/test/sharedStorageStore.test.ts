@@ -23,7 +23,7 @@ import {
   sharedObservationHashMatches,
 } from "../src/sharedStorage.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
-import { BIG_ID, guild, warband, type TabSpec } from "./sharedStorageBuilders.ts";
+import { BIG_ID, guild, warband } from "./sharedStorageBuilders.ts";
 import { renderExport, renderGuild, renderWarband, type ExportSpec } from "./sharedStorageExports.ts";
 import { CLOCK_MS, NOW, T, VIREK_1, VIREK_2, VIREK_KEY, WARBAND_KEY, WIDE, NARROW, mats, normalized, withHarness, type Harness } from "./sharedStorageHarness.ts";
 
@@ -190,7 +190,7 @@ test("[SYNTHETIC] unanchored and unattributable sections stay in the snapshot bu
     const result = h.imp({ name: "Alpha", generated: T + 10, warband: unanchored, guild: noId });
     assert.deepEqual(result.sharedStorage.map((s) => [s.section, s.outcome, s.reason]), [["accountBank", "skipped", "unanchored"], ["guildBank", "skipped", "unattributable"]]);
     assert.deepEqual(h.counts(), { characters: 1, snapshots: 1, observations: 0, sources: 0 });
-    // The snapshot itself still carries both sections exactly as parsed (the transitional character-page view is unchanged).
+    // The snapshot itself still carries both sections exactly as parsed (the character page's "carried by this export" view is unchanged).
     assert.equal(result.snapshot.parsed.accountBank?.status.state, "OBSERVED");
     assert.equal(result.snapshot.parsed.guildBank?.guildName, "Fixture Guild");
     assert.equal(h.store.projectSharedStorage().warband, undefined, "never observed is not empty: there is simply no owner state");

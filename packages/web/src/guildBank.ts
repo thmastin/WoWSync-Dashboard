@@ -1,4 +1,4 @@
-// Presentation rules for the (transitional) Guild Bank card. Pure so the trust
+// Presentation rules for the "Guild Bank carried by this export" card on the character page. Pure so the trust
 // wording is unit-tested rather than living inside JSX.
 //
 //   UNKNOWN     -> "Never observed": nothing about the contents is known.

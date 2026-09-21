@@ -97,6 +97,9 @@ are not live balances. Every total says what it is made of:
   keeps one total. The developer export (`GET /api/account-context`, schema
   "3") still contains the cross-realm sums under `facts`, and says in-band
   (`scopeNote`) that `facts.realms[]` is the per-realm view.
+- **Shared storage is not in any total.** The Warband Bank and Guild Banks have their own
+  [Shared Storage](#shared-storage-warband-and-guild-bank) view; their contents are not added to a character's or the
+  account's totals.
 
 ## Deleting a character (local data cleanup)
 
@@ -123,17 +126,35 @@ character's exact name. Cancel is the default.
 - Re-importing an export afterwards starts a fresh history for that
   character.
 
-### Shared storage (Warband and Guild Bank) API
+## Shared storage (Warband and Guild Bank)
 
-Shared storage belongs to its owner (the Warband, or one guild), not to the character whose export carried
-it. `GET /api/shared-storage` returns each owner's reconciled state, derived from the stored observations
-(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); it is **not** part of any total, item search, or Ask My Account
-context. The Warband here is this Dashboard's local Retail account scope, not a Battle.net account. Deleting a
-character never removes it. To clear one owner's stored history there are two explicit routes,
-`DELETE /api/shared-storage/warband` and `DELETE /api/shared-storage/guilds/:guildClubId`, each with a JSON body
-`{"confirmOwnerKey": "<owner key from GET>"}`. **This clears stored shared-storage history. A later WoWSync export
-may add it again**, because the addon keeps carrying what it last saw; importing an export that is already stored
-restores nothing. A missing owner is a 404 (`SHARED_OWNER_NOT_FOUND`).
+Some Retail storage is shared rather than belonging to one character: the **Warband Bank** (account-level) and **Guild
+Banks** (one per guild). The addon carries what it last saw of them in every Retail export, so the same bank can arrive
+with many characters. The Dashboard therefore treats each one as owned by **the Warband or the guild**, never by the
+character whose export happened to carry it.
+
+- **Where it appears.** Retail → **Shared Storage** tab: one card per owner. A character page shows only what its
+  own export *carried* ("Warband Bank carried by this export") as historical evidence, with a link to the owner's card.
+- **What you see.** When the storage was actually observed and how fresh that is; whether the observation was complete;
+  what is in it (items are listed together: an observation does not record which guild tab held each item); which
+  exports carried it ("one observation, carried by N exports"); and, for a guild, which tabs were observed, inaccessible
+  to the observing character, or not confirmed. **Unknown is never shown as empty.** A newer partial observation, an
+  earlier observation with broader tab visibility, or a conflict at the same time is shown alongside, never merged into
+  the current one. "Derived" only means the Dashboard chose which real observation is current.
+- **Ownership.** The Warband is this Dashboard's local Retail account scope: it is *not* a Battle.net account, so two
+  accounts imported into one Dashboard cannot be told apart. A guild is identified by its exact `GuildClubID` (opaque
+  text); the guild name is only a label.
+- **Not part of any total (yet).** Shared storage is not counted in gold or inventory totals, item search, recent
+  changes, the developer export, or Ask My Account.
+- **Clearing history.** Deleting a character never removes shared storage. Each owner has **Clear stored history…**
+  (type `Warband` or the guild's exact ID to confirm). **This clears stored shared-storage history. A later WoWSync
+  export may add it again**, because the addon keeps carrying what it last saw; importing an export that is already
+  stored restores nothing.
+- **Integrity.** If stored shared data fails validation, the tab says so, names the affected owners and lets you clear
+  them; nothing is skipped or guessed.
+- **API.** `GET /api/shared-storage`; `DELETE /api/shared-storage/warband` and
+  `DELETE /api/shared-storage/guilds/:guildClubId` with a JSON body `{"confirmOwnerKey": "<owner key from GET>"}`
+  (404 `SHARED_OWNER_NOT_FOUND` when there is nothing to clear). Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Real fixtures
 

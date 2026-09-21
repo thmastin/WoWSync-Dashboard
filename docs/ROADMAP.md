@@ -1,9 +1,9 @@
 # WoWSync Roadmap
 
 Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
-merged to `main`, which is at `797fc3d`), including shared-storage checkpoints C1 (`90ff3c1`),
-C2 (persistence and import integration), C3 (explicit owner deletion), C4 (HTTP API) and C5 (UI).
-Tests at that baseline: core 413, server 118, web 136; typechecks clean; production build succeeds.
+merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
+milestone (C1-C6). Tests at that baseline: core 413, server 122, web 136; typechecks clean;
+production build succeeds.
 
 ## How to use this roadmap
 
@@ -55,81 +55,32 @@ Work happening now.
     `FOREVER_PROFESSIONS.md`, `FOREVER_REMAINING.md`, `FOREVER_SPELLS.md`,
     `FOREVER_STATS_DIAGNOSTIC.md`. Dashboard side: [ARCHITECTURE.md](ARCHITECTURE.md) ("Forever").
 
-- [ ] **Shared-storage reconciliation** (in progress: C1-C5 done, C6 remaining).
-  Warband and Guild storage belong to an owner, not to the character whose export carried
-  them. Approved design: an immutable journal of observations plus provenance, a
-  deterministic read-time projection per owner (Warband = installation-local account scope;
-  guild = opaque `GuildClubID` text), OBSERVED/UNKNOWN/DERIVED/LAST_SEEN preserved.
-  Detail: [ARCHITECTURE.md](ARCHITECTURE.md) → "Shared storage (Warband + Guild Bank): reconciled journal".
-  - [x] **C1** pure domain module and tests: `90ff3c11167707c284ee71940e9265bed139799f`
-    (`feat: add pure shared-storage reconciliation domain module`).
-  - [x] **C2** persisted journal, transactional import integration, idempotent backfill of
-    existing databases, content-hash version persisted, store read seam
-    (`loadSharedJournal` / `projectSharedStorage`), additive `ImportResult.sharedStorage`
-    (`3f139751e3ef46d7e899b5be6f2942be49e2c1c2`, `feat: persist reconciled shared storage`).
-    Character deletion leaves shared observations and their provenance labels intact.
-  - [x] **C3** explicit owner-scoped deletion **foundation** (store/domain only at that checkpoint:
-    `deleteSharedStorageOwner`): deletes one owner's whole journal
-    history atomically (`feat: add explicit shared-storage deletion`). Character deletion still
-    keeps shared history; a per-owner cutoff stops backfill from resurrecting deleted history
-    from already-stored snapshots, while newly imported exports recreate the owner normally.
-  - [x] **C4** HTTP API (`feat: expose reconciled shared storage API`): `GET /api/shared-storage` (the
-    DERIVED projection: stable empty shape, bounded deterministic provenance, no database ids, a distinct
-    `SHARED_STORAGE_INTEGRITY` error that names damaged owners); explicit owner-delete routes
-    (`DELETE /api/shared-storage/warband`, `/guilds/:guildClubId`) with JSON confirmation, 404
-    `SHARED_OWNER_NOT_FOUND`, opaque guild-id validation; typed web client seam (no UI). The existing security
-    baseline is unchanged. **Controlled real-database validation passed** (2026-09-21): the first restart on this
-    code backfilled the real 40-snapshot database to 1 Warband observation with 2 Virek sources (98 items,
-    effective time 1789965174, LAST_SEEN preserved, no guild), through the actual API, with every AccountFacts /
-    AccountContext / LLM / character-page output unchanged. Backup taken first
-    (`data/wowsync.backup-20260921T133844Z.sqlite`).
-  - [x] **C5** owner-level UI (`feat: add reconciled shared storage UI`): a **Shared Storage** tab on the
-    Retail account view (not inside any character): one card per owner (Warband, each guild) with time and
-    freshness, completeness, how it was carried, capacity, contents (filterable table), guild tab coverage,
-    bounded provenance ("one observation, carried by N exports"), notices for a newer partial / earlier
-    broader / conflicting observation, and "contents unknown" (never empty) where nothing readable was
-    observed. Explicit per-owner "Clear stored history" with a typed confirmation and the sentence "Clears
-    stored shared-storage history. A later WoWSync export may add it again."; a distinct integrity-failure
-    screen with a recovery action per damaged owner. The character page's cards are now "carried by this
-    export" and link to the reconciled view. Presentation only: still not in totals, search, diffs,
-    AccountContext or the LLM context. Checked in a real browser against the real 98-item Warband (one owner,
-    98 items, 98 of 98 slots occupied, observed 1789965174, two exports from Virek, no guild card) and against
-    scratch fixtures (restricted, partial, conflicting, locked and many-carrier guilds; the deletion flow; a
-    corrupt journal; 390 px and 700 px widths). The real Warband was not deleted.
-  - [ ] **C6** final reconciliation review and documentation/roadmap close-out (shared storage stays Active
-    until then).
-  - **Still deliberately excluded** from totals, item search, diffs, AccountContext and LLM
-    context; each is a later consumer (see Dashboard Product / Ask My Account). Shared totals
-    must count each owner once and be labelled as asynchronous observations.
-  - **Deferred / open:** a "delete all Dashboard data" operation does not exist (it would have to
-    purge the journal too); per-tab Guild Bank merging (needs per-tab item rows from the addon);
-    a stable Warband account discriminator (addon); whether club IDs need a region to be
-    unique; the textual form of a real `GuildClubID` (no live guild observation exists yet).
+- [ ] **Richer item metadata / expansion awareness (addon export → Dashboard)** — next
+  implementation area; not started. Current inventory exports lack the information needed
+  for reliable expansion/category reasoning. Real regression: the Midnight reagent
+  *Mote of Light* was interpreted as legacy clutter.
+  - **First step is an investigation/design checkpoint**, not implementation: which Blizzard
+    item APIs supply `expansionID`, `classID`, `subclassID`, `bindType`,
+    `isCraftingReagent`, and any other cheap, stable metadata useful for inventory analysis.
+  - Agreed requirements: prefer Blizzard API metadata over a hand-maintained item database;
+    preserve raw IDs; human-readable expansion/category labels are derived at the
+    presentation/context layer, not collected; metadata that is uncached or unavailable is
+    UNKNOWN (no guessing, no defaults); keep OBSERVED / UNKNOWN / DERIVED semantics; weigh
+    export size; apply consistently to bags, reagent bags, Character Bank, Warband Bank and
+    Guild Bank where the API allows.
+  - Regression to add: *Mote of Light* must be distinguishable as a current-expansion reagent.
+  - Goal: make this question answerable: *"What should I keep, vendor, mail to my banker,
+    or move to shared storage?"*
+  - Dependencies: shared-storage reconciliation is complete, so the Shared Storage view can
+    display richer item rows once they are exported; using that data in totals, item search
+    or the LLM context is a separate, later step (see [Later](#later)). Do not claim
+    inventory intelligence from item data alone before those consumers exist.
 
 ---
 
 ## Next
 
 Work intended next, in this order.
-
-- [ ] **Richer item metadata / expansion awareness (addon export → Dashboard).**
-  Current inventory exports lack the information needed for reliable expansion/category
-  reasoning. Real regression: the Midnight reagent *Mote of Light* was interpreted as
-  legacy clutter.
-  - Investigate Blizzard-provided fields: `expansionID`, `classID`, `subclassID`,
-    `bindType`, `isCraftingReagent`, and any other cheap, stable metadata.
-  - Prefer Blizzard APIs over a hand-maintained item database; preserve raw IDs; put
-    human-readable expansion/category names in the presentation/context layer, not in
-    collection.
-  - Metadata that is not yet cached is UNKNOWN. Never guess or default it.
-  - Weigh export size. Apply consistently to bags, reagent bags, Character Bank, Warband
-    Bank, and Guild Bank where appropriate.
-  - Add a regression around *Mote of Light*.
-  - Goal: make this question answerable: *"What should I keep, vendor, mail to my banker,
-    or move to shared storage?"*
-  - Coordinate with shared-storage reconciliation and with
-    [Ask My Account](#7-ask-my-account--deterministic-context): do not claim inventory
-    intelligence before both exist.
 
 - [ ] **Account / multi-character context.**
   Existing addon schema direction (GearExport `WOWSYNC_SCHEMA.md`, account/alt export
@@ -139,7 +90,7 @@ Work intended next, in this order.
   - Later, explicit full-account export: complete cross-character bags/banks/economy.
   - Keep account-level and character-level state separate. The normal public LLM workflow
     must not require an enormous full-account export.
-  - Coordinate with shared-storage reconciliation.
+  - Shared storage is already owner-level state (never per character); keep it that way here.
   - Whether/when the explicit full-account export ships is undecided (see
     [Needs Decision](#needs-decision)).
 
@@ -226,6 +177,15 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 - [ ] Responsive/mobile improvements
 - [ ] Facts cache, when scale justifies it
 - [ ] Per-question LLM routing, when scale/context size justifies it
+- [ ] **Shared-storage follow-ups (deferred on purpose after the reconciliation milestone):**
+  - shared-storage consumers: account totals, global item search, recent-change diffs, AccountContext and
+    the LLM context (each must count an owner once, however many characters carried it, and label shared
+    totals as asynchronous observations; depends on richer item metadata for useful item questions)
+  - surface `ImportResult.sharedStorage` in the import dialog
+  - a guild with only informationless observations keeps a display name but exposes no tab detail; richer
+    detail could be added to the API/UI if it proves useful
+  - a "delete all Dashboard data" operation does not exist; if added it must clear the shared journal and the
+    per-owner cutoff state (`shared_owner_clears`) together
 
 Triggers for the scale-dependent items are in the product review, "Later — with explicit
 triggers".
@@ -239,6 +199,8 @@ dependencies change.
 - [ ] Mailbox / Auction House capture
 - [ ] Recipe catalogues
 - [ ] Pet spellbook capture
+- [ ] Per-tab Guild Bank item rows (addon): current item rows are aggregated and carry no tab attribution, so
+  there is no safe per-tab item reconciliation or merge until the export preserves it
 - [ ] Optional currency / account-balance views where appropriate
 
 ---
@@ -289,9 +251,9 @@ where it is written up) when it is made; open parts stay listed.
 
 | Question | Blocks | Notes |
 | --- | --- | --- |
-| Final Warband persistence / reconciliation model | Shared-storage reconciliation | **Decided and implemented (C1-C2):** journal + read-time projection, installation-local account scope ([ARCHITECTURE.md](ARCHITECTURE.md)). **Open (needs the addon):** a stable account discriminator; until then two Battle.net accounts in one Dashboard reconcile as one |
-| Final Guild persistence model keyed by `GuildClubID` | Shared-storage reconciliation | **Decided and implemented (C1-C2):** opaque text key. **Open (addon):** whether a region is needed for uniqueness; the textual form of a real club ID |
-| Deletion semantics for shared observations | Shared-storage reconciliation | **Decided:** deleting a character (or a snapshot) never deletes shared observations; source labels are kept. **Also decided (C3/C4):** explicit owner deletion removes that owner's observations and provenance and never touches snapshots; it is not a tombstone (new evidence recreates the owner); the HTTP contract is settled (owner routes + JSON confirmation, 404 for a missing owner). **UI wording decided (C5):** typed confirmation ("Warband", or the exact GuildClubID) plus "Clears stored shared-storage history. A later WoWSync export may add it again." |
+| Stable Warband account discriminator | Multi-account Warband | The shared-storage model is decided and implemented (journal + read-time projection, installation-local account scope; [ARCHITECTURE.md](ARCHITECTURE.md)). **Open (needs the addon):** a stable account identifier; until then two Battle.net accounts imported into one Dashboard are reconciled as one Warband |
+| Guild uniqueness: region / discriminator, and real `GuildClubID` form | Multi-region guilds | Guilds are keyed by the opaque `GuildClubID` text (implemented; never parsed). **Open (addon):** whether the id alone is unique across regions. The addon and Dashboard both treat it as opaque text; one live value has been seen in GearExport validation (Ciao, 84606081) and no broader guarantee is inferred from it |
+| Deletion semantics for shared observations | — (decided) | **Decided and implemented:** deleting a character or snapshot never deletes shared observations; an explicit per-owner clear removes that owner's observations and provenance, is not a tombstone (a new export may recreate the owner) and cannot be undone by backfill from already-stored snapshots; typed confirmation plus "Clears stored shared-storage history. A later WoWSync export may add it again." |
 | Character identity / GUID strategy, especially rename/transfer | Identity, companion, Activity History | Identity is `version::realm::name`; the text export carries no GUID while SavedVariables is GUID-keyed |
 | Desktop companion transport / handoff | Desktop companion | Depends on the feasibility checkpoint (SavedVariables flush timing) |
 | Local companion API authentication | Desktop companion | Whether a token is needed beyond loopback + Host/Origin protection |
@@ -324,13 +286,27 @@ Guard against re-adding. This is not a changelog.
 - Trust hardening: unknown is not zero, freshness-aware totals, observation-time ordering
   and latest-snapshot semantics, idempotent re-import, per-realm LLM gold, classified API
   errors, localhost binding by default with Host/Origin guard
-- Warband parsing and display
-- Guild Bank parser compatibility and transitional, truthful display. Current Retail
-  exports, which always contain `[GUILD BANK]`, import successfully
+- Warband parsing; Guild Bank parser compatibility (later superseded by the Shared Storage view below). Current
+  Retail exports, which always contain `[GUILD BANK]`, import successfully
 - Product review document
-- Shared-storage reconciliation foundation: C1 pure domain module (`90ff3c1`), C2 persisted
-  journal + transactional import integration + backfill, C3 explicit owner-scoped deletion, and
-  C4 HTTP read/delete API, and C5 owner-level Shared Storage UI (the rest of the reconciliation is under
-  [Active](#active))
+- **Shared-storage reconciliation: milestone closed.** Warband and Guild Bank state is owned by the Warband /
+  the guild (never by the carrying character), reconciled from an immutable observation journal with
+  provenance, projected on read, persisted transactionally with an idempotent backfill, explicitly clearable per
+  owner, exposed over HTTP, and shown in an account-level Shared Storage view. Design:
+  [ARCHITECTURE.md](ARCHITECTURE.md) ("Shared storage").
+  - Chain: **C1** `90ff3c1` pure domain module; **C2** `3f13975` persisted journal, import integration and
+    backfill; **C3** `fa06d4d` explicit owner deletion with a backfill cutoff; **C4** `b658e17` HTTP read/delete
+    API; **C5** `ca1baa2` owner-level UI; **C6** closeout (`docs: close shared-storage reconciliation milestone`):
+    final trust-model audit, cross-layer end-to-end tests, documentation reconciled.
+  - **Real-data validation** (the real Dashboard database; 40 snapshots and 15 characters preserved): one Warband
+    observation (complete, observed 1789965174, `LAST_SEEN`) carried by two Virek/Cairne exports, 98 item rows,
+    98 of 98 slots occupied; no Guild owner; nothing leaked into AccountFacts, AccountContext, the LLM context or
+    character pages; the real Warband was never deleted.
+  - **Guild Bank evidence is separate:** GearExport's Guild Bank capture was live-validated earlier (Ciao), but the
+    Dashboard's real database holds **no** real Guild shared observation. Guild behavior is covered by rendered
+    fixtures and tests (restricted, partial, conflicting and locked guilds; opaque ids above 2^53).
+  - Still open, recorded above: stable Warband account discriminator and guild region question ([Needs
+    Decision](#needs-decision)); per-tab Guild item rows (addon); shared-storage consumers, import-dialog
+    surfacing, informationless-guild detail and delete-all-data ([Later](#later)).
 - Integration branch `feature/dashboard-integration` (`0f525a7`): main + trust hardening +
   Warband + Guild Bank + product review. Not yet merged to `main`.

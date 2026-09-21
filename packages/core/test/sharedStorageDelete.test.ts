@@ -142,7 +142,7 @@ test("[SYNTHETIC] owner deletion never modifies characters or snapshots: the car
     h.store.deleteSharedStorageOwner(GX);
     assert.equal(snapshotRows(h), snapshots, "snapshots byte-identical (raw_text and parsed_json included)");
     assert.equal(characterRows(h), characters);
-    // The transitional character-page copy still shows what each export carried.
+    // The character page's "carried by this export" copy still shows what each export carried.
     const alpha = h.store.listSnapshots("retail::cairne::alpha")[0];
     assert.equal(alpha.parsed.accountBank?.status.state, "OBSERVED");
     assert.equal(alpha.parsed.guildBank?.guildName, "Guild X");
