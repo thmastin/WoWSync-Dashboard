@@ -101,6 +101,49 @@ export interface AccountBankSection extends InventorySection {
   ownerScope: "ACCOUNT_WARBAND";
 }
 
+/**
+ * One tab of a Guild Bank as reported by the addon's tab table.
+ *
+ * `state` is kept as the addon's own string. The collector currently emits
+ * OBSERVED (viewable and fully scanned), INACCESSIBLE (not viewable by the
+ * observing character - its contents are UNKNOWN, never empty) and UNKNOWN
+ * (viewable but not confirmed; `note` carries the reason). Anything else is
+ * preserved verbatim rather than guessed at or rejected.
+ */
+export interface GuildBankTab {
+  id?: number;
+  name?: string;
+  /** From the addon's yes/no column; undefined when unknown (`?`). */
+  viewable?: boolean;
+  state?: string;
+  note?: string;
+}
+
+/**
+ * Retail-only guild-scoped shared storage ([GUILD BANK]). Deliberately separate
+ * from the character bank and the Warband bank: its contents belong to the guild,
+ * not to the character that happened to export it, and it must never be merged
+ * into either. Its final Dashboard model (guild-scoped reconciliation across the
+ * characters that transport it) is NOT decided yet - for now it only rides along
+ * inside the exporting character's snapshot.
+ *
+ * The inventory body is aggregated by the addon and does NOT retain which tab an
+ * item came from; only `tabs` says which tabs were scanned, inaccessible or unconfirmed.
+ */
+export interface GuildBankSection extends InventorySection {
+  ownerScope: "GUILD";
+  /**
+   * The observed `C_Club.GetGuildClubId()` value, kept as the exact text the addon
+   * rendered. A string on purpose: club IDs can exceed 2^53, where a JS number would
+   * silently round the identifier. Undefined when the export said `?`.
+   */
+  guildClubId?: string;
+  /** Display metadata only (a guild can be renamed); identity is `guildClubId`. */
+  guildName?: string;
+  /** Empty when the section is UNKNOWN or the export carried no tab table. */
+  tabs: GuildBankTab[];
+}
+
 export interface ProfessionEntry {
   name: string;
   skill?: number;
@@ -168,6 +211,8 @@ export interface ParsedSnapshot {
   bank: InventorySection;
   /** Optional additive Retail section; absent from all legacy exports. */
   accountBank?: AccountBankSection;
+  /** Optional additive Retail section; absent from exports made before Guild Bank capture existed. */
+  guildBank?: GuildBankSection;
   professions: ProfessionsSection;
   spells: SpellsSection;
   trainer: TrainerSection;

@@ -416,6 +416,39 @@ Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
 thing today's real data can't: proving two *different* Classic/TBC realms
 stay isolated, since only one has been captured so far.
 
+## Shared storage (Warband + Guild Bank): transitional
+
+Retail's addon exports three storage scopes: the character's own `[BANK]`, the account's
+`[ACCOUNT BANK]` (Warband, `Scope: ACCOUNT_WARBAND`), and the guild's `[GUILD BANK]`
+(`Scope: GUILD`, identified by `GuildClubID`). Current Retail exports **always** contain
+the latter two, as `State: UNKNOWN` when never observed - so the parser must accept both
+(before Guild Bank support, an unknown `[GUILD BANK]` section made every Retail export fail
+to import). `parseGuildBank` keeps the trust states verbatim: UNKNOWN (no tabs, no items,
+not "known empty"), OBSERVED (complete or partial), LAST_SEEN (a prior complete observation,
+original `observed=` time kept), per-tab OBSERVED / UNKNOWN / INACCESSIBLE (an inaccessible
+tab is never an empty tab), and the club ID as **text** (identifiers can exceed 2^53).
+
+**Transitional by design.** Both shared sections currently ride inside the *exporting
+character's* snapshot JSON and are shown as separately labelled cards on that character's
+page. They are deliberately **not** in AccountFacts inventory/totals, item search, snapshot
+diffs, AccountContext, or the LLM context (tests pin this). The same guild bank or Warband
+bank therefore appears once per character that observed it, with no reconciliation between
+them.
+
+**Open design decisions (deliberately not made yet).** The final Dashboard model needs explicit
+account-scoped and guild-scoped observations. Still to decide:
+
+- account-scoped Warband: which observation is the latest *complete* one;
+- guild-scoped storage keyed by `GuildClubID`: latest complete observation per guild;
+- reconciling LAST_SEEN across the different characters that transport the same shared storage;
+- what deleting a character means for a shared observation that is independently valid;
+- shared-storage item search;
+- shared-storage LLM context;
+- shared-storage totals and presentation (and how they are labelled as asynchronous observations
+  from different times).
+
+Until then, do not add shared storage to any total, search, or model context.
+
 ## Snapshot chronology and idempotent import
 
 One rule orders snapshots everywhere (`packages/core/src/chronology.ts`):

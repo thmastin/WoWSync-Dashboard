@@ -7,6 +7,7 @@ import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } 
 
 import { VERSION_LABELS } from "../versions.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
+import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
 
 function StatusBadge({ state }: { state: string }) {
@@ -179,6 +180,7 @@ export default function CharacterDetail({
               note="Observed from this export as account state. It is not part of this character’s bank and is excluded from account totals until account-scope reconciliation is implemented."
             />
           )}
+          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} />}
 
           <section className="detail-card">
             <h3>

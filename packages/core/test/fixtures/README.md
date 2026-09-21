@@ -108,3 +108,25 @@ to demonstrate (a second Classic/TBC realm to prove isolation, an unknown
 similar). Character names in these are always obviously fake (e.g.
 `Ghost`, `Alpha`/`Beta`, `Odd`), never a name that could be mistaken for
 real history.
+
+## Derived fixtures (`derived/`)
+
+Unlike `classic-era/`, `retail/`, `tbc-anniversary/` and `forever/` above, files here
+are **not** live captures. They are real exports with specific sections replaced or
+added, so they are labelled `[DERIVED]` in tests and must never be mistaken for
+observed data.
+
+- `derived/ezaller-shared-storage-1789478317.wowsync.txt` — the real Ezaller Retail
+  export (`retail/ezaller-1789478317.wowsync.txt`) with its `[BANK] State: UNKNOWN`
+  block replaced by the three storage sections a current Retail addon emits, in the
+  addon's order: an observed character `[BANK]`, an observed `[ACCOUNT BANK]`
+  (`Scope: ACCOUNT_WARBAND`) and an observed `[GUILD BANK]` (`Scope: GUILD`) with two
+  viewable tabs (one populated, one genuinely empty) and one `INACCESSIBLE` tab. The
+  structure, field order, coverage strings, and tab/state vocabulary follow
+  `GearExport/WoWSyncRender.lua` and `WoWSyncCollectors.lua` at GearExport `3e9c6bf`
+  ("feat: add trusted Retail guild bank capture"); item rows, guild name, and the guild
+  club ID (deliberately above 2^53, to prove identifiers are not rounded) are invented
+  sample values. No live capture containing `[ACCOUNT BANK]` or `[GUILD BANK]` was
+  available when this was written; replace it with a real capture when one exists.
+  The UNKNOWN, LAST_SEEN, partial, and all-tabs-inaccessible variants are produced
+  inside `test/guildBank.test.ts` by editing this file's Guild Bank block.

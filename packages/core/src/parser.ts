@@ -12,6 +12,8 @@ import type {
   CharacterSection,
   ContainerRecord,
   EquipmentSection,
+  GuildBankSection,
+  GuildBankTab,
   InventoryItemRecord,
   InventorySection,
   LocationSection,
@@ -41,6 +43,7 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   BAGS: "bags",
   BANK: "bank",
   "ACCOUNT BANK": "accountBank",
+  "GUILD BANK": "guildBank",
   PROFESSIONS: "professions",
   "KNOWN SPELLS": "spells",
   // Real captures show both spellings in the wild: the current addon
@@ -356,10 +359,30 @@ function parseBank(lines: string[]): InventorySection {
   return { status, coverage, snapshotVisit, purchasedBankBagSlots, purchasedBankTabs, ...body };
 }
 
+/**
+ * Shared-storage sections ([ACCOUNT BANK], [GUILD BANK]) render an unobserved state as
+ * State / Scope / Reason, but parseSectionStatus only looks for Reason immediately after
+ * State - so the addon's reason was silently dropped. Reads the rest of an UNKNOWN
+ * section for `Reason:` (and, when `expectedScope` is given, rejects a mismatched Scope).
+ */
+function recoverUnknownSharedStorage(lines: string[], from: number, status: SectionStatus, expectedScope?: string, label?: string): void {
+  for (let j = from; j < lines.length; j++) {
+    const line = lines[j];
+    if (line.startsWith("Reason: ")) status.reason = fieldValue(line.slice("Reason: ".length));
+    else if (expectedScope && line.startsWith("Scope: ")) {
+      const scope = fieldValue(line.slice("Scope: ".length));
+      if (scope !== expectedScope) fail(`Unsupported ${label} scope`, scope);
+    }
+  }
+}
+
 function parseAccountBank(lines: string[]): AccountBankSection {
   const { status, next } = parseSectionStatus(lines, 0);
   let i = next;
-  if (status.state === "UNKNOWN") return { status, ownerScope: "ACCOUNT_WARBAND", containers: [], itemsKnownEmpty: false, items: [] };
+  if (status.state === "UNKNOWN") {
+    recoverUnknownSharedStorage(lines, i, status);
+    return { status, ownerScope: "ACCOUNT_WARBAND", containers: [], itemsKnownEmpty: false, items: [] };
+  }
 
   const get = (prefix: string) => {
     const [v, ni] = takeLine(lines, i, prefix);
@@ -373,6 +396,54 @@ function parseAccountBank(lines: string[]): AccountBankSection {
   const purchasedBankTabs = fieldNumber(get("PurchasedBankTabs: "));
   const body = parseInventoryBody(lines, i);
   return { status, ownerScope: "ACCOUNT_WARBAND", coverage, snapshotVisit, purchasedBankTabs, ...body };
+}
+
+/**
+ * [GUILD BANK] - Retail guild-scoped storage. Rendered by the addon as:
+ *   State / Scope / GuildClubID / GuildName / Coverage / SnapshotVisit, then a tab table
+ *   (tab, name, viewable, state, note), then the usual container/slots/item body.
+ * Nothing is inferred: an UNKNOWN section stays UNKNOWN (no tabs, no items, contents not
+ * "known empty"), an INACCESSIBLE tab stays INACCESSIBLE, and the club ID stays text.
+ */
+function parseGuildBank(lines: string[]): GuildBankSection {
+  const { status, next } = parseSectionStatus(lines, 0);
+  let i = next;
+  if (status.state === "UNKNOWN") {
+    recoverUnknownSharedStorage(lines, i, status, "GUILD", "guild-bank");
+    return { status, ownerScope: "GUILD", tabs: [], containers: [], itemsKnownEmpty: false, items: [] };
+  }
+
+  const get = (prefix: string) => {
+    const [v, ni] = takeLine(lines, i, prefix);
+    i = ni;
+    return v;
+  };
+  const scope = fieldValue(get("Scope: "));
+  if (scope !== "GUILD") fail("Unsupported guild-bank scope", scope);
+  const guildClubId = fieldValue(get("GuildClubID: "));
+  const guildName = fieldValue(get("GuildName: "));
+  const coverage = fieldValue(get("Coverage: "));
+  const snapshotVisit = fieldNumber(get("SnapshotVisit: "));
+
+  const tabs: GuildBankTab[] = [];
+  if (lines[i] !== undefined && splitFields(lines[i])[0] === "tab") {
+    i++; // the tab / name / viewable / state / note header row
+    while (i < lines.length && splitFields(lines[i])[0] !== "container") {
+      const cols = splitRow(lines[i], 5, "guild bank tab row");
+      const viewable = fieldValue(cols[2]);
+      tabs.push({
+        id: fieldNumber(cols[0]),
+        name: fieldValue(cols[1]),
+        viewable: viewable === "yes" ? true : viewable === "no" ? false : undefined,
+        state: fieldValue(cols[3]),
+        note: fieldValue(cols[4]),
+      });
+      i++;
+    }
+  }
+
+  const { next: _consumed, ...inventory } = parseInventoryBody(lines, i);
+  return { status, ownerScope: "GUILD", guildClubId, guildName, coverage, snapshotVisit, tabs, ...inventory };
 }
 
 function parseProfessions(lines: string[]): ProfessionsSection {
@@ -551,6 +622,7 @@ const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   bags: parseBags,
   bank: parseBank,
   accountBank: parseAccountBank,
+  guildBank: parseGuildBank,
   professions: parseProfessions,
   spells: parseSpells,
   trainer: parseTrainer,
@@ -617,6 +689,9 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   if (result.accountBank && result.character?.clientFamily?.toLowerCase() !== "retail") {
     fail("[ACCOUNT BANK] is only valid for a Retail export");
   }
+  if (result.guildBank && result.character?.clientFamily?.toLowerCase() !== "retail") {
+    fail("[GUILD BANK] is only valid for a Retail export");
+  }
 
   return {
     raw,
@@ -628,6 +703,7 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     bags: result.bags!,
     bank: result.bank!,
     accountBank: result.accountBank,
+    guildBank: result.guildBank,
     professions: result.professions!,
     spells: result.spells!,
     trainer: result.trainer!,

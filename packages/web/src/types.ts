@@ -131,6 +131,8 @@ export interface ParsedSnapshot {
   bank: InventorySection;
   /** Account/Warband storage is separate from the exporting character's bank. */
   accountBank?: InventorySection & { ownerScope: "ACCOUNT_WARBAND" };
+  /** Guild storage is separate from the exporting character's bank and from the Warband bank. */
+  guildBank?: GuildBankSection;
   professions: {
     status: SectionStatus;
     coverage?: string;
@@ -207,6 +209,23 @@ export interface InventorySection {
   itemsKnownEmpty: boolean;
   items: { itemRef?: string; name?: string; qty?: number; bound?: string; vendorEachCopper?: number }[];
 }
+
+/** One Guild Bank tab as reported by the addon. `state` is the addon's own string (OBSERVED / INACCESSIBLE / UNKNOWN today); unfamiliar values are preserved, not guessed. */
+export interface GuildBankTab {
+  id?: number;
+  name?: string;
+  viewable?: boolean;
+  state?: string;
+  note?: string;
+}
+
+/** Retail guild-scoped shared storage. `guildClubId` is text on purpose (identifiers can exceed 2^53). */
+export type GuildBankSection = InventorySection & {
+  ownerScope: "GUILD";
+  guildClubId?: string;
+  guildName?: string;
+  tabs: GuildBankTab[];
+};
 
 export interface StoredSnapshot {
   id: number;

@@ -3,6 +3,14 @@
 Status: research / design. Nothing in this document is implemented.
 Date: 2026-09-19. Basis: `main` at `797fc3d` (Forever support + character deletion).
 
+> **Point-in-time review.** This document records the findings as of the date and
+> basis above and has deliberately not been edited since. Some of them have since
+> been implemented (for example the trust-hardening wave: unknown-is-not-zero,
+> freshness-aware totals, observation-time ordering, idempotent imports, per-realm
+> LLM gold, classified API errors, localhost binding) and Warband/Guild Bank
+> parsing has been added. Read its "current" statements as describing the
+> repository at that basis, not today's.
+
 **Evidence legend.** `[REPO]` = read in the source or the local API by the review team
 and, for the items in "Verified by the lead" below, re-checked by the lead.
 `[EXTERNAL]` = outside research. `[AGENT]` = a claim by a review agent that the lead
