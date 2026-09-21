@@ -416,7 +416,7 @@ Classic/TBC realm (`packages/core/test/realmFacts.test.ts`) covers the one
 thing today's real data can't: proving two *different* Classic/TBC realms
 stay isolated, since only one has been captured so far.
 
-## Shared storage (Warband + Guild Bank): transitional
+## Shared storage (Warband + Guild Bank): reconciled journal
 
 Retail's addon exports three storage scopes: the character's own `[BANK]`, the account's
 `[ACCOUNT BANK]` (Warband, `Scope: ACCOUNT_WARBAND`), and the guild's `[GUILD BANK]`
@@ -428,26 +428,64 @@ not "known empty"), OBSERVED (complete or partial), LAST_SEEN (a prior complete 
 original `observed=` time kept), per-tab OBSERVED / UNKNOWN / INACCESSIBLE (an inaccessible
 tab is never an empty tab), and the club ID as **text** (identifiers can exceed 2^53).
 
-**Transitional by design.** Both shared sections currently ride inside the *exporting
-character's* snapshot JSON and are shown as separately labelled cards on that character's
-page. They are deliberately **not** in AccountFacts inventory/totals, item search, snapshot
-diffs, AccountContext, or the LLM context (tests pin this). The same guild bank or Warband
-bank therefore appears once per character that observed it, with no reconciliation between
-them.
+**Ownership is not transport.** The character whose export delivers a shared section is only
+its *carrier*. The owner is the Warband or one guild:
 
-**Open design decisions (deliberately not made yet).** The final Dashboard model needs explicit
-account-scoped and guild-scoped observations. Still to decide:
+| Storage | Owner | Key |
+| --- | --- | --- |
+| Character Bank | the character (unchanged; stays in its snapshot, outside this model) | `identity_key` |
+| Warband | the **installation-local** Retail account scope | `retail::warband::local` |
+| Guild Bank | one guild | `retail::guild::<GuildClubID text>` |
 
-- account-scoped Warband: which observation is the latest *complete* one;
-- guild-scoped storage keyed by `GuildClubID`: latest complete observation per guild;
-- reconciling LAST_SEEN across the different characters that transport the same shared storage;
-- what deleting a character means for a shared observation that is independently valid;
-- shared-storage item search;
-- shared-storage LLM context;
-- shared-storage totals and presentation (and how they are labelled as asynchronous observations
-  from different times).
+`local` is *not* a Battle.net account id. The export carries no verified account identifier, so
+two accounts imported into one Dashboard cannot be told apart and would be reconciled as one
+(a known limitation; the owner type has a reserved extension point for a real discriminator, which
+has to come from the addon). The guild id is opaque text: never parsed as a number, never
+case-folded.
 
-Until then, do not add shared storage to any total, search, or model context.
+**Immutable journal + read-time projection.** `packages/core/src/sharedStorage.ts` is the pure
+domain model; `sqliteStore.ts` only persists it (tables `shared_observations` and
+`shared_observation_sources`, plus `store_meta`). An *observation* is one fact - "this owner's
+storage looked like this at time T" - with identity `(owner, claimed observed time, content hash)`.
+The carrier state (OBSERVED / LAST_SEEN), the carrying export, `SnapshotVisit` and other transport
+noise are deliberately **not** part of the identity, so a LAST_SEEN replay of one record (which is
+how most observations first arrive: the bank is closed by the time `/wowsync` runs) is the same
+observation with another *source*, never a new observation. UNKNOWN, unattributable (a guild without
+a `GuildClubID`) and unanchored (no `observed=`) sections are never journaled, so they cannot erase
+anything. Nothing about the *current* state is stored: `projectJournal` selects it on read (newest
+informative complete observation; a newer partial or informationless capture never displaces it; a
+newer narrower guild observation leaves the earlier broader one exposed as `broaderCoverageEarlier`;
+same-second different content is reported as a conflict; effective time is clamped by the carrying
+export's time). The projection is DERIVED - it selects one observation and never splices several,
+so it can never claim a composite as OBSERVED. `ImportResult.sharedStorage` reports per section
+what an import did (`recorded`, `source-added`, `already-known`, `skipped` + reason, `becameCurrent`).
+
+**Persistence rules.**
+- Import admits shared sections **in the same transaction** as the snapshot: both are stored or neither.
+- The journal tables reference neither `characters` nor `snapshots`. A source keeps a historical
+  `snapshot_id` (AUTOINCREMENT ids are never reused, so it cannot come to mean another snapshot) and a
+  denormalized character label, so **deleting a character (or, later, a snapshot) never deletes a shared
+  observation or its provenance**. Removing shared history is reserved for explicit owner-scoped operations,
+  which do not exist yet.
+- Each observation stores the content-hash **version** (`SHARED_CONTENT_HASH_VERSION`). A changed
+  canonicalization needs a version bump and an explicit re-hash migration; observations under another
+  version still load (only their hash cannot be re-verified).
+- Schema evolution is additive `CREATE TABLE IF NOT EXISTS` (no migration framework). Existing databases are
+  backfilled once by an idempotent pass (`backfillSharedStorage`, guarded by a `store_meta` marker) that runs
+  the *same* admission code over stored snapshots; it never edits snapshots, never relabels LAST_SEEN as
+  OBSERVED, never advances an observation time, and never removes journal rows (the journal can be the only copy
+  after a character deletion, so it is never rebuilt from snapshots).
+- `SnapshotStore.loadSharedJournal()` / `projectSharedStorage()` are the read seam for later work.
+
+**Still not consumed.** Shared storage is deliberately **not** in AccountFacts inventory/totals, item
+search, snapshot diffs, AccountContext or the LLM context (tests pin this, including byte-identical facts and
+LLM context with and without shared sections). The character page still shows each export's own copy as a
+transitional card. Later work must count each owner exactly once (one projection per owner key, regardless of
+how many characters carried it) and label shared totals as asynchronous observations.
+
+**Not done yet** (see the roadmap): owner-scoped deletion, a public read endpoint, and owner-level UI
+(including navigation and freshness/provenance display); per-tab Guild Bank merging is blocked on the addon
+(item rows carry no tab attribution).
 
 ## Snapshot chronology and idempotent import
 

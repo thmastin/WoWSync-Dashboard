@@ -5,12 +5,29 @@ import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } f
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
+import {
+  admitExport,
+  isInformativeContent,
+  projectJournal,
+  recordExport,
+  restoreSharedObservation,
+  serializeSharedObservation,
+  type CarrierExport,
+  type CarrierState,
+  type JournalEntry,
+  type RecordedSection,
+  type SharedJournal,
+  type SharedObservationSource,
+  type SharedStorageProjection,
+} from "./sharedStorage.ts";
 import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
 import { WOW_VERSIONS, detectVersion } from "./version.ts";
 import type {
   DeleteCharacterResult,
   ImportResult,
   RecentChange,
+  SharedStorageBackfillResult,
+  SharedStorageImportOutcome,
   SnapshotStore,
   StoredCharacterSummary,
   StoredSnapshot,
@@ -42,7 +59,59 @@ CREATE TABLE IF NOT EXISTS snapshots (
   parsed_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_character ON snapshots(character_id, imported_at);
+
+-- Schema evolution is additive: every table here is IF NOT EXISTS, and one-time data work is an
+-- idempotent pass guarded by a marker in store_meta (there is no migration framework).
+CREATE TABLE IF NOT EXISTS store_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Shared-storage journal (see sharedStorage.ts and docs/ARCHITECTURE.md). Immutable observations of
+-- storage that belongs to an OWNER (the Warband, or one guild), never to a character. There is
+-- deliberately NO reference from these tables to characters or snapshots: deleting a character or a
+-- snapshot must not delete, cascade into, or invalidate a shared observation.
+CREATE TABLE IF NOT EXISTS shared_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  identity TEXT NOT NULL UNIQUE,
+  owner_key TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('warband', 'guild')),
+  owner_json TEXT NOT NULL,
+  claimed_observed_at INTEGER NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+  content_hash TEXT NOT NULL,
+  hash_version INTEGER NOT NULL,
+  content_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL -- audit only (when this row was written); never used for ordering
+);
+CREATE INDEX IF NOT EXISTS idx_shared_observations_owner ON shared_observations(owner_key);
+
+-- Provenance: one row per (observation, carrying export). snapshot_id is a historical reference
+-- WITHOUT a foreign key (AUTOINCREMENT ids are never reused, so it can never point at a different
+-- snapshot); the source character's label is denormalized so it survives that character.
+CREATE TABLE IF NOT EXISTS shared_observation_sources (
+  observation_id INTEGER NOT NULL REFERENCES shared_observations(id),
+  snapshot_id INTEGER NOT NULL,
+  carrier_state TEXT NOT NULL CHECK (carrier_state IN ('OBSERVED', 'LAST_SEEN')),
+  export_observed_at INTEGER NOT NULL,
+  source_identity_key TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  source_realm TEXT NOT NULL,
+  snapshot_visit INTEGER,
+  last_visit INTEGER,
+  visited_npc TEXT,
+  visited_zone TEXT,
+  coverage_note TEXT,
+  refresh_issue TEXT,
+  pending INTEGER,
+  PRIMARY KEY (observation_id, snapshot_id)
+);
+CREATE INDEX IF NOT EXISTS idx_shared_sources_snapshot ON shared_observation_sources(snapshot_id);
 `;
+
+/** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
+const SHARED_BACKFILL_VERSION = "1";
+const SHARED_BACKFILL_KEY = "shared_storage_backfill";
 
 interface CharacterRow {
   id: number;
@@ -66,6 +135,65 @@ interface SnapshotRow {
   level_played_seconds: number | null;
   raw_text: string;
   parsed_json: string;
+}
+
+interface SharedObservationRow {
+  id: number;
+  identity: string;
+  owner_key: string;
+  owner_json: string;
+  claimed_observed_at: number;
+  completeness: string;
+  content_hash: string;
+  hash_version: number;
+  content_json: string;
+}
+
+interface SharedSourceRow {
+  observation_id: number;
+  snapshot_id: number;
+  carrier_state: string;
+  export_observed_at: number;
+  source_identity_key: string;
+  source_name: string;
+  source_realm: string;
+  snapshot_visit: number | null;
+  last_visit: number | null;
+  visited_npc: string | null;
+  visited_zone: string | null;
+  coverage_note: string | null;
+  refresh_issue: string | null;
+  pending: number | null;
+}
+
+function toSource(row: SharedSourceRow): SharedObservationSource {
+  return {
+    snapshotId: row.snapshot_id,
+    carrierState: row.carrier_state as CarrierState,
+    exportObservedAt: row.export_observed_at,
+    sourceIdentityKey: row.source_identity_key,
+    sourceName: row.source_name,
+    sourceRealm: row.source_realm,
+    snapshotVisit: row.snapshot_visit ?? undefined,
+    lastVisit: row.last_visit ?? undefined,
+    visitedNpc: row.visited_npc ?? undefined,
+    visitedZone: row.visited_zone ?? undefined,
+    coverageNote: row.coverage_note ?? undefined,
+    refreshIssue: row.refresh_issue ?? undefined,
+    pending: row.pending === 1 ? true : undefined,
+  };
+}
+
+function toImportOutcome(section: RecordedSection): SharedStorageImportOutcome {
+  if (section.outcome === "skipped") return { section: section.section, outcome: "skipped", reason: section.reason };
+  const content = section.observation?.content;
+  return {
+    section: section.section,
+    outcome: section.outcome === "new-observation" ? "recorded" : section.outcome === "new-source" ? "source-added" : "already-known",
+    ownerKey: section.ownerKey,
+    becameCurrent: section.becameCurrent,
+    informative: content ? isInformativeContent(content) : undefined,
+  };
 }
 
 function one<T>(stmt: StatementSync, ...params: SQLInputValue[]): T | undefined {
@@ -120,7 +248,34 @@ export class SqliteSnapshotStore implements SnapshotStore {
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
       deleteSnapshotsForCharacter: this.db.prepare("DELETE FROM snapshots WHERE character_id = ?"),
       deleteCharacterById: this.db.prepare("DELETE FROM characters WHERE id = ?"),
+      getMeta: this.db.prepare("SELECT value FROM store_meta WHERE key = ?"),
+      setMeta: this.db.prepare(
+        "INSERT INTO store_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      ),
+      insertSharedObservation: this.db.prepare(
+        `INSERT OR IGNORE INTO shared_observations
+          (identity, owner_key, owner_kind, owner_json, claimed_observed_at, completeness, content_hash, hash_version, content_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      sharedObservationId: this.db.prepare("SELECT id FROM shared_observations WHERE identity = ?"),
+      insertSharedSource: this.db.prepare(
+        `INSERT OR IGNORE INTO shared_observation_sources
+          (observation_id, snapshot_id, carrier_state, export_observed_at, source_identity_key, source_name, source_realm,
+           snapshot_visit, last_visit, visited_npc, visited_zone, coverage_note, refresh_issue, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      allSharedObservations: this.db.prepare("SELECT * FROM shared_observations ORDER BY id"),
+      allSharedSources: this.db.prepare("SELECT * FROM shared_observation_sources ORDER BY observation_id, snapshot_id"),
+      // A cheap pre-filter only: a false positive is re-checked by parsing (the sections are optional JSON keys).
+      snapshotsWithSharedSections: this.db.prepare(
+        `SELECT s.*, c.identity_key AS c_identity_key, c.name AS c_name, c.realm AS c_realm
+           FROM snapshots s JOIN characters c ON c.id = s.character_id
+          WHERE s.parsed_json LIKE '%"accountBank"%' OR s.parsed_json LIKE '%"guildBank"%'
+          ORDER BY s.id`,
+      ),
     };
+    // One-time, idempotent: journals shared storage already present in stored snapshots.
+    if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
   }
 
   /**
@@ -176,6 +331,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             isFirstSnapshot: false,
             isDuplicate: true,
             isLatest: newest?.id === existing.id,
+            sharedStorage: [],
           };
         }
       } else {
@@ -225,6 +381,20 @@ export class SqliteSnapshotStore implements SnapshotStore {
         );
       }
 
+      // Shared storage carried by this export joins the journal in THIS transaction: either the
+      // snapshot and its admitted observations are stored together, or neither is.
+      const sharedStorage = this.recordSharedStorage(
+        parsed,
+        {
+          snapshotId: newId,
+          sourceIdentityKey: identity.key,
+          sourceName: identity.name,
+          sourceRealm: identity.realm,
+          exportObservedAt: snapshotObservedAt(rows[index].generated_at, rows[index].imported_at),
+        },
+        now,
+      );
+
       return {
         character: this.summarize(characterRow.id)!,
         snapshot,
@@ -233,7 +403,137 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isFirstSnapshot: rows.length === 1,
         isDuplicate: false,
         isLatest,
+        sharedStorage,
       };
+    });
+  }
+
+  // --- Shared-storage journal ------------------------------------------------------------------------
+  //
+  // Persistence only. Every rule (admission, identity, effective time, selection) lives in
+  // sharedStorage.ts; this class loads rows into that model and writes back exactly what it decided.
+  // Deleting a character or a snapshot never touches these tables.
+
+  /** Loads the journal (or only the given owners') into the pure domain model. */
+  private loadSharedJournalFor(ownerKeys?: readonly string[]): SharedJournal {
+    if (ownerKeys?.length === 0) return { entries: new Map() };
+    const marks = ownerKeys ? ownerKeys.map(() => "?").join(", ") : "";
+    const observationRows = ownerKeys
+      ? many<SharedObservationRow>(this.db.prepare(`SELECT * FROM shared_observations WHERE owner_key IN (${marks}) ORDER BY id`), ...ownerKeys)
+      : many<SharedObservationRow>(this.stmts.allSharedObservations);
+    const sourceRows = ownerKeys
+      ? many<SharedSourceRow>(
+          this.db.prepare(
+            `SELECT s.* FROM shared_observation_sources s JOIN shared_observations o ON o.id = s.observation_id
+              WHERE o.owner_key IN (${marks}) ORDER BY s.observation_id, s.snapshot_id`,
+          ),
+          ...ownerKeys,
+        )
+      : many<SharedSourceRow>(this.stmts.allSharedSources);
+
+    const entries = new Map<string, JournalEntry>();
+    const sourcesByObservation = new Map<number, Map<number, SharedObservationSource>>();
+    for (const row of observationRows) {
+      const observation = restoreSharedObservation({
+        identity: row.identity,
+        ownerKey: row.owner_key,
+        ownerJson: row.owner_json,
+        claimedObservedAt: row.claimed_observed_at,
+        completeness: row.completeness,
+        contentHash: row.content_hash,
+        hashVersion: row.hash_version,
+        contentJson: row.content_json,
+      });
+      const sources = new Map<number, SharedObservationSource>();
+      sourcesByObservation.set(row.id, sources);
+      entries.set(observation.identity, { observation, sources });
+    }
+    for (const row of sourceRows) sourcesByObservation.get(row.observation_id)?.set(row.snapshot_id, toSource(row));
+    return { entries };
+  }
+
+  loadSharedJournal(): SharedJournal {
+    return this.loadSharedJournalFor();
+  }
+
+  projectSharedStorage(): SharedStorageProjection {
+    return projectJournal(this.loadSharedJournal());
+  }
+
+  /**
+   * Admits one export's shared sections. The domain decides everything (admission, identity,
+   * duplicates); this writes back only what it reports as new. Must run inside a transaction.
+   */
+  private recordSharedStorage(parsed: ParsedSnapshot, carrier: CarrierExport, now: number): SharedStorageImportOutcome[] {
+    if (!parsed.accountBank && !parsed.guildBank) return [];
+    const owners = admitExport(parsed, carrier).flatMap((a) => (a.admitted ? [a.observation.ownerKey] : []));
+    const { sections } = recordExport(this.loadSharedJournalFor(owners), parsed, carrier);
+    for (const section of sections) {
+      const { observation, source, outcome } = section;
+      if (!observation || !source || outcome === "already-known" || outcome === "skipped") continue;
+      if (outcome === "new-observation") {
+        const stored = serializeSharedObservation(observation);
+        this.stmts.insertSharedObservation.run(
+          stored.identity,
+          stored.ownerKey,
+          observation.owner.kind,
+          stored.ownerJson,
+          stored.claimedObservedAt,
+          stored.completeness,
+          stored.contentHash,
+          stored.hashVersion,
+          stored.contentJson,
+          now,
+        );
+      }
+      const observationId = one<{ id: number }>(this.stmts.sharedObservationId, observation.identity)!.id;
+      this.stmts.insertSharedSource.run(
+        observationId,
+        source.snapshotId,
+        source.carrierState,
+        source.exportObservedAt,
+        source.sourceIdentityKey,
+        source.sourceName,
+        source.sourceRealm,
+        source.snapshotVisit ?? null,
+        source.lastVisit ?? null,
+        source.visitedNpc ?? null,
+        source.visitedZone ?? null,
+        source.coverageNote ?? null,
+        source.refreshIssue ?? null,
+        source.pending ? 1 : null,
+      );
+    }
+    return sections.map(toImportOutcome);
+  }
+
+  backfillSharedStorage(): SharedStorageBackfillResult {
+    return this.inTransaction(() => {
+      const now = Math.floor(Date.now() / 1000);
+      const result: SharedStorageBackfillResult = { snapshotsWithSharedSections: 0, observationsAdded: 0, sourcesAdded: 0 };
+      const rows = many<SnapshotRow & { c_identity_key: string; c_name: string; c_realm: string }>(this.stmts.snapshotsWithSharedSections);
+      for (const row of rows) {
+        const parsed = JSON.parse(row.parsed_json) as ParsedSnapshot;
+        if (!parsed.accountBank && !parsed.guildBank) continue;
+        result.snapshotsWithSharedSections++;
+        const outcomes = this.recordSharedStorage(
+          parsed,
+          {
+            snapshotId: row.id,
+            sourceIdentityKey: row.c_identity_key,
+            sourceName: row.c_name,
+            sourceRealm: row.c_realm,
+            exportObservedAt: snapshotObservedAt(row.generated_at, row.imported_at),
+          },
+          now,
+        );
+        for (const outcome of outcomes) {
+          if (outcome.outcome === "recorded") result.observationsAdded++;
+          if (outcome.outcome === "recorded" || outcome.outcome === "source-added") result.sourcesAdded++;
+        }
+      }
+      this.stmts.setMeta.run(SHARED_BACKFILL_KEY, SHARED_BACKFILL_VERSION);
+      return result;
     });
   }
 

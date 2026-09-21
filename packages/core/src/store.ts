@@ -6,6 +6,7 @@ import type { ParsedSnapshot, VersionOrUnknown } from "./types.ts";
 import type { SnapshotDiff } from "./diff.ts";
 import type { AccountFacts } from "./accountFacts.ts";
 import type { AccountContext } from "./accountContext.ts";
+import type { SharedJournal, SharedSectionName, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -62,6 +63,29 @@ export interface RecentChange {
   diff: SnapshotDiff;
 }
 
+/**
+ * What an import did with one shared-storage section (Warband / Guild Bank). The section itself
+ * stays in the character's snapshot exactly as before; this only reports whether it was admitted
+ * into the shared-storage journal (see sharedStorage.ts). Deterministic and free of storage details.
+ */
+export interface SharedStorageImportOutcome {
+  section: SharedSectionName;
+  /**
+   * recorded      - a new underlying observation was journaled
+   * source-added  - the observation was already known; this export was added as another source of it
+   * already-known - nothing changed (this export was already a recorded source)
+   * skipped       - not evidence (UNKNOWN), not attributable to an owner, or not anchored in time; see `reason`
+   */
+  outcome: "recorded" | "source-added" | "already-known" | "skipped";
+  reason?: SkipReason;
+  /** The owner the observation belongs to (e.g. "retail::warband::local"); absent when skipped. */
+  ownerKey?: string;
+  /** True when this import made the observation its owner's current (newest informative) state. False when it recorded an older, partial or informationless one. */
+  becameCurrent?: boolean;
+  /** False when the observation scanned nothing (e.g. every guild tab inaccessible): recorded, but never a current state. */
+  informative?: boolean;
+}
+
 export interface ImportResult {
   character: StoredCharacterSummary;
   /** The stored snapshot for this export. For a duplicate, the EXISTING snapshot - nothing new was stored. */
@@ -76,6 +100,18 @@ export interface ImportResult {
   isDuplicate: boolean;
   /** Whether this snapshot is now the character's current (newest-observed) state. False when an older export was imported after a newer one. */
   isLatest: boolean;
+  /**
+   * What the export's shared-storage sections did to the shared-storage journal, in section order
+   * (Warband, then Guild). Empty for a duplicate export (nothing was imported) and for an export with no shared sections.
+   */
+  sharedStorage: SharedStorageImportOutcome[];
+}
+
+/** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */
+export interface SharedStorageBackfillResult {
+  snapshotsWithSharedSections: number;
+  observationsAdded: number;
+  sourcesAdded: number;
 }
 
 /** What a successful character deletion removed. Counts are read from the rows actually deleted, not estimated. */
@@ -106,6 +142,19 @@ export interface SnapshotStore {
    * its next computation with nothing further to invalidate.
    */
   deleteCharacter(identityKey: string): DeleteCharacterResult | undefined;
+  /**
+   * The persisted shared-storage journal (immutable observations + provenance), as the pure
+   * shared-storage domain model. Character deletion never removes anything from it.
+   */
+  loadSharedJournal(): SharedJournal;
+  /** The current state of every shared-storage owner: `projectJournal(loadSharedJournal())`. Read-time and DERIVED; nothing is cached. */
+  projectSharedStorage(): SharedStorageProjection;
+  /**
+   * Idempotently admits shared-storage sections of already-stored snapshots into the journal using the
+   * same domain rules as import. Never alters snapshots and never removes journal rows. Runs automatically
+   * once per database; safe to call again.
+   */
+  backfillSharedStorage(): SharedStorageBackfillResult;
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   getCharacter(identityKey: string): StoredCharacterSummary | undefined;

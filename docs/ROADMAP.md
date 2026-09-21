@@ -1,8 +1,9 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-21. Dashboard baseline: `feature/dashboard-integration` at
-`0f525a7` (not merged to `main`, which is at `797fc3d`). Tests at that baseline: core 281,
-server 82, web 76; typechecks clean; production build succeeds.
+Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
+merged to `main`, which is at `797fc3d`), including shared-storage checkpoints C1 (`90ff3c1`)
+and C2 (persistence and import integration). Tests at that baseline: core 378, server 82,
+web 76; typechecks clean; production build succeeds.
 
 ## How to use this roadmap
 
@@ -36,50 +37,56 @@ Where a link points at another repository, the path is given relative to that re
 
 Work happening now.
 
-- [ ] **Forever completion pass (GearExport).** A substantial completion pass is preserved
-  **uncommitted** in the GearExport working tree.
-  - Implemented and covered by automated tests: Forever 1.60.1 / build 69913 / interface
-    16001 guard; identity; level/XP; faction; money; location; equipment; normalized
-    effective stats; bags; professions; async playtime; known spells; character-bank
-    collector; trainer collector; effective-stat diagnostic; focused Forever regression tests.
-  - Live-validated: identity/location/XP/money, equipment, effective stats, bags,
-    professions (subject to the discrepancy below), playtime, known spells.
-  - Still needs live work:
-    - [ ] first live **Character Bank** validation
-    - [ ] **trainer** validation
-    - [ ] investigate the profession **20/75 → 0/0** discrepancy: login/UI hydration or
-      timing versus a meaningful zero. Until resolved, do not treat 0/0 as an observed value.
-  - Then: reconcile the stale Forever Phase 1/2 documents → full validation → commit → push.
-  - Scope note: Forever Guild Bank is **not** planned; no such plan is documented.
+- [x] **Forever completion pass (GearExport): complete.** GearExport branch
+  `feature/retail-bank-support-implementation`, commit
+  `791cb9d33d9b979441550858a6708c61a4d4dcdd` (`feat: complete live-validated Forever support`).
+  - Live validation passed for **Character Bank**, **Trainers** and **Professions**.
+  - Professions trust fix: values now come from `GetProfessions()` / `GetProfessionInfo()`
+    instead of unhydrated `C_TradeSkillUI` skill values. After a fresh `/reload`, before
+    opening any trade-skill window, Cooking 5/75, Engineering 20/75 and Mining 23/75 are
+    reported correctly.
+  - Bounded limitations, intentionally kept: the build guard is limited to Forever 1.60.1
+    build 69913; only live-proven effective-stat keys are normalized; trainer rank and spell
+    ID are unavailable from the validated tuple; Character Bank only (no Forever Warband or
+    Guild Bank; none is planned); defensive UNKNOWN/LAST_SEEN handling remains for
+    malformed or unavailable profession tuples.
+  - What remains is release acceptance: see [Validation & Release Gates](#validation--release-gates) (item 14).
   - Detail: GearExport `FOREVER_PHASE1.md`, `FOREVER_PHASE2.md`, `FOREVER_BAGS.md`,
     `FOREVER_PROFESSIONS.md`, `FOREVER_REMAINING.md`, `FOREVER_SPELLS.md`,
     `FOREVER_STATS_DIAGNOSTIC.md`. Dashboard side: [ARCHITECTURE.md](ARCHITECTURE.md) ("Forever").
+
+- [ ] **Shared-storage reconciliation** (in progress: C1 and C2 done, C3-C6 remaining).
+  Warband and Guild storage belong to an owner, not to the character whose export carried
+  them. Approved design: an immutable journal of observations plus provenance, a
+  deterministic read-time projection per owner (Warband = installation-local account scope;
+  guild = opaque `GuildClubID` text), OBSERVED/UNKNOWN/DERIVED/LAST_SEEN preserved.
+  Detail: [ARCHITECTURE.md](ARCHITECTURE.md) → "Shared storage (Warband + Guild Bank): reconciled journal".
+  - [x] **C1** pure domain module and tests: `90ff3c11167707c284ee71940e9265bed139799f`
+    (`feat: add pure shared-storage reconciliation domain module`).
+  - [x] **C2** persisted journal, transactional import integration, idempotent backfill of
+    existing databases, content-hash version persisted, store read seam
+    (`loadSharedJournal` / `projectSharedStorage`), additive `ImportResult.sharedStorage`
+    (`feat: persist reconciled shared storage`). Character deletion already leaves shared
+    observations and their provenance labels intact.
+  - [ ] **C3** owner-scoped deletion operations (delete Warband history, delete Guild X
+    history, delete all Dashboard data), with explicit confirmation wording. Character
+    deletion never deletes shared observations.
+  - [ ] **C4** read endpoint and web client for the shared-storage projection.
+  - [ ] **C5** presentation: owner-level Warband/Guild views, freshness and provenance,
+    navigation; retitle the transitional character-page cards.
+  - [ ] **C6** final documentation and roadmap update.
+  - **Still deliberately excluded** from totals, item search, diffs, AccountContext and LLM
+    context; each is a later consumer (see Dashboard Product / Ask My Account). Shared totals
+    must count each owner once and be labelled as asynchronous observations.
+  - **Deferred / open:** per-tab Guild Bank merging (needs per-tab item rows from the addon);
+    a stable Warband account discriminator (addon); whether club IDs need a region to be
+    unique; the textual form of a real `GuildClubID` (no live guild observation exists yet).
 
 ---
 
 ## Next
 
 Work intended next, in this order.
-
-- [ ] **Shared-storage reconciliation (design, then implementation).**
-  Today: the Character Bank is character-scoped; the Warband Bank is account-scoped and the
-  Guild Bank is guild-scoped, but **both are stored inside the exporting character's
-  snapshot** and shown as transitional cards.
-  The final model needs:
-  - first-class account-scoped Warband state
-  - first-class guild-scoped state keyed by `GuildClubID`
-  - latest-*complete*-observation selection
-  - LAST_SEEN reconciliation across the characters that transport the same storage
-  - defined behavior when several characters observe the same storage
-  - deletion semantics: deleting a character must not destroy an independently valid
-    shared observation
-  - shared-storage freshness and provenance
-  - item search, LLM context, and totals/presentation behavior
-  - **Constraint:** UNKNOWN and LAST_SEEN must not be collapsed into current truth. Until
-    this lands, shared storage stays out of totals, item search, diffs, AccountContext, and
-    LLM context.
-  - Detail: [ARCHITECTURE.md](ARCHITECTURE.md) → "Shared storage (Warband + Guild Bank): transitional".
-  - Decisions needed: see [Needs Decision](#needs-decision).
 
 - [ ] **Richer item metadata / expansion awareness (addon export → Dashboard).**
   Current inventory exports lack the information needed for reliable expansion/category
@@ -244,22 +251,23 @@ repeating old unchecked boxes.
   delayed data, bags, trainers, professions, spells, character separation, UI/error
   checks. Reconcile the stale wording in `WOWSYNC_ACCEPTANCE.md` and `RETAIL_TEST_PLAN.md`
   (including the icon item, which is now integrated) rather than repeating it.
-- [ ] **14. Forever acceptance.** After the live bank/trainer/profession work in
-  [Active](#active): reconcile docs, full package validation, release acceptance.
+- [ ] **14. Forever acceptance.** The live Character Bank / Trainers / Professions validation
+  has passed (GearExport `791cb9d`). Remaining: confirm the Forever documents are
+  reconciled, full package validation, release acceptance.
 - [ ] **15. Public release acceptance.** Explicitly deferred until sufficient live evidence
   and final fixes.
 ---
 
 ## Needs Decision
 
-Unresolved architectural questions. **None are decided by this document.** Record the
-decision (and where it is written up) here when made.
+Architectural questions. This document does not decide them: record a decision here (and
+where it is written up) when it is made; open parts stay listed.
 
 | Question | Blocks | Notes |
 | --- | --- | --- |
-| Final Warband persistence / reconciliation model | Shared-storage reconciliation | Account-scoped; which observation is "latest complete"; LAST_SEEN across transporting characters |
-| Final Guild persistence model keyed by `GuildClubID` | Shared-storage reconciliation | The club ID is text (values can exceed 2^53) |
-| Deletion semantics for shared observations | Shared-storage reconciliation | Deleting a character must not destroy an independently valid shared observation |
+| Final Warband persistence / reconciliation model | Shared-storage reconciliation | **Decided and implemented (C1-C2):** journal + read-time projection, installation-local account scope ([ARCHITECTURE.md](ARCHITECTURE.md)). **Open (needs the addon):** a stable account discriminator; until then two Battle.net accounts in one Dashboard reconcile as one |
+| Final Guild persistence model keyed by `GuildClubID` | Shared-storage reconciliation | **Decided and implemented (C1-C2):** opaque text key. **Open (addon):** whether a region is needed for uniqueness; the textual form of a real club ID |
+| Deletion semantics for shared observations | Shared-storage reconciliation | **Decided:** deleting a character (or a snapshot) never deletes shared observations; source labels are kept. **Open (C3):** the explicit owner-scoped operations and their confirmation wording |
 | Character identity / GUID strategy, especially rename/transfer | Identity, companion, Activity History | Identity is `version::realm::name`; the text export carries no GUID while SavedVariables is GUID-keyed |
 | Desktop companion transport / handoff | Desktop companion | Depends on the feasibility checkpoint (SavedVariables flush timing) |
 | Local companion API authentication | Desktop companion | Whether a token is needed beyond loopback + Host/Origin protection |
@@ -283,8 +291,10 @@ Guard against re-adding. This is not a changelog.
 - Activity History architecture/design (design only; see [Post-release](#post-release--major-subsystems))
 - README suggested LLM/ChatGPT prompt set
 - WoWSync icon integration (TOC `IconTexture` on all builds)
-- Forever live-validated observation: equipment, bags, professions, playtime, known spells,
-  effective-stat work (the remaining Forever work is under [Active](#active))
+- Forever completion pass: live-validated Character Bank, Trainers, Professions, equipment,
+  bags, playtime, known spells and effective-stat work (GearExport
+  `feature/retail-bank-support-implementation` @ `791cb9d`); only release acceptance remains
+  (item 14)
 
 **Dashboard**
 - Trust hardening: unknown is not zero, freshness-aware totals, observation-time ordering
@@ -294,5 +304,8 @@ Guard against re-adding. This is not a changelog.
 - Guild Bank parser compatibility and transitional, truthful display. Current Retail
   exports, which always contain `[GUILD BANK]`, import successfully
 - Product review document
+- Shared-storage reconciliation foundation: C1 pure domain module (`90ff3c1`) and C2
+  persisted journal + transactional import integration + backfill (the rest of the
+  reconciliation is under [Active](#active))
 - Integration branch `feature/dashboard-integration` (`0f525a7`): main + trust hardening +
   Warband + Guild Bank + product review. Not yet merged to `main`.

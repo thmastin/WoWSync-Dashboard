@@ -123,9 +123,9 @@ export interface GuildBankTab {
  * Retail-only guild-scoped shared storage ([GUILD BANK]). Deliberately separate
  * from the character bank and the Warband bank: its contents belong to the guild,
  * not to the character that happened to export it, and it must never be merged
- * into either. Its final Dashboard model (guild-scoped reconciliation across the
- * characters that transport it) is NOT decided yet - for now it only rides along
- * inside the exporting character's snapshot.
+ * into either. This is the exporting character's own COPY, exactly as delivered. The
+ * guild-scoped state (reconciled across every character that carries it, keyed by
+ * `guildClubId`) is the shared-storage journal in sharedStorage.ts.
  *
  * The inventory body is aggregated by the addon and does NOT retain which tab an
  * item came from; only `tabs` says which tabs were scanned, inaccessible or unconfirmed.

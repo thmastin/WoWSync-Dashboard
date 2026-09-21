@@ -172,6 +172,8 @@ export interface SharedObservation {
   completeness: Completeness;
   content: SharedContent;
   contentHash: string;
+  /** The `SHARED_CONTENT_HASH_VERSION` `contentHash` was computed under. */
+  hashVersion: number;
 }
 
 /** Provenance: one carrying export of an observation. */
@@ -194,7 +196,13 @@ export interface SharedObservationSource {
 
 // --- Canonicalization and identity ---------------------------------------------------------------
 
-const CONTENT_HASH_VERSION = 1;
+/**
+ * Version of the canonicalization + hash below. It is stored next to every persisted
+ * observation: changing what is hashed (or how) means bumping this and re-hashing stored
+ * observations in an explicit migration, never silently. Observations carrying another
+ * version are still loaded as they are; only their hash cannot be re-verified.
+ */
+export const SHARED_CONTENT_HASH_VERSION = 1;
 
 /** JSON with sorted object keys; undefined becomes null. Deterministic for equal structures. */
 function canonicalJson(value: unknown): string {
@@ -258,7 +266,7 @@ function canonicalContent(section: AccountBankSection | GuildBankSection): Share
  */
 export function hashSharedContent(kind: SharedStorageOwner["kind"], completeness: Completeness, content: SharedContent): string {
   return createHash("sha256")
-    .update(canonicalJson({ v: CONTENT_HASH_VERSION, kind, completeness, ...content }))
+    .update(canonicalJson({ v: SHARED_CONTENT_HASH_VERSION, kind, completeness, ...content }))
     .digest("hex");
 }
 
@@ -285,6 +293,11 @@ export type SkipReason =
 export type Admission =
   | { admitted: true; section: SharedSectionName; observation: SharedObservation; source: SharedObservationSource }
   | { admitted: false; section: SharedSectionName; reason: SkipReason };
+
+/** Something was actually scanned. "Items: EMPTY" with no scanned container is not evidence of an empty bank. */
+export function isInformativeContent(content: SharedContent): boolean {
+  return content.containers.length > 0 || content.items.length > 0;
+}
 
 function isUnixSeconds(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -328,6 +341,7 @@ export function admitSection(section: AccountBankSection | GuildBankSection, car
     completeness,
     content,
     contentHash,
+    hashVersion: SHARED_CONTENT_HASH_VERSION,
   };
   const source: SharedObservationSource = {
     snapshotId: carrier.snapshotId,
@@ -400,6 +414,9 @@ export interface RecordedSection {
   identity?: string;
   /** True when this call made the observation its owner's CURRENT one (it was not before). */
   becameCurrent?: boolean;
+  /** What was admitted (absent when skipped), so a persistence layer writes exactly what the domain decided. */
+  observation?: SharedObservation;
+  source?: SharedObservationSource;
 }
 
 /** Records every shared section of one export. Skipped sections change nothing (UNKNOWN never erases). */
@@ -425,6 +442,8 @@ export function recordExport(
       ownerKey: admission.observation.ownerKey,
       identity: admission.observation.identity,
       becameCurrent: after === admission.observation.identity && before !== after,
+      observation: admission.observation,
+      source: admission.source,
     });
   }
   return { journal: current, sections };
@@ -459,6 +478,7 @@ export interface ProjectedObservation {
   informative: boolean;
   content: SharedContent;
   contentHash: string;
+  contentHashVersion: number;
   coverage: ObservationCoverage;
   /** Provenance, sorted by (exportObservedAt, snapshotId). */
   sources: SharedObservationSource[];
@@ -539,10 +559,10 @@ function project(entry: JournalEntry): ProjectedObservation {
     effectiveObservedAt,
     claimedAfterCarrier: observation.claimedObservedAt > effectiveObservedAt,
     completeness: observation.completeness,
-    // Something was actually scanned. "Items: EMPTY" with no scanned container is not evidence of an empty bank.
-    informative: content.containers.length > 0 || content.items.length > 0,
+    informative: isInformativeContent(content),
     content,
     contentHash: observation.contentHash,
+    contentHashVersion: observation.hashVersion,
     coverage: coverageOf(content),
     sources,
     carrierStates: [...new Set(sources.map((s) => s.carrierState))].sort(),
@@ -628,4 +648,144 @@ export function projectJournal(journal: SharedJournal): SharedStorageProjection 
     warband: projections.find((p) => p.owner.kind === "warband"),
     guilds: projections.filter((p) => p.owner.kind === "guild"),
   };
+}
+
+// --- Persistence support -------------------------------------------------------------------------
+//
+// Storage-neutral (de)serialization, so a persistence layer never re-implements domain rules and a
+// journal loaded from disk is structurally identical to the one that was written.
+
+/** An observation as a persistence layer stores it: plain columns plus two JSON documents. */
+export interface StoredSharedObservation {
+  identity: string;
+  ownerKey: string;
+  /** Serialized owner. Carries the whole owner (including any future account discriminator), so the schema needs no change for one. */
+  ownerJson: string;
+  claimedObservedAt: number;
+  completeness: string;
+  contentHash: string;
+  hashVersion: number;
+  contentJson: string;
+}
+
+export class SharedStorageIntegrityError extends Error {
+  constructor(message: string) {
+    super(`Stored shared-storage observation is not valid: ${message}`);
+    this.name = "SharedStorageIntegrityError";
+  }
+}
+
+export function serializeSharedObservation(observation: SharedObservation): StoredSharedObservation {
+  return {
+    identity: observation.identity,
+    ownerKey: observation.ownerKey,
+    ownerJson: JSON.stringify(observation.owner),
+    claimedObservedAt: observation.claimedObservedAt,
+    completeness: observation.completeness,
+    contentHash: observation.contentHash,
+    hashVersion: observation.hashVersion,
+    contentJson: JSON.stringify(observation.content),
+  };
+}
+
+function record(value: unknown, what: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new SharedStorageIntegrityError(`${what} is not an object`);
+  return value as Record<string, unknown>;
+}
+function list(value: unknown, what: string): Record<string, unknown>[] {
+  if (!Array.isArray(value)) throw new SharedStorageIntegrityError(`${what} is not a list`);
+  return value.map((entry) => record(entry, what));
+}
+const optString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const optNumber = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+const optBoolean = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+
+function restoreOwner(json: string): SharedStorageOwner {
+  const raw = record(JSON.parse(json), "owner");
+  if (raw.kind === "guild" && raw.version === "retail" && typeof raw.guildClubId === "string") return guildOwner(raw.guildClubId);
+  if (raw.kind === "warband" && raw.version === "retail") {
+    const account = record(raw.account, "owner account");
+    if (account.kind === "installation-local") return warbandOwner(INSTALLATION_LOCAL_ACCOUNT);
+  }
+  throw new SharedStorageIntegrityError(`unrecognized owner ${json}`);
+}
+
+/**
+ * Rebuilds content with EVERY field present (undefined when absent), exactly like a fresh
+ * admission, so a restored observation is deep-equal to the one that was serialized.
+ */
+function restoreContent(json: string): SharedContent {
+  const raw = record(JSON.parse(json), "content");
+  const content: SharedContent = {
+    guildName: optString(raw.guildName),
+    purchasedTabs: optNumber(raw.purchasedTabs),
+    tabs: list(raw.tabs, "tabs").map((t) => ({
+      id: optNumber(t.id),
+      name: optString(t.name),
+      viewable: optBoolean(t.viewable),
+      state: optString(t.state),
+      note: optString(t.note),
+    })),
+    containers: list(raw.containers, "containers").map((c) => {
+      if (typeof c.id !== "number") throw new SharedStorageIntegrityError("container without an id");
+      return {
+        id: c.id,
+        storage: optString(c.storage),
+        capacity: optNumber(c.capacity),
+        free: optNumber(c.free),
+        family: optString(c.family),
+        bagRef: optString(c.bagRef),
+      };
+    }),
+    freeSlots: optNumber(raw.freeSlots),
+    totalSlots: optNumber(raw.totalSlots),
+    itemsKnownEmpty: raw.itemsKnownEmpty === true,
+    items: list(raw.items, "items").map((i) => ({
+      itemRef: optString(i.itemRef),
+      name: optString(i.name),
+      qty: optNumber(i.qty),
+      bound: optString(i.bound),
+      vendorEachCopper: optNumber(i.vendorEachCopper),
+    })),
+  };
+  return deepFreeze(content);
+}
+
+/** Inverse of `serializeSharedObservation`. Throws `SharedStorageIntegrityError` on a row that cannot be one of ours. */
+export function restoreSharedObservation(stored: StoredSharedObservation): SharedObservation {
+  let owner: SharedStorageOwner;
+  let content: SharedContent;
+  try {
+    owner = restoreOwner(stored.ownerJson);
+    content = restoreContent(stored.contentJson);
+  } catch (err) {
+    if (err instanceof SharedStorageIntegrityError) throw err;
+    throw new SharedStorageIntegrityError(`unreadable JSON (${(err as Error).message})`);
+  }
+  if (stored.completeness !== "complete" && stored.completeness !== "partial") {
+    throw new SharedStorageIntegrityError(`unknown completeness "${stored.completeness}"`);
+  }
+  if (ownerKey(owner) !== stored.ownerKey) throw new SharedStorageIntegrityError(`owner key ${stored.ownerKey} does not match its owner`);
+  if (observationIdentity(stored.ownerKey, stored.claimedObservedAt, stored.contentHash) !== stored.identity) {
+    throw new SharedStorageIntegrityError(`identity ${stored.identity} does not match its owner, time and content hash`);
+  }
+  return deepFreeze({
+    identity: stored.identity,
+    ownerKey: stored.ownerKey,
+    owner,
+    claimedObservedAt: stored.claimedObservedAt,
+    completeness: stored.completeness,
+    content,
+    contentHash: stored.contentHash,
+    hashVersion: stored.hashVersion,
+  });
+}
+
+/**
+ * Re-checks an observation's content hash. `undefined` means "cannot be verified" (it was hashed
+ * under a different `SHARED_CONTENT_HASH_VERSION` than this code implements); it is not a failure.
+ */
+export function sharedObservationHashMatches(observation: SharedObservation): boolean | undefined {
+  if (observation.hashVersion !== SHARED_CONTENT_HASH_VERSION) return undefined;
+  return hashSharedContent(observation.owner.kind, observation.completeness, observation.content) === observation.contentHash;
 }
