@@ -510,6 +510,12 @@ export interface OwnerProjection {
   /** Two or more observations with DIFFERENT content share the top effective time; `current` is picked by a fixed rule and the rest are listed. */
   conflict?: { effectiveObservedAt: number; others: ProjectedObservation[] };
   observationCount: { total: number; complete: number; partial: number; informationless: number };
+  /**
+   * Guild only: display name from the NEWEST observation of any kind that carries one (a guild can be
+   * renamed; identity is the club id). Present even when no observation is informative enough to be
+   * `current`. Display data only.
+   */
+  guildName?: string;
 }
 
 function compareNewestFirst(a: ProjectedObservation, b: ProjectedObservation): number {
@@ -610,6 +616,7 @@ export function projectOwner(owner: SharedStorageOwner, entries: readonly Journa
     basis: "DERIVED",
     owner,
     ownerKey: key,
+    guildName: owner.kind === "guild" ? projected.find((p) => p.content.guildName !== undefined)?.content.guildName : undefined,
     current,
     latestPartial,
     broaderCoverageEarlier,
@@ -669,10 +676,31 @@ export interface StoredSharedObservation {
 }
 
 export class SharedStorageIntegrityError extends Error {
-  constructor(message: string) {
+  /** What is wrong, without the standard prefix (for aggregating several failures). */
+  readonly detail: string;
+  /** Owner keys of the damaged rows when known (from the row's own owner_key column, so present even if the owner JSON is unreadable). */
+  readonly ownerKeys: readonly string[];
+  constructor(message: string, ownerKeys: readonly string[] = []) {
     super(`Stored shared-storage observation is not valid: ${message}`);
     this.name = "SharedStorageIntegrityError";
+    this.detail = message;
+    this.ownerKeys = ownerKeys;
   }
+}
+
+/**
+ * Inverse of `ownerKey` for keys THIS code produced, strictly: anything else (an unknown prefix, an
+ * empty or whitespace-padded guild id, a different account scope) is `undefined`. Lets a damaged row's
+ * `owner_key` be reported as a typed owner even when its owner JSON cannot be read.
+ */
+export function parseOwnerKey(key: string): SharedStorageOwner | undefined {
+  if (key === "retail::warband::local") return warbandOwner();
+  const prefix = "retail::guild::";
+  if (key.startsWith(prefix)) {
+    const id = key.slice(prefix.length);
+    if (id.length > 0 && id === id.trim()) return guildOwner(id);
+  }
+  return undefined;
 }
 
 export function serializeSharedObservation(observation: SharedObservation): StoredSharedObservation {

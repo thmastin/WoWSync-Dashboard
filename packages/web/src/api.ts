@@ -3,7 +3,11 @@ import type {
   AccountFacts,
   AskAccountResponse,
   DeleteCharacterResult,
+  DeleteSharedStorageOwnerResponse,
   ImportResult,
+  SharedOwnerIdentity,
+  SharedStorageIntegrityErrorBody,
+  SharedStorageResponse,
   StoredCharacterSummary,
   StoredSnapshot,
   VersionOrUnknown,
@@ -24,12 +28,15 @@ export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status?: number;
   readonly code?: string;
-  constructor(message: string, kind: ApiErrorKind, status?: number, code?: string) {
+  /** The server's parsed JSON error body, when it sent one (e.g. the damaged owners of a shared-storage integrity failure). */
+  readonly details?: unknown;
+  constructor(message: string, kind: ApiErrorKind, status?: number, code?: string, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -90,7 +97,7 @@ export async function request<T>(path: string, init?: RequestInit, options: Requ
   if (!res.ok) {
     const message = parsed && isRecord(body) && typeof body.error === "string" ? body.error : httpFallbackMessage(res.status);
     const code = parsed && isRecord(body) && typeof body.code === "string" ? body.code : undefined;
-    throw new ApiError(message, "http", res.status, code);
+    throw new ApiError(message, "http", res.status, code, parsed ? body : undefined);
   }
   if (!parsed) {
     throw new ApiError("The server sent a reply that is not valid JSON. Is something else running on this port?", "parse", res.status);
@@ -170,5 +177,46 @@ export function askAccount(question: string) {
     "/api/ask",
     { method: "POST", body: JSON.stringify({ question }) },
     { validate: (body) => isRecord(body) && typeof body.answer === "string" },
+  );
+}
+
+// --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------
+
+/** validate: the reply is a GET /api/shared-storage document (stable even when empty: warband null, guilds []). */
+export function isSharedStorageResponse(body: unknown): body is SharedStorageResponse {
+  return (
+    isRecord(body) &&
+    body.schema === "shared-storage-1" &&
+    typeof body.asOf === "number" &&
+    (body.warband === null || isRecord(body.warband)) &&
+    Array.isArray(body.guilds)
+  );
+}
+
+/** The reconciled (DERIVED) Warband and guild storage. Not part of AccountFacts or any total. */
+export function fetchSharedStorage(signal?: AbortSignal) {
+  return request<SharedStorageResponse>("/api/shared-storage", undefined, { signal, validate: isSharedStorageResponse });
+}
+
+/** The shared-storage integrity failure a rejected request carried, if that is what it was (else undefined). */
+export function sharedStorageIntegrityDetails(err: unknown): SharedStorageIntegrityErrorBody | undefined {
+  if (!(err instanceof ApiError) || err.code !== "SHARED_STORAGE_INTEGRITY" || !isRecord(err.details) || !Array.isArray(err.details.damagedOwners)) return undefined;
+  return err.details as unknown as SharedStorageIntegrityErrorBody;
+}
+
+/**
+ * EXPLICITLY clears the stored shared-storage history of ONE owner (the Warband, or one guild), as named by an
+ * owner from GET /api/shared-storage. It clears stored history; it is not permanent: a later WoWSync export may
+ * add it again. It never touches characters or snapshots. The route is chosen by the owner's kind and the guild
+ * id is sent verbatim (percent-encoded, never converted to a number); the owner's key is sent only as the
+ * confirmation. The reply is validated: only a body that names the deleted owner counts as success. A 404 with
+ * code SHARED_OWNER_NOT_FOUND means the server says that history is already gone.
+ */
+export function deleteSharedStorageOwner(owner: SharedOwnerIdentity) {
+  const path = owner.kind === "warband" ? "/api/shared-storage/warband" : `/api/shared-storage/guilds/${encodeURIComponent(owner.guildClubId)}`;
+  return request<DeleteSharedStorageOwnerResponse>(
+    path,
+    { method: "DELETE", body: JSON.stringify({ confirmOwnerKey: owner.ownerKey }) },
+    { validate: (body) => hasObject("deleted")(body) && isRecord((body as { deleted: { owner?: unknown } }).deleted.owner) },
   );
 }

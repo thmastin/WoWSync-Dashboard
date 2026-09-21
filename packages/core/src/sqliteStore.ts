@@ -12,6 +12,7 @@ import {
   projectJournal,
   recordExport,
   restoreSharedObservation,
+  SharedStorageIntegrityError,
   serializeSharedObservation,
   type CarrierExport,
   type CarrierState,
@@ -463,21 +464,30 @@ export class SqliteSnapshotStore implements SnapshotStore {
 
     const entries = new Map<string, JournalEntry>();
     const sourcesByObservation = new Map<number, Map<number, SharedObservationSource>>();
+    // A damaged row is never skipped: every row is checked, then ONE error names every damaged owner
+    // (from each row's own owner_key, so it works even when that row's owner JSON is the damaged part).
+    const damaged = new Map<string, string>();
     for (const row of observationRows) {
-      const observation = restoreSharedObservation({
-        identity: row.identity,
-        ownerKey: row.owner_key,
-        ownerJson: row.owner_json,
-        claimedObservedAt: row.claimed_observed_at,
-        completeness: row.completeness,
-        contentHash: row.content_hash,
-        hashVersion: row.hash_version,
-        contentJson: row.content_json,
-      });
-      const sources = new Map<number, SharedObservationSource>();
-      sourcesByObservation.set(row.id, sources);
-      entries.set(observation.identity, { observation, sources });
+      try {
+        const observation = restoreSharedObservation({
+          identity: row.identity,
+          ownerKey: row.owner_key,
+          ownerJson: row.owner_json,
+          claimedObservedAt: row.claimed_observed_at,
+          completeness: row.completeness,
+          contentHash: row.content_hash,
+          hashVersion: row.hash_version,
+          contentJson: row.content_json,
+        });
+        const sources = new Map<number, SharedObservationSource>();
+        sourcesByObservation.set(row.id, sources);
+        entries.set(observation.identity, { observation, sources });
+      } catch (err) {
+        if (!(err instanceof SharedStorageIntegrityError)) throw err;
+        if (!damaged.has(row.owner_key)) damaged.set(row.owner_key, err.detail);
+      }
     }
+    if (damaged.size > 0) throw new SharedStorageIntegrityError([...damaged.values()][0], [...damaged.keys()].sort());
     for (const row of sourceRows) sourcesByObservation.get(row.observation_id)?.set(row.snapshot_id, toSource(row));
     return { entries };
   }

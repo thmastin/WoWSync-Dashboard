@@ -8,6 +8,7 @@ import express, { type Express } from "express";
 import {
   VERSION_LABELS,
   WOW_VERSIONS,
+  SharedStorageIntegrityError,
   WowSyncParseError,
   diffSnapshots,
   summarizeTrainerCategory,
@@ -19,6 +20,7 @@ import {
 } from "@wowsync-dashboard/core";
 import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.ts";
 import { hostGuard } from "./net.ts";
+import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -265,10 +267,16 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
       if (err instanceof WowSyncParseError) {
         return res.status(422).json({ error: err.message });
       }
+      // A damaged shared-storage journal blocks an import that touches that owner (the whole import is rolled back).
+      if (err instanceof SharedStorageIntegrityError) {
+        return res.status(500).json(integrityErrorBody(err, "The export was NOT imported."));
+      }
       console.error(err);
       res.status(500).json({ error: "Unexpected error while importing the export." });
     }
   });
+
+  registerSharedStorageRoutes(app, store);
 
   // Unknown API paths are JSON 404s like every other API error - never
   // Express's default HTML page (which the web client cannot tell from a

@@ -482,3 +482,90 @@ export interface AskAccountResponse {
   contextSummary: { characterCount: number; versions: string[] };
   usage?: AskAccountUsage;
 }
+
+// --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------
+// Mirrors packages/core/src/sharedStorageApi.ts (GET /api/shared-storage and the owner-delete routes).
+// Everything here is DERIVED from OBSERVED journal facts; a view is ONE real observation with its own time
+// and coverage. An UNKNOWN scalar is an absent key, never 0. It is NOT part of AccountFacts, totals, search or AI context.
+
+export type CarrierState = "OBSERVED" | "LAST_SEEN";
+
+/** Who owns a shared storage. Not a character. The Warband's "installation-local" scope is NOT a Battle.net account id. */
+export type SharedOwnerIdentity =
+  | { kind: "warband"; ownerKey: string; accountScope: "installation-local" }
+  | { kind: "guild"; ownerKey: string; guildClubId: string; guildName?: string };
+
+export interface SharedSourceView {
+  characterName: string;
+  characterRealm: string;
+  characterIdentityKey: string;
+  carrierState: CarrierState;
+  exportObservedAt: number;
+  snapshotVisit?: number;
+  visitedNpc?: string;
+  visitedZone?: string;
+}
+
+export interface SharedProvenanceView {
+  totalSources: number;
+  totalCharacters: number;
+  /** Most recent carrying exports, newest first, capped by the server. */
+  sources: SharedSourceView[];
+  truncated: boolean;
+}
+
+export interface SharedContent {
+  guildName?: string;
+  purchasedTabs?: number;
+  tabs: GuildBankTab[];
+  containers: { id: number; storage?: string; capacity?: number; free?: number; family?: string; bagRef?: string }[];
+  freeSlots?: number;
+  totalSlots?: number;
+  itemsKnownEmpty: boolean;
+  /** Aggregated across the scanned tabs: an item row does not say which tab held it. */
+  items: { itemRef?: string; name?: string; qty?: number; bound?: string; vendorEachCopper?: number }[];
+}
+
+export interface SharedObservationView {
+  claimedObservedAt: number;
+  effectiveObservedAt: number;
+  claimedAfterCarrier: boolean;
+  ageSeconds: number;
+  freshness: "recent" | "stale" | "unknown";
+  completeness: "complete" | "partial";
+  informative: boolean;
+  contentHash: string;
+  liveAtExport: boolean;
+  carrierStates: CarrierState[];
+  coverage: { observedTabs: number[]; inaccessibleTabs: number[]; unconfirmedTabs: number[]; unidentifiedTabs: number; observedContainerIds: number[] };
+  content: SharedContent;
+  provenance: SharedProvenanceView;
+}
+
+export interface SharedOwnerView {
+  owner: SharedOwnerIdentity;
+  basis: "DERIVED";
+  current: SharedObservationView | null;
+  latestPartial: SharedObservationView | null;
+  broaderCoverageEarlier: SharedObservationView | null;
+  conflict: { effectiveObservedAt: number; others: SharedObservationView[] } | null;
+  observationCount: { total: number; complete: number; partial: number; informationless: number };
+}
+
+export interface SharedStorageResponse {
+  schema: "shared-storage-1";
+  asOf: number;
+  warband: SharedOwnerView | null;
+  guilds: SharedOwnerView[];
+}
+
+export interface DeleteSharedStorageOwnerResponse {
+  deleted: { owner: SharedOwnerIdentity; existed: true; observationsDeleted: number; sourcesDeleted: number };
+}
+
+/** The body of a shared-storage integrity failure (HTTP 500, code SHARED_STORAGE_INTEGRITY), available as `ApiError.details`. */
+export interface SharedStorageIntegrityErrorBody {
+  error: string;
+  code: "SHARED_STORAGE_INTEGRITY";
+  damagedOwners: Array<{ ownerKey: string; kind?: "warband" | "guild"; guildClubId?: string }>;
+}

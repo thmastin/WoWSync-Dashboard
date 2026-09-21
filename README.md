@@ -123,6 +123,18 @@ character's exact name. Cancel is the default.
 - Re-importing an export afterwards starts a fresh history for that
   character.
 
+### Shared storage (Warband and Guild Bank) API
+
+Shared storage belongs to its owner (the Warband, or one guild), not to the character whose export carried
+it. `GET /api/shared-storage` returns each owner's reconciled state, derived from the stored observations
+(see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)); it is **not** part of any total, item search, or Ask My Account
+context. The Warband here is this Dashboard's local Retail account scope, not a Battle.net account. Deleting a
+character never removes it. To clear one owner's stored history there are two explicit routes,
+`DELETE /api/shared-storage/warband` and `DELETE /api/shared-storage/guilds/:guildClubId`, each with a JSON body
+`{"confirmOwnerKey": "<owner key from GET>"}`. **This clears stored shared-storage history. A later WoWSync export
+may add it again**, because the addon keeps carrying what it last saw; importing an export that is already stored
+restores nothing. A missing owner is a 404 (`SHARED_OWNER_NOT_FOUND`).
+
 ## Real fixtures
 
 `packages/core/test/fixtures/classic-era/`, `.../retail/`, and

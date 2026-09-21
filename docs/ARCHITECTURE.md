@@ -491,8 +491,8 @@ matches the owner key as data, rejects a malformed owner (an empty or whitespace
 anything, and returns `{ownerKey, existed, observationsDeleted, sourcesDeleted}`; an owner with no history is a
 no-op. It never parses journal content, so it also clears an owner whose rows are corrupt (reads of a corrupt
 journal still fail loudly with `SharedStorageIntegrityError`). Nothing else implies it: not deleting a character
-or snapshot, a character changing guild, or a newer UNKNOWN / partial / inaccessible section. There is no HTTP
-endpoint or UI for it yet.
+or snapshot, a character changing guild, or a newer UNKNOWN / partial / inaccessible section. It is exposed over HTTP
+(next section); there is no UI for it yet.
 
 *New evidence vs. stored history.* An owner deletion is **not a tombstone**. An export imported afterwards that
 carries a valid observation for the owner admits it normally and the journal starts again from that evidence
@@ -506,15 +506,46 @@ Backfill skips, for that owner only, snapshots with an id at or below the cutoff
 it. So "stored before the deletion" stays deleted and "imported after" is ordinary evidence. Importing the exact
 text of an already-stored export is a duplicate and is not new evidence.
 
+**HTTP API** (`packages/server/src/sharedStorageRoutes.ts`; the response types and the pure serializer are in
+`packages/core/src/sharedStorageApi.ts`, mirrored in `packages/web/src/types.ts` with client functions in `api.ts`).
+The server reconciles nothing and queries no tables: it serializes `store.projectSharedStorage()` and calls the typed
+`store.deleteSharedStorageOwner(owner)`.
+- `GET /api/shared-storage` returns `{schema: "shared-storage-1", asOf, warband, guilds[]}`. Empty is a normal
+  answer (`warband: null`, `guilds: []`, never a 404). Each owner has an `owner` identity (Warband:
+  `accountScope: "installation-local"`, which is **not** a Battle.net account id; guild: the exact opaque
+  `guildClubId` string, plus a `guildName` that is display data only), `basis: "DERIVED"`, and
+  `current` / `latestPartial` / `broaderCoverageEarlier` / `conflict` (each `null` when absent) and
+  `observationCount`. An observation view is ONE real observation: claimed and effective time, `ageSeconds` and
+  `freshness` by the Dashboard's single freshness rule, completeness, `informative`, `liveAtExport`,
+  `carrierStates`, `coverage` (observed / inaccessible / unconfirmed tabs), the `content` (an UNKNOWN scalar is an
+  omitted key, never 0), and bounded `provenance`: exact `totalSources` and `totalCharacters`, the newest 10
+  `sources` (character label, realm, carrier state, export time, visit) and `truncated`. No database ids appear;
+  `?now=` pins ages like `/api/account-context`.
+- A damaged journal is never skipped: `GET` answers **500** with `code: "SHARED_STORAGE_INTEGRITY"` and
+  `damagedOwners` (owner key, kind, guild id), with no stack or SQL. An import that touches a damaged owner is
+  refused with the same code (the whole import is rolled back); an import with nothing to reconcile still works.
+- `DELETE /api/shared-storage/warband` and `DELETE /api/shared-storage/guilds/:guildClubId` **clear stored
+  shared-storage history; a later WoWSync export may add it again** (the addon keeps carrying what it last saw, and
+  a genuinely new export is new evidence; an already-stored export is a duplicate and restores nothing). Modeled on the
+  character delete: a JSON body `{"confirmOwnerKey": "<the owner's key from GET>"}` must match the owner the URL
+  names (a non-JSON body never confirms; a display guild name is ignored) - **400** `CONFIRMATION_REQUIRED` /
+  `CONFIRMATION_MISMATCH` / `INVALID_GUILD_CLUB_ID`; **404** `SHARED_OWNER_NOT_FOUND` when the owner has no stored
+  history (nothing deleted); **200** `{deleted: {owner, existed: true, observationsDeleted, sourcesDeleted}}`. The
+  guild id is taken exactly as decoded from the URL (never `Number`/`BigInt`); empty, whitespace-padded,
+  control-character and over-long ids are rejected rather than changed. Owners are built server-side from the fixed
+  route; a client never supplies an owner key as identity.
+- Security is the existing baseline, unchanged: the app-wide Host guard (Host on every request, Origin on
+  state-changing ones), no CORS headers, default loopback bind. Tests cover the new routes under each.
+
 **Still not consumed.** Shared storage is deliberately **not** in AccountFacts inventory/totals, item
 search, snapshot diffs, AccountContext or the LLM context (tests pin this, including byte-identical facts and
 LLM context with and without shared sections). The character page still shows each export's own copy as a
 transitional card. Later work must count each owner exactly once (one projection per owner key, regardless of
 how many characters carried it) and label shared totals as asynchronous observations.
 
-**Not done yet** (see the roadmap): a public read endpoint, an HTTP contract and UI for owner deletion, and owner-level UI
-(including navigation and freshness/provenance display); per-tab Guild Bank merging is blocked on the addon
-(item rows carry no tab attribution).
+**Not done yet** (see the roadmap): the owner-level UI (navigation, freshness/provenance display), the deletion
+controls and their confirmation wording; per-tab Guild Bank merging is blocked on the addon (item rows carry no tab
+attribution).
 
 ## Snapshot chronology and idempotent import
 

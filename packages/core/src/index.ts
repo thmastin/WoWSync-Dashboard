@@ -14,3 +14,4 @@ export * from "./llmContext.ts";
 export * from "./store.ts";
 export { SqliteSnapshotStore } from "./sqliteStore.ts";
 export * from "./sharedStorage.ts";
+export * from "./sharedStorageApi.ts";
