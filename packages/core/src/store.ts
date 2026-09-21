@@ -6,7 +6,7 @@ import type { ParsedSnapshot, VersionOrUnknown } from "./types.ts";
 import type { SnapshotDiff } from "./diff.ts";
 import type { AccountFacts } from "./accountFacts.ts";
 import type { AccountContext } from "./accountContext.ts";
-import type { SharedJournal, SharedSectionName, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
+import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -112,6 +112,26 @@ export interface SharedStorageBackfillResult {
   snapshotsWithSharedSections: number;
   observationsAdded: number;
   sourcesAdded: number;
+  /**
+   * Admissions NOT written because their owner's history was explicitly deleted after that snapshot
+   * was stored (see `deleteSharedStorageOwner`). Counted so a backfill that declined to resurrect
+   * deleted history says so.
+   */
+  suppressedByDeletion: number;
+}
+
+/**
+ * What an explicit shared-storage owner deletion removed. Counts come from the rows actually
+ * deleted. `existed: false` (and zero counts) means the owner had no journal history: nothing was
+ * deleted and nothing was recorded.
+ */
+export interface DeleteSharedStorageOwnerResult {
+  /** The owner's serialized key (e.g. "retail::warband::local"), as in `ImportResult.sharedStorage[].ownerKey`. */
+  ownerKey: string;
+  existed: boolean;
+  observationsDeleted: number;
+  /** Provenance rows (one per carrying export) deleted with those observations. */
+  sourcesDeleted: number;
 }
 
 /** What a successful character deletion removed. Counts are read from the rows actually deleted, not estimated. */
@@ -150,9 +170,30 @@ export interface SnapshotStore {
   /** The current state of every shared-storage owner: `projectJournal(loadSharedJournal())`. Read-time and DERIVED; nothing is cached. */
   projectSharedStorage(): SharedStorageProjection;
   /**
+   * EXPLICIT, owner-scoped, destructive: deletes that one owner's entire journal history (every
+   * observation and every provenance row), atomically. The caller names the owner with the typed
+   * shared-storage identity (the Warband's installation-local scope, or one guild by its opaque
+   * GuildClubID); nothing else identifies it and nothing is matched as a pattern.
+   *
+   * It is never implied by anything else: deleting a character or snapshot, a character changing
+   * guild, or a newer UNKNOWN / partial / inaccessible section all leave the journal alone.
+   * Character snapshots are never modified. Other owners are untouched. A missing owner is a no-op.
+   *
+   * Afterwards the owner has no projection. It is NOT a tombstone: any export imported later that
+   * carries a valid observation admits it normally and the journal starts again from that evidence
+   * (a LAST_SEEN replay the addon still holds counts as such evidence). What deletion does prevent is
+   * `backfillSharedStorage` resurrecting the deleted history from snapshots that were already stored
+   * (see the \`shared_owner_clears\` cutoff).
+   *
+   * Throws TypeError for a malformed owner (e.g. an empty or whitespace-padded GuildClubID).
+   */
+  deleteSharedStorageOwner(owner: SharedStorageOwner): DeleteSharedStorageOwnerResult;
+  /**
    * Idempotently admits shared-storage sections of already-stored snapshots into the journal using the
    * same domain rules as import. Never alters snapshots and never removes journal rows. Runs automatically
-   * once per database; safe to call again.
+   * once per database (a \`store_meta\` marker); safe to call again. It skips, per owner, every snapshot that
+   * was already stored when that owner's history was explicitly deleted, so it can never bring deleted
+   * history back; snapshots imported afterwards are ordinary evidence and are processed normally.
    */
   backfillSharedStorage(): SharedStorageBackfillResult;
   listVersions(): VersionSummary[];

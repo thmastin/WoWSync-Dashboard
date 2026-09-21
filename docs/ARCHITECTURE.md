@@ -465,8 +465,8 @@ what an import did (`recorded`, `source-added`, `already-known`, `skipped` + rea
 - The journal tables reference neither `characters` nor `snapshots`. A source keeps a historical
   `snapshot_id` (AUTOINCREMENT ids are never reused, so it cannot come to mean another snapshot) and a
   denormalized character label, so **deleting a character (or, later, a snapshot) never deletes a shared
-  observation or its provenance**. Removing shared history is reserved for explicit owner-scoped operations,
-  which do not exist yet.
+  observation or its provenance**. Shared history is removed only by an explicit, owner-scoped operation
+  (next section).
 - Each observation stores the content-hash **version** (`SHARED_CONTENT_HASH_VERSION`). A changed
   canonicalization needs a version bump and an explicit re-hash migration; observations under another
   version still load (only their hash cannot be re-verified).
@@ -474,8 +474,37 @@ what an import did (`recorded`, `source-added`, `already-known`, `skipped` + rea
   backfilled once by an idempotent pass (`backfillSharedStorage`, guarded by a `store_meta` marker) that runs
   the *same* admission code over stored snapshots; it never edits snapshots, never relabels LAST_SEEN as
   OBSERVED, never advances an observation time, and never removes journal rows (the journal can be the only copy
-  after a character deletion, so it is never rebuilt from snapshots).
+  after a character deletion, so it is never rebuilt from snapshots). It also honors explicit owner deletion
+  (see the cutoff below).
 - `SnapshotStore.loadSharedJournal()` / `projectSharedStorage()` are the read seam for later work.
+
+**Deleting shared storage.** Two operations, deliberately different:
+
+| Operation | Shared observations | Provenance | Snapshots / characters |
+| --- | --- | --- | --- |
+| Delete a **character** (`deleteCharacter`) | **kept** | **kept**, including that character's label | that character's are deleted |
+| Delete an **owner** (`deleteSharedStorageOwner(owner)`) | that owner's all deleted | that owner's all deleted | **never touched** |
+
+`deleteSharedStorageOwner` takes the typed owner (the Warband's installation-local scope, or one guild by its
+opaque `GuildClubID`), runs in one transaction (all of the owner's observations and provenance, or nothing),
+matches the owner key as data, rejects a malformed owner (an empty or whitespace-padded club id) before touching
+anything, and returns `{ownerKey, existed, observationsDeleted, sourcesDeleted}`; an owner with no history is a
+no-op. It never parses journal content, so it also clears an owner whose rows are corrupt (reads of a corrupt
+journal still fail loudly with `SharedStorageIntegrityError`). Nothing else implies it: not deleting a character
+or snapshot, a character changing guild, or a newer UNKNOWN / partial / inaccessible section. There is no HTTP
+endpoint or UI for it yet.
+
+*New evidence vs. stored history.* An owner deletion is **not a tombstone**. An export imported afterwards that
+carries a valid observation for the owner admits it normally and the journal starts again from that evidence
+(a LAST_SEEN replay the addon still holds counts: the addon keeps replaying its record in every export, so
+deleted history reappears with the next export that carries it). What must not happen is the *automatic*
+resurrection of history from snapshots that were **already stored**: `backfillSharedStorage` re-scans every
+snapshot each time it runs and is documented as safe to re-run, so a plain row delete would be undone by it (a test
+proves this). Each deletion therefore records, in `shared_owner_clears`, one row per owner: the highest snapshot
+id ever allocated at that moment (`sqlite_sequence`, which survives deleted snapshots; ids are never reused).
+Backfill skips, for that owner only, snapshots with an id at or below the cutoff; the import path never consults
+it. So "stored before the deletion" stays deleted and "imported after" is ordinary evidence. Importing the exact
+text of an already-stored export is a duplicate and is not new evidence.
 
 **Still not consumed.** Shared storage is deliberately **not** in AccountFacts inventory/totals, item
 search, snapshot diffs, AccountContext or the LLM context (tests pin this, including byte-identical facts and
@@ -483,7 +512,7 @@ LLM context with and without shared sections). The character page still shows ea
 transitional card. Later work must count each owner exactly once (one projection per owner key, regardless of
 how many characters carried it) and label shared totals as asynchronous observations.
 
-**Not done yet** (see the roadmap): owner-scoped deletion, a public read endpoint, and owner-level UI
+**Not done yet** (see the roadmap): a public read endpoint, an HTTP contract and UI for owner deletion, and owner-level UI
 (including navigation and freshness/provenance display); per-tab Guild Bank merging is blocked on the addon
 (item rows carry no tab attribution).
 

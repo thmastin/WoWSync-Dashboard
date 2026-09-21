@@ -8,6 +8,7 @@ import { parseWowSyncExport } from "./parser.ts";
 import {
   admitExport,
   isInformativeContent,
+  ownerKey,
   projectJournal,
   recordExport,
   restoreSharedObservation,
@@ -18,6 +19,7 @@ import {
   type RecordedSection,
   type SharedJournal,
   type SharedObservationSource,
+  type SharedStorageOwner,
   type SharedStorageProjection,
 } from "./sharedStorage.ts";
 import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
@@ -25,6 +27,7 @@ import { WOW_VERSIONS, detectVersion } from "./version.ts";
 import type {
   DeleteCharacterResult,
   ImportResult,
+  DeleteSharedStorageOwnerResult,
   RecentChange,
   SharedStorageBackfillResult,
   SharedStorageImportOutcome,
@@ -107,6 +110,18 @@ CREATE TABLE IF NOT EXISTS shared_observation_sources (
   PRIMARY KEY (observation_id, snapshot_id)
 );
 CREATE INDEX IF NOT EXISTS idx_shared_sources_snapshot ON shared_observation_sources(snapshot_id);
+
+-- Explicit owner deletion (deleteSharedStorageOwner) leaves ONE row per cleared owner: the highest snapshot
+-- id ever allocated at that moment. It is a BACKFILL CUTOFF, not a tombstone: import never consults it, so
+-- new evidence recreates the owner normally. Only a re-scan of snapshots that ALREADY existed
+-- (backfillSharedStorage) skips that owner's admissions from them, so old stored snapshots can never
+-- resurrect history the user deleted. Snapshot ids are AUTOINCREMENT (never reused), so "id <= cutoff"
+-- means exactly "stored before the deletion".
+CREATE TABLE IF NOT EXISTS shared_owner_clears (
+  owner_key TEXT PRIMARY KEY,
+  cleared_through_snapshot_id INTEGER NOT NULL,
+  cleared_at INTEGER NOT NULL -- audit only
+);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -264,6 +279,20 @@ export class SqliteSnapshotStore implements SnapshotStore {
            snapshot_visit, last_visit, visited_npc, visited_zone, coverage_note, refresh_issue, pending)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ),
+      countSharedObservationsForOwner: this.db.prepare("SELECT COUNT(*) AS n FROM shared_observations WHERE owner_key = ?"),
+      deleteSharedSourcesForOwner: this.db.prepare(
+        "DELETE FROM shared_observation_sources WHERE observation_id IN (SELECT id FROM shared_observations WHERE owner_key = ?)",
+      ),
+      deleteSharedObservationsForOwner: this.db.prepare("DELETE FROM shared_observations WHERE owner_key = ?"),
+      // The highest snapshot id EVER allocated (sqlite_sequence survives deletions), or 0 if none.
+      highestSnapshotId: this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'snapshots'), 0) AS n"),
+      upsertOwnerClear: this.db.prepare(
+        `INSERT INTO shared_owner_clears (owner_key, cleared_through_snapshot_id, cleared_at) VALUES (?, ?, ?)
+         ON CONFLICT(owner_key) DO UPDATE SET
+           cleared_through_snapshot_id = MAX(cleared_through_snapshot_id, excluded.cleared_through_snapshot_id),
+           cleared_at = excluded.cleared_at`,
+      ),
+      allOwnerClears: this.db.prepare("SELECT owner_key, cleared_through_snapshot_id FROM shared_owner_clears"),
       allSharedObservations: this.db.prepare("SELECT * FROM shared_observations ORDER BY id"),
       allSharedSources: this.db.prepare("SELECT * FROM shared_observation_sources ORDER BY observation_id, snapshot_id"),
       // A cheap pre-filter only: a false positive is re-checked by parsing (the sections are optional JSON keys).
@@ -383,7 +412,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
 
       // Shared storage carried by this export joins the journal in THIS transaction: either the
       // snapshot and its admitted observations are stored together, or neither is.
-      const sharedStorage = this.recordSharedStorage(
+      // No owner is ever skipped here: a cleared owner's cutoff only limits backfill, never new evidence.
+      const { outcomes: sharedStorage } = this.recordSharedStorage(
         parsed,
         {
           snapshotId: newId,
@@ -464,12 +494,25 @@ export class SqliteSnapshotStore implements SnapshotStore {
    * Admits one export's shared sections. The domain decides everything (admission, identity,
    * duplicates); this writes back only what it reports as new. Must run inside a transaction.
    */
-  private recordSharedStorage(parsed: ParsedSnapshot, carrier: CarrierExport, now: number): SharedStorageImportOutcome[] {
-    if (!parsed.accountBank && !parsed.guildBank) return [];
+  private recordSharedStorage(
+    parsed: ParsedSnapshot,
+    carrier: CarrierExport,
+    now: number,
+    /** Backfill only: owners whose admission from this (already stored) snapshot must not be written. */
+    skipOwner?: (ownerKey: string) => boolean,
+  ): { outcomes: SharedStorageImportOutcome[]; suppressed: number } {
+    if (!parsed.accountBank && !parsed.guildBank) return { outcomes: [], suppressed: 0 };
+    let suppressed = 0;
     const owners = admitExport(parsed, carrier).flatMap((a) => (a.admitted ? [a.observation.ownerKey] : []));
     const { sections } = recordExport(this.loadSharedJournalFor(owners), parsed, carrier);
+    const written: RecordedSection[] = [];
     for (const section of sections) {
       const { observation, source, outcome } = section;
+      if (observation && skipOwner?.(observation.ownerKey)) {
+        suppressed++;
+        continue;
+      }
+      written.push(section);
       if (!observation || !source || outcome === "already-known" || outcome === "skipped") continue;
       if (outcome === "new-observation") {
         const stored = serializeSharedObservation(observation);
@@ -504,19 +547,47 @@ export class SqliteSnapshotStore implements SnapshotStore {
         source.pending ? 1 : null,
       );
     }
-    return sections.map(toImportOutcome);
+    return { outcomes: written.map(toImportOutcome), suppressed };
+  }
+
+  deleteSharedStorageOwner(owner: SharedStorageOwner): DeleteSharedStorageOwnerResult {
+    // Validate before touching anything: a padded or empty club id would otherwise silently match nothing.
+    if (owner.kind === "guild" && (typeof owner.guildClubId !== "string" || owner.guildClubId.length === 0 || owner.guildClubId !== owner.guildClubId.trim())) {
+      throw new TypeError("A guild owner needs a non-empty GuildClubID without surrounding whitespace.");
+    }
+    let key: string;
+    try {
+      key = ownerKey(owner);
+    } catch {
+      throw new TypeError("Unsupported shared-storage owner.");
+    }
+    // The key is matched with = as data (never a pattern), so it can only ever identify this one owner.
+    return this.inTransaction(() => {
+      if (one<{ n: number }>(this.stmts.countSharedObservationsForOwner, key)!.n === 0) {
+        return { ownerKey: key, existed: false, observationsDeleted: 0, sourcesDeleted: 0 };
+      }
+      const sourcesDeleted = Number(this.stmts.deleteSharedSourcesForOwner.run(key).changes);
+      const observationsDeleted = Number(this.stmts.deleteSharedObservationsForOwner.run(key).changes);
+      const cutoff = one<{ n: number }>(this.stmts.highestSnapshotId)!.n;
+      this.stmts.upsertOwnerClear.run(key, cutoff, Math.floor(Date.now() / 1000));
+      return { ownerKey: key, existed: true, observationsDeleted, sourcesDeleted };
+    });
   }
 
   backfillSharedStorage(): SharedStorageBackfillResult {
     return this.inTransaction(() => {
       const now = Math.floor(Date.now() / 1000);
-      const result: SharedStorageBackfillResult = { snapshotsWithSharedSections: 0, observationsAdded: 0, sourcesAdded: 0 };
+      const result: SharedStorageBackfillResult = { snapshotsWithSharedSections: 0, observationsAdded: 0, sourcesAdded: 0, suppressedByDeletion: 0 };
+      // Per owner: the snapshots stored before that owner's history was explicitly deleted stay excluded.
+      const cutoffs = new Map(
+        many<{ owner_key: string; cleared_through_snapshot_id: number }>(this.stmts.allOwnerClears).map((r) => [r.owner_key, r.cleared_through_snapshot_id]),
+      );
       const rows = many<SnapshotRow & { c_identity_key: string; c_name: string; c_realm: string }>(this.stmts.snapshotsWithSharedSections);
       for (const row of rows) {
         const parsed = JSON.parse(row.parsed_json) as ParsedSnapshot;
         if (!parsed.accountBank && !parsed.guildBank) continue;
         result.snapshotsWithSharedSections++;
-        const outcomes = this.recordSharedStorage(
+        const { outcomes, suppressed } = this.recordSharedStorage(
           parsed,
           {
             snapshotId: row.id,
@@ -526,7 +597,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
             exportObservedAt: snapshotObservedAt(row.generated_at, row.imported_at),
           },
           now,
+          (key) => row.id <= (cutoffs.get(key) ?? 0),
         );
+        result.suppressedByDeletion += suppressed;
         for (const outcome of outcomes) {
           if (outcome.outcome === "recorded") result.observationsAdded++;
           if (outcome.outcome === "recorded" || outcome.outcome === "source-added") result.sourcesAdded++;
