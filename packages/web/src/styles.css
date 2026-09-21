@@ -908,6 +908,7 @@ h1, h2, h3 {
 .shared-table { min-width: 100%; }
 .shared-table thead th { position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
 .shared-table tbody tr { cursor: default; }
+.shared-table .col-item-info { text-align: left; font-size: 0.85rem; white-space: normal; }
 .shared-table th[scope="row"] { text-align: left; font-weight: 400; color: var(--text); padding: 7px 10px; border-bottom: 1px solid var(--border); text-transform: none; letter-spacing: normal; font-size: 0.85rem; white-space: normal; }
 .shared-notice {
   margin: 14px 0 0;

@@ -13,6 +13,7 @@ import {
   diffSnapshots,
   summarizeTrainerCategory,
   type AccountContext,
+  type ItemMetadataResponse,
   type SnapshotStore,
   type StoredSnapshot,
   type TrainerUnlock,
@@ -111,6 +112,17 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
     res.json({ facts: store.buildAccountFacts(version) });
+  });
+
+  // Item metadata (enrichment, never observation truth): the resolved, game-client-reported static facts per
+  // base item id for ONE game version, with the Dashboard-derived expansion label. An item with no evidence is
+  // absent (all facets UNKNOWN). A pure read; it changes no stored observation and is not part of any total,
+  // search, diff, AccountContext or LLM context.
+  app.get("/api/versions/:version/item-metadata", (req, res) => {
+    const { version } = req.params;
+    if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+    const body: ItemMetadataResponse = { schema: "item-metadata-1", version, items: store.listItemMetadata(version) };
+    res.json(body);
   });
 
   // The canonical "Export Dashboard Context" payload — every known WoW

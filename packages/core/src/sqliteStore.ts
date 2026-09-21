@@ -6,6 +6,17 @@ import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import {
+  ITEM_FACETS,
+  ITEM_METADATA_SOURCES,
+  buildItemMetadataViews,
+  knownFacets,
+  mergeEvidence,
+  type ItemFacetEvidence,
+  type ItemFacetName,
+  type ItemMetadataSource,
+  type ItemMetadataView,
+} from "./itemMetadata.ts";
+import {
   admitExport,
   isInformativeContent,
   ownerKey,
@@ -23,7 +34,7 @@ import {
   type SharedStorageOwner,
   type SharedStorageProjection,
 } from "./sharedStorage.ts";
-import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
+import { UNKNOWN_VERSION, type ParsedSnapshot, type VersionOrUnknown, type WowVersion } from "./types.ts";
 import { WOW_VERSIONS, detectVersion } from "./version.ts";
 import type {
   DeleteCharacterResult,
@@ -123,6 +134,24 @@ CREATE TABLE IF NOT EXISTS shared_owner_clears (
   cleared_through_snapshot_id INTEGER NOT NULL,
   cleared_at INTEGER NOT NULL -- audit only
 );
+
+-- Item metadata (see itemMetadata.ts): static per-base-item facts learned from the game client. ENRICHMENT, not
+-- observation truth: a separate store keyed by (game_version, base_item_id) that is never part of a snapshot's or a
+-- shared observation's identity or hash. Only KNOWN values are stored (an UNKNOWN facet is the absence of a row, so it
+-- can never overwrite a known one). One row per distinct value per source: two rows for one (item, facet) is a
+-- CONFLICT that is exposed, never resolved by "latest wins". Like shared observations there is deliberately no
+-- reference to characters or snapshots: deleting either never removes item facts.
+CREATE TABLE IF NOT EXISTS item_metadata_evidence (
+  game_version TEXT NOT NULL,
+  base_item_id INTEGER NOT NULL CHECK (base_item_id > 0),
+  facet TEXT NOT NULL CHECK (facet IN ('classID', 'subclassID', 'bindType', 'expansionID', 'isCraftingReagent')),
+  source TEXT NOT NULL CHECK (source IN ('game-client')),
+  value INTEGER NOT NULL CHECK (typeof(value) = 'integer' AND value >= 0),
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  client_builds TEXT NOT NULL, -- JSON array of distinct builds, sorted
+  PRIMARY KEY (game_version, base_item_id, facet, source, value)
+) WITHOUT ROWID;
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -151,6 +180,17 @@ interface SnapshotRow {
   level_played_seconds: number | null;
   raw_text: string;
   parsed_json: string;
+}
+
+interface ItemEvidenceRow {
+  game_version: string;
+  base_item_id: number;
+  facet: string;
+  source: string;
+  value: number;
+  first_seen_at: number;
+  last_seen_at: number;
+  client_builds: string;
 }
 
 interface SharedObservationRow {
@@ -294,6 +334,20 @@ export class SqliteSnapshotStore implements SnapshotStore {
            cleared_at = excluded.cleared_at`,
       ),
       allOwnerClears: this.db.prepare("SELECT owner_key, cleared_through_snapshot_id FROM shared_owner_clears"),
+      itemEvidenceForKey: this.db.prepare(
+        "SELECT * FROM item_metadata_evidence WHERE game_version = ? AND base_item_id = ? AND facet = ? AND source = ? AND value = ?",
+      ),
+      insertItemEvidence: this.db.prepare(
+        `INSERT INTO item_metadata_evidence (game_version, base_item_id, facet, source, value, first_seen_at, last_seen_at, client_builds)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      updateItemEvidence: this.db.prepare(
+        `UPDATE item_metadata_evidence SET first_seen_at = ?, last_seen_at = ?, client_builds = ?
+          WHERE game_version = ? AND base_item_id = ? AND facet = ? AND source = ? AND value = ?`,
+      ),
+      itemEvidenceForVersion: this.db.prepare(
+        "SELECT * FROM item_metadata_evidence WHERE game_version = ? ORDER BY base_item_id, facet, source, value",
+      ),
       allSharedObservations: this.db.prepare("SELECT * FROM shared_observations ORDER BY id"),
       allSharedSources: this.db.prepare("SELECT * FROM shared_observation_sources ORDER BY observation_id, snapshot_id"),
       // A cheap pre-filter only: a false positive is re-checked by parsing (the sections are optional JSON keys).
@@ -426,6 +480,16 @@ export class SqliteSnapshotStore implements SnapshotStore {
         now,
       );
 
+      // Item metadata carried by this export joins its own store in the same transaction. It only ever adds
+      // (or widens the provenance of) KNOWN facts; it cannot alter this snapshot, any observation, or any hash.
+      if (version !== UNKNOWN_VERSION && parsed.itemMetadata) {
+        this.recordItemMetadata(
+          version,
+          parsed,
+          snapshotObservedAt(rows[index].generated_at, rows[index].imported_at),
+        );
+      }
+
       return {
         character: this.summarize(characterRow.id)!,
         snapshot,
@@ -435,6 +499,60 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isDuplicate: false,
         isLatest,
         sharedStorage,
+      };
+    });
+  }
+
+  // --- Item metadata ----------------------------------------------------------------------------------
+  //
+  // Persistence only; every rule (what a value means, conflicts, expansion labels) is in itemMetadata.ts.
+
+  /**
+   * Folds the KNOWN facets of one export's `[ITEM METADATA]` into the evidence store. Idempotent and
+   * order-independent (see mergeEvidence): replaying an export, or importing exports in any order, produces the
+   * same rows. A client that is not a routable game version records nothing (no version, no scope to key by).
+   */
+  private recordItemMetadata(version: WowVersion, parsed: ParsedSnapshot, seenAt: number): void {
+    const source: ItemMetadataSource = "game-client";
+    for (const fact of knownFacets(parsed.itemMetadata?.rows ?? [])) {
+      const key = [version, fact.baseItemId, fact.facet, source, fact.value] as const;
+      const existing = one<ItemEvidenceRow>(this.stmts.itemEvidenceForKey, ...key);
+      const merged = mergeEvidence(
+        existing
+          ? { firstSeenAt: existing.first_seen_at, lastSeenAt: existing.last_seen_at, clientBuilds: JSON.parse(existing.client_builds) as string[] }
+          : undefined,
+        seenAt,
+        parsed.character.clientBuild,
+      );
+      if (!existing) {
+        this.stmts.insertItemEvidence.run(...key, merged.firstSeenAt, merged.lastSeenAt, JSON.stringify(merged.clientBuilds));
+      } else {
+        this.stmts.updateItemEvidence.run(merged.firstSeenAt, merged.lastSeenAt, JSON.stringify(merged.clientBuilds), ...key);
+      }
+    }
+  }
+
+  /** The resolved item metadata for one game version: one view per item that has any evidence, ordered by item id. Empty for an unrouted version. */
+  listItemMetadata(version: VersionOrUnknown): ItemMetadataView[] {
+    if (version === UNKNOWN_VERSION) return [];
+    return buildItemMetadataViews(version, this.loadItemEvidence(version));
+  }
+
+  /** The raw stored evidence for one game version (provenance included), ordered deterministically. */
+  loadItemEvidence(version: WowVersion): ItemFacetEvidence[] {
+    return many<ItemEvidenceRow>(this.stmts.itemEvidenceForVersion, version).map((row) => {
+      if (!ITEM_FACETS.includes(row.facet as ItemFacetName) || !ITEM_METADATA_SOURCES.includes(row.source as ItemMetadataSource)) {
+        throw new Error(`Corrupt item metadata row for item ${row.base_item_id}: unknown facet or source`);
+      }
+      return {
+        gameVersion: version,
+        baseItemId: row.base_item_id,
+        facet: row.facet as ItemFacetName,
+        source: row.source as ItemMetadataSource,
+        value: row.value,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        clientBuilds: JSON.parse(row.client_builds) as string[],
       };
     });
   }

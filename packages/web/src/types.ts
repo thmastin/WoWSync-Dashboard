@@ -569,3 +569,6 @@ export interface SharedStorageIntegrityErrorBody {
   code: "SHARED_STORAGE_INTEGRITY";
   damagedOwners: Array<{ ownerKey: string; kind?: "warband" | "guild"; guildClubId?: string }>;
 }
+
+// Item metadata (game-client enrichment). The types live with the pure core module the server serializes with.
+export type { ItemMetadataResponse, ItemMetadataView, FacetState, ExpansionInfo } from "@wowsync-dashboard/core/itemMetadata.ts";

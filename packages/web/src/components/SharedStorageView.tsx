@@ -13,6 +13,7 @@ import {
 } from "../sharedStorage.ts";
 import type { SharedOwnerIdentity, SharedStorageResponse } from "../types.ts";
 import { useAsync } from "../useAsync.ts";
+import { ItemInfoContext, useItemInfoLoader } from "../useItemInfo.ts";
 import DeleteSharedStorageModal from "./DeleteSharedStorageModal.tsx";
 import ErrorNotice from "./ErrorNotice.tsx";
 import SharedOwnerCard from "./SharedOwnerCard.tsx";
@@ -127,6 +128,8 @@ export default function SharedStorageView() {
   const [flash, setFlash] = useState<string | null>(null);
   const [pending, setPending] = useState<OwnerDeletionTarget | null>(null);
   const load = useAsync((signal) => fetchSharedStorage(signal), "shared-storage", reloadTick);
+  // Shared storage is Retail-only; its item rows are enriched from Retail's game-client metadata (never blocks the view).
+  const itemInfo = useItemInfoLoader("retail", reloadTick);
 
   function finished(target: OwnerDeletionTarget, outcome: Extract<OwnerDeleteOutcome, { kind: "deleted" | "already-gone" }>) {
     setPending(null);
@@ -135,7 +138,7 @@ export default function SharedStorageView() {
   }
 
   return (
-    <>
+    <ItemInfoContext.Provider value={itemInfo}>
       <SharedStorageBody
         status={load.state.status}
         data={load.state.data}
@@ -145,6 +148,6 @@ export default function SharedStorageView() {
         onRequestClear={(owner) => setPending(describeOwnerDeletion(owner))}
       />
       {pending && <DeleteSharedStorageModal target={pending} onClose={() => setPending(null)} onDone={(outcome) => finished(pending, outcome)} />}
-    </>
+    </ItemInfoContext.Provider>
   );
 }

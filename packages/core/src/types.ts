@@ -199,6 +199,27 @@ export interface TrainerSection {
   categories: TrainerCategorySnapshot[];
 }
 
+/**
+ * One row of the additive `[ITEM METADATA]` section: the raw static facets the game client reported
+ * for ONE base item id (see WOWSYNC_SCHEMA.md, "Additive item metadata block"). Every facet is
+ * `undefined` when the export said `?` (UNKNOWN) - never 0 / false / "". `bindType: 0` ("no binding") and
+ * `isCraftingReagent: false` ("known not a reagent") are real known values, distinct from UNKNOWN.
+ * `expansionId` is the client's raw number: no name is derived here and no value (0, 254, ...) is reinterpreted.
+ */
+export interface ItemMetadataRow {
+  baseItemId: number;
+  classId?: number;
+  subclassId?: number;
+  bindType?: number;
+  expansionId?: number;
+  isCraftingReagent?: boolean;
+}
+
+/** The export's `[ITEM METADATA]` block, as delivered (a record of what this export carried; enrichment, never observation truth). */
+export interface ItemMetadataSection {
+  rows: ItemMetadataRow[];
+}
+
 export interface ParsedSnapshot {
   /** The exact text that was parsed, preserved verbatim for audit/history. */
   raw: string;
@@ -216,6 +237,8 @@ export interface ParsedSnapshot {
   professions: ProfessionsSection;
   spells: SpellsSection;
   trainer: TrainerSection;
+  /** Optional additive section; absent from every export made before item metadata existed. Never affects any observation section. */
+  itemMetadata?: ItemMetadataSection;
 }
 
 /** WoW version spaces. Data must never be aggregated across these. */

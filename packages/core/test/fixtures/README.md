@@ -131,6 +131,16 @@ observed data.
   The UNKNOWN, LAST_SEEN, partial, and all-tabs-inaccessible variants are produced
   inside `test/guildBank.test.ts` by editing this file's Guild Bank block.
 
+- `derived/virek-warband-item-metadata-1789965777.wowsync.txt` - the real sanitized Virek export
+  (`sanitized/virek-warband-last-seen-1789965777.wowsync.txt`) kept byte-for-byte, with one `[ITEM METADATA]` block
+  inserted before `[END]` in the addon's format (GearExport `a94288e`): the header row, then one row per base item id the
+  export references (98, ascending). Only two rows carry facts, and they are the values captured from the live Retail
+  (Midnight) client: Mote of Harmony 89112 (class 7, subclass 10, bind 0, expansion 4, reagent) and Mote of Light 236949
+  (class 7, subclass 11, bind 0, expansion 11, reagent). The other 96 rows are all `?`, as the addon writes an item whose
+  full info was not available. This is not a live capture (it is the older sanitized export plus a block written from the live values).
+  A real `a94288e` Virek export has since been imported into the real database, but it is not committed as a
+  fixture because it carries the character's full inventory, professions and gold.
+
 ## Sanitized real fixtures (`sanitized/`)
 
 Files here come from **real exports** but are deliberately minimal: only what a test needs

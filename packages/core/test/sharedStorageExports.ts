@@ -3,7 +3,7 @@
 // (GearExport/WoWSyncRender.lua @ 3e9c6bf), so persistence tests go through the real parser and
 // importer. Everything unrelated to shared storage is UNKNOWN, exactly like the sanitized Virek
 // fixtures. Not a test file (the test glob is *.test.ts).
-import type { AccountBankSection, GuildBankSection, SectionStatus } from "../src/types.ts";
+import type { AccountBankSection, GuildBankSection, InventorySection, SectionStatus } from "../src/types.ts";
 
 const T = "\t";
 const cell = (value: unknown): string => (value === undefined || value === null ? "?" : typeof value === "boolean" ? (value ? "yes" : "no") : String(value));
@@ -22,7 +22,7 @@ function statusLines(status: SectionStatus): string[] {
   return out;
 }
 
-function inventoryLines(section: AccountBankSection | GuildBankSection): string[] {
+function inventoryLines(section: AccountBankSection | GuildBankSection | InventorySection): string[] {
   const out = [row("container", "capacity", "free", "family", "bagRef")];
   for (const c of section.containers) {
     if (c.storage !== undefined) out.push(`ContainerStorage ${c.id}: ${c.storage}`);
@@ -33,6 +33,28 @@ function inventoryLines(section: AccountBankSection | GuildBankSection): string[
   if (section.items.length === 0 && section.itemsKnownEmpty) out.push("Items: EMPTY");
   for (const i of section.items) out.push(row(i.itemRef, i.name, i.qty, i.bound, i.vendorEachCopper));
   return out;
+}
+
+/** A Character-bag section in the addon's format (State line, then the container / slots / item body). */
+export function renderBags(section: InventorySection): string {
+  return ["[BAGS]", ...statusLines(section.status), ...inventoryLines(section)].join("\n");
+}
+
+/** One row of the addon's `[ITEM METADATA]` block; an omitted facet is `?` (UNKNOWN), and a boolean renders yes / no. */
+export interface MetadataRowSpec {
+  id: number | string;
+  classId?: number | string;
+  subclassId?: number | string;
+  bindType?: number | string;
+  expansionId?: number | string;
+  reagent?: boolean | string;
+}
+
+export const METADATA_HEADER = ["baseItemID", "classID", "subclassID", "bindType", "expansionID", "isCraftingReagent"].join(T);
+
+/** The block exactly as GearExport a94288e renders it: a header row, then one row per item (the caller keeps them ascending). */
+export function renderItemMetadata(rows: MetadataRowSpec[]): string {
+  return ["[ITEM METADATA]", METADATA_HEADER, ...rows.map((r) => row(r.id, r.classId, r.subclassId, r.bindType, r.expansionId, r.reagent))].join("\n");
 }
 
 export function renderWarband(section: AccountBankSection): string {
@@ -76,6 +98,12 @@ export interface ExportSpec {
   guild?: GuildBankSection;
   /** Vary this to make two otherwise identical exports different text (so they are not whole-export duplicates). */
   level?: number;
+  /** The character's own bags. Omitted = `State: UNKNOWN`. */
+  bags?: InventorySection;
+  /** An `[ITEM METADATA]` block: rows to render, or the exact block text (for malformed-input tests). Omitted = no such section (a legacy export). */
+  itemMetadata?: MetadataRowSpec[] | string;
+  /** Client build line; defaults to the current Retail build used by the Virek fixtures. */
+  build?: string;
 }
 
 /** A minimal Retail export in the addon's section order. */
@@ -93,19 +121,20 @@ export function renderExport(spec: ExportSpec): string {
       `Level: ${spec.level ?? "?"}`,
       "Faction: ?",
       "MoneyCopper: ?",
-      "Client: 12.1.0 build 69875",
+      `Client: 12.1.0 build ${spec.build ?? "69875"}`,
       "ClientFamily: Retail",
       "Interface: 120100",
     ].join("\n"),
     unknown("LOCATION"),
     unknown("EQUIPMENT"),
-    unknown("BAGS"),
+    spec.bags ? renderBags(spec.bags) : unknown("BAGS"),
     unknown("BANK"),
     spec.warband ? renderWarband(spec.warband) : UNKNOWN_WARBAND,
     spec.guild ? renderGuild(spec.guild) : UNKNOWN_GUILD,
     unknown("PROFESSIONS"),
     unknown("KNOWN SPELLS"),
     unknown("TRAINERS"),
+    ...(spec.itemMetadata === undefined ? [] : [typeof spec.itemMetadata === "string" ? spec.itemMetadata : renderItemMetadata(spec.itemMetadata)]),
     "[END]",
   ].join("\n\n") + "\n";
 }

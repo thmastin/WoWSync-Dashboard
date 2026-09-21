@@ -156,6 +156,29 @@ character whose export happened to carry it.
   `DELETE /api/shared-storage/guilds/:guildClubId` with a JSON body `{"confirmOwnerKey": "<owner key from GET>"}`
   (404 `SHARED_OWNER_NOT_FOUND` when there is nothing to clear). Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Item info (expansion and crafting reagents)
+
+Current WoWSync exports carry an additive `[ITEM METADATA]` section: what the game client itself reported about each
+item (its type, binding, expansion number and whether it is a crafting reagent). The Dashboard shows it as **Item info**:
+
+- **Where.** In the Shared Storage table (an **Item info** column) and, as a short suffix, in the bag, bank, Warband and
+  Guild Bank lists on a character page - for example *Mote of Light × 13 — Midnight · Reagent*.
+- **What it means.** The expansion is the game client's own number, named only where the Dashboard has verified it in the
+  live Retail client (Mists of Pandaria, Shadowlands, Dragonflight, The War Within, Midnight). Any other number is shown as
+  "Expansion unknown (client value N)" - never guessed, and never assumed to be "Classic". A reagent is "Reagent" or
+  "Not a reagent" only when the client said so. The expansion is the client's own tag for the item, not proof of when it
+  was introduced: a very old holiday item can carry the current expansion, and some old items report 0.
+- **Unknown stays unknown.** "?" means the client did not report it (for example an item that was not cached when the
+  export was made). Nothing is inferred from an item's name or number. An older export has no item info at all, and lists
+  then look exactly as before; the column only appears once the Dashboard holds metadata.
+- **It is enrichment.** It never changes what an export or a stored Warband / Guild Bank observation says, and later exports
+  can fill in what an earlier one did not know. If two exports disagree about an item, it is shown as unknown rather than
+  picking one.
+- **Not used elsewhere (yet).** Item info is not part of gold or inventory totals, item search, recent changes, the developer
+  export or Ask My Account. There is no keep / vendor / mail advice. Blizzard-API lookups are not implemented; the
+  Dashboard still makes no outbound calls for this.
+- **API.** `GET /api/versions/:version/item-metadata`. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ("Item metadata").
+
 ## Real fixtures
 
 `packages/core/test/fixtures/classic-era/`, `.../retail/`, and

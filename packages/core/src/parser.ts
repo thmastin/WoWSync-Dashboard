@@ -16,6 +16,8 @@ import type {
   GuildBankTab,
   InventoryItemRecord,
   InventorySection,
+  ItemMetadataRow,
+  ItemMetadataSection,
   LocationSection,
   ParsedSnapshot,
   ProfessionEntry,
@@ -52,6 +54,7 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   // route to the same section rather than failing on addon version skew.
   TRAINERS: "trainer",
   TRAINER: "trainer",
+  "ITEM METADATA": "itemMetadata",
 };
 
 function fail(message: string, context?: string): never {
@@ -615,6 +618,61 @@ function parseTrainer(lines: string[]): TrainerSection {
   return { status: outer, categories };
 }
 
+const ITEM_METADATA_COLUMNS = ["baseItemID", "classID", "subclassID", "bindType", "expansionID", "isCraftingReagent"] as const;
+
+/** A non-negative decimal integer in canonical form ("0", "11"). No sign, fraction, exponent, hex, leading zero, padding or unit is accepted. */
+function metadataInteger(raw: string, column: string, line: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(raw)) fail(`Malformed [ITEM METADATA] ${column}: expected a non-negative integer or "?"`, line);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) fail(`Malformed [ITEM METADATA] ${column}: value is out of range`, line);
+  return value;
+}
+
+/** `?` is UNKNOWN (undefined). Every other value must be a well-formed integer: a malformed known value is rejected, never coerced. */
+function metadataFacet(raw: string, column: string, line: string): number | undefined {
+  return raw === "?" ? undefined : metadataInteger(raw, column, line);
+}
+
+/**
+ * [ITEM METADATA] - the addon's additive block of static base-item facets (one row per base item id).
+ * Exactly six columns: baseItemID, classID, subclassID, bindType, expansionID, isCraftingReagent. `?` is
+ * UNKNOWN, `yes` / `no` are the only known reagent values, and a duplicate baseItemID is rejected (the producer
+ * writes exactly one row per id, so a repeat means the text was damaged or merged). Values stay raw: nothing
+ * here derives an expansion name or reinterprets a number. This section never touches an observation section.
+ */
+function parseItemMetadata(lines: string[]): ItemMetadataSection {
+  const header = lines[0];
+  const headerCols = header === undefined ? [] : splitFields(header);
+  if (headerCols.length !== ITEM_METADATA_COLUMNS.length || headerCols.some((c, i) => c !== ITEM_METADATA_COLUMNS[i])) {
+    fail(`[ITEM METADATA] must start with the column row: ${ITEM_METADATA_COLUMNS.join(", ")}`, header ?? "<end of section>");
+  }
+  const rows: ItemMetadataRow[] = [];
+  const seen = new Set<number>();
+  for (const line of lines.slice(1)) {
+    const cols = splitFields(line);
+    if (cols.length !== ITEM_METADATA_COLUMNS.length) {
+      fail(`Expected exactly ${ITEM_METADATA_COLUMNS.length} columns for an [ITEM METADATA] row, found ${cols.length}`, line);
+    }
+    const baseItemId = metadataInteger(cols[0], "baseItemID", line);
+    if (baseItemId < 1) fail("Malformed [ITEM METADATA] baseItemID: must be a positive integer", line);
+    if (seen.has(baseItemId)) fail(`Duplicate [ITEM METADATA] row for baseItemID ${baseItemId}`, line);
+    seen.add(baseItemId);
+    const reagent = cols[5];
+    if (reagent !== "yes" && reagent !== "no" && reagent !== "?") {
+      fail('Malformed [ITEM METADATA] isCraftingReagent: expected "yes", "no" or "?"', line);
+    }
+    rows.push({
+      baseItemId,
+      classId: metadataFacet(cols[1], "classID", line),
+      subclassId: metadataFacet(cols[2], "subclassID", line),
+      bindType: metadataFacet(cols[3], "bindType", line),
+      expansionId: metadataFacet(cols[4], "expansionID", line),
+      isCraftingReagent: reagent === "yes" ? true : reagent === "no" ? false : undefined,
+    });
+  }
+  return { rows };
+}
+
 const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   character: parseCharacter,
   location: parseLocation,
@@ -626,6 +684,7 @@ const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   professions: parseProfessions,
   spells: parseSpells,
   trainer: parseTrainer,
+  itemMetadata: parseItemMetadata,
 };
 
 export function parseWowSyncExport(raw: string): ParsedSnapshot {
@@ -707,5 +766,7 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     professions: result.professions!,
     spells: result.spells!,
     trainer: result.trainer!,
+    // Only present when the export carried the section, so a legacy export's parsed form is unchanged.
+    ...(result.itemMetadata ? { itemMetadata: result.itemMetadata } : {}),
   };
 }

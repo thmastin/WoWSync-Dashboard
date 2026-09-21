@@ -5,6 +5,7 @@ import type {
   DeleteCharacterResult,
   DeleteSharedStorageOwnerResponse,
   ImportResult,
+  ItemMetadataResponse,
   SharedOwnerIdentity,
   SharedStorageIntegrityErrorBody,
   SharedStorageResponse,
@@ -133,6 +134,14 @@ export function fetchAccountFacts(version: VersionOrUnknown, signal?: AbortSigna
   return request<{ facts: AccountFacts }>(`/api/versions/${version}/account-facts`, undefined, {
     signal,
     validate: (body) => hasObject("facts")(body) && Array.isArray((body as { facts: { characters?: unknown } }).facts.characters),
+  });
+}
+
+/** Enrichment only: the resolved game-client item metadata for one game version (see itemMetadata.ts). */
+export function fetchItemMetadata(version: string, signal?: AbortSignal) {
+  return request<ItemMetadataResponse>(`/api/versions/${encodeURIComponent(version)}/item-metadata`, undefined, {
+    signal,
+    validate: (body) => hasArray("items")(body) && (body as { schema?: unknown }).schema === "item-metadata-1",
   });
 }
 

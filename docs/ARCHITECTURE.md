@@ -555,6 +555,93 @@ with only informationless observations exposes a display name but no tab detail;
 `ImportResult.sharedStorage`; and there is no "delete all Dashboard data" operation (it would have to clear the journal
 and `shared_owner_clears` together).
 
+## Item metadata (enrichment, not observation)
+
+Inventory rows carry a full `itemRef` and a name but nothing about what an item *is*. The addon's additive
+`[ITEM METADATA]` section (GearExport `a94288e`; WOWSYNC stays v1) supplies raw, static, per-base-item facts from the
+game client, and the Dashboard keeps them as **enrichment**: it never becomes part of what a snapshot or a
+shared-storage observation says.
+
+### The producer contract
+
+One tab-separated row per base item id referenced by equipment, bags, Character Bank, Warband Bank or Guild Bank,
+ascending, after a header row of exactly:
+
+`baseItemID  classID  subclassID  bindType  expansionID  isCraftingReagent`
+
+`?` is UNKNOWN for that facet; `isCraftingReagent` is `yes` / `no` / `?`. `expansionID` is the client's raw
+number: the addon maps, reinterprets and infers nothing (not from a name, an id or a class). The addon may fill
+class/subclass from the instant item tuple while full item info is still loading; the other facets stay `?` until it
+arrives. The parser (`parseItemMetadata`, `packages/core/src/parser.ts`) is strict: exactly six columns, the exact
+header, canonical non-negative integers, `yes`/`no`/`?` only, a positive base id, no duplicate id. A malformed value
+rejects the whole import (HTTP 422) rather than being coerced. An export with no section (every historical export)
+parses exactly as before and its parsed form has no `itemMetadata` key. (Any *other* unrecognized section is still
+rejected; only this one was added.) Values are undefined for `?`, following the model's usual convention: `bindType: 0`
+and `isCraftingReagent: false` are known values, distinct from unknown.
+
+### Identity and storage
+
+Metadata is keyed by **game version + base item id** - never by the id alone, because ids overlap across products
+(*Hearthstone* is 6948 in Classic Era and Retail). The game version is the one the export's client already routes to
+(`detectVersion`); a client that cannot be routed records nothing. Item facts are stored in `item_metadata_evidence`, a
+separate additive table with **no reference to characters or snapshots**:
+
+- one row per distinct KNOWN value of a facet, per source (today only `game-client`), with order-independent
+  provenance (earliest / latest observation time, the set of client builds that reported it);
+- UNKNOWN is **absence** - it is never stored, so it can never overwrite a known value, and a later export that knows
+  a facet simply fills it in;
+- the same value replayed (a duplicate export, or a new export reporting it again) adds no row and only widens
+  provenance; the result is identical in any import order;
+- two different KNOWN values for one facet are kept as two rows and resolved to **CONFLICT** at read time - never
+  "latest wins", never a chosen label; the values and builds are exposed for diagnosis;
+- a snapshot is never rewritten when metadata arrives later, an observation's identity and content hash never include
+  metadata (a Warband observation carried by an export with and without metadata is one observation), and deleting a
+  character keeps the item facts (they are game data, not that character's).
+
+The section is also kept verbatim in the carrying snapshot's parsed form (as a record of what that export said), but
+nothing reads it back from there: the evidence table is the only source.
+
+### Resolution and labels
+
+`packages/core/src/itemMetadata.ts` (pure) resolves evidence into a per-item view: each facet is KNOWN (with sources),
+UNKNOWN or CONFLICT. The **expansion label is derived there, at read time, never stored**, from an explicit table
+scoped to a game version. Only values seen directly in the live Retail client are mapped, each with its evidence:
+4 Mists of Pandaria (Mote of Harmony), 8 Shadowlands (Progenitor Essentia), 9 Dragonflight (Elemental Mote), 10 The War
+Within (Bismuth), 11 Midnight (Mote of Light). The numbering is deliberately not extrapolated from that sequence, and
+Retail's table is not applied to any other client. Every other number - including `0` and `254`, which are not
+assumed to mean Classic - renders as **"Expansion unknown (client value N)"**; a conflict renders as unknown with both
+values; an unreported expansion is "Expansion unknown".
+
+**What the number means.** It is the client's own tag on the item record, not a statement of when the item was
+introduced, and the first live export with metadata showed why that distinction matters. Old evergreen items can carry
+the *current* tag (the 2004 holiday items *Snowball* and *Winter Veil Cookie* are reported as 11, Midnight), while some old
+items are reported as `0` (*Grilled Shark*, *Cask of Aged Dalaran Red*), matching the client bug reported for
+`GetItemInfo`. The Dashboard therefore labels only what the client said, refuses to read `0` as Classic, and any future
+"is this item obsolete?" logic must not treat the expansion tag as an item's age.
+
+### API and presentation
+
+`GET /api/versions/:version/item-metadata` returns `{schema: "item-metadata-1", version, items[]}`: one view per item
+that has any evidence (an absent item has every facet UNKNOWN; empty is a normal answer). It is a pure read. The web
+app words what the server resolved and derives no label itself (a test pins this). One lookup (`ItemInfoLookup`, built
+from that response) serves every item list: bags, Character Bank, the carried Warband and Guild Bank on a character
+page (compact suffix, only when something is known), and the Shared Storage table (an **Item info** column, shown only
+when the Dashboard holds metadata for Retail, with "?" for unreported items and a note). A failed metadata request is
+not an error: lists render as they did before metadata existed.
+
+### What it does not do
+
+- It does not decide ownership or reconcile anything: that remains the shared-storage journal.
+- It is **not** used by AccountFacts totals, global item search, recent-change diffs, AccountContext or the LLM /
+  Ask My Account context, and it has no keep / vendor / mail recommendation logic. Tests pin those consumers
+  byte-identical with and without metadata.
+- Blizzard Game Data API enrichment does **not** exist. The design leaves room for it as a second `source` (the
+  Game Data API item document has no expansion field, so it could add names, icons and class/subclass names but not
+  expansion); it needs Blizzard credentials and would run asynchronously, never during import.
+- Known limits: the remaining expansion numbers are unmapped until verified; a conflict is shown as unknown rather
+  than resolved by build; there is no backfill because no stored snapshot carries the section; and item facts are not
+  removed by any delete operation (a future "delete all data" would have to clear them too).
+
 ## Snapshot chronology and idempotent import
 
 One rule orders snapshots everywhere (`packages/core/src/chronology.ts`):

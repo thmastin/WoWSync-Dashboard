@@ -2,10 +2,11 @@
 // (sqliteStore.ts) could be swapped for another engine later without
 // touching the importer, diff engine, API layer, or UI.
 
-import type { ParsedSnapshot, VersionOrUnknown } from "./types.ts";
+import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
 import type { SnapshotDiff } from "./diff.ts";
 import type { AccountFacts } from "./accountFacts.ts";
 import type { AccountContext } from "./accountContext.ts";
+import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 
 export interface StoredCharacterSummary {
@@ -196,6 +197,15 @@ export interface SnapshotStore {
    * history back; snapshots imported afterwards are ordinary evidence and are processed normally.
    */
   backfillSharedStorage(): SharedStorageBackfillResult;
+  /**
+   * Resolved item metadata for one game version (see itemMetadata.ts): static, game-client-reported facts per base
+   * item id. ENRICHMENT: never part of a snapshot or shared-observation identity, never rewrites history, and
+   * independent of character deletion. An item with no evidence is simply absent (every facet UNKNOWN). Empty for
+   * the unrouted version.
+   */
+  listItemMetadata(version: VersionOrUnknown): ItemMetadataView[];
+  /** The stored item-metadata evidence (with provenance) for one game version, for diagnostics and tests. */
+  loadItemEvidence(version: WowVersion): ItemFacetEvidence[];
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   getCharacter(identityKey: string): StoredCharacterSummary | undefined;

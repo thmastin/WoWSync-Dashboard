@@ -6,6 +6,8 @@ import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCat
 import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } from "../format.ts";
 
 import { VERSION_LABELS } from "../versions.ts";
+import { EMPTY_ITEM_INFO, describeItemInfo, itemInfoSuffix, type ItemInfoLookup } from "../itemMetadata.ts";
+import { useItemInfoLoader } from "../useItemInfo.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
@@ -56,6 +58,8 @@ export default function CharacterDetail({
   }, [load.state.data]);
 
   const snapshot = snapshots.find((s) => s.id === selectedId) ?? snapshots[0];
+  // Enrichment for this character's game version (bags, Character Bank, carried Warband/Guild); never blocks the page.
+  const itemInfo = useItemInfoLoader(character?.version, refreshTick);
 
   if (!character) {
     if (load.state.status === "error") return <ErrorNotice error={load.state.error} onRetry={load.retry} onBack={onBack} />;
@@ -175,18 +179,19 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <InventoryCard title="Bags" inv={snapshot.parsed.bags} />
-          <InventoryCard title="Bank" inv={snapshot.parsed.bank} />
+          <InventoryCard title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
+          <InventoryCard title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
           {snapshot.parsed.accountBank && (
             <InventoryCard
               title={CARRIED_WARBAND_TITLE}
               inv={snapshot.parsed.accountBank}
               note={CARRIED_WARBAND_NOTE}
+              itemInfo={itemInfo}
               actionLabel={snapshot.parsed.accountBank.status.state !== "UNKNOWN" ? OPEN_SHARED_WARBAND : undefined}
               onAction={onOpenSharedStorage}
             />
           )}
-          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} onOpenSharedStorage={onOpenSharedStorage} />}
+          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} onOpenSharedStorage={onOpenSharedStorage} itemInfo={itemInfo} />}
 
           <section className="detail-card">
             <h3>
@@ -316,8 +321,11 @@ export function InventoryCard({
   note,
   actionLabel,
   onAction,
+  itemInfo = EMPTY_ITEM_INFO,
 }: {
   title: string;
+  /** Game-client item metadata for this character's game version; absent or empty means nothing extra is shown. */
+  itemInfo?: ItemInfoLookup;
   inv: import("../types.ts").InventorySection;
   note?: string;
   /** A link-style button to somewhere more authoritative (only shown when both are given). */
@@ -342,11 +350,21 @@ export function InventoryCard({
             {inv.freeSlots ?? "?"} free / {inv.totalSlots ?? "?"} slots
           </div>
           <ul className="compact-list">
-            {inv.items.slice(0, 12).map((item, i) => (
-              <li key={i}>
-                {item.name ?? item.itemRef ?? "?"} × {item.qty ?? "?"}
-              </li>
-            ))}
+            {inv.items.slice(0, 12).map((item, i) => {
+              const view = itemInfo.forItemRef(item.itemRef);
+              const info = itemInfoSuffix(view);
+              return (
+                <li key={i}>
+                  {item.name ?? item.itemRef ?? "?"} × {item.qty ?? "?"}
+                  {info && (
+                    <span className="muted small item-info" title={describeItemInfo(view).summary}>
+                      {" "}
+                      — {info}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
             {inv.itemsKnownEmpty && <li className="muted">Empty.</li>}
             {inv.items.length > 12 && <li className="muted">+{inv.items.length - 12} more…</li>}
           </ul>

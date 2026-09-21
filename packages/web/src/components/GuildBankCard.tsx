@@ -1,4 +1,5 @@
 import { formatAbsoluteTime } from "../format.ts";
+import { EMPTY_ITEM_INFO, describeItemInfo, itemInfoSuffix, type ItemInfoLookup } from "../itemMetadata.ts";
 import { describeGuildCapacity, describeGuildCaveats, describeGuildContents, describeGuildState, describeGuildTab } from "../guildBank.ts";
 import { CARRIED_GUILD_NOTE, CARRIED_GUILD_TITLE, OPEN_SHARED_GUILD } from "../sharedStorage.ts";
 import type { GuildBankSection } from "../types.ts";
@@ -13,7 +14,15 @@ const PREVIEW_ITEMS = 12;
  * merged into either, nor into any total. All wording comes from guildBank.ts so UNKNOWN /
  * LAST_SEEN / INACCESSIBLE are never presented as current, empty, or known.
  */
-export default function GuildBankCard({ guild, onOpenSharedStorage }: { guild: GuildBankSection; onOpenSharedStorage?: () => void }) {
+export default function GuildBankCard({
+  guild,
+  onOpenSharedStorage,
+  itemInfo = EMPTY_ITEM_INFO,
+}: {
+  guild: GuildBankSection;
+  onOpenSharedStorage?: () => void;
+  itemInfo?: ItemInfoLookup;
+}) {
   const state = describeGuildState(guild.status);
   const capacity = describeGuildCapacity(guild);
   const caveats = describeGuildCaveats(guild);
@@ -77,11 +86,21 @@ export default function GuildBankCard({ guild, onOpenSharedStorage }: { guild: G
         <>
           <div className="muted small">{describeGuildContents(guild)}</div>
           <ul className="compact-list">
-            {guild.items.slice(0, PREVIEW_ITEMS).map((item, i) => (
-              <li key={i}>
-                {item.name ?? item.itemRef ?? "?"} × {item.qty ?? "?"}
-              </li>
-            ))}
+            {guild.items.slice(0, PREVIEW_ITEMS).map((item, i) => {
+              const view = itemInfo.forItemRef(item.itemRef);
+              const info = itemInfoSuffix(view);
+              return (
+                <li key={i}>
+                  {item.name ?? item.itemRef ?? "?"} × {item.qty ?? "?"}
+                  {info && (
+                    <span className="muted small item-info" title={describeItemInfo(view).summary}>
+                      {" "}
+                      — {info}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
             {guild.items.length > PREVIEW_ITEMS && <li className="muted">+{guild.items.length - PREVIEW_ITEMS} more…</li>}
           </ul>
         </>

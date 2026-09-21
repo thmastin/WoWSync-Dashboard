@@ -2,7 +2,8 @@
 
 Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
-milestone (C1-C6). Tests at that baseline: core 413, server 122, web 136; typechecks clean;
+milestone (C1-C6) and the item-metadata consumer (parser, store, API, Shared Storage / inventory
+presentation). Tests at that baseline: core 461, server 129, web 150; typechecks clean;
 production build succeeds.
 
 ## How to use this roadmap
@@ -55,26 +56,38 @@ Work happening now.
     `FOREVER_PROFESSIONS.md`, `FOREVER_REMAINING.md`, `FOREVER_SPELLS.md`,
     `FOREVER_STATS_DIAGNOSTIC.md`. Dashboard side: [ARCHITECTURE.md](ARCHITECTURE.md) ("Forever").
 
-- [ ] **Richer item metadata / expansion awareness (addon export → Dashboard)** — next
-  implementation area; not started. Current inventory exports lack the information needed
-  for reliable expansion/category reasoning. Real regression: the Midnight reagent
-  *Mote of Light* was interpreted as legacy clutter.
-  - **First step is an investigation/design checkpoint**, not implementation: which Blizzard
-    item APIs supply `expansionID`, `classID`, `subclassID`, `bindType`,
-    `isCraftingReagent`, and any other cheap, stable metadata useful for inventory analysis.
-  - Agreed requirements: prefer Blizzard API metadata over a hand-maintained item database;
-    preserve raw IDs; human-readable expansion/category labels are derived at the
-    presentation/context layer, not collected; metadata that is uncached or unavailable is
-    UNKNOWN (no guessing, no defaults); keep OBSERVED / UNKNOWN / DERIVED semantics; weigh
-    export size; apply consistently to bags, reagent bags, Character Bank, Warband Bank and
-    Guild Bank where the API allows.
-  - Regression to add: *Mote of Light* must be distinguishable as a current-expansion reagent.
-  - Goal: make this question answerable: *"What should I keep, vendor, mail to my banker,
-    or move to shared storage?"*
-  - Dependencies: shared-storage reconciliation is complete, so the Shared Storage view can
-    display richer item rows once they are exported; using that data in totals, item search
-    or the LLM context is a separate, later step (see [Later](#later)). Do not claim
-    inventory intelligence from item data alone before those consumers exist.
+- [x] **Richer item metadata / expansion awareness: producer and Dashboard consumer done and validated
+  against a real export.** The addon (GearExport `a94288e`, `feat: add additive item metadata
+  export`) exports `[ITEM METADATA]`; the Dashboard parses it, keeps it in its own game-version-scoped
+  store, serves it over `GET /api/versions/:version/item-metadata`, and shows expansion and crafting-reagent
+  info on inventory lists and the Shared Storage table. Design: [ARCHITECTURE.md](ARCHITECTURE.md) ("Item metadata").
+  - **Design decision (investigation, 2026-09-21):** the Blizzard Game Data API item document has no
+    expansion field (per typed clients; the official reference could not be read), and the in-game
+    `GetItemInfo` has one but was reported unreliable for some items - so the client's raw value is exported
+    as evidence and the Dashboard, not the addon, derives labels. This replaced the earlier assumption
+    "prefer Blizzard API metadata over a hand-maintained item database" for expansion.
+  - Verified in the live Retail client: Mote of Harmony 4, Progenitor Essentia 8, Elemental Mote 9, Bismuth 10,
+    Mote of Light 11. Only these values are mapped (Retail only); every other number, including 0 and 254,
+    renders as "Expansion unknown (client value N)".
+  - Regression pinned: *Mote of Light* (base id 236949) is a known crafting reagent from the Midnight expansion
+    wherever it appears (character bags, Warband, Guild Bank), from the client's own data, never from its name
+    or id.
+  - **Real-export validation (2026-09-21):** a fresh Virek export from the installed `a94288e` addon
+    (build 69875, 200 metadata rows: 109 with every facet known, 91 with every facet `?`) was read from
+    SavedVariables `latestExport.text` and imported into the real database through `POST /api/import`. Every
+    row reached the API intact (545 known facets, 0 mismatches); Mote of Light's row `7 11 0 11 yes` resolves to
+    Midnight · Reagent; the Warband observation (hash, time, 98 items, 98/98 slots) was unchanged and gained one
+    carrying export; no excluded consumer changed.
+  - **What that export taught us:** the client's expansion number is its own tag, not an introduction date
+    (the 2004 items Snowball and Winter Veil Cookie report 11, Midnight; several old food and drink items report
+    0). The UI says so, and any future obsolescence logic must not read the tag as an item's age. Items the
+    client had not cached (91 rows, including Warband items replayed as last seen) stay `?`.
+  - Still open (see [Needs Decision](#needs-decision) and [Later](#later)): the remaining expansion numbers
+    (that export also reported 3, 6 and 7, which are not yet verified against a known item); a resolution policy
+    for conflicting client values; Blizzard-API enrichment; and every consumer that is deliberately excluded
+    (totals, global item search, recent-change diffs, AccountContext, the LLM context).
+  - Goal, unchanged: make *"What should I keep, vendor, mail to my banker, or move to shared storage?"*
+    answerable. No recommendation policy exists yet; do not claim inventory intelligence from item data alone.
 
 ---
 
@@ -177,6 +190,15 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 - [ ] Responsive/mobile improvements
 - [ ] Facts cache, when scale justifies it
 - [ ] Per-question LLM routing, when scale/context size justifies it
+- [ ] **Item-metadata follow-ups (deferred on purpose):**
+  - use metadata in AccountFacts totals, global item search, recent-change diffs, AccountContext and the LLM
+    context (each is its own milestone; nothing consumes it today, and tests pin that)
+  - map further expansion numbers (0-3, 5-7, 12+) only as each is verified from a real client value
+  - Blizzard Game Data API enrichment (names, icons, class/subclass names): a separate, asynchronous, opt-in
+    source that would be recorded as its own `source` and never mixed into the game-client evidence; needs
+    Blizzard API credentials, which the repository must never contain
+  - a policy for a conflicting client value across builds (today it is shown as unknown, never resolved)
+  - a developer bridge from the addon's SavedVariables `latestExport` to `POST /api/import` (see item 8)
 - [ ] **Shared-storage follow-ups (deferred on purpose after the reconciliation milestone):**
   - shared-storage consumers: account totals, global item search, recent-change diffs, AccountContext and
     the LLM context (each must count an owner once, however many characters carried it, and label shared

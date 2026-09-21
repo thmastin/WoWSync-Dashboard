@@ -1,5 +1,7 @@
 import { useId, useState } from "react";
 import { formatAbsoluteTime, formatCopper } from "../format.ts";
+import { ITEM_INFO_NOTE, describeItemInfo } from "../itemMetadata.ts";
+import { useItemInfo } from "../useItemInfo.ts";
 import {
   AGGREGATED_ITEMS_NOTE,
   DERIVED_EXPLANATION,
@@ -27,6 +29,10 @@ type FormatTime = (unixSeconds: number | undefined) => string;
 export function ItemTable({ view, label }: { view: SharedObservationView; label: string }) {
   const [query, setQuery] = useState("");
   const inputId = useId();
+  const itemInfo = useItemInfo();
+  // The column exists only when the Dashboard actually holds item metadata for this game version: otherwise every row
+  // would say "?" and imply an export that never carried any.
+  const showInfo = itemInfo.available;
   const all = itemRows(view);
   const rows = filterItemRows(all, query);
   return (
@@ -63,6 +69,11 @@ export function ItemTable({ view, label }: { view: SharedObservationView; label:
               <th scope="col" className="num col-vendor">
                 Vendor each
               </th>
+              {showInfo && (
+                <th scope="col" className="col-item-info">
+                  Item info
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -74,11 +85,12 @@ export function ItemTable({ view, label }: { view: SharedObservationView; label:
                 <td className="num">{row.qty ?? "?"}</td>
                 <td className="col-bound">{row.bound ?? "?"}</td>
                 <td className="num col-vendor">{formatCopper(row.vendorEachCopper)}</td>
+                {showInfo && <ItemInfoCell itemRef={row.itemRef} />}
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={showInfo ? 5 : 4} className="muted">
                   No item matches “{query.trim()}”.
                 </td>
               </tr>
@@ -86,7 +98,18 @@ export function ItemTable({ view, label }: { view: SharedObservationView; label:
           </tbody>
         </table>
       </div>
+      {showInfo && <p className="muted small">{ITEM_INFO_NOTE}</p>}
     </div>
+  );
+}
+
+/** One row's item info: what the game client reported (expansion, crafting reagent), or "?". The full sentence, unknowns included, is the tooltip and the accessible name. */
+function ItemInfoCell({ itemRef }: { itemRef: string | undefined }) {
+  const display = describeItemInfo(useItemInfo().forItemRef(itemRef));
+  return (
+    <td className="col-item-info" title={display.summary} aria-label={display.summary}>
+      {display.cell === "?" ? <span className="muted">?</span> : display.cell}
+    </td>
   );
 }
 
