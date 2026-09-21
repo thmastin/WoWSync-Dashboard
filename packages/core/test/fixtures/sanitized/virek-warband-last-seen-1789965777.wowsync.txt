@@ -1,0 +1,165 @@
+WOWSYNC v1
+
+Generated: 1789965777
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1789965777
+Name: Virek
+Realm: Cairne
+Class: ?
+Level: ?
+Faction: ?
+MoneyCopper: ?
+Client: 12.1.0 build 69875
+ClientFamily: Retail
+Interface: 120100
+
+[LOCATION]
+State: UNKNOWN
+Reason: Not observed
+
+[EQUIPMENT]
+State: UNKNOWN
+Reason: Not observed
+
+[BAGS]
+State: UNKNOWN
+Reason: Not observed
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[ACCOUNT BANK]
+LastVisit: 1789965173
+VisitedNPC: Elana
+VisitedZone: Silvermoon City
+State: LAST_SEEN; complete; observed=1789965174
+Scope: ACCOUNT_WARBAND
+Coverage: ACCOUNT/Warband purchased tabs only; observed independently from character bank; legacy main bank, bank bags and reagent bank not applicable
+SnapshotVisit: 1789965173
+PurchasedBankTabs: 1
+container	capacity	free	family	bagRef
+ContainerStorage 12: ACCOUNT_WARBAND
+12	98	0	0	-
+Slots: 0 free / 98
+itemRef	name	qty	bound	vendorEachCopper
+item:2318::::::::85:253:::::::::	Light Leather	3	no	15
+item:7069::::::::85:253:::::::::	Elemental Air	2	no	400
+item:12207::::::::85:253:::::::::	Giant Egg	3	no	150
+item:17056::::::::85:253:::::::::	Light Feather	1	no	7
+item:72092::::::::85:253:::::::::	Ghost Iron Ore	14	no	1500
+item:72234::::::::85:253:::::::::	Green Tea Leaf	9	no	2337
+item:72235::::::::85:253:::::::::	Silkweed	6	no	2487
+item:72237::::::::85:253:::::::::	Rain Poppy	1	no	2462
+item:72988::::::::85:253:::::::::	Windwool Cloth	45	no	1750
+item:74833::::::::85:253:::::::::	Raw Tiger Steak	33	no	300
+item:74834::::::::85:253:::::::::	Mushan Ribs	23	no	300
+item:74837::::::::85:253:::::::::	Raw Turtle Meat	26	no	300
+item:74838::::::::85:253:::::::::	Raw Crab Meat	1	no	300
+item:74839::::::::85:253:::::::::	Wildfowl Breast	17	no	10
+item:74840::::::::85:253:::::::::	Green Cabbage	1	no	300
+item:74842::::::::85:253:::::::::	Mogu Pumpkin	2	no	300
+item:74844::::::::85:253:::::::::	Red Blossom Leek	1	no	300
+item:74848::::::::85:253:::::::::	Striped Melon	1	no	300
+item:75014::::::::85:253:::::::::	Raw Crocolisk Belly	6	no	300
+item:76061::::::::85:253:::::::::	Spirit of Harmony	1	no	0
+item:82392::::::::85:253:::::::::	Gumweed	7	no	0
+item:89112::::::::85:253:::::::::	Mote of Harmony	38	no	0
+item:89639::::::::85:253:::::::::	Desecrated Herb	1	no	285
+item:89683::::::::85:253:::::::::	Hozen Cuervo	1	no	6400
+item:109133::::::::85:253:::::::::	Rylak Egg	1	no	300
+item:109136::::::::85:253:::::::::	Raw Boar Meat	2	no	300
+item:111557::::::::85:253:::::::::	Sumptuous Fur	8	no	1750
+item:124117::::::::85:253:::::::::	Lean Shank	37	no	30
+item:124118::::::::85:253:::::::::	Fatty Bearsteak	24	no	30
+item:124119::::::::85:253:::::::::	Big Gamy Ribs	6	no	30
+item:124120::::::::85:253:::::::::	Leyblood	46	no	30
+item:124121::::::::85:253:::::::::	Wildfowl Egg	19	no	30
+item:124437::::::::85:253:::::::::	Shal'dorei Silk	238	no	1
+item:124438::::::::85:253:::::::::	Unbroken Claw	9	no	1
+item:124439::::::::85:253:::::::::	Unbroken Tooth	17	no	1
+item:124440::::::::85:253:::::::::	Arkhana	73	no	0
+item:124441::::::::85:253:::::::::	Leylight Shard	3	no	0
+item:127037::::::::85:253:::::::::	Runic Catgut	14	no	1250
+item:152576::::::::85:253:::::::::	Tidespray Linen	48	no	1
+item:152577::::::::85:253:::::::::	Deep Sea Satin	2	no	1
+item:154897::::::::85:253:::::::::	Stringy Loins	3	no	625
+item:154899::::::::85:253:::::::::	Thick Paleo Steak	2	no	625
+item:163036::::::::85:253:::::::::	Polished Pet Charm	45	yes	0
+item:190312::::::::85:253::::1:38:1:::::	Khaz'gorite Ore	2	no	2000
+item:190320::::::::85:253:::::::::	Rousing Fire	9	no	200
+item:190328::::::::85:253:::::::::	Rousing Frost	12	no	200
+item:193050::::::::85:253:::::::::	Tattered Wildercloth	23	no	500
+item:194964::::::::85:253::11::1:28:2437:::::	Recipe: Thrice-Spiced Mammoth Kabob	1	yes	0
+item:197741::::::::85:253:::::::::	Maybe Meat	2	no	200
+item:197743::::::::85:253:::::::::	Waterfowl Filet	3	no	200
+item:197745::::::::85:253:::::::::	Basilisk Eggs	2	no	200
+item:197747::::::::85:253:::::::::	Mighty Mammoth Ribs	2	no	200
+item:197748::::::::85:253:::::::::	Burly Bear Haunch	9	no	200
+item:199002::::::::85:253:::3:7968:6652:1680:2:9:70:28:2523:::::	Hornstrider's Leggings of the Quickblade	1	no	99512
+item:199020::::::::85:253:::3:7969:6652:1692:2:9:70:28:2523:::::	Drake Race Starting Rifle	1	no	30295
+item:199044::::::::85:253:::3:7969:6652:1685:2:9:70:28:2524:::::	Isle Trapper's Axe	1	no	24584
+item:199049::::::::85:253:::3:7969:6652:1710:2:9:70:28:2437:::::	Fire-Blessed Greatsword	1	no	29070
+item:200886::::::::85:253:::::::::	Lemon Silverleaf Tea	4	yes	1875
+item:200891::::::::85:253:::::::::	Druidic Dreamsalad	1	yes	1875
+item:201405::::::::85:253:::::::::	Tuft of Primal Wool	1	no	20000
+item:210796::::::::85:253::::1:38:1:::::	Mycobloom	73	no	500
+item:210799::::::::85:253::::1:38:1:::::	Luredrop	1	no	1500
+item:210800::::::::85:253::::1:38:2:::::	Luredrop	2	no	1500
+item:210802::::::::85:253::::1:38:1:::::	Orbinid	1	no	1500
+item:210805::::::::85:253::::1:38:1:::::	Blessing Blossom	46	no	1500
+item:210808::::::::85:253::::1:38:1:::::	Arathor's Spear	11	no	1500
+item:210930::::::::85:253::::1:38:1:::::	Bismuth	40	no	500
+item:210936::::::::85:253::::1:38:1:::::	Ironclaw Ore	50	no	1500
+item:213197::::::::85:253:::::::::	Null Lotus	2	no	30000
+item:213610::::::::85:253:::::::::	Crystalline Powder	15	no	2000
+item:213613::::::::85:253:::::::::	Leyline Residue	11	no	2000
+item:220308::::::::85:253::25:1:10350:2:9:72:28:2894:::::	Moth-Ridden Slippers	1	no	47515
+item:220319::::::::85:253::25:1:10350:2:9:72:28:2894:::::	Distressed Breeches	1	no	67807
+item:220320::::::::85:253::25:1:10350:2:9:72:28:2894:::::	Distressed Shoulderpads	1	no	46085
+item:220321::::::::85:253::25:1:10350:2:9:75:28:5402:::::	Distressed Belt	1	no	31075
+item:223096::::::::85:253::1::1:28:2894:::::	Pattern: Roiling Thunderstrike Talons	1	no	500000
+item:223512::::::::85:253:::::::::	Basically Beef	51	no	100
+item:224828::::::::85:253::::1:38:1:::::	Weavercloth	4	no	100
+item:225566::::::::85:253:::::::::	Warped Wing	7	no	225
+item:225567::::::::85:253:::::::::	Bug Brisket	2	no	215
+item:225569::::::::85:253:::::::::	Clipped Bird Wing	2	no	245
+item:236761::::::::85:253::::1:38:13:::::	Tranquility Bloom	58	no	750
+item:236770::::::::85:253::::1:38:13:::::	Sanguithorn	8	no	950
+item:236774::::::::85:253::::1:38:13:::::	Azeroot	14	no	1100
+item:236776::::::::85:253::::1:38:13:::::	Argentleaf	10	no	975
+item:236778::::::::85:253::::1:38:13:::::	Mana Lily	28	no	1050
+item:236780::::::::85:253:::::::::	Nocturnal Lotus	1	no	30000
+item:236949::::::::85:253:::::::::	Mote of Light	13	no	2000
+item:236952::::::::85:253:::::::::	Mote of Pure Void	2	no	2000
+item:237359::::::::85:253::::1:38:13:::::	Refulgent Copper Ore	19	no	1500
+item:237362::::::::85:253::::1:38:13:::::	Umbral Tin Ore	3	no	1500
+item:237364::::::::85:253::::1:38:13:::::	Brilliant Silver Ore	12	no	1500
+item:239142::::::::85:253:::::::::	Bottle of Mysterious Wisdom	8	yes	0
+item:242639::::::::85:253:::::::::	Practically Pork	19	no	100
+item:242640::::::::85:253:::::::::	Plant Protein	9	no	100
+item:251773::::::::85:253:::::::::	Dragonpine Lumber	6	yes	0
+item:258138::::::::85:253:::::::::	Potent Healing Potion	5	yes	0
+item:265803::::::::85:253:::::::::	Bazaar Bites	1	no	5450
+
+[GUILD BANK]
+State: UNKNOWN
+Scope: GUILD
+Reason: Not observed
+
+[PROFESSIONS]
+State: UNKNOWN
+Reason: Not observed
+
+[KNOWN SPELLS]
+State: UNKNOWN
+Reason: Not observed
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

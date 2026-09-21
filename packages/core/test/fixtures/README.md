@@ -130,3 +130,21 @@ observed data.
   available when this was written; replace it with a real capture when one exists.
   The UNKNOWN, LAST_SEEN, partial, and all-tabs-inaccessible variants are produced
   inside `test/guildBank.test.ts` by editing this file's Guild Bank block.
+
+## Sanitized real fixtures (`sanitized/`)
+
+Files here come from **real exports** but are deliberately minimal: only what a test needs
+is kept verbatim, and everything irrelevant is replaced with `?` / `State: UNKNOWN` so no
+unrelated character data is committed. They are neither byte-for-byte captures (those are
+the directories above) nor invented data (that is `derived/`).
+
+- `sanitized/virek-warband-last-seen-{1789965184,1789965777}.wowsync.txt` — Virek,
+  Cairne, Retail 12.1.0 build 69875. Two exports made ~10 minutes apart, both carrying
+  the **same** Warband observation as `State: LAST_SEEN; complete; observed=1789965174`
+  (`SnapshotVisit: 1789965173`, NPC Elana, 98 items), each with `[GUILD BANK]` UNKNOWN.
+  Kept verbatim: the header, the `[CHARACTER]` name/realm/client lines, the whole
+  `[ACCOUNT BANK]` block and the `[GUILD BANK]` block. Replaced with `?`/UNKNOWN: class,
+  level, faction, gold, playtime, XP, location, equipment, bags, character bank,
+  professions, spells, trainers. They exist to prove that replaying one shared-storage
+  observation from several exports must not manufacture several observations
+  (`test/sharedStorage.test.ts`).
