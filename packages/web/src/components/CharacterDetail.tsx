@@ -7,6 +7,7 @@ import { formatAbsoluteTime, formatCopper, formatPlaytime, formatRelativeTime } 
 
 import { VERSION_LABELS } from "../versions.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
+import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
 
@@ -19,6 +20,7 @@ export default function CharacterDetail({
   refreshTick,
   onBack,
   onDeleted,
+  onOpenSharedStorage,
 }: {
   identityKey: string;
   /** Changes after an import/delete elsewhere, so this page reloads instead of showing pre-import data. */
@@ -26,6 +28,8 @@ export default function CharacterDetail({
   onBack: () => void;
   /** Called after this character was permanently deleted; the caller refreshes and leaves this (now empty) page. */
   onDeleted: () => void;
+  /** Opens the account-level Shared Storage view (the reconciled Warband / Guild Bank), which is where that state lives. */
+  onOpenSharedStorage?: () => void;
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -175,12 +179,14 @@ export default function CharacterDetail({
           <InventoryCard title="Bank" inv={snapshot.parsed.bank} />
           {snapshot.parsed.accountBank && (
             <InventoryCard
-              title="Warband Bank (account-scoped)"
+              title={CARRIED_WARBAND_TITLE}
               inv={snapshot.parsed.accountBank}
-              note="Observed from this export as account state. It is not part of this character’s bank and is excluded from account totals until account-scope reconciliation is implemented."
+              note={CARRIED_WARBAND_NOTE}
+              actionLabel={snapshot.parsed.accountBank.status.state !== "UNKNOWN" ? OPEN_SHARED_WARBAND : undefined}
+              onAction={onOpenSharedStorage}
             />
           )}
-          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} />}
+          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} onOpenSharedStorage={onOpenSharedStorage} />}
 
           <section className="detail-card">
             <h3>
@@ -304,13 +310,31 @@ export default function CharacterDetail({
   );
 }
 
-function InventoryCard({ title, inv, note }: { title: string; inv: import("../types.ts").InventorySection; note?: string }) {
+export function InventoryCard({
+  title,
+  inv,
+  note,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  inv: import("../types.ts").InventorySection;
+  note?: string;
+  /** A link-style button to somewhere more authoritative (only shown when both are given). */
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
   return (
     <section className="detail-card">
       <h3>
         {title} <StatusBadge state={inv.status.state} />
       </h3>
       {note && <p className="muted small">{note}</p>}
+      {actionLabel && onAction && (
+        <button className="link-button" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
       {inv.status.state === "UNKNOWN" && <p className="muted">Never observed.</p>}
       {inv.status.state !== "UNKNOWN" && (
         <>

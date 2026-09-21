@@ -17,7 +17,11 @@ export function formatPlaytime(seconds: number | undefined): string {
 
 export function formatRelativeTime(unixSeconds: number | undefined): string {
   if (unixSeconds === undefined) return "never";
-  const deltaSeconds = Date.now() / 1000 - unixSeconds;
+  return formatAgeSeconds(Date.now() / 1000 - unixSeconds);
+}
+
+/** "just now" / "5m ago" / "3h ago" / "2d ago" ... for an age in seconds (deterministic: no clock is read). */
+export function formatAgeSeconds(deltaSeconds: number): string {
   if (deltaSeconds < 60) return "just now";
   const minutes = Math.floor(deltaSeconds / 60);
   if (minutes < 60) return `${minutes}m ago`;

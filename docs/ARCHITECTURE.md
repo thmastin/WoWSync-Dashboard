@@ -537,6 +537,19 @@ The server reconciles nothing and queries no tables: it serializes `store.projec
 - Security is the existing baseline, unchanged: the app-wide Host guard (Host on every request, Origin on
   state-changing ones), no CORS headers, default loopback bind. Tests cover the new routes under each.
 
+**Presentation** (`packages/web/src/sharedStorage.ts` holds every wording and trust decision as pure, unit-tested
+functions; the components only render them). Shared storage is shown on the account level: a **Shared Storage** tab on
+the Retail view, one card per owner, never inside a character. A card says what the owner's reconciled state is (the
+"Derived" tag means the Dashboard chose the current observation; the observation itself is real evidence), when it was
+observed and its freshness (the age of the observation, independent of how it was carried: "recent" and "last seen"
+are not contradictory), how complete it was, and which exports carried it ("one observation, carried by N exports").
+Unknown stays unknown: no readable observation, an inaccessible tab or an unconfirmed tab is "contents unknown", never
+empty. A newer partial, an earlier broader observation and a same-time conflict are each surfaced and openable as
+separately labelled observations, never merged. The character page keeps showing what each export carried, retitled
+"... carried by this export" and linking to the owner view: the snapshot is historical evidence, the owner card is the
+reconciled state. Clearing an owner's history is an explicit dialog (typed "Warband" or the exact GuildClubID) carrying the
+reappearance sentence, and a damaged journal has its own screen with a recovery action per damaged owner.
+
 **Still not consumed.** Shared storage is deliberately **not** in AccountFacts inventory/totals, item
 search, snapshot diffs, AccountContext or the LLM context (tests pin this, including byte-identical facts and
 LLM context with and without shared sections). The character page still shows each export's own copy as a

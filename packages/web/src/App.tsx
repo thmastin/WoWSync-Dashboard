@@ -9,11 +9,12 @@ import CharactersGrid from "./components/CharactersGrid.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
+import SharedStorageView from "./components/SharedStorageView.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
-type View = { kind: "overview" } | { kind: "characters" } | { kind: "economy" } | { kind: "detail"; identityKey: string };
+type View = { kind: "overview" } | { kind: "characters" } | { kind: "economy" } | { kind: "shared" } | { kind: "detail"; identityKey: string };
 
 function loadStoredVersion(): VersionOrUnknown {
   const stored = localStorage.getItem("wowsync.activeVersion");
@@ -57,6 +58,13 @@ export default function App() {
 
   function openCharacter(identityKey: string) {
     setView({ kind: "detail", identityKey });
+  }
+
+  // Shared storage (Warband / Guild Bank) is Retail-only account information: it lives in its own tab,
+  // and a character's "carried by this export" cards link here.
+  function openSharedStorage() {
+    setActiveVersion("retail");
+    setView({ kind: "shared" });
   }
 
   return (
@@ -104,6 +112,7 @@ export default function App() {
               refresh();
               setView({ kind: "characters" });
             }}
+            onOpenSharedStorage={openSharedStorage}
           />
         ) : (
           <>
@@ -118,9 +127,14 @@ export default function App() {
                 <button className={view.kind === "economy" ? "active" : ""} onClick={() => setView({ kind: "economy" })}>
                   Economy
                 </button>
+                {activeVersion === "retail" && (
+                  <button className={view.kind === "shared" ? "active" : ""} onClick={() => setView({ kind: "shared" })}>
+                    Shared Storage
+                  </button>
+                )}
               </div>
 
-              {scoped && scoped.isRealmScoped ? (
+              {view.kind === "shared" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
@@ -140,8 +154,9 @@ export default function App() {
               ) : null}
             </div>
 
-            {factsLoad.state.status === "error" && <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />}
-            {!scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {view.kind === "shared" && <SharedStorageView />}
+            {view.kind !== "shared" && factsLoad.state.status === "error" && <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />}
+            {view.kind !== "shared" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && view.kind === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
             {scoped && view.kind === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
             {scoped && view.kind === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}

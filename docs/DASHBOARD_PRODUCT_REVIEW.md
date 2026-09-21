@@ -9,7 +9,9 @@ Date: 2026-09-19. Basis: `main` at `797fc3d` (Forever support + character deleti
 > freshness-aware totals, observation-time ordering, idempotent imports, per-realm
 > LLM gold, classified API errors, localhost binding) and Warband/Guild Bank
 > parsing has been added. Read its "current" statements as describing the
-> repository at that basis, not today's.
+> repository at that basis, not today's. In particular the review's remarks that the Warband bank is not shown or is
+> excluded describe that basis: shared storage (Warband and Guild Banks) now has its own account-level Shared Storage
+> view (see docs/ROADMAP.md, shared-storage checkpoint C5); it is still not part of any total, search or AI context.
 
 **Evidence legend.** `[REPO]` = read in the source or the local API by the review team
 and, for the items in "Verified by the lead" below, re-checked by the lead.

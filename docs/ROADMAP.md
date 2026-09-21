@@ -2,8 +2,8 @@
 
 Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including shared-storage checkpoints C1 (`90ff3c1`),
-C2 (persistence and import integration), C3 (explicit owner deletion) and C4 (HTTP API). Tests at
-that baseline: core 413, server 118, web 84; typechecks clean; production build succeeds.
+C2 (persistence and import integration), C3 (explicit owner deletion), C4 (HTTP API) and C5 (UI).
+Tests at that baseline: core 413, server 118, web 136; typechecks clean; production build succeeds.
 
 ## How to use this roadmap
 
@@ -55,7 +55,7 @@ Work happening now.
     `FOREVER_PROFESSIONS.md`, `FOREVER_REMAINING.md`, `FOREVER_SPELLS.md`,
     `FOREVER_STATS_DIAGNOSTIC.md`. Dashboard side: [ARCHITECTURE.md](ARCHITECTURE.md) ("Forever").
 
-- [ ] **Shared-storage reconciliation** (in progress: C1-C4 done, C5-C6 remaining).
+- [ ] **Shared-storage reconciliation** (in progress: C1-C5 done, C6 remaining).
   Warband and Guild storage belong to an owner, not to the character whose export carried
   them. Approved design: an immutable journal of observations plus provenance, a
   deterministic read-time projection per owner (Warband = installation-local account scope;
@@ -83,10 +83,21 @@ Work happening now.
     effective time 1789965174, LAST_SEEN preserved, no guild), through the actual API, with every AccountFacts /
     AccountContext / LLM / character-page output unchanged. Backup taken first
     (`data/wowsync.backup-20260921T133844Z.sqlite`).
-  - [ ] **C5** presentation: owner-level Warband/Guild views, freshness and provenance,
-    navigation; user-facing deletion controls and confirmation wording ("Clears stored shared-storage
-    history. A later WoWSync export may add it again."); retitle the transitional character-page cards.
-  - [ ] **C6** final documentation and roadmap update.
+  - [x] **C5** owner-level UI (`feat: add reconciled shared storage UI`): a **Shared Storage** tab on the
+    Retail account view (not inside any character): one card per owner (Warband, each guild) with time and
+    freshness, completeness, how it was carried, capacity, contents (filterable table), guild tab coverage,
+    bounded provenance ("one observation, carried by N exports"), notices for a newer partial / earlier
+    broader / conflicting observation, and "contents unknown" (never empty) where nothing readable was
+    observed. Explicit per-owner "Clear stored history" with a typed confirmation and the sentence "Clears
+    stored shared-storage history. A later WoWSync export may add it again."; a distinct integrity-failure
+    screen with a recovery action per damaged owner. The character page's cards are now "carried by this
+    export" and link to the reconciled view. Presentation only: still not in totals, search, diffs,
+    AccountContext or the LLM context. Checked in a real browser against the real 98-item Warband (one owner,
+    98 items, 98 of 98 slots occupied, observed 1789965174, two exports from Virek, no guild card) and against
+    scratch fixtures (restricted, partial, conflicting, locked and many-carrier guilds; the deletion flow; a
+    corrupt journal; 390 px and 700 px widths). The real Warband was not deleted.
+  - [ ] **C6** final reconciliation review and documentation/roadmap close-out (shared storage stays Active
+    until then).
   - **Still deliberately excluded** from totals, item search, diffs, AccountContext and LLM
     context; each is a later consumer (see Dashboard Product / Ask My Account). Shared totals
     must count each owner once and be labelled as asynchronous observations.
@@ -280,7 +291,7 @@ where it is written up) when it is made; open parts stay listed.
 | --- | --- | --- |
 | Final Warband persistence / reconciliation model | Shared-storage reconciliation | **Decided and implemented (C1-C2):** journal + read-time projection, installation-local account scope ([ARCHITECTURE.md](ARCHITECTURE.md)). **Open (needs the addon):** a stable account discriminator; until then two Battle.net accounts in one Dashboard reconcile as one |
 | Final Guild persistence model keyed by `GuildClubID` | Shared-storage reconciliation | **Decided and implemented (C1-C2):** opaque text key. **Open (addon):** whether a region is needed for uniqueness; the textual form of a real club ID |
-| Deletion semantics for shared observations | Shared-storage reconciliation | **Decided:** deleting a character (or a snapshot) never deletes shared observations; source labels are kept. **Also decided (C3/C4):** explicit owner deletion removes that owner's observations and provenance and never touches snapshots; it is not a tombstone (new evidence recreates the owner); the HTTP contract is settled (owner routes + JSON confirmation, 404 for a missing owner). **Open (C5):** the UI confirmation wording |
+| Deletion semantics for shared observations | Shared-storage reconciliation | **Decided:** deleting a character (or a snapshot) never deletes shared observations; source labels are kept. **Also decided (C3/C4):** explicit owner deletion removes that owner's observations and provenance and never touches snapshots; it is not a tombstone (new evidence recreates the owner); the HTTP contract is settled (owner routes + JSON confirmation, 404 for a missing owner). **UI wording decided (C5):** typed confirmation ("Warband", or the exact GuildClubID) plus "Clears stored shared-storage history. A later WoWSync export may add it again." |
 | Character identity / GUID strategy, especially rename/transfer | Identity, companion, Activity History | Identity is `version::realm::name`; the text export carries no GUID while SavedVariables is GUID-keyed |
 | Desktop companion transport / handoff | Desktop companion | Depends on the feasibility checkpoint (SavedVariables flush timing) |
 | Local companion API authentication | Desktop companion | Whether a token is needed beyond loopback + Host/Origin protection |
@@ -319,6 +330,7 @@ Guard against re-adding. This is not a changelog.
 - Product review document
 - Shared-storage reconciliation foundation: C1 pure domain module (`90ff3c1`), C2 persisted
   journal + transactional import integration + backfill, C3 explicit owner-scoped deletion, and
-  C4 HTTP read/delete API (no UI; the rest of the reconciliation is under [Active](#active))
+  C4 HTTP read/delete API, and C5 owner-level Shared Storage UI (the rest of the reconciliation is under
+  [Active](#active))
 - Integration branch `feature/dashboard-integration` (`0f525a7`): main + trust hardening +
   Warband + Guild Bank + product review. Not yet merged to `main`.

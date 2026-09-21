@@ -1,20 +1,19 @@
 import { formatAbsoluteTime } from "../format.ts";
 import { describeGuildCapacity, describeGuildCaveats, describeGuildContents, describeGuildState, describeGuildTab } from "../guildBank.ts";
+import { CARRIED_GUILD_NOTE, CARRIED_GUILD_TITLE, OPEN_SHARED_GUILD } from "../sharedStorage.ts";
 import type { GuildBankSection } from "../types.ts";
 
 const PREVIEW_ITEMS = 12;
 
 /**
- * TRANSITIONAL Guild Bank display. Guild storage is shared by the whole guild and
- * is a different scope from the character bank and the Warband bank, so it gets
- * its own clearly labelled card and is never merged into either, nor into any total.
- * The final model (guild-scoped reconciliation across the characters that carry
- * this data) is deliberately not decided yet - this card only makes sure the
- * section, once parsed, is not silently invisible. All wording comes from
- * guildBank.ts so UNKNOWN / LAST_SEEN / INACCESSIBLE are never presented as
- * current, empty, or known.
+ * What THIS EXPORT carried about a guild's Guild Bank: historical evidence from one export,
+ * shown on the character page. It is not the guild's state - that is the reconciled owner view
+ * in Shared Storage (one card per guild however many exports carried it), which this card links to.
+ * Guild storage is a different scope from the character bank and the Warband bank, so it is never
+ * merged into either, nor into any total. All wording comes from guildBank.ts so UNKNOWN /
+ * LAST_SEEN / INACCESSIBLE are never presented as current, empty, or known.
  */
-export default function GuildBankCard({ guild }: { guild: GuildBankSection }) {
+export default function GuildBankCard({ guild, onOpenSharedStorage }: { guild: GuildBankSection; onOpenSharedStorage?: () => void }) {
   const state = describeGuildState(guild.status);
   const capacity = describeGuildCapacity(guild);
   const caveats = describeGuildCaveats(guild);
@@ -22,12 +21,14 @@ export default function GuildBankCard({ guild }: { guild: GuildBankSection }) {
   return (
     <section className="detail-card">
       <h3>
-        Guild Bank (guild-scoped) <span className={`status-badge status-${guild.status.state.toLowerCase()}`}>{guild.status.state}</span>
+        {CARRIED_GUILD_TITLE} <span className={`status-badge status-${guild.status.state.toLowerCase()}`}>{guild.status.state}</span>
       </h3>
-      <p className="muted small">
-        Shared storage owned by the guild, seen through this character's export. It is not this character's bank or the Warband Bank, and it is
-        excluded from all totals, item search and AI context until guild-scope reconciliation is implemented.
-      </p>
+      <p className="muted small">{CARRIED_GUILD_NOTE}</p>
+      {!unknown && onOpenSharedStorage && (
+        <button className="link-button" onClick={onOpenSharedStorage}>
+          {OPEN_SHARED_GUILD}
+        </button>
+      )}
 
       <div>{state.headline}</div>
       {state.detail && <p className="muted small">{state.detail}</p>}
