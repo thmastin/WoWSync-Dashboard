@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
+Last updated: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
 milestone (C1-C6), the item-metadata consumer (parser, store, API, Shared Storage / inventory
 presentation) and the SavedVariables developer bridge. Tests at that baseline: core 471, server 161, web 150; typechecks clean;
@@ -104,6 +104,20 @@ Work happening now.
 
 Work intended next, in this order.
 
+- [ ] **GearExport: keep `latestExport` fresh in memory while playing (remove manual `/wowsync`).**
+  **Repo:** GearExport only (this Dashboard repo must not modify the addon). Pairs with Slice 1
+  `watch:saved` so the player's biggest friction — remembering to run a report — goes away.
+  - On relevant OBSERVED changes (bags/bank/money/equipment/zone/level, or a quiet throttle), rebuild
+    `WoWSyncDB.characters[guid].latestExport` in memory the same way `/wowsync` does today.
+  - Disk flush stays **WoW-owned**: `/reload`, logout, or exit. No forced reload, no off-box network
+    from the addon, no writing outside SavedVariables.
+  - Player loop becomes: play normally → natural `/reload` or end-of-session logout → watcher imports.
+  - Keep an explicit `/wowsync` (or equivalent) for "force refresh now" and for clients where auto-refresh
+    is off or still landing.
+  - Do-not-do: mid-session Dashboard push, process memory, input simulation, clipboard as primary path.
+  - Acceptance: after bag/bank changes without typing `/wowsync`, a `/reload` (or logout) with
+    `watch:saved` running produces a new Dashboard snapshot whose `generatedAt` matches the post-change export.
+
 - [ ] **Account / multi-character context.**
   Existing addon schema direction (GearExport `WOWSYNC_SCHEMA.md`, account/alt export
   section):
@@ -164,12 +178,12 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
   user-facing product and is not started.) A real product need: the user
   sometimes forgets to paste `/wowsync` output into the Dashboard. Goal: reduce or
   eliminate that manual handoff.
-  - **Status: Slice 1 implemented, awaiting review.** `npm run watch:saved -- --wow-dir <one product folder>` (`--once` for a single
-    catch-up import) is a foreground CLI that polls one GearExport SavedVariables file, waits for it to be stable, and sends the newest
-    saved export through the existing `POST /api/import` (loopback only; read-only; no second parser or database). It delivers at the
-    next WoW save (`/reload`, logout, exit), not at `/wowsync`. Not built and still open: tray/installer/autostart, multi-file /
-    multi-account watching, the timing experiment, a deleted-character tombstone. See [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md)
-    (section 8, "Review decisions").
+  - **Status: Slice 1 shipped** (`ad5fc79` on `feature/dashboard-integration`; live-validated: `/wowsync` → `/reload` → auto-import).
+    `npm run watch:saved -- --wow-dir <one product folder>` (`--once` for a single catch-up import) polls one GearExport SavedVariables
+    file and POSTs the newest `latestExport.text` through existing `POST /api/import` (loopback only; read-only; no second parser/DB).
+    Delivery is still at the next WoW save (`/reload`, logout, exit). **Next dependency for "no manual report":** GearExport in-memory
+    auto-refresh (see [Next](#next)). Still open on the companion itself: tray/installer/autostart, multi-file/multi-account watching,
+    deleted-character tombstone. See [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
   - **Began with a design/feasibility checkpoint (approved); Slice 1 was built from it. Packaging (tray, installer, autostart) needs its own review first.**
   - Reuse, do not duplicate: `POST /api/import`, idempotent imports, observation-time
     ordering, transactional persistence, `parseWowSyncExport`,
