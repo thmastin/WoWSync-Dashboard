@@ -4,7 +4,7 @@
 //   #/<version>/characters?realm=&q=&class=&age=&sort=
 //   #/<version>/economy?realm=
 //   #/<version>/shared
-//   #/<version>/items?...   (reserved; UI may show a placeholder until X3)
+//   #/<version>/items?q=&realm=
 //   #/<version>/c/<identityKey>[/snapshot/<id>]?from=overview|characters|...
 // localStorage keeps only the last version, used when the hash is empty.
 

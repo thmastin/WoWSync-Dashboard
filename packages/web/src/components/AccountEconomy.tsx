@@ -1,10 +1,8 @@
-import { useState } from "react";
 import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
-import type { InventoryAggregateEntry } from "../types.ts";
 
-export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
+export default function AccountEconomy({ scoped }: { scoped: ScopedFacts; onOpenCharacter?: (key: string) => void }) {
   const facts = scoped;
   const goldTotal = describeGoldTotal(facts.gold, facts.now);
   const playtimeTotal = describePlaytimeTotal(facts.playtime, facts.characters.length, facts.now);
@@ -124,52 +122,13 @@ export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: Sc
           </div>
         )}
       </section>
-
-      <InventorySearch scoped={scoped} onOpenCharacter={onOpenCharacter} />
-    </div>
+      <section className="panel detail-card-wide">
+        <h3>Item search</h3>
+        <p className="muted small">
+          Item search moved to the <strong>Items</strong> tab (same version + realm scope). Use the header box or that tab.
+        </p>
+      </section>
+</div>
   );
 }
 
-function InventorySearch({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
-  const facts = scoped;
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-  const results: InventoryAggregateEntry[] = q.length === 0 ? [] : facts.inventory.items.filter((i) => (i.name ?? "").toLowerCase().includes(q));
-
-  return (
-    <section className="panel detail-card-wide">
-      <h3>Item search</h3>
-      <input
-        className="item-search-input"
-        type="text"
-        placeholder="Search known inventory (e.g. Strange Dust)…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      {facts.inventory.hasUnknownStorage && (
-        <div className="muted small" style={{ marginTop: 6 }}>
-          Some characters' bags/bank were never observed — results below are a <strong>known total</strong>, not
-          necessarily the complete total for this scope.
-          {facts.inventory.unknownBank.length > 0 && (
-            <> Bank unknown for: {facts.inventory.unknownBank.map((c) => c.name).join(", ")}.</>
-          )}
-        </div>
-      )}
-      {q.length > 0 && results.length === 0 && <p className="muted small">No known items match "{query}".</p>}
-      {results.map((item) => (
-        <div key={item.itemKey} className="inventory-result">
-          <div className="inventory-result-header">
-            <strong>{item.name ?? "?"}</strong> <span className="muted">Known total: {item.totalKnownQty}</span>
-          </div>
-          <ul className="compact-list">
-            {item.locations.map((loc, i) => (
-              <li key={i} className="clickable" onClick={() => onOpenCharacter(loc.identityKey)}>
-                {loc.name} — {loc.storage === "bags" ? "Bags" : "Bank"}: {loc.qty}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </section>
-  );
-}

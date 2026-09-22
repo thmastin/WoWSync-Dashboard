@@ -998,3 +998,18 @@ h1, h2, h3 {
   display: inline-block; font-size: 0.75rem; padding: 1px 6px; border-radius: 999px;
   border: 1px solid var(--border); color: var(--muted);
 }
+
+.header-item-search { display: flex; align-items: center; margin-left: auto; margin-right: 8px; }
+.header-search-input {
+  width: min(240px, 36vw);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: inherit;
+  font-size: 0.9rem;
+}
+.header-search-input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); border-color: var(--accent); }
+.items-caveat { margin: 8px 0 12px; }
+.items-more { margin-top: 10px; }
+.items-table td:nth-child(5) { font-variant-numeric: tabular-nums; }

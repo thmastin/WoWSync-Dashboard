@@ -6,6 +6,7 @@ import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
 import AskAccountModal from "./components/AskAccountModal.tsx";
 import CharactersRoster from "./components/CharactersRoster.tsx";
+import ItemsSearch from "./components/ItemsSearch.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
@@ -90,8 +91,10 @@ export default function App() {
   }
 
   function openCharacter(identityKey: string) {
-    const from: RouteView = route.view === "detail" ? route.from ?? "characters" : route.view === "items" ? "characters" : route.view;
-    navigate(patchRoute(route, { view: "detail", identityKey, from: from === "detail" ? "characters" : from }));
+    let from: RouteView = route.view;
+    if (from === "detail") from = route.from ?? "characters";
+    if (from === "detail") from = "characters";
+    navigate(patchRoute(route, { view: "detail", identityKey, from }));
   }
 
   function openSharedStorage() {
@@ -111,6 +114,19 @@ export default function App() {
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark">⚔</span> WoWSync Dashboard
+        </div>
+        <div className="header-item-search">
+          <input
+            className="header-search-input"
+            type="search"
+            placeholder="Find item…"
+            value={route.view === "items" ? route.q : ""}
+            onChange={(e) => navigate(patchRoute(route, { view: "items", q: e.target.value }))}
+            onFocus={() => {
+              if (route.view !== "items") navigate(patchRoute(route, { view: "items" }));
+            }}
+            aria-label="Find item across this version"
+          />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
@@ -163,6 +179,9 @@ export default function App() {
                 <button className={tabView === "economy" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "economy" }))}>
                   Economy
                 </button>
+                <button className={tabView === "items" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "items", q: route.q }))}>
+                  Items
+                </button>
                 {activeVersion === "retail" && (
                   <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
                     Shared Storage
@@ -191,16 +210,19 @@ export default function App() {
             </div>
 
             {route.view === "shared" && <SharedStorageView />}
-            {route.view === "items" && (
-              <div className="panel">
-                <h3>Item search</h3>
-                <p className="muted">Global item search lands next (roster spine X3). The URL `#/{activeVersion}/items` is reserved.</p>
-              </div>
+            {scoped && route.view === "items" && (
+              <ItemsSearch
+                inventory={scoped.inventory}
+                characters={scoped.characters}
+                route={route}
+                onNavigate={navigate}
+                onOpenCharacter={openCharacter}
+              />
             )}
-            {route.view !== "shared" && route.view !== "items" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && route.view !== "items" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster
