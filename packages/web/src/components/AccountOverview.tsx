@@ -1,4 +1,4 @@
-import { buildNeedsAttention } from "@wowsync-dashboard/core/needsAttention.ts";
+import { buildNeedsAttention, groupNeedsAttentionByAgeBand } from "@wowsync-dashboard/core/needsAttention.ts";
 import { formatAgeSeconds, formatCopperDelta, formatRelativeTime, formatXpPercent } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
@@ -9,6 +9,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
   const goldTotal = describeGoldTotal(facts.gold, facts.now);
   const playtimeTotal = describePlaytimeTotal(facts.playtime, characterCount, facts.now);
   const attention = buildNeedsAttention(facts.characters, facts.now);
+  const attentionGroups = groupNeedsAttentionByAgeBand(attention);
 
   const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
   const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
@@ -40,19 +41,32 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
       <div className="overview-columns">
         <section className="panel">
           <h3>Needs attention</h3>
-          {attention.length === 0 && <p className="muted">Nothing flagged for this scope — every character is recent with observed bank/bags/professions (or those sections do not apply yet).</p>}
-          <ul className="compact-list">
-            {attention.map((row) => (
-              <li key={row.identityKey} className="clickable" onClick={() => onOpenCharacter(row.identityKey)}>
-                <strong>{row.name}</strong>{" "}
-                <span className="muted">
-                  {row.realm}
-                  {" · "}
-                  {row.reasons.map((r) => r.text).join(" · ")}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {attention.length === 0 && (
+            <p className="muted">
+              Nothing flagged for this scope — every character is recent with observed bank/bags/professions (or those
+              sections do not apply yet).
+            </p>
+          )}
+          {attentionGroups.map((group) => (
+            <div key={group.band} className="attention-band">
+              <h4 className="attention-band-label">
+                {group.label}{" "}
+                <span className="muted">({group.rows.length})</span>
+              </h4>
+              <ul className="compact-list">
+                {group.rows.map((row) => (
+                  <li key={row.identityKey} className="clickable" onClick={() => onOpenCharacter(row.identityKey)}>
+                    <strong>{row.name}</strong>{" "}
+                    <span className="muted">
+                      {row.realm}
+                      {" · "}
+                      {row.reasons.map((r) => r.text).join(" · ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </section>
 
         <section className="panel">

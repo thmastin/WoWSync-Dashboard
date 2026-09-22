@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildNeedsAttention, LOW_BAG_FREE_SLOTS, type AttentionCharacter } from "../src/needsAttention.ts";
+import { buildNeedsAttention, classifyAgeBand, groupNeedsAttentionByAgeBand, LOW_BAG_FREE_SLOTS, type AttentionCharacter } from "../src/needsAttention.ts";
 
 const NOW = 1_700_000_000;
 const day = 86400;
@@ -105,4 +105,35 @@ test("unknown bags do not invent free-slot reasons", () => {
     NOW,
   );
   assert.deepEqual(rows, []);
+});
+test("classifyAgeBand uses fixed 3d / 14d / never boundaries", () => {
+  assert.equal(classifyAgeBand(undefined, NOW), "never");
+  assert.equal(classifyAgeBand(NOW - 2 * day, NOW), "recent");
+  assert.equal(classifyAgeBand(NOW - 3 * day, NOW), "recent");
+  assert.equal(classifyAgeBand(NOW - 3 * day - 1, NOW), "aging");
+  assert.equal(classifyAgeBand(NOW - 10 * day, NOW), "aging");
+  assert.equal(classifyAgeBand(NOW - 14 * day, NOW), "aging");
+  assert.equal(classifyAgeBand(NOW - 14 * day - 1, NOW), "old");
+});
+
+test("groupNeedsAttentionByAgeBand orders never â†’ old â†’ aging â†’ recent and skips empty", () => {
+  const rows = buildNeedsAttention(
+    [
+      char({ identityKey: "r", name: "RecentBag", freshness: "recent", lastObservedAt: NOW - day, bankStatus: "UNKNOWN" }),
+      char({ identityKey: "a", name: "Aging", freshness: "stale", lastObservedAt: NOW - 10 * day }),
+      char({ identityKey: "o", name: "Old", freshness: "stale", lastObservedAt: NOW - 20 * day }),
+      char({ identityKey: "n", name: "Never", freshness: "unknown", lastObservedAt: undefined }),
+    ],
+    NOW,
+  );
+  const groups = groupNeedsAttentionByAgeBand(rows);
+  assert.deepEqual(
+    groups.map((g) => g.band),
+    ["never", "old", "aging", "recent"],
+  );
+  assert.equal(groups[0].rows[0].name, "Never");
+  assert.equal(groups[1].rows[0].name, "Old");
+  assert.equal(groups[2].rows[0].name, "Aging");
+  assert.equal(groups[3].rows[0].name, "RecentBag");
+  assert.ok(rows.every((r) => r.ageBand !== undefined));
 });

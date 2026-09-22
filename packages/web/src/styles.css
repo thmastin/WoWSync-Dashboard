@@ -1021,3 +1021,13 @@ button.roster-name-link {
 .items-caveat { margin: 8px 0 12px; }
 .items-more { margin-top: 10px; }
 .items-table td:nth-child(5) { font-variant-numeric: tabular-nums; }
+.attention-band { margin-top: 10px; }
+.attention-band:first-of-type { margin-top: 4px; }
+.attention-band-label {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

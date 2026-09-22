@@ -1,12 +1,40 @@
 // Deterministic "Needs attention" digest (DASHBOARD_PRODUCT_REVIEW X4 / Overview).
 // Fact-only reasons that cite their source field. No advice ("should log in").
 // A character appears only when at least one reason applies; rows sort oldest sync first.
+// Age bands (N4): never / >14d / 3–14d / ≤3d — fixed, not user-configurable.
 
-import { classifyFreshness, type Freshness } from "./freshness.ts";
+import { classifyFreshness, RECENT_THRESHOLD_SECONDS, type Freshness } from "./freshness.ts";
 import type { SectionState } from "./types.ts";
 
 /** Free bag slots at or below this (when known) are listed as an attention reason. */
 export const LOW_BAG_FREE_SLOTS = 5;
+
+/** 14 days — second fixed band boundary after RECENT_THRESHOLD_SECONDS (3d). */
+export const OLD_THRESHOLD_SECONDS = 14 * 24 * 60 * 60;
+
+/**
+ * Fixed sync-age bands for Needs Attention (and other age surfaces).
+ * Boundaries: ≤3d = recent, 3–14d = aging, >14d = old, missing = never.
+ */
+export type AgeBand = "recent" | "aging" | "old" | "never";
+
+export const AGE_BAND_ORDER: readonly AgeBand[] = ["never", "old", "aging", "recent"];
+
+export const AGE_BAND_LABELS: Record<AgeBand, string> = {
+  never: "Never synced",
+  old: "Older than 14 days",
+  aging: "3–14 days",
+  recent: "Within 3 days",
+};
+
+export function classifyAgeBand(lastObservedAtSeconds: number | undefined, nowSeconds: number): AgeBand {
+  if (lastObservedAtSeconds === undefined) return "never";
+  const ageSeconds = nowSeconds - lastObservedAtSeconds;
+  if (ageSeconds < 0) return "recent";
+  if (ageSeconds <= RECENT_THRESHOLD_SECONDS) return "recent";
+  if (ageSeconds <= OLD_THRESHOLD_SECONDS) return "aging";
+  return "old";
+}
 
 export interface AttentionReason {
   /** Human-readable observed fact, e.g. "synced 12d ago". */
@@ -25,6 +53,14 @@ export interface AttentionRow {
    * observed — sorts first (oldest / never first).
    */
   syncAgeSeconds: number;
+  /** Fixed age band from lastObservedAt (N4). */
+  ageBand: AgeBand;
+}
+
+export interface AttentionBandGroup {
+  band: AgeBand;
+  label: string;
+  rows: AttentionRow[];
 }
 
 /** The fields Needs Attention reads. Matches CharacterFacts (+ optional bag/bank/profession details). */
@@ -99,6 +135,7 @@ export function buildNeedsAttention(characters: readonly AttentionCharacter[], n
       realm: c.realm,
       reasons,
       syncAgeSeconds: syncAgeSeconds(c.lastObservedAt, now),
+      ageBand: classifyAgeBand(c.lastObservedAt, now),
     });
   }
 
@@ -107,4 +144,20 @@ export function buildNeedsAttention(characters: readonly AttentionCharacter[], n
     return a.name.localeCompare(b.name) || a.identityKey.localeCompare(b.identityKey);
   });
   return rows;
+}
+
+/** Group attention rows into fixed age-band sections. Empty bands are omitted. */
+export function groupNeedsAttentionByAgeBand(rows: readonly AttentionRow[]): AttentionBandGroup[] {
+  const byBand = new Map<AgeBand, AttentionRow[]>();
+  for (const band of AGE_BAND_ORDER) byBand.set(band, []);
+  for (const row of rows) {
+    byBand.get(row.ageBand)!.push(row);
+  }
+  const groups: AttentionBandGroup[] = [];
+  for (const band of AGE_BAND_ORDER) {
+    const bandRows = byBand.get(band)!;
+    if (bandRows.length === 0) continue;
+    groups.push({ band, label: AGE_BAND_LABELS[band], rows: bandRows });
+  }
+  return groups;
 }
