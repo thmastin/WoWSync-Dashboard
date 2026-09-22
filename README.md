@@ -152,12 +152,12 @@ force a save or run in the background. To have the same import happen when WoW s
 
 ```
 npm start                                                          # the Dashboard, in one terminal
-npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft\_retail_"   # the watcher, in another
-npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft\_retail_" --once   # import the newest saved export now, then exit
+npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft"   # all products; or ...\_retail_ for one
+npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft" --once   # catch-up import from every product file, then exit
 ```
 
 **Bridge vs watcher.** They share one implementation (same file reader, same checks, same `POST /api/import`); the difference is who
-decides when. `import:saved` imports **one character you name, when you run it**. `watch:saved` polls **one file** and, whenever WoW saves
+decides when. `import:saved` imports **one character you name, when you run it**. `watch:saved` polls **every matching GearExport.lua** (install root = all products; one product folder = that client) and, whenever WoW saves
 it, imports **the single newest export in it**, without you naming anyone. Neither has an importer of its own.
 
 **When it can act.** WoW writes SavedVariables on `/reload`, logout and exit, **not** when you run `/wowsync` (the addon holds the export
@@ -168,8 +168,9 @@ has not yet been measured against a live client.)
 
 **What it does**
 
-- Resolves exactly one `GearExport.lua` with the same rules as the bridge (`--file`, `--wow-dir`, or `WOWSYNC_SAVED_VARIABLES` /
-  `WOWSYNC_WOW_DIR`); several accounts or products stop with the candidate list: point `--wow-dir` at one product folder or use `--file`.
+- Resolves SavedVariables with the same discovery roots as the bridge (`--file`, `--wow-dir`, or `WOWSYNC_SAVED_VARIABLES` /
+  `WOWSYNC_WOW_DIR`). Unlike `import:saved`, several accounts or products are **all watched** (each file has its own last-sent state).
+  Point `--wow-dir` at the install root for every product, at one product folder for a single client, or use `--file` for one path.
 - Polls the file's size and modified time every 2 s. After a change it waits until the file has been unchanged for 3 s (WoW may still
   be writing), reads it **once** as data, and rejects a partial or non-data file (nothing is sent; it waits for the next change).
 - Picks the **newest** `latestExport` by its own generated time (equal times with different text are refused), checks it is consistent

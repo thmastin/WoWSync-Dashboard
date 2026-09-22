@@ -23,8 +23,9 @@ import {
   consistencyProblems,
   describeExport,
   describeImportResult,
-  discoverSavedVariables,
+  discoverWatchTargets,
   importEndpoint,
+  watchTargetLabel,
   iso,
   parseSavedExports,
   postImport,
@@ -263,18 +264,21 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
 
 export const USAGE = `Usage: npm run watch:saved -- [options]
 
-Watches one GearExport SavedVariables file and, when WoW saves it, sends the newest saved export to the running Dashboard
+Watches one or more GearExport SavedVariables files and, when WoW saves them, sends each file's newest saved export to the running Dashboard
 through the normal POST /api/import. Foreground; stop it with Ctrl+C. Read-only: it never writes to SavedVariables or WoW,
 and cannot make WoW save.
 
-WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /wowsync. Run /wowsync, then /reload or log out:
-the watcher picks the export up then.
+Point --wow-dir at the install root (e.g. "D:\\World of Warcraft") to watch every product that has GearExport.lua
+(_retail_, _anniversary_, _classic_era_, _classic_, _classic_beta_). Point it at one product folder to watch only that client.
+--file still watches a single file. import:saved still refuses when several files match; only the watcher accepts multiples.
 
-  --file <path>          The GearExport.lua SavedVariables file.
-  --wow-dir <path>       The WoW folder (or ONE product folder such as _retail_) to find it in.
+WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /wowsync. An export arrives on the next save.
+
+  --file <path>          One GearExport.lua SavedVariables file.
+  --wow-dir <path>       WoW install root (all products) or ONE product folder such as _retail_.
   --url <url>            The Dashboard's address (default: from PORT / WOWSYNC_HOST, else http://127.0.0.1:4173). Loopback only.
-  --once                 Import the newest saved export now, then exit (a catch-up). Without it, the file's state at startup is
-                         ignored and only later saves are imported.
+  --once                 Import the newest saved export from each watched file now, then exit (a catch-up). Without it, each file's
+                         state at startup is ignored and only later saves are imported.
   --help                 This text.
 
 Environment (a .env file works too): WOWSYNC_SAVED_VARIABLES, WOWSYNC_WOW_DIR, WOWSYNC_URL.`;
@@ -325,26 +329,46 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
       for (const line of USAGE.split("\n")) deps.out(line);
       return 0;
     }
-    const found = discoverSavedVariables({ file: options.file, wowDir: options.wowDir, env: deps.env });
+    const found = discoverWatchTargets({ file: options.file, wowDir: options.wowDir, env: deps.env });
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) {
       throw new BridgeError(`Refusing to watch: ${target.warning}\n  The watcher only sends to this machine. Use a loopback --url (e.g. http://127.0.0.1:4173).`);
     }
-    const config: WatchConfig = { file: found.path, origin: target.origin, once: options.once, pollMs: deps.pollMs ?? DEFAULT_POLL_MS, quietMs: deps.quietMs ?? DEFAULT_QUIET_MS };
-    deps.out(`Watching ${found.path}  (from ${found.via}; read-only)`);
+    const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
+    const quietMs = deps.quietMs ?? DEFAULT_QUIET_MS;
+    const multi = found.length > 1;
+    if (multi) {
+      deps.out(`Watching ${found.length} SavedVariables files  (from ${found[0].via}; read-only)`);
+      for (const f of found) deps.out(`  [${watchTargetLabel(f.path)}] ${f.path}`);
+    } else {
+      deps.out(`Watching ${found[0].path}  (from ${found[0].via}; read-only)`);
+    }
     deps.out(`Dashboard:  ${importEndpoint(target.origin)}`);
-    deps.out(`Polling every ${config.pollMs / 1000}s; a change is read once the file has been unchanged for ${config.quietMs / 1000}s.`);
+    deps.out(`Polling every ${pollMs / 1000}s; a change is read once the file has been unchanged for ${quietMs / 1000}s.`);
     if (!options.once) {
-      deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. The file's current contents are ignored (use --once to import the newest saved export now).");
+      deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. Each file's current contents are ignored (use --once to import the newest saved export now).");
     }
 
-    const watcher = createWatcher(config, deps);
-    while (!signal.aborted && !watcher.finished) {
-      await watcher.tick();
-      if (watcher.finished) break;
-      await deps.sleep(config.pollMs, signal);
+    const watchers = found.map((f) => {
+      const label = watchTargetLabel(f.path);
+      const prefix = multi ? `[${label}] ` : "";
+      const fileDeps: WatchDeps = {
+        ...deps,
+        out: (line) => deps.out(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
+        err: (line) => deps.err(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
+      };
+      return createWatcher({ file: f.path, origin: target.origin, once: options.once, pollMs, quietMs }, fileDeps);
+    });
+
+    while (!signal.aborted && !watchers.every((w) => w.finished)) {
+      for (const w of watchers) {
+        if (!w.finished) await w.tick();
+      }
+      if (watchers.every((w) => w.finished)) break;
+      await deps.sleep(pollMs, signal);
     }
-    return watcher.finished ? watcher.exitCode : 0;
+    if (!watchers.some((w) => w.finished)) return 0;
+    return Math.max(...watchers.map((w) => w.exitCode));
   } catch (err) {
     if (err instanceof BridgeError) {
       deps.err(`error: ${err.message}`);

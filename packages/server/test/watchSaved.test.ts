@@ -12,6 +12,7 @@ import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { createWatcher, nodeFs, runWatchSaved, selectNewestExport, type RunDeps, type WatchConfig, type WatchDeps, type WatchFs } from "../src/watchSaved.ts";
+import { discoverWatchTargets, watchTargetLabel } from "../src/importSaved.ts";
 import { exportFor, record, savedVariables } from "./savedVariablesFixtures.ts";
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -446,24 +447,23 @@ test("without --once, aborting stops a healthy watcher cleanly with exit 0 and n
   assert.match(all(d.out), /not at \/wowsync/);
 });
 
-test("several accounts or products are AMBIGUOUS: it refuses with the candidates and watches nothing", async () => {
+test("several accounts or products are ALL watched (each file independent); one product folder still works", async () => {
   const dir = join(root, `wow${counter++}`);
   for (const rel of ["_retail_/WTF/Account/AAA", "_retail_/WTF/Account/BBB", "_classic_era_/WTF/Account/AAA"]) {
     mkdirSync(join(dir, ...rel.split("/"), "SavedVariables"), { recursive: true });
     writeFileSync(join(dir, ...rel.split("/"), "SavedVariables", "GearExport.lua"), VIREK_SV);
   }
-  const d = runDeps(nodeFs);
-  assert.equal(await run(["--wow-dir", dir, "--once"], d), 1);
-  const text = all(d.err);
-  assert.match(text, /3 GearExport\.lua files were found/);
-  assert.match(text, /refusing to guess/);
-  for (const needle of ["_retail_", "AAA", "BBB", "_classic_era_"]) assert.ok(text.includes(needle), needle);
-  assert.equal(d.calls.length, 0);
-  assert.equal(d.out.length, 0, "nothing was watched");
-  // One product folder with one account resolves.
+  const d = runDeps(nodeFs, ok());
+  assert.equal(await run(["--wow-dir", dir, "--once"], d), 0, all(d.err) || all(d.out));
+  assert.match(all(d.out), /Watching 3 SavedVariables files/);
+  assert.match(all(d.out), /_retail_/);
+  assert.match(all(d.out), /_classic_era_/);
+  assert.equal(d.calls.length, 3);
+  // One product folder with one account still resolves to a single watch.
   const one = runDeps(nodeFs, ok());
   assert.equal(await run(["--wow-dir", join(dir, "_classic_era_"), "--once"], one), 0);
   assert.match(all(one.out), /from --wow-dir/);
+  assert.match(all(one.out), /Watching .*GearExport\.lua/);
 });
 
 test("a non-loopback Dashboard URL is REFUSED (the bridge only warns): nothing is watched or sent", async () => {
@@ -649,4 +649,91 @@ test("END TO END: a real save, then a re-save with the same export, then a new e
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
   }
+});
+
+test("watchTargetLabel picks the product folder from a SavedVariables path", () => {
+  assert.equal(watchTargetLabel("D:/World of Warcraft/_retail_/WTF/Account/EY215/SavedVariables/GearExport.lua"), "_retail_");
+  assert.equal(watchTargetLabel("D:/World of Warcraft/_anniversary_/WTF/Account/EY215/SavedVariables/GearExport.lua"), "_anniversary_");
+  assert.equal(watchTargetLabel("D:/World of Warcraft/_classic_beta_/WTF/Account/262269#1/SavedVariables/GearExport.lua"), "_classic_beta_");
+});
+
+test("discoverWatchTargets returns every GearExport.lua under an install root", () => {
+  const install = join(root, "multi-install");
+  const files = [];
+  for (const product of ["_retail_", "_anniversary_"]) {
+    const dir = join(install, product, "WTF", "Account", "A1", "SavedVariables");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "GearExport.lua");
+    writeFileSync(file, savedVariables([record("Virek", 1_790_022_739)]));
+    files.push(file);
+  }
+  const found = discoverWatchTargets({ wowDir: install, env: {} });
+  assert.equal(found.length, 2);
+  assert.deepEqual(found.map((f) => f.path).sort(), files.sort());
+});
+
+test("two product files change independently: each POSTs its own export (lastSent is per-file)", async () => {
+  const FILE_A = "/wow/_retail_/WTF/Account/A1/SavedVariables/GearExport.lua";
+  const FILE_B = "/wow/_anniversary_/WTF/Account/A1/SavedVariables/GearExport.lua";
+  const fs = new FakeFs();
+  fs.set(FILE_A, savedVariables([record("Virek", 1_790_022_739)]));
+  fs.set(FILE_B, savedVariables([record("Torahn", 1_700_000_000)]));
+  let t = 0;
+  const calls = [];
+  const out = [];
+  const err = [];
+  const baseDeps = {
+    fs,
+    clock: () => t,
+    out: (l) => out.push(l),
+    err: (l) => err.push(l),
+    fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      calls.push({ url: String(url), body });
+      const text = JSON.parse(body || "{}").text ?? "";
+      return importedOk(text);
+    }) as typeof fetch,
+  };
+  const wA = createWatcher({ file: FILE_A, origin: ORIGIN, once: false, pollMs: POLL, quietMs: QUIET }, {
+    ...baseDeps,
+    out: (l) => out.push(l.startsWith(" ") || l === "" ? l : `[_retail_] ${l}`),
+    err: (l) => err.push(l.startsWith(" ") || l === "" ? l : `[_retail_] ${l}`),
+  });
+  const wB = createWatcher({ file: FILE_B, origin: ORIGIN, once: false, pollMs: POLL, quietMs: QUIET }, {
+    ...baseDeps,
+    out: (l) => out.push(l.startsWith(" ") || l === "" ? l : `[_anniversary_] ${l}`),
+    err: (l) => err.push(l.startsWith(" ") || l === "" ? l : `[_anniversary_] ${l}`),
+  });
+  await wA.tick();
+  await wB.tick();
+  const newerRetail = record("Virek", 1_790_050_000);
+  const newerAnni = record("Torahn", 1_700_010_000);
+  fs.set(FILE_A, savedVariables([newerRetail]));
+  fs.set(FILE_B, savedVariables([newerAnni]));
+  for (let i = 0; i < 4; i++) {
+    t += POLL;
+    await wA.tick();
+    await wB.tick();
+  }
+  assert.equal(calls.length, 2, all(err) || all(out));
+  const bodies = calls.map((c) => JSON.parse(c.body).text);
+  assert.ok(bodies.includes(newerRetail.text));
+  assert.ok(bodies.includes(newerAnni.text));
+  assert.match(all(out), /\[_retail_\]/);
+  assert.match(all(out), /\[_anniversary_\]/);
+});
+
+test("runWatchSaved with --wow-dir install root watches every product file", async () => {
+  const install = join(root, "run-multi");
+  for (const product of ["_retail_", "_classic_era_"]) {
+    const dir = join(install, product, "WTF", "Account", "A1", "SavedVariables");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "GearExport.lua"), savedVariables([record(product === "_retail_" ? "Virek" : "Hallok", 1_790_022_739)]));
+  }
+  const d = runDeps(nodeFs, () => importedOk(""));
+  const code = await run(["--wow-dir", install, "--once", "--url", ORIGIN], d);
+  assert.equal(code, 0, all(d.err) || all(d.out));
+  assert.match(all(d.out), /Watching 2 SavedVariables files/);
+  assert.match(all(d.out), /_retail_/);
+  assert.match(all(d.out), /_classic_era_/);
 });

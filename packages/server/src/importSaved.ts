@@ -141,6 +141,54 @@ export function discoverSavedVariables(input: DiscoveryInput): Discovered {
   );
 }
 
+/** Every SavedVariables file the watcher should poll. Unlike discoverSavedVariables, multiple product/account files are all returned (each keeps its own last-sent state). Precedence: --file, --wow-dir, WOWSYNC_SAVED_VARIABLES, WOWSYNC_WOW_DIR. */
+export function discoverWatchTargets(input: DiscoveryInput): Discovered[] {
+  if (input.file !== undefined && input.wowDir !== undefined) {
+    throw new BridgeError("Give either --file or --wow-dir, not both.", true);
+  }
+  const envFile = input.env.WOWSYNC_SAVED_VARIABLES?.trim();
+  const envDir = input.env.WOWSYNC_WOW_DIR?.trim();
+  const file = input.file ?? (input.wowDir === undefined ? envFile : undefined);
+  const dir = input.wowDir ?? (input.file === undefined && !envFile ? envDir : undefined);
+  const source = (flag: string, envName: string, fromFlag: boolean) => (fromFlag ? flag : `${envName} (environment)`);
+
+  if (file) {
+    const resolved = path.resolve(file);
+    if (!isFile(resolved)) throw new BridgeError(`SavedVariables file not found: ${resolved}`);
+    return [{ path: resolved, via: source("--file", "WOWSYNC_SAVED_VARIABLES", input.file !== undefined) }];
+  }
+  if (dir) {
+    const rootDir = path.resolve(dir);
+    const via = source("--wow-dir", "WOWSYNC_WOW_DIR", input.wowDir !== undefined);
+    if (!isDirectory(rootDir)) throw new BridgeError(`WoW folder not found: ${rootDir}`);
+    const found = findSavedVariablesFiles(rootDir);
+    if (found.length === 0) {
+      throw new BridgeError(
+        `No ${SAVED_VARIABLES_FILE} found under ${rootDir}.\n` +
+          `  Looked for WTF/Account/<account>/SavedVariables/${SAVED_VARIABLES_FILE} in that folder and in ${PRODUCT_FOLDERS.join(", ")}.\n` +
+          `  Has GearExport run and been saved (/reload or log out) yet? Or pass the file itself with --file.`,
+      );
+    }
+    return found.map((p) => ({ path: p, via }));
+  }
+  throw new BridgeError(
+    "Where is the SavedVariables file? Pass --file <GearExport.lua>, or --wow-dir <WoW folder>\n" +
+      "  (or set WOWSYNC_SAVED_VARIABLES / WOWSYNC_WOW_DIR, e.g. in .env).",
+    true,
+  );
+}
+
+/** Short product label for log lines when watching several files (e.g. _retail_). Falls back to the account folder name. */
+export function watchTargetLabel(filePath: string): string {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  for (const folder of PRODUCT_FOLDERS) {
+    if (parts.includes(folder)) return folder;
+  }
+  const accountIdx = parts.findIndex((p) => p === "Account");
+  if (accountIdx > 0 && parts[accountIdx - 1] === "WTF" && parts[accountIdx + 1]) return parts[accountIdx + 1];
+  return path.basename(path.dirname(path.dirname(filePath)));
+}
+
 // --- reading the persisted exports -------------------------------------------------------------------
 
 /** One saved character record, reduced to what the bridge needs. The character GUID is deliberately not kept. */

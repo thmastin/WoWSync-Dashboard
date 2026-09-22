@@ -674,6 +674,8 @@ start the server.
 
 ## SavedVariables watcher (desktop companion, Slice 1)
 
+`watch:saved` may poll **multiple** `GearExport.lua` files when `--wow-dir` is the install root (or otherwise finds several): each file gets its own watcher state so Retail and Classic never share `lastSent`. `import:saved` still refuses ambiguity.
+
 `npm run watch:saved` (`packages/server/src/watchSaved.ts`, entry `watchSavedCli.ts`) is the developer bridge driven by a foreground poll
 loop; design and decisions are in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md). It adds no listener, no parser, no
 database and no import logic:
