@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchAccountFacts } from "./api.ts";
 import ErrorNotice from "./components/ErrorNotice.tsx";
 import { useAsync } from "./useAsync.ts";
@@ -11,10 +11,9 @@ import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
+import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
-
-type View = { kind: "overview" } | { kind: "characters" } | { kind: "economy" } | { kind: "shared" } | { kind: "detail"; identityKey: string };
 
 function loadStoredVersion(): VersionOrUnknown {
   const stored = localStorage.getItem("wowsync.activeVersion");
@@ -22,50 +21,90 @@ function loadStoredVersion(): VersionOrUnknown {
   return "tbc-anniversary";
 }
 
+function readRoute(): AppRoute {
+  return parseHash(window.location.hash, loadStoredVersion());
+}
+
 export default function App() {
-  const [activeVersion, setActiveVersion] = useState<VersionOrUnknown>(loadStoredVersion);
-  const [view, setView] = useState<View>({ kind: "overview" });
-  const [selectedRealm, setSelectedRealm] = useState<string | null>(null);
+  const [route, setRoute] = useState<AppRoute>(() => {
+    const initial = readRoute();
+    // Empty hash → seed from localStorage so the first paint has a real address.
+    if (!window.location.hash || window.location.hash === "#") {
+      const seeded = defaultRoute(loadStoredVersion());
+      history.replaceState(null, "", formatHash(seeded));
+      return seeded;
+    }
+    return initial;
+  });
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
-  useEffect(() => {
-    localStorage.setItem("wowsync.activeVersion", activeVersion);
-  }, [activeVersion]);
+  const navigate = useCallback((next: AppRoute, replace = false) => {
+    const hash = formatHash(next);
+    if (replace) {
+      history.replaceState(null, "", hash);
+      setRoute(next);
+      return;
+    }
+    if (window.location.hash === hash) {
+      setRoute(next);
+      return;
+    }
+    // Assigning location.hash pushes history and fires hashchange.
+    window.location.hash = hash.startsWith("#") ? hash.slice(1) : hash;
+  }, []);
 
-  // A different version drops the old facts at once; a refresh (after an
-  // import/delete) reloads the same version in place. Slow replies to a
-  // superseded request are ignored, and a failure is shown with Retry -
-  // never an endless "Loading…" or another version's facts under this tab.
+  useEffect(() => {
+    const onHash = () => {
+      const next = readRoute();
+      setRoute((prev) => (sameRoute(prev, next) ? prev : next));
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("wowsync.activeVersion", route.version);
+  }, [route.version]);
+
+  const activeVersion = route.version;
   const factsLoad = useAsync((signal) => fetchAccountFacts(activeVersion, signal).then((r) => r.facts), activeVersion, refreshTick);
   const loaded = factsLoad.state.data;
   const facts = loaded && loaded.version === activeVersion ? loaded : null;
+  const scoped = facts ? scopeFacts(facts, route.realm) : null;
 
-  // The realm choice belongs to a version. (It used to reset on every refresh, so
-  // each import snapped the view back to the first realm.)
+  // If the URL names a realm that no longer exists in this version, clear it in the address.
   useEffect(() => {
-    setSelectedRealm(null);
-  }, [activeVersion]);
+    if (!scoped || !scoped.isRealmScoped || !route.realm) return;
+    if (!scoped.availableRealms.includes(route.realm)) {
+      navigate(patchRoute(route, { realm: null }), true);
+    }
+  }, [scoped, route, navigate]);
 
   const accent = VERSION_ACCENTS[activeVersion];
-  const scoped = facts ? scopeFacts(facts, selectedRealm) : null;
 
   function refresh() {
     setRefreshTick((t) => t + 1);
   }
 
   function openCharacter(identityKey: string) {
-    setView({ kind: "detail", identityKey });
+    const from: RouteView = route.view === "detail" ? route.from ?? "characters" : route.view === "items" ? "characters" : route.view;
+    navigate(patchRoute(route, { view: "detail", identityKey, from: from === "detail" ? "characters" : from }));
   }
 
-  // Shared storage (Warband / Guild Bank) is Retail-only account information: it lives in its own tab,
-  // and a character's "carried by this export" cards link here.
   function openSharedStorage() {
-    setActiveVersion("retail");
-    setView({ kind: "shared" });
+    navigate(patchRoute(route, { version: "retail", view: "shared" }));
   }
+
+  function backFromDetail() {
+    const target = route.from && route.from !== "detail" ? route.from : "characters";
+    navigate(patchRoute(route, { view: target, identityKey: undefined, snapshotId: undefined, from: null }));
+  }
+
+  const tabView: RouteView =
+    route.view === "detail" || route.view === "items" ? (route.view === "items" ? "items" : "characters") : route.view;
 
   return (
     <div className="app" style={{ ["--accent" as string]: accent }}>
@@ -92,10 +131,7 @@ export default function App() {
             key={v}
             className={`version-tab ${v === activeVersion ? "active" : ""}`}
             style={v === activeVersion ? { borderColor: VERSION_ACCENTS[v], color: VERSION_ACCENTS[v] } : undefined}
-            onClick={() => {
-              setActiveVersion(v);
-              setView({ kind: "overview" });
-            }}
+            onClick={() => navigate(defaultRoute(v))}
           >
             {VERSION_LABELS[v]}
           </button>
@@ -103,14 +139,14 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {view.kind === "detail" ? (
+        {route.view === "detail" && route.identityKey ? (
           <CharacterDetail
-            identityKey={view.identityKey}
+            identityKey={route.identityKey}
             refreshTick={refreshTick}
-            onBack={() => setView({ kind: "characters" })}
+            onBack={backFromDetail}
             onDeleted={() => {
               refresh();
-              setView({ kind: "characters" });
+              navigate(patchRoute(route, { view: route.from ?? "characters", identityKey: undefined, from: null }));
             }}
             onOpenSharedStorage={openSharedStorage}
           />
@@ -118,30 +154,30 @@ export default function App() {
           <>
             <div className="scope-row">
               <div className="view-tabs">
-                <button className={view.kind === "overview" ? "active" : ""} onClick={() => setView({ kind: "overview" })}>
+                <button className={tabView === "overview" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "overview" }))}>
                   Overview
                 </button>
-                <button className={view.kind === "characters" ? "active" : ""} onClick={() => setView({ kind: "characters" })}>
+                <button className={tabView === "characters" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "characters" }))}>
                   Characters
                 </button>
-                <button className={view.kind === "economy" ? "active" : ""} onClick={() => setView({ kind: "economy" })}>
+                <button className={tabView === "economy" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "economy" }))}>
                   Economy
                 </button>
                 {activeVersion === "retail" && (
-                  <button className={view.kind === "shared" ? "active" : ""} onClick={() => setView({ kind: "shared" })}>
+                  <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
                     Shared Storage
                   </button>
                 )}
               </div>
 
-              {view.kind === "shared" ? null : scoped && scoped.isRealmScoped ? (
+              {route.view === "shared" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
                     <button
                       key={realm}
                       className={`realm-pill ${realm === scoped.scopeLabel ? "active" : ""}`}
-                      onClick={() => setSelectedRealm(realm)}
+                      onClick={() => navigate(patchRoute(route, { realm }))}
                     >
                       {realm}
                     </button>
@@ -154,12 +190,20 @@ export default function App() {
               ) : null}
             </div>
 
-            {view.kind === "shared" && <SharedStorageView />}
-            {view.kind !== "shared" && factsLoad.state.status === "error" && <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />}
-            {view.kind !== "shared" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
-            {scoped && view.kind === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
-            {scoped && view.kind === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
-            {scoped && view.kind === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}
+            {route.view === "shared" && <SharedStorageView />}
+            {route.view === "items" && (
+              <div className="panel">
+                <h3>Item search</h3>
+                <p className="muted">Global item search lands next (roster spine X3). The URL `#/{activeVersion}/items` is reserved.</p>
+              </div>
+            )}
+            {route.view !== "shared" && route.view !== "items" && factsLoad.state.status === "error" && (
+              <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
+            )}
+            {route.view !== "shared" && route.view !== "items" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
+            {scoped && route.view === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
+            {scoped && route.view === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}
           </>
         )}
       </main>
