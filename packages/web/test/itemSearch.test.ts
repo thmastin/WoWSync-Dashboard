@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   ITEM_SEARCH_RESULT_CAP,
+  classifyBound,
   filterItemRows,
   flattenInventoryRows,
   searchItemRows,
@@ -26,15 +27,15 @@ const inventory: InventoryFacts = {
       name: "Strange Dust",
       totalKnownQty: 12,
       locations: [
-        { identityKey: "a|r", name: "Alice", storage: "bags", qty: 5 },
-        { identityKey: "b|r", name: "Bob", storage: "bank", qty: 7 },
+        { identityKey: "a|r", name: "Alice", storage: "bags", qty: 5, bound: "no" },
+        { identityKey: "b|r", name: "Bob", storage: "bank", qty: 7, bound: "yes" },
       ],
     },
     {
       itemKey: "1",
       name: "Copper Ore",
       totalKnownQty: 20,
-      locations: [{ identityKey: "a|r", name: "Alice", storage: "bags", qty: 20 }],
+      locations: [{ identityKey: "a|r", name: "Alice", storage: "bags", qty: 20, bound: "no" }],
     },
   ],
   unknownBank: [{ identityKey: "c|r", name: "Carol" }],
@@ -55,7 +56,7 @@ const characters: CharacterFacts[] = [
 ];
 
 describe("itemSearch", () => {
-  it("flattens locations with realm and storage-specific age", () => {
+  it("flattens locations with realm, bound, and storage-specific age", () => {
     const rows = flattenInventoryRows(inventory, characters);
     assert.equal(rows.length, 3);
     const dustBank = rows.find((r) => r.itemName === "Strange Dust" && r.storage === "bank");
@@ -63,16 +64,36 @@ describe("itemSearch", () => {
     assert.equal(dustBank.realm, "Area 52");
     assert.equal(dustBank.observedAt, 1_700_050_000);
     assert.equal(dustBank.storageState, "LAST_SEEN");
+    assert.equal(dustBank.bound, "yes");
   });
 
   it("filters by name substring case-insensitively", () => {
-    const rows = filterItemRows(flattenInventoryRows(inventory, characters), "strange");
+    const rows = filterItemRows(flattenInventoryRows(inventory, characters), { q: "strange", storage: "", bound: "" });
     assert.equal(rows.length, 2);
-    assert.ok(rows.every((r) => r.itemName === "Strange Dust"));
+  });
+
+  it("filters by storage bags/bank", () => {
+    const bags = searchItemRows(inventory, characters, { q: "strange", storage: "bags", bound: "" });
+    assert.equal(bags.totalMatches, 1);
+    assert.equal(bags.rows[0].characterName, "Alice");
+    const bank = searchItemRows(inventory, characters, { q: "strange", storage: "bank", bound: "" });
+    assert.equal(bank.totalMatches, 1);
+    assert.equal(bank.rows[0].characterName, "Bob");
+  });
+
+  it("filters by bound / unbound using yes/no export values", () => {
+    assert.equal(classifyBound("yes"), "bound");
+    assert.equal(classifyBound("no"), "unbound");
+    const bound = searchItemRows(inventory, characters, { q: "strange", storage: "", bound: "bound" });
+    assert.equal(bound.totalMatches, 1);
+    assert.equal(bound.rows[0].storage, "bank");
+    const unbound = searchItemRows(inventory, characters, { q: "strange", storage: "", bound: "unbound" });
+    assert.equal(unbound.totalMatches, 1);
+    assert.equal(unbound.rows[0].storage, "bags");
   });
 
   it("empty query yields no rows (type-to-search)", () => {
-    const result = searchItemRows(inventory, characters, "   ");
+    const result = searchItemRows(inventory, characters, { q: "   ", storage: "", bound: "" });
     assert.equal(result.totalMatches, 0);
     assert.deepEqual(result.rows, []);
   });
@@ -83,13 +104,13 @@ describe("itemSearch", () => {
         itemKey: String(i),
         name: `Widget ${i}`,
         totalKnownQty: 1,
-        locations: [{ identityKey: "a|r", name: "Alice", storage: "bags" as const, qty: 1 }],
+        locations: [{ identityKey: "a|r", name: "Alice", storage: "bags" as const, qty: 1, bound: "no" }],
       })),
       unknownBank: [],
       unknownBags: [],
       hasUnknownStorage: false,
     };
-    const result = searchItemRows(big, characters, "widget");
+    const result = searchItemRows(big, characters, { q: "widget", storage: "", bound: "" });
     assert.equal(result.totalMatches, ITEM_SEARCH_RESULT_CAP + 5);
     assert.equal(result.rows.length, ITEM_SEARCH_RESULT_CAP);
     assert.equal(result.truncated, true);

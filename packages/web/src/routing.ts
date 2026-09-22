@@ -4,7 +4,7 @@
 //   #/<version>/characters?realm=&q=&class=&age=&sort=
 //   #/<version>/economy?realm=
 //   #/<version>/shared
-//   #/<version>/items?q=&realm=
+//   #/<version>/items?q=&realm=&storage=&bound=
 //   #/<version>/c/<identityKey>[/snapshot/<id>]?from=overview|characters|...
 // localStorage keeps only the last version, used when the hash is empty.
 
@@ -28,6 +28,10 @@ export interface AppRoute {
   sort: string;
   /** Roster: only characters whose bank was never observed. */
   bankMissing: boolean;
+  /** Items: bags | bank | "" (all). */
+  storageFilter: string;
+  /** Items: bound | unbound | "" (all). */
+  boundFilter: string;
 }
 
 const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "shared", "items", "detail"]);
@@ -37,8 +41,8 @@ export function isVersion(value: string): value is VersionOrUnknown {
   return (WOW_VERSIONS as string[]).includes(value) || value === "unknown-version";
 }
 
-export function emptyFilters(): Pick<AppRoute, "q" | "classFilter" | "age" | "sort" | "bankMissing"> {
-  return { q: "", classFilter: "", age: "", sort: "", bankMissing: false };
+export function emptyFilters(): Pick<AppRoute, "q" | "classFilter" | "age" | "sort" | "bankMissing" | "storageFilter" | "boundFilter"> {
+  return { q: "", classFilter: "", age: "", sort: "", bankMissing: false, storageFilter: "", boundFilter: "" };
 }
 
 export function defaultRoute(version: VersionOrUnknown): AppRoute {
@@ -81,6 +85,8 @@ export function parseHash(hash: string, fallbackVersion: VersionOrUnknown): AppR
     age: query.get("age") ?? "",
     sort: query.get("sort") ?? "",
     bankMissing: query.get("bank") === "missing",
+    storageFilter: query.get("storage") ?? "",
+    boundFilter: query.get("bound") ?? "",
   };
 
   if (rest[0] === "c" && rest[1]) {
@@ -122,6 +128,8 @@ export function formatHash(route: AppRoute): string {
   if (route.age) params.set("age", route.age);
   if (route.sort) params.set("sort", route.sort);
   if (route.bankMissing) params.set("bank", "missing");
+  if (route.storageFilter === "bags" || route.storageFilter === "bank") params.set("storage", route.storageFilter);
+  if (route.boundFilter === "bound" || route.boundFilter === "unbound") params.set("bound", route.boundFilter);
   const qs = params.toString();
   return qs ? `#${path}?${qs}` : `#${path}`;
 }

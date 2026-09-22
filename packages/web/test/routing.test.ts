@@ -70,3 +70,17 @@ test("invalid path falls back to overview for the version", () => {
   assert.equal(r.version, "forever");
   assert.equal(r.view, "overview");
 });
+test("items storage and bound filters round-trip in the hash", () => {
+  const route = {
+    ...defaultRoute("retail"),
+    view: "items" as const,
+    q: "dust",
+    storageFilter: "bags",
+    boundFilter: "unbound",
+  };
+  const again = parseHash(formatHash(route), "retail");
+  assert.equal(again.view, "items");
+  assert.equal(again.q, "dust");
+  assert.equal(again.storageFilter, "bags");
+  assert.equal(again.boundFilter, "unbound");
+});
