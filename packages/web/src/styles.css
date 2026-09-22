@@ -965,3 +965,36 @@ h1, h2, h3 {
   .shared-table-wrap { max-height: 22rem; }
   .shared-filter { max-width: none; flex: 1; }
 }
+
+/* --- Roster table (Characters tab) --- */
+.roster { display: flex; flex-direction: column; gap: 12px; }
+.roster-controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.roster-search {
+  min-width: 200px; flex: 1;
+  background: var(--bg-input, #1a1a1a); color: inherit;
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+.roster-filter { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+.roster-filter select {
+  background: var(--bg-input, #1a1a1a); color: inherit;
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
+}
+.roster-check { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
+.roster-count { margin-left: auto; font-size: 0.85rem; }
+.roster-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+.roster-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.roster-table th, .roster-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+.roster-table th { background: var(--bg-panel); font-weight: 600; white-space: nowrap; }
+.roster-sort {
+  background: none; border: none; color: inherit; font: inherit; font-weight: 600;
+  cursor: pointer; padding: 0;
+}
+.roster-sort:hover { color: var(--accent); }
+.roster-row { cursor: pointer; }
+.roster-row:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.roster-name-link { color: inherit; font-weight: 600; text-decoration: none; }
+.roster-name-link:hover { color: var(--accent); text-decoration: underline; }
+.bank-chip {
+  display: inline-block; font-size: 0.75rem; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted);
+}

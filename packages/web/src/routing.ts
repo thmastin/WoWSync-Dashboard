@@ -26,6 +26,8 @@ export interface AppRoute {
   classFilter: string;
   age: string;
   sort: string;
+  /** Roster: only characters whose bank was never observed. */
+  bankMissing: boolean;
 }
 
 const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "shared", "items", "detail"]);
@@ -35,8 +37,8 @@ export function isVersion(value: string): value is VersionOrUnknown {
   return (WOW_VERSIONS as string[]).includes(value) || value === "unknown-version";
 }
 
-export function emptyFilters(): Pick<AppRoute, "q" | "classFilter" | "age" | "sort"> {
-  return { q: "", classFilter: "", age: "", sort: "" };
+export function emptyFilters(): Pick<AppRoute, "q" | "classFilter" | "age" | "sort" | "bankMissing"> {
+  return { q: "", classFilter: "", age: "", sort: "", bankMissing: false };
 }
 
 export function defaultRoute(version: VersionOrUnknown): AppRoute {
@@ -78,6 +80,7 @@ export function parseHash(hash: string, fallbackVersion: VersionOrUnknown): AppR
     classFilter: query.get("class") ?? "",
     age: query.get("age") ?? "",
     sort: query.get("sort") ?? "",
+    bankMissing: query.get("bank") === "missing",
   };
 
   if (rest[0] === "c" && rest[1]) {
@@ -118,6 +121,7 @@ export function formatHash(route: AppRoute): string {
   if (route.classFilter) params.set("class", route.classFilter);
   if (route.age) params.set("age", route.age);
   if (route.sort) params.set("sort", route.sort);
+  if (route.bankMissing) params.set("bank", "missing");
   const qs = params.toString();
   return qs ? `#${path}?${qs}` : `#${path}`;
 }

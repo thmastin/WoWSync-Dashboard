@@ -5,7 +5,7 @@ import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
 import AskAccountModal from "./components/AskAccountModal.tsx";
-import CharactersGrid from "./components/CharactersGrid.tsx";
+import CharactersRoster from "./components/CharactersRoster.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
@@ -202,7 +202,14 @@ export default function App() {
             )}
             {route.view !== "shared" && route.view !== "items" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
-            {scoped && route.view === "characters" && <CharactersGrid characters={scoped.characters} onOpenCharacter={openCharacter} />}
+            {scoped && route.view === "characters" && (
+              <CharactersRoster
+                characters={scoped.characters}
+                route={route}
+                onNavigate={navigate}
+                onOpenCharacter={openCharacter}
+              />
+            )}
             {scoped && route.view === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}
           </>
         )}
