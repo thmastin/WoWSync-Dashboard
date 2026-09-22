@@ -7,6 +7,7 @@ export * from "./diff.ts";
 export * from "./currency.ts";
 export * from "./trainerSummary.ts";
 export * from "./freshness.ts";
+export * from "./needsAttention.ts";
 export * from "./professionCatalog.ts";
 export * from "./accountFacts.ts";
 export * from "./accountContext.ts";

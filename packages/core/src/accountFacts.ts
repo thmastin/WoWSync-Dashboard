@@ -58,6 +58,13 @@ export interface CharacterFacts {
   snapshotCount: number;
   freshness: Freshness;
   bankStatus: SectionState;
+  /** Bank section observedAt when present (OBSERVED / LAST_SEEN). */
+  bankObservedAt?: number;
+  /** Professions section state — UNKNOWN means never observed on this character. */
+  professionsObservationStatus: SectionState;
+  bagsStatus: SectionState;
+  bagsFreeSlots?: number;
+  bagsTotalSlots?: number;
 }
 
 // ---------------------------------------------------------------------
@@ -461,6 +468,11 @@ function buildCharacterFacts(
       snapshotCount: c.snapshotCount,
       freshness: classifyFreshness(lastObservedAt, now),
       bankStatus: parsed?.bank.status.state ?? "UNKNOWN",
+      bankObservedAt: parsed?.bank.status.observedAt ?? parsed?.bank.status.lastVisit,
+      professionsObservationStatus: parsed?.professions.status.state ?? "UNKNOWN",
+      bagsStatus: parsed?.bags.status.state ?? "UNKNOWN",
+      bagsFreeSlots: parsed?.bags.freeSlots,
+      bagsTotalSlots: parsed?.bags.totalSlots,
     };
   });
 }

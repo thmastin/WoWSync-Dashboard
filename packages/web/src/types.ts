@@ -275,6 +275,11 @@ export interface CharacterFacts {
   snapshotCount: number;
   freshness: Freshness;
   bankStatus: SectionStatus["state"];
+  bankObservedAt?: number;
+  professionsObservationStatus: SectionStatus["state"];
+  bagsStatus: SectionStatus["state"];
+  bagsFreeSlots?: number;
+  bagsTotalSlots?: number;
 }
 
 export interface CharacterGold {

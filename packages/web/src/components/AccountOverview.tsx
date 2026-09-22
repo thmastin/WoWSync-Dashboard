@@ -1,21 +1,21 @@
-import { formatCopperDelta, formatRelativeTime, formatXpPercent, freshnessLabel } from "../format.ts";
+import { buildNeedsAttention } from "@wowsync-dashboard/core/needsAttention.ts";
+import { formatAgeSeconds, formatCopperDelta, formatRelativeTime, formatXpPercent } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
 
 export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
   const facts = scoped;
   const characterCount = facts.characters.length;
-  // Ordered by when each character's state was OBSERVED (its export time), not when it happened to be imported.
-  const recentlyUpdated = [...facts.characters]
-    .filter((c) => c.lastObservedAt !== undefined)
-    .sort((a, b) => (b.lastObservedAt ?? 0) - (a.lastObservedAt ?? 0))
-    .slice(0, 5);
   const goldTotal = describeGoldTotal(facts.gold, facts.now);
   const playtimeTotal = describePlaytimeTotal(facts.playtime, characterCount, facts.now);
+  const attention = buildNeedsAttention(facts.characters, facts.now);
 
-  const staleOrUnknown = facts.freshness.byCharacter.filter((c) => c.freshness !== "recent");
   const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
   const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
+  const lastSyncedAt = facts.characters
+    .map((c) => c.lastObservedAt)
+    .filter((t): t is number => t !== undefined)
+    .sort((a, b) => b - a)[0];
 
   return (
     <div className="overview">
@@ -25,24 +25,31 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
         <StatTile label="Total known gold" value={goldTotal.value} hint={goldTotal.basis} emphasize={goldTotal.hasStale} />
         <StatTile label="Total known /played" value={playtimeTotal.value} hint={playtimeTotal.basis} emphasize={playtimeTotal.hasStale} />
         <StatTile
-          label="Data freshness"
-          value={`${facts.freshness.recentCharacters} recent`}
+          label="Last synced"
+          value={lastSyncedAt !== undefined ? formatAgeSeconds(facts.now - lastSyncedAt) : "never"}
           hint={
             facts.freshness.staleCharacters + facts.freshness.unknownCharacters > 0
-              ? `${facts.freshness.staleCharacters} stale, ${facts.freshness.unknownCharacters} unknown`
-              : "all up to date"
+              ? `${facts.freshness.recentCharacters} recent · ${facts.freshness.staleCharacters} stale · ${facts.freshness.unknownCharacters} unknown`
+              : characterCount > 0
+                ? "all recent"
+                : undefined
           }
         />
       </div>
 
       <div className="overview-columns">
         <section className="panel">
-          <h3>Recently updated</h3>
-          {recentlyUpdated.length === 0 && <p className="muted">No characters imported for this scope yet.</p>}
+          <h3>Needs attention</h3>
+          {attention.length === 0 && <p className="muted">Nothing flagged for this scope — every character is recent with observed bank/bags/professions (or those sections do not apply yet).</p>}
           <ul className="compact-list">
-            {recentlyUpdated.map((c) => (
-              <li key={c.identityKey} className="clickable" onClick={() => onOpenCharacter(c.identityKey)}>
-                <strong>{c.name}</strong> <span className="muted">Lv {c.level ?? "?"} · synced {formatRelativeTime(c.lastObservedAt)}</span>
+            {attention.map((row) => (
+              <li key={row.identityKey} className="clickable" onClick={() => onOpenCharacter(row.identityKey)}>
+                <strong>{row.name}</strong>{" "}
+                <span className="muted">
+                  {row.realm}
+                  {" · "}
+                  {row.reasons.map((r) => r.text).join(" · ")}
+                </span>
               </li>
             ))}
           </ul>
@@ -103,6 +110,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
               </li>
             ))}
           </ul>
+          {covered.length > 8 && <p className="muted small">+{covered.length - 8} more</p>}
           {missing.length > 0 && (
             <details className="coverage-missing">
               <summary>
@@ -118,29 +126,6 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
               </ul>
             </details>
           )}
-        </section>
-
-        <section className="panel">
-          <h3>Data freshness</h3>
-          {staleOrUnknown.length === 0 && <p className="muted">Every character was observed within the last few days.</p>}
-          <ul className="compact-list">
-            {staleOrUnknown.map((c) => (
-              <li key={c.identityKey} className="clickable" onClick={() => onOpenCharacter(c.identityKey)}>
-                <strong>{c.name}</strong>{" "}
-                <span className={`muted freshness-text-${c.freshness}`}>
-                  {freshnessLabel(c.freshness)} — last seen {formatRelativeTime(c.lastObservedAt)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="panel">
-          <h3>Account summary (LLM)</h3>
-          <p className="muted">
-            Ask-my-account analysis isn't wired up yet. Once enabled, this panel will summarize this scope's
-            account state using the deterministic facts above — never raw exports.
-          </p>
         </section>
       </div>
     </div>
