@@ -77,6 +77,124 @@ Malformed input fails with a specific message (e.g. "missing `[END]`" or
 "missing required section: BANK") rather than silently importing partial
 garbage.
 
+## Developer bridge: import a saved export from WoW's SavedVariables
+
+The normal workflow above is unchanged. For development and integration testing there is also one supported command
+that takes the export GearExport has **already saved to disk** and sends it through the same `POST /api/import`:
+
+```
+npm run import:saved -- --list
+npm run import:saved -- --character Virek --dry-run
+npm run import:saved -- --character Virek
+```
+
+GearExport keeps the exact text of each character's last `/wowsync` export in its SavedVariables file
+(`WTF/Account/<account>/SavedVariables/GearExport.lua`, under `WoWSyncDB.characters[...].latestExport.text`). WoW only
+writes that file when it saves, so the flow is:
+
+1. Run `/wowsync` in WoW.
+2. **`/reload` or log out**, so the export reaches disk. The command reads what WoW persisted; it cannot make WoW save.
+3. Run the command (the Dashboard server must be running: `npm start`).
+
+**Telling it where the file is** (the smallest set that works; nothing is guessed and no path is built in):
+
+| Option | Meaning |
+| --- | --- |
+| `--file <path>` | the `GearExport.lua` file itself (env `WOWSYNC_SAVED_VARIABLES`) |
+| `--wow-dir <path>` | the WoW folder, or one product folder such as `_retail_` (env `WOWSYNC_WOW_DIR`); the command finds `WTF/Account/<account>/SavedVariables/GearExport.lua` under it and under `_retail_`, `_classic_era_`, `_classic_`, `_anniversary_`, `_classic_beta_` |
+
+Put the environment variables in `.env` (the same file the server reads) to avoid retyping. If more than one
+`GearExport.lua` matches (several accounts or products), the command lists them and stops: point `--wow-dir` at one
+product folder or pass `--file`.
+
+**Options**
+
+- `--list`: show each saved character with realm, when its export was generated, and whether it has `[ITEM METADATA]`.
+  Contacts nothing.
+- `--character <name>`: which character to import. If that name exists on several realms, add `--realm <realm>`; it never picks
+  one for you. A character with no saved export is an error, never a substitute. If two saved records exist for the same
+  name and realm (a re-created character), the newest export is used and a warning says so.
+- `--dry-run`: do everything except send: find the file, pick the character, and report the export's character, realm, client
+  build, generated time, length, SHA-256 and whether it has `[ITEM METADATA]`. Contacts nothing.
+- `--url <url>`: the Dashboard's address. Default: what the server itself would use (`PORT` / `WOWSYNC_HOST`, so
+  `http://127.0.0.1:4173`); env `WOWSYNC_URL`. A non-loopback address prints a warning.
+
+**What it guarantees**
+
+- **Read-only.** It never writes to SavedVariables, the addon or WoW's folders, and never asks WoW to save.
+- **Data, not code.** `GearExport.lua` is Lua, but it is read by a small data-only reader that accepts just the tables, strings,
+  numbers and booleans WoW writes. It never evaluates the file: a file containing a function call or any other code is refused.
+  A truncated or garbled file fails loudly (if WoW was writing it, wait and retry).
+- **The exact export.** The persisted `latestExport.text` is what is sent, unchanged. Nothing is rebuilt from tables, rewritten or
+  regenerated. It prints the SHA-256 of what it sent and, after the import, whether the stored text has the same hash.
+- **No second importer.** The server does all parsing, validation, snapshot storage, shared-storage reconciliation and item-metadata
+  ingestion, exactly as for a pasted export; importing the same export again is a harmless duplicate.
+- **It stops rather than guess.** It refuses when the saved export is for a different character or realm than asked, when WoW's
+  saved `generatedAt` disagrees with the export's own `Generated` line, or when the Dashboard would reject the text.
+
+**Troubleshooting**
+
+- *"N GearExport.lua files were found ... refusing to guess"*: several accounts or products. Use `--wow-dir <WoW>/_retail_` or `--file`.
+- *"has no saved export"*: run `/wowsync` on that character and `/reload`.
+- *"is not a SavedVariables file this tool can read as data"*: the file is truncated or is not GearExport's; if WoW was just
+  writing it, retry.
+- *"Can't reach the Dashboard"*: start the server (`npm start`), or give `--url` / `WOWSYNC_URL`.
+
+This is a **developer convenience, not the desktop companion**. It runs when you run it; it does not watch files, react to WoW,
+force a save or run in the background. To have the same import happen when WoW saves, see the
+[watcher](#watcher-import-automatically-when-wow-saves-slice-1) below.
+
+## Watcher: import automatically when WoW saves (Slice 1)
+
+`npm run watch:saved` is the bridge above run by a loop, so you no longer have to remember to run it. It is a **foreground command**
+(stop it with Ctrl+C), not a tray app, installer, service or autostart. It is the first slice of the desktop companion
+([ROADMAP](docs/ROADMAP.md) item 8, design in [docs/DESKTOP_COMPANION_FEASIBILITY.md](docs/DESKTOP_COMPANION_FEASIBILITY.md)) and is awaiting review.
+
+```
+npm start                                                          # the Dashboard, in one terminal
+npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft\_retail_"   # the watcher, in another
+npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft\_retail_" --once   # import the newest saved export now, then exit
+```
+
+**Bridge vs watcher.** They share one implementation (same file reader, same checks, same `POST /api/import`); the difference is who
+decides when. `import:saved` imports **one character you name, when you run it**. `watch:saved` polls **one file** and, whenever WoW saves
+it, imports **the single newest export in it**, without you naming anyone. Neither has an importer of its own.
+
+**When it can act.** WoW writes SavedVariables on `/reload`, logout and exit, **not** when you run `/wowsync` (the addon holds the export
+in memory until then). So the flow is: `/wowsync`, then `/reload` or log out, and the watcher sends it within a few seconds. It cannot
+see a `/wowsync` while you stay logged in, cannot make WoW save, and never asks it to. It prints only what it knows: when WoW last
+wrote the file and when the newest export in it was generated, never a "synced at" time. (This timing is an accepted assumption that
+has not yet been measured against a live client.)
+
+**What it does**
+
+- Resolves exactly one `GearExport.lua` with the same rules as the bridge (`--file`, `--wow-dir`, or `WOWSYNC_SAVED_VARIABLES` /
+  `WOWSYNC_WOW_DIR`); several accounts or products stop with the candidate list: point `--wow-dir` at one product folder or use `--file`.
+- Polls the file's size and modified time every 2 s. After a change it waits until the file has been unchanged for 3 s (WoW may still
+  be writing), reads it **once** as data, and rejects a partial or non-data file (nothing is sent; it waits for the next change).
+- Picks the **newest** `latestExport` by its own generated time (equal times with different text are refused), checks it is consistent
+  with its record and that the Dashboard would accept it, and sends the exact persisted text. It remembers the last export sent (in memory
+  only), so the many saves that do not change the export send nothing; a restart at worst sends once more and the server reports a duplicate.
+- **Ignores the file as it was at startup**: only a save that happens while it runs is imported. `--once` is the catch-up: import the
+  newest saved export now, then exit (exit code 0 imported or already imported, 1 otherwise).
+- If the Dashboard is not running it says so and retries with backoff (5 s, 10 s, 20 s, up to 60 s); the file is the source, so nothing is
+  lost. If the Dashboard answers and **refuses** the export, it reports it once and waits for the next save.
+
+**Guarantees.** Read-only (only stat and read; never writes, renames, locks or spawns anything in the WoW folder, and a test pins that the
+source contains no write, spawn or eval call and that a run leaves the file and folder byte- and mtime-identical); data-only reader (nothing is
+executed); no second parser, database or import POST. It sends **only to a loopback Dashboard** and **refuses** any other `--url`. There is no
+token: like the rest of the API it relies on loopback binding and the Host/Origin check, which stop browsers, not other programs on the machine.
+
+**Known limits (Slice 1).**
+
+- One file, one product, no autostart or tray. Watching several accounts or products is a later, explicit choice.
+- A character you deleted in the Dashboard can **reappear** if its export is the newest in the file (deleting is not a tombstone). Accepted for
+  this slice; see the ROADMAP's Needs Decision table.
+- Only the newest export is sent per save. A `/wowsync` on character A followed by one on character B before a single `/reload` sends B; A
+  reaches the Dashboard by pasting it, `import:saved --character A`, or a later `/wowsync` and save.
+- Options: `--file`, `--wow-dir`, `--url` (loopback only), `--once`, `--help`; environment: `WOWSYNC_SAVED_VARIABLES`, `WOWSYNC_WOW_DIR`,
+  `WOWSYNC_URL` (a `.env` file works).
+
 ## What the totals mean (unknown, zero, and stale)
 
 Gold and `/played` totals sum each character's **last observed** value; they
@@ -293,7 +411,11 @@ project doesn't implement or assume any particular future format for that
 — the core data model (`parseWowSyncExport` → `SnapshotStore.importSnapshot`)
 only depends on receiving WOWSYNC v1 text, not on *how* that text arrived.
 Manual paste, a dropped `.txt` file, and a hypothetical future
-auto-generated snapshot file all go through the exact same importer.
+auto-generated snapshot file all go through the exact same importer. The one thing that exists today is the
+[developer bridge](#developer-bridge-import-a-saved-export-from-wows-savedvariables), a command you run by hand that reads what
+GearExport already saved and sends it to the same endpoint, and the [watcher](#watcher-import-automatically-when-wow-saves-slice-1)
+(`npm run watch:saved`, a foreground command awaiting review) runs the same import when WoW saves the file. A packaged desktop
+companion (tray, installer, autostart, several accounts) is still future work.
 
 ## Export Dashboard Context (developer tool)
 

@@ -642,6 +642,70 @@ not an error: lists render as they did before metadata existed.
   than resolved by build; there is no backfill because no stored snapshot carries the section; and item facts are not
   removed by any delete operation (a future "delete all data" would have to clear them too).
 
+## SavedVariables developer bridge
+
+`npm run import:saved` (`packages/server/src/importSaved.ts`, entry `importSavedCli.ts`) sends the export GearExport has already
+persisted (`WoWSyncDB.characters[guid].latestExport.text`) through the ordinary `POST /api/import`. It is **transport only**, and
+the boundaries are deliberate:
+
+- **One importer.** The bridge has no parser of its own for exports and never touches SQLite. The server keeps parsing,
+  validation, snapshot storage, shared-storage reconciliation, item-metadata ingestion and idempotence. (The core WOWSYNC parser
+  is used only to report what is about to be sent and to refuse text the server would reject anyway.)
+- **Exact text.** The text is taken from SavedVariables as a string and posted as `{text}`. It is never reconstructed from the
+  saved tables. The tool reports its length and SHA-256 and compares it with the text the server says it stored.
+- **A data-only Lua reader** (`packages/core/src/savedVariables.ts`, pure): a small recursive-descent reader for what WoW's
+  serializer writes (`Name = { ["key"] = value, ... }` with strings, numbers, booleans, nil, nested tables). It has no interpreter and
+  no `eval`; any function call, identifier used as a value, operator, concatenation, long-bracket string or block comment is an
+  error with a position, so a hostile or damaged file can neither run code nor be half-read. String escapes are decoded exactly,
+  nesting is bounded, other top-level variables (the legacy `GearExportDB`) are skipped lexically, and a file caught mid-write fails
+  loudly. Only `WoWSyncDB` (schema 1) is read.
+- **Read-only.** The bridge uses only read APIs on the WoW folder (a test pins that the source contains no write, spawn or eval call, and
+  that a full run leaves the file and folder byte- and mtime-identical). It cannot make WoW flush SavedVariables; the developer runs
+  `/reload` or logs out first.
+- **No guessing.** The WoW location is never built in: `--file`, `--wow-dir`, or `WOWSYNC_SAVED_VARIABLES` / `WOWSYNC_WOW_DIR`. More than
+  one candidate file, or a character name on several realms, stops with what to specify. The saved export must agree with the request
+  (name, realm) and with itself (the record's identity and `generatedAt` against the export text) before anything is sent. A character
+  GUID is read to walk the file but never printed or sent.
+- **Default target** is what the server itself would bind (`resolveHost` / `resolvePort`, i.e. `http://127.0.0.1:4173`), overridable by
+  `--url` / `WOWSYNC_URL`; a non-loopback target warns.
+
+It is not the desktop companion (see the roadmap): it does not watch files, monitor WoW, force a save, run in the background or
+start the server.
+
+## SavedVariables watcher (desktop companion, Slice 1)
+
+`npm run watch:saved` (`packages/server/src/watchSaved.ts`, entry `watchSavedCli.ts`) is the developer bridge driven by a foreground poll
+loop; design and decisions are in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md). It adds no listener, no parser, no
+database and no import logic:
+
+```
+GearExport.lua ──stat every 2s──▶ stable? (size+mtime unchanged 3s) ──read once──▶ parseSavedExports (core data-only reader)
+   ──▶ newest latestExport by generatedAt ──▶ describeExport + consistencyProblems ──▶ (generatedAt, sha256) already sent? skip
+   ──▶ postImport({text}) ──▶ POST /api/import (existing; loopback) ──▶ server: parse, dedupe, snapshots, shared storage, item metadata
+```
+
+- **Shared with the bridge, not copied.** `importSaved.ts` exports the pieces both use: `discoverSavedVariables`, `parseSavedExports`,
+  `describeExport`, `consistencyProblems`, `resolveDashboardUrl`, `postImport` (the one POST; throws `ImportPostError` with `unreachable` or
+  `refused`) and `describeImportResult`. `watchSaved.ts` contributes only the timing and state: stable-file detection, newest-export
+  selection, the in-memory last-sent `(generatedAt, sha256)`, and retry policy. A test pins that its source has no parser, no SQLite, no
+  `importSnapshot` and no copy of the POST.
+- **A step machine with injected effects.** `createWatcher(config, deps).tick()` is one deterministic poll; the filesystem (`stat`, `readText`),
+  the clock, `fetch` and output are injected, so tests drive a fake clock over a fake filesystem (a file "still changing" is exact, not a
+  race) and a real server for the end-to-end case. The CLI supplies the real ones and a `sleep`.
+- **Trigger on content, not mtime.** Any change to size or mtime means "look after it is quiet"; whether to send is decided by the newest
+  export's `generatedAt` and SHA-256, because WoW rewrites the whole file on every save. mtime is never shown as an observation time; the
+  export's own `Generated` is what the Dashboard orders by.
+- **Failure handling.** A partial or non-data file is rejected by the reader (nothing sent; wait for the next change). A transient read error
+  (a Windows sharing violation) is retried up to 3 times. An unreachable Dashboard is retried with capped backoff (5 s doubling to 60 s); a
+  Dashboard that answers and refuses is reported once. `--once` makes a single attempt.
+- **Read-only, loopback-only, no token.** Only `stat` and `read`; the source-scan test covers these files, and a test pins that a watch run
+  leaves the file and folder byte- and mtime-identical. It refuses a non-loopback target rather than warning. No token is used in this slice
+  (a same-user local process can already read the file and call the whole API); revisit per the feasibility doc if that changes.
+- **Timing.** SavedVariables reach disk at `/reload`, logout and exit, so an export is delivered then, not at `/wowsync`. That is an accepted,
+  not yet measured, assumption.
+- **Known limits.** One file; a deleted character can reappear if its export is the newest (no tombstone); only the newest export per save is
+  sent; no folder-product-vs-export-version warning yet.
+
 ## Snapshot chronology and idempotent import
 
 One rule orders snapshots everywhere (`packages/core/src/chronology.ts`):

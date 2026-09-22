@@ -2,8 +2,8 @@
 
 Last updated: 2026-09-21. Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
-milestone (C1-C6) and the item-metadata consumer (parser, store, API, Shared Storage / inventory
-presentation). Tests at that baseline: core 461, server 129, web 150; typechecks clean;
+milestone (C1-C6), the item-metadata consumer (parser, store, API, Shared Storage / inventory
+presentation) and the SavedVariables developer bridge. Tests at that baseline: core 471, server 161, web 150; typechecks clean;
 production build succeeds.
 
 ## How to use this roadmap
@@ -55,6 +55,15 @@ Work happening now.
   - Detail: GearExport `FOREVER_PHASE1.md`, `FOREVER_PHASE2.md`, `FOREVER_BAGS.md`,
     `FOREVER_PROFESSIONS.md`, `FOREVER_REMAINING.md`, `FOREVER_SPELLS.md`,
     `FOREVER_STATS_DIAGNOSTIC.md`. Dashboard side: [ARCHITECTURE.md](ARCHITECTURE.md) ("Forever").
+
+- [x] **Developer bridge: import a saved export from SavedVariables (done; separate from the Desktop companion).**
+  `npm run import:saved -- --character <name>` reads GearExport's persisted `latestExport.text` from the WoW SavedVariables
+  file as data (never executing it, never writing to WoW) and sends the exact text through the existing `POST /api/import`;
+  `--list` and `--dry-run` contact nothing. It replaced the scratch extraction used to validate item metadata. It is a
+  command run by hand: it does **not** watch files, react to `/wowsync`, force a `/reload`, run in the background or start the
+  server, so it is **not** the Desktop companion (item 8 below; its Slice 1, `npm run watch:saved`, is the same bridge run by a
+  foreground watch loop and is awaiting review). Detail: [README.md](../README.md) ("Developer
+  bridge"), [ARCHITECTURE.md](ARCHITECTURE.md) ("SavedVariables developer bridge").
 
 - [x] **Richer item metadata / expansion awareness: producer and Dashboard consumer done and validated
   against a real export.** The addon (GearExport `a94288e`, `feat: add additive item metadata
@@ -151,10 +160,17 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 
 ## Soon
 
-- [ ] **8. Desktop companion / automatic ingestion.** A real product need: the user
+- [ ] **8. Desktop companion / automatic ingestion.** (The manual [developer bridge](#active) exists; this item is the automatic,
+  user-facing product and is not started.) A real product need: the user
   sometimes forgets to paste `/wowsync` output into the Dashboard. Goal: reduce or
   eliminate that manual handoff.
-  - **Begins with a design/feasibility checkpoint. No implementation before it.**
+  - **Status: Slice 1 implemented, awaiting review.** `npm run watch:saved -- --wow-dir <one product folder>` (`--once` for a single
+    catch-up import) is a foreground CLI that polls one GearExport SavedVariables file, waits for it to be stable, and sends the newest
+    saved export through the existing `POST /api/import` (loopback only; read-only; no second parser or database). It delivers at the
+    next WoW save (`/reload`, logout, exit), not at `/wowsync`. Not built and still open: tray/installer/autostart, multi-file /
+    multi-account watching, the timing experiment, a deleted-character tombstone. See [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md)
+    (section 8, "Review decisions").
+  - **Began with a design/feasibility checkpoint (approved); Slice 1 was built from it. Packaging (tray, installer, autostart) needs its own review first.**
   - Reuse, do not duplicate: `POST /api/import`, idempotent imports, observation-time
     ordering, transactional persistence, `parseWowSyncExport`,
     `SnapshotStore.importSnapshot`, `ImportResult` semantics. The companion must not
@@ -198,7 +214,6 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
     source that would be recorded as its own `source` and never mixed into the game-client evidence; needs
     Blizzard API credentials, which the repository must never contain
   - a policy for a conflicting client value across builds (today it is shown as unknown, never resolved)
-  - a developer bridge from the addon's SavedVariables `latestExport` to `POST /api/import` (see item 8)
 - [ ] **Shared-storage follow-ups (deferred on purpose after the reconciliation milestone):**
   - shared-storage consumers: account totals, global item search, recent-change diffs, AccountContext and
     the LLM context (each must count an owner once, however many characters carried it, and label shared
@@ -277,8 +292,9 @@ where it is written up) when it is made; open parts stay listed.
 | Guild uniqueness: region / discriminator, and real `GuildClubID` form | Multi-region guilds | Guilds are keyed by the opaque `GuildClubID` text (implemented; never parsed). **Open (addon):** whether the id alone is unique across regions. The addon and Dashboard both treat it as opaque text; one live value has been seen in GearExport validation (Ciao, 84606081) and no broader guarantee is inferred from it |
 | Deletion semantics for shared observations | — (decided) | **Decided and implemented:** deleting a character or snapshot never deletes shared observations; an explicit per-owner clear removes that owner's observations and provenance, is not a tombstone (a new export may recreate the owner) and cannot be undone by backfill from already-stored snapshots; typed confirmation plus "Clears stored shared-storage history. A later WoWSync export may add it again." |
 | Character identity / GUID strategy, especially rename/transfer | Identity, companion, Activity History | Identity is `version::realm::name`; the text export carries no GUID while SavedVariables is GUID-keyed |
-| Desktop companion transport / handoff | Desktop companion | Depends on the feasibility checkpoint (SavedVariables flush timing) |
-| Local companion API authentication | Desktop companion | Whether a token is needed beyond loopback + Host/Origin protection |
+| Desktop companion transport / handoff | Desktop companion | **Decided for Slice 1:** poll the SavedVariables file and POST the newest `latestExport.text`; delivery is at the next WoW save (`/reload`, logout, exit), not at `/wowsync`. The flush timing is an accepted assumption, still **UNVERIFIED** (optional experiment in the feasibility checklist). Open: a dedicated handoff artifact (addon side) |
+| Local companion API authentication | Desktop companion | **Decided for Slice 1: no token; loopback-only client** (the watcher refuses a non-loopback `--url`). Revisit if the server binds beyond loopback, other local users matter, or the companion becomes a background service or accepts inbound connections ([feasibility doc](DESKTOP_COMPANION_FEASIBILITY.md), section 5) |
+| Deleted-in-Dashboard character vs the companion | Desktop companion | **Accepted for Slice 1:** the newest export can reappear after a Dashboard delete (delete is not a tombstone; the watcher sends only the single newest export, and only after a change seen since it started, or with `--once`). Needs a persisted watermark or a server-side tombstone (its own milestone) before the companion runs unattended |
 | Activity History transport path | Activity History | Expected to be separate from the snapshot export |
 | When/if the explicit full-account export ships | Account context | Normal `/wowsync` stays current-character plus compact summary |
 | LLM provider | Ask My Account | Project is paused at this decision (provider-agnostic work continues) |

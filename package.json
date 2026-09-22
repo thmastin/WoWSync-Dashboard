@@ -14,7 +14,9 @@
     "dev:server": "node --watch packages/server/src/index.ts",
     "dev:web": "npm run dev --workspace packages/web",
     "build:web": "npm run build --workspace packages/web",
-    "start": "node packages/server/src/index.ts"
+    "start": "node packages/server/src/index.ts",
+    "import:saved": "node --disable-warning=ExperimentalWarning packages/server/src/importSavedCli.ts",
+    "watch:saved": "node --disable-warning=ExperimentalWarning packages/server/src/watchSavedCli.ts"
   },
   "engines": {
     "node": ">=24"
