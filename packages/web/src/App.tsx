@@ -228,6 +228,7 @@ export default function App() {
               <CharactersRoster
                 characters={scoped.characters}
                 route={route}
+                now={scoped.now}
                 onNavigate={navigate}
                 onOpenCharacter={openCharacter}
               />

@@ -1,6 +1,8 @@
+import { classifyAgeBand, type AgeBand } from "@wowsync-dashboard/core/needsAttention.ts";
 import type { CharacterFacts } from "./types.ts";
 
-export type RosterAgeFilter = "" | "recent" | "stale" | "unknown";
+/** N4 sync-age bands (same as Needs Attention). Legacy: stale → aging|old, unknown → never. */
+export type RosterAgeFilter = "" | AgeBand | "stale" | "unknown";
 export type RosterSortKey = "name" | "level" | "gold" | "synced" | "class" | "realm";
 
 export interface RosterFilters {
@@ -11,7 +13,17 @@ export interface RosterFilters {
   sort: string;
   /** When true, only characters whose bank was never observed. */
   bankMissing: boolean;
+  /** AccountFacts.generatedAt — required for age-band filtering. */
+  now: number;
 }
+
+export const ROSTER_AGE_OPTIONS: { value: AgeBand | ""; label: string }[] = [
+  { value: "", label: "All" },
+  { value: "recent", label: "Within 3 days" },
+  { value: "aging", label: "3–14 days" },
+  { value: "old", label: "Older than 14 days" },
+  { value: "never", label: "Never synced" },
+];
 
 export function parseSort(sort: string): { key: RosterSortKey; descending: boolean } {
   const raw = (sort || "name").trim();
@@ -19,7 +31,6 @@ export function parseSort(sort: string): { key: RosterSortKey; descending: boole
   const key = (descending ? raw.slice(1) : raw) as RosterSortKey;
   const allowed: RosterSortKey[] = ["name", "level", "gold", "synced", "class", "realm"];
   if (!allowed.includes(key)) return { key: "name", descending: false };
-  // Default direction: synced newest-first feels right when choosing "synced".
   if (key === "synced" && !raw.startsWith("-") && !raw.startsWith("+")) {
     return { key, descending: true };
   }
@@ -32,11 +43,19 @@ function matchesQuery(c: CharacterFacts, q: string): boolean {
   return [c.name, c.realm, c.class ?? "", c.faction ?? ""].some((s) => s.toLowerCase().includes(needle));
 }
 
+function matchesAge(c: CharacterFacts, age: string, now: number): boolean {
+  if (!age) return true;
+  const band = classifyAgeBand(c.lastObservedAt, now);
+  if (age === "stale") return band === "aging" || band === "old";
+  if (age === "unknown") return band === "never";
+  return band === age;
+}
+
 export function filterRoster(characters: readonly CharacterFacts[], filters: RosterFilters): CharacterFacts[] {
   return characters.filter((c) => {
     if (!matchesQuery(c, filters.q)) return false;
     if (filters.classFilter && (c.class ?? "") !== filters.classFilter) return false;
-    if (filters.age && c.freshness !== filters.age) return false;
+    if (!matchesAge(c, filters.age, filters.now)) return false;
     if (filters.bankMissing && c.bankStatus !== "UNKNOWN") return false;
     return true;
   });
@@ -66,7 +85,6 @@ export function sortRoster(characters: readonly CharacterFacts[], sort: string):
         cmp = compareNullableNumber(a.goldCopper, b.goldCopper);
         break;
       case "synced": {
-        // Never-synced characters always sort after known times (newest/oldest among known only).
         const aMissing = a.lastObservedAt === undefined;
         const bMissing = b.lastObservedAt === undefined;
         if (aMissing && bMissing) cmp = 0;
@@ -101,7 +119,6 @@ export function filterAndSortRoster(characters: readonly CharacterFacts[], filte
   return sortRoster(filterRoster(characters, filters), filters.sort);
 }
 
-/** Distinct class names present in the list, sorted, for filter chips. */
 export function rosterClassOptions(characters: readonly CharacterFacts[]): string[] {
   const set = new Set<string>();
   for (const c of characters) if (c.class) set.add(c.class);

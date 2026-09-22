@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { filterAndSortRoster, parseSort, rosterClassOptions, toggleSort, type RosterFilters } from "../src/roster.ts";
 import type { CharacterFacts } from "../src/types.ts";
 
+const NOW = 1_700_000_000;
+const day = 86400;
+
 function char(over: Partial<CharacterFacts> & Pick<CharacterFacts, "identityKey" | "name">): CharacterFacts {
   return {
     realm: "Cairne",
@@ -16,16 +19,51 @@ function char(over: Partial<CharacterFacts> & Pick<CharacterFacts, "identityKey"
 }
 
 const sample: CharacterFacts[] = [
-  char({ identityKey: "a", name: "Aldor", class: "Priest", level: 70, goldCopper: 50000, freshness: "stale", lastObservedAt: 100, bankStatus: "UNKNOWN" }),
-  char({ identityKey: "b", name: "Brom", class: "Warrior", level: 80, goldCopper: 100, freshness: "recent", lastObservedAt: 300 }),
-  char({ identityKey: "c", name: "Cyra", class: "Mage", level: 60, goldCopper: 90000, freshness: "unknown", lastObservedAt: undefined, bankStatus: "UNKNOWN" }),
+  char({
+    identityKey: "a",
+    name: "Aldor",
+    class: "Priest",
+    level: 70,
+    goldCopper: 50000,
+    freshness: "stale",
+    lastObservedAt: NOW - 10 * day,
+    bankStatus: "UNKNOWN",
+  }),
+  char({
+    identityKey: "b",
+    name: "Brom",
+    class: "Warrior",
+    level: 80,
+    goldCopper: 100,
+    freshness: "recent",
+    lastObservedAt: NOW - day,
+  }),
+  char({
+    identityKey: "c",
+    name: "Cyra",
+    class: "Mage",
+    level: 60,
+    goldCopper: 90000,
+    freshness: "unknown",
+    lastObservedAt: undefined,
+    bankStatus: "UNKNOWN",
+  }),
+  char({
+    identityKey: "d",
+    name: "Dara",
+    class: "Hunter",
+    level: 85,
+    goldCopper: 200,
+    freshness: "stale",
+    lastObservedAt: NOW - 20 * day,
+  }),
 ];
 
-const base: RosterFilters = { q: "", classFilter: "", age: "", sort: "name", bankMissing: false };
+const base: RosterFilters = { q: "", classFilter: "", age: "", sort: "name", bankMissing: false, now: NOW };
 
 test("default sort is by name ascending", () => {
   const rows = filterAndSortRoster(sample, base);
-  assert.deepEqual(rows.map((r) => r.name), ["Aldor", "Brom", "Cyra"]);
+  assert.deepEqual(rows.map((r) => r.name), ["Aldor", "Brom", "Cyra", "Dara"]);
 });
 
 test("q matches name or class", () => {
@@ -33,14 +71,26 @@ test("q matches name or class", () => {
   assert.equal(filterAndSortRoster(sample, { ...base, q: "ald" }).map((r) => r.name).join(), "Aldor");
 });
 
-test("class and age and bank-missing filters compose", () => {
-  const rows = filterAndSortRoster(sample, { ...base, classFilter: "Priest", age: "stale", bankMissing: true });
+test("class and age bands and bank-missing filters compose", () => {
+  const rows = filterAndSortRoster(sample, { ...base, classFilter: "Priest", age: "aging", bankMissing: true });
   assert.deepEqual(rows.map((r) => r.name), ["Aldor"]);
+});
+
+test("age bands: recent / aging / old / never", () => {
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "recent" }).map((r) => r.name), ["Brom"]);
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "aging" }).map((r) => r.name), ["Aldor"]);
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "old" }).map((r) => r.name), ["Dara"]);
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "never" }).map((r) => r.name), ["Cyra"]);
+});
+
+test("legacy age=stale matches aging and old; unknown matches never", () => {
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "stale" }).map((r) => r.name), ["Aldor", "Dara"]);
+  assert.deepEqual(filterAndSortRoster(sample, { ...base, age: "unknown" }).map((r) => r.name), ["Cyra"]);
 });
 
 test("sort by level descending", () => {
   const rows = filterAndSortRoster(sample, { ...base, sort: "-level" });
-  assert.deepEqual(rows.map((r) => r.level), [80, 70, 60]);
+  assert.deepEqual(rows.map((r) => r.level), [85, 80, 70, 60]);
 });
 
 test("synced defaults to newest first", () => {
@@ -57,5 +107,5 @@ test("toggleSort flips direction on the same key", () => {
 });
 
 test("rosterClassOptions is sorted unique", () => {
-  assert.deepEqual(rosterClassOptions(sample), ["Mage", "Priest", "Warrior"]);
+  assert.deepEqual(rosterClassOptions(sample), ["Hunter", "Mage", "Priest", "Warrior"]);
 });

@@ -1,16 +1,18 @@
 import { formatCopper, formatRelativeTime, freshnessLabel } from "../format.ts";
-import { filterAndSortRoster, rosterClassOptions, toggleSort, type RosterSortKey } from "../roster.ts";
+import { filterAndSortRoster, rosterClassOptions, ROSTER_AGE_OPTIONS, toggleSort, type RosterSortKey } from "../roster.ts";
 import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts } from "../types.ts";
 
 export default function CharactersRoster({
   characters,
   route,
+  now,
   onNavigate,
   onOpenCharacter,
 }: {
   characters: CharacterFacts[];
   route: AppRoute;
+  now: number;
   onNavigate: (next: AppRoute) => void;
   onOpenCharacter: (identityKey: string) => void;
 }) {
@@ -21,6 +23,7 @@ export default function CharactersRoster({
     age: route.age,
     sort,
     bankMissing: route.bankMissing,
+    now,
   });
   const classes = rosterClassOptions(characters);
 
@@ -66,10 +69,11 @@ export default function CharactersRoster({
         <label className="roster-filter">
           Sync age
           <select value={route.age} onChange={(e) => setFilter({ age: e.target.value })}>
-            <option value="">All</option>
-            <option value="recent">Recent</option>
-            <option value="stale">Stale</option>
-            <option value="unknown">Unknown</option>
+            {ROSTER_AGE_OPTIONS.map((opt) => (
+              <option key={opt.value || "all"} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </label>
         <label className="roster-check">
