@@ -1,6 +1,6 @@
 import { formatRelativeTime } from "../format.ts";
 import { searchItemRows } from "../itemSearch.ts";
-import { patchRoute, type AppRoute } from "../routing.ts";
+import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts, InventoryFacts } from "../types.ts";
 
 function storageLabel(storage: "bags" | "bank"): string {
@@ -100,16 +100,17 @@ export default function ItemsSearch({
                       <strong>{row.itemName}</strong>
                     </td>
                     <td>
-                      <button
-                        type="button"
+                      <a
+                        href={formatHash(patchRoute(route, { view: "detail", identityKey: row.identityKey, from: "items" }))}
                         className="roster-name-link"
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
                           onOpenCharacter(row.identityKey);
                         }}
                       >
                         {row.characterName}
-                      </button>
+                      </a>
                     </td>
                     <td>{row.realm || "—"}</td>
                     <td>{storageLabel(row.storage)}</td>
