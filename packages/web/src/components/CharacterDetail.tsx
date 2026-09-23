@@ -11,6 +11,7 @@ import { useItemInfoLoader } from "../useItemInfo.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
 import { characterHeaderView, latestSnapshotId } from "../characterSnapshotView.ts";
 import { sectionFreshnessCaption } from "../sectionFreshness.ts";
+import { parseItemLevel, summarizeEquipmentIlvl } from "../equipmentView.ts";
 import type { SectionStatus } from "../types.ts";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
@@ -198,16 +199,47 @@ export default function CharacterDetail({
             {snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
-              <ul className="compact-list">
-                {snapshot.parsed.equipment.slots
-                  .filter((s) => !s.empty)
-                  .map((s) => (
-                    <li key={s.slot}>
-                      <span className="muted">{s.slotName || `Slot ${s.slot}`}:</span> {s.name ?? s.itemRef ?? "?"}
-                    </li>
-                  ))}
-                {snapshot.parsed.equipment.slots.every((s) => s.empty) && <li className="muted">Nothing equipped.</li>}
-              </ul>
+              <>
+                {(() => {
+                  const ilvl = summarizeEquipmentIlvl(snapshot.parsed.equipment.slots);
+                  if (!ilvl) {
+                    const emptyOnly = snapshot.parsed.equipment.slots.every((s) => s.empty);
+                    return emptyOnly ? null : (
+                      <div className="muted small">Average ilvl unknown (no numeric levels in this export).</div>
+                    );
+                  }
+                  const unknownNote =
+                    ilvl.unknownIlvl > 0 ? ` / ${ilvl.unknownIlvl} equipped without ilvl` : "";
+                  const emptyNote = ilvl.empty > 0 ? ` / ${ilvl.empty} empty` : "";
+                  return (
+                    <div className="muted small">
+                      Avg ilvl {ilvl.average} (from {ilvl.counted}/{ilvl.equipped} equipped)
+                      {unknownNote}
+                      {emptyNote}
+                    </div>
+                  );
+                })()}
+                <ul className="compact-list">
+                  {snapshot.parsed.equipment.slots.map((s) => {
+                    if (s.empty) {
+                      return (
+                        <li key={s.slot} className="muted">
+                          <span>{s.slotName || `Slot ${s.slot}`}:</span> empty
+                        </li>
+                      );
+                    }
+                    const level = parseItemLevel(s.itemLevel);
+                    const ilvlLabel = level !== undefined ? `ilvl ${level}` : "ilvl ?";
+                    return (
+                      <li key={s.slot}>
+                        <span className="muted">{s.slotName || `Slot ${s.slot}`}:</span> {s.name ?? s.itemRef ?? "?"}{" "}
+                        <span className="muted small">- {ilvlLabel}</span>
+                      </li>
+                    );
+                  })}
+                  {snapshot.parsed.equipment.slots.length === 0 && <li className="muted">Nothing equipped.</li>}
+                </ul>
+              </>
             )}
           </section>
 

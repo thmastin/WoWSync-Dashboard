@@ -125,7 +125,7 @@ export interface ParsedSnapshot {
   location: { status: SectionStatus; zone?: string; subzone?: string; mapID?: string; x?: string; y?: string };
   equipment: {
     status: SectionStatus;
-    slots: { slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string }[];
+    slots: { slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string; itemLevel?: string; requiredLevel?: string; effectiveStats?: string }[];
   };
   bags: InventorySection;
   bank: InventorySection;

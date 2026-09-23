@@ -149,7 +149,7 @@ statements describe `797fc3d`, and the first trust wave has since landed.
 - [ ] Freshness cleanup / age bands
 - [x] Character-page old-snapshot banner (2026-09-23)
 - [x] Per-section observed/freshness display (2026-09-23)
-- [ ] Display equipment item level
+- [x] Display equipment item level (2026-09-23)
 - [ ] Version-tab information and default behavior
 - [ ] Fix the recent-changes cap after realm scoping
 - [ ] Remove the stale LLM placeholder
