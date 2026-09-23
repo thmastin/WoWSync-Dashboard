@@ -116,3 +116,50 @@ test("formatBagSlots: never shows unknown as 0", () => {
   assert.equal(formatBagSlots(0, 80), "0/80");
   assert.equal(formatBagSlots(12, 80), "12/80");
 });
+
+test("sort by bags: known free slots before unknown; unknown never sorts as 0", () => {
+  const mixed = [
+    char({ identityKey: "u", name: "UnknownBags", bagsFreeSlots: undefined, bagsTotalSlots: undefined }),
+    char({ identityKey: "z", name: "ZeroFree", bagsFreeSlots: 0, bagsTotalSlots: 80 }),
+    char({ identityKey: "t", name: "TenFree", bagsFreeSlots: 10, bagsTotalSlots: 80 }),
+  ];
+  const asc = filterAndSortRoster(mixed, { ...base, sort: "bags" });
+  assert.deepEqual(asc.map((r) => r.name), ["ZeroFree", "TenFree", "UnknownBags"]);
+  const desc = filterAndSortRoster(mixed, { ...base, sort: "-bags" });
+  assert.deepEqual(desc.map((r) => r.name), ["TenFree", "ZeroFree", "UnknownBags"]);
+});
+
+test("sort by bank: observed before unknown (unknown last)", () => {
+  const mixed = [
+    char({ identityKey: "u", name: "NoBank", bankStatus: "UNKNOWN" }),
+    char({ identityKey: "o", name: "HasBank", bankStatus: "OBSERVED" }),
+    char({ identityKey: "l", name: "LastSeen", bankStatus: "LAST_SEEN" }),
+  ];
+  const asc = filterAndSortRoster(mixed, { ...base, sort: "bank" });
+  assert.deepEqual(asc.map((r) => r.name), ["HasBank", "LastSeen", "NoBank"]);
+});
+
+test("sort by gold: unknown gold sorts after known, including after a real 0", () => {
+  const mixed = [
+    char({ identityKey: "u", name: "UnknownGold", goldCopper: undefined }),
+    char({ identityKey: "z", name: "ZeroGold", goldCopper: 0 }),
+    char({ identityKey: "r", name: "Rich", goldCopper: 50000 }),
+  ];
+  const asc = filterAndSortRoster(mixed, { ...base, sort: "gold" });
+  assert.deepEqual(asc.map((r) => r.name), ["ZeroGold", "Rich", "UnknownGold"]);
+});
+
+test("every visible column has a recognized sort key", () => {
+  for (const key of ["name", "realm", "class", "level", "gold", "bank", "bags", "synced"] as const) {
+    assert.equal(parseSort(key).key, key);
+    assert.equal(parseSort("-" + key).key, key);
+  }
+});
+
+test("toggleSort flips synced via +synced for ascending", () => {
+  assert.equal(toggleSort("name", "synced"), "synced");
+  assert.deepEqual(parseSort("synced"), { key: "synced", descending: true });
+  assert.equal(toggleSort("synced", "synced"), "+synced");
+  assert.deepEqual(parseSort("+synced"), { key: "synced", descending: false });
+  assert.equal(toggleSort("+synced", "synced"), "synced");
+});

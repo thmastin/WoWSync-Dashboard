@@ -1,7 +1,7 @@
 import { formatCopper, formatRelativeTime, freshnessLabel } from "../format.ts";
 import { freshnessGlossary } from "../versionTabs.ts";
 import { formatBagSlots } from "../roster.ts";
-import { filterAndSortRoster, rosterClassOptions, ROSTER_AGE_OPTIONS, toggleSort, type RosterSortKey } from "../roster.ts";
+import { filterAndSortRoster, parseSort, rosterClassOptions, ROSTER_AGE_OPTIONS, toggleSort, type RosterSortKey } from "../roster.ts";
 import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts } from "../types.ts";
 
@@ -96,8 +96,8 @@ export default function CharactersRoster({
               <th>{sortHeader("Class", "class")}</th>
               <th>{sortHeader("Level", "level")}</th>
               <th>{sortHeader("Gold", "gold")}</th>
-              <th>Bank</th>
-              <th>Bags</th>
+              <th>{sortHeader("Bank", "bank")}</th>
+              <th>{sortHeader("Bags", "bags")}</th>
               <th>{sortHeader("Synced", "synced")}</th>
             </tr>
           </thead>
@@ -144,10 +144,7 @@ export default function CharactersRoster({
 }
 
 function sortMarker(sort: string, key: RosterSortKey): string {
-  const raw = sort || "name";
-  const desc = raw.startsWith("-");
-  const k = desc ? raw.slice(1) : raw;
-  if (k !== key) return "";
-  if (key === "synced" && raw === "synced") return " ↓";
-  return desc ? " ↓" : " ↑";
+  const parsed = parseSort(sort || "name");
+  if (parsed.key !== key) return "";
+  return parsed.descending ? " v" : " ^";
 }

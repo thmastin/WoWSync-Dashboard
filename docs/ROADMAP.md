@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
+Last updated: 2026-09-23 (Professions tab). Prior: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
 milestone (C1-C6), the item-metadata consumer (parser, store, API, Shared Storage / inventory
 presentation) and the SavedVariables developer bridge. Tests at that baseline: core 471, server 161, web 150; typechecks clean;
@@ -155,6 +155,8 @@ statements describe `797fc3d`, and the first trust wave has since landed.
 - [x] Remove the stale LLM placeholder (2026-09-23; Overview has no Account summary / LLM panel)
 - [x] De-duplicate the Professions presentation (2026-09-23; coverage on Overview only; Economy is gold + playtime ledger)
 - [x] Economy gold-focus + sync strip + character TOC + roster bag slots + freshness glossary (2026-09-23 polish)
+- [x] Top-level Professions tab + Overview one-line summary (2026-09-23; coverage-first; Economy stays gold+/played)
+- [x] Roster all-column sort (Bank/Bags included) + gold thousands commas in formatCopper (2026-09-23)
 
 ### 7. Ask My Account / deterministic context
 
@@ -336,6 +338,7 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- Top-level Professions tab (coverage table + gaps; Overview one-line summary navigates there); roster all-column sort; gold thousands commas via formatCopper; 2026-09-23 on `feature/dashboard-integration`
 - Trust hardening: unknown is not zero, freshness-aware totals, observation-time ordering
   and latest-snapshot semantics, idempotent re-import, per-realm LLM gold, classified API
   errors, localhost binding by default with Host/Origin guard

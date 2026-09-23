@@ -3,7 +3,7 @@ import type { CharacterFacts } from "./types.ts";
 
 /** N4 sync-age bands (same as Needs Attention). Legacy: stale → aging|old, unknown → never. */
 export type RosterAgeFilter = "" | AgeBand | "stale" | "unknown";
-export type RosterSortKey = "name" | "level" | "gold" | "synced" | "class" | "realm";
+export type RosterSortKey = "name" | "level" | "gold" | "synced" | "class" | "realm" | "bags" | "bank";
 
 export interface RosterFilters {
   q: string;
@@ -28,10 +28,13 @@ export const ROSTER_AGE_OPTIONS: { value: AgeBand | ""; label: string }[] = [
 export function parseSort(sort: string): { key: RosterSortKey; descending: boolean } {
   const raw = (sort || "name").trim();
   const descending = raw.startsWith("-");
-  const key = (descending ? raw.slice(1) : raw) as RosterSortKey;
-  const allowed: RosterSortKey[] = ["name", "level", "gold", "synced", "class", "realm"];
-  if (!allowed.includes(key)) return { key: "name", descending: false };
-  if (key === "synced" && !raw.startsWith("-") && !raw.startsWith("+")) {
+  const ascendingExplicit = raw.startsWith("+");
+  const keyToken = descending || ascendingExplicit ? raw.slice(1) : raw;
+  const allowed: RosterSortKey[] = ["name", "level", "gold", "synced", "class", "realm", "bags", "bank"];
+  if (!allowed.includes(keyToken as RosterSortKey)) return { key: "name", descending: false };
+  const key = keyToken as RosterSortKey;
+  // Bare "synced" means newest-first (desc). Explicit "+synced" is oldest-first.
+  if (key === "synced" && !descending && !ascendingExplicit) {
     return { key, descending: true };
   }
   return { key, descending };
@@ -72,6 +75,14 @@ function compareNullableString(a: string | undefined, b: string | undefined): nu
   return (a ?? "").localeCompare(b ?? "", undefined, { sensitivity: "base" });
 }
 
+/** Known bank before unknown; OBSERVED before LAST_SEEN. Unknown sorts last (never coerced to 0). */
+function bankRank(status: CharacterFacts["bankStatus"] | undefined): number | undefined {
+  if (status === undefined || status === "UNKNOWN") return undefined;
+  if (status === "OBSERVED") return 0;
+  if (status === "LAST_SEEN") return 1;
+  return 2;
+}
+
 export function sortRoster(characters: readonly CharacterFacts[], sort: string): CharacterFacts[] {
   const { key, descending } = parseSort(sort);
   const copy = [...characters];
@@ -99,20 +110,47 @@ export function sortRoster(characters: readonly CharacterFacts[], sort: string):
       case "realm":
         cmp = compareNullableString(a.realm, b.realm);
         break;
+      case "bags": {
+        cmp = compareNullableNumber(a.bagsFreeSlots, b.bagsFreeSlots);
+        if (cmp === 0) cmp = compareNullableNumber(a.bagsTotalSlots, b.bagsTotalSlots);
+        break;
+      }
+      case "bank":
+        cmp = compareNullableNumber(bankRank(a.bankStatus), bankRank(b.bankStatus));
+        break;
       case "name":
       default:
         cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
         break;
     }
     if (cmp === 0) cmp = a.identityKey.localeCompare(b.identityKey);
-    if (key === "synced") {
-      const aMissing = a.lastObservedAt === undefined;
-      const bMissing = b.lastObservedAt === undefined;
-      if (aMissing !== bMissing) return aMissing ? 1 : -1;
-    }
+
+    // Nulls-last for nullable columns: unknown stays after known in BOTH directions
+    // (never coerce unknown to 0, and never let descending pull unknowns to the top).
+    const aMissing = isSortMissing(a, key);
+    const bMissing = isSortMissing(b, key);
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+
     return descending ? -cmp : cmp;
   });
   return copy;
+}
+
+function isSortMissing(c: CharacterFacts, key: RosterSortKey): boolean {
+  switch (key) {
+    case "level":
+      return c.level === undefined;
+    case "gold":
+      return c.goldCopper === undefined;
+    case "synced":
+      return c.lastObservedAt === undefined;
+    case "bags":
+      return c.bagsFreeSlots === undefined && c.bagsTotalSlots === undefined;
+    case "bank":
+      return c.bankStatus === undefined || c.bankStatus === "UNKNOWN";
+    default:
+      return false;
+  }
 }
 
 export function filterAndSortRoster(characters: readonly CharacterFacts[], filters: RosterFilters): CharacterFacts[] {
@@ -128,7 +166,12 @@ export function rosterClassOptions(characters: readonly CharacterFacts[]): strin
 export function toggleSort(current: string, key: RosterSortKey): string {
   const parsed = parseSort(current);
   if (parsed.key !== key) {
+    // First activation: synced defaults to newest-first (desc); others ascending.
     return key === "synced" ? "synced" : key;
+  }
+  if (key === "synced") {
+    // Bare "synced" means desc; ascending is "+synced" (see parseSort).
+    return parsed.descending ? "+synced" : "synced";
   }
   return parsed.descending ? key : `-${key}`;
 }

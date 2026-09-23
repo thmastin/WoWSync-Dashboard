@@ -11,7 +11,7 @@ export default function AccountEconomy({ scoped }: { scoped: ScopedFacts; onOpen
     <div className="economy">
       <div className="scope-label detail-card-wide">{scoped.scopeLabel}</div>
       <p className="muted small detail-card-wide" style={{ marginBottom: 4 }}>
-        Gold ledger and /played for this version and realm scope. Profession coverage lives on Overview; item search is on the Items tab.
+        Gold ledger and /played for this version and realm scope. Profession coverage lives on the Professions tab; item search is on the Items tab.
       </p>
 
       <section className="panel">

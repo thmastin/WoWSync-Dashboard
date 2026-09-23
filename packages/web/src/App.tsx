@@ -3,6 +3,7 @@ import { fetchAccountFacts, fetchVersions } from "./api.ts";
 import ErrorNotice from "./components/ErrorNotice.tsx";
 import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
+import AccountProfessions from "./components/AccountProfessions.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
 import AskAccountModal from "./components/AskAccountModal.tsx";
 import CharactersRoster from "./components/CharactersRoster.tsx";
@@ -132,13 +133,19 @@ export default function App() {
     navigate(patchRoute(route, { version: "retail", view: "shared" }));
   }
 
+  function openProfessions() {
+    navigate(patchRoute(route, { view: "professions" }));
+  }
+
   function backFromDetail() {
     const target = route.from && route.from !== "detail" ? route.from : "characters";
     navigate(patchRoute(route, { view: target, identityKey: undefined, snapshotId: undefined, from: null }));
   }
 
   const tabView: RouteView =
-    route.view === "detail" || route.view === "items" ? (route.view === "items" ? "items" : "characters") : route.view;
+    route.view === "detail"
+      ? (route.from && route.from !== "detail" ? route.from : "characters")
+      : route.view;
 
   return (
     <div className="app" style={{ ["--accent" as string]: accent }}>
@@ -235,6 +242,9 @@ export default function App() {
                 <button className={tabView === "economy" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "economy" }))}>
                   Economy
                 </button>
+                <button className={tabView === "professions" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "professions" }))}>
+                  Professions
+                </button>
                 <button className={tabView === "items" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "items", q: route.q }))}>
                   Items
                 </button>
@@ -279,7 +289,7 @@ export default function App() {
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
             {route.view !== "shared" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
-            {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} />}
+            {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster
                 characters={scoped.characters}
@@ -290,6 +300,9 @@ export default function App() {
               />
             )}
             {scoped && route.view === "economy" && <AccountEconomy scoped={scoped} onOpenCharacter={openCharacter} />}
+            {scoped && route.view === "professions" && (
+              <AccountProfessions scoped={scoped} onOpenCharacter={openCharacter} />
+            )}
           </>
         )}
       </main>

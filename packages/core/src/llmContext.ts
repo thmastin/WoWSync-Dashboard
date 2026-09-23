@@ -68,7 +68,7 @@ export interface LlmLatestTransition {
   previousGoldCopper?: number;
   currentGoldCopper?: number;
   goldDeltaCopper?: number;
-  /** Deterministically formatted, e.g. "+1753g 77s 90c" - present exactly when goldDeltaCopper is present. */
+  /** Deterministically formatted, e.g. "+1,753g 77s 90c" - present exactly when goldDeltaCopper is present. */
   goldDeltaFormatted?: string;
   playtimeDeltaSeconds?: number;
   professionChanged: boolean;

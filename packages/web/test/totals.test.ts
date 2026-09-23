@@ -48,7 +48,7 @@ test("an OBSERVED 0 copper is a real zero (known count 1, total 0)", () => {
 test("the decision is by the known COUNT, never by total === 0 or truthiness", () => {
   assert.equal(describeGoldTotal(gold({ totalKnownCopper: 0, charactersWithKnownGold: 0 }), NOW).value, "?");
   assert.equal(describeGoldTotal(gold({ totalKnownCopper: 0, charactersWithKnownGold: 3 }), NOW).value, "0c");
-  assert.equal(describeGoldTotal(gold({ totalKnownCopper: 12_345_678, charactersWithKnownGold: 3 }), NOW).value, "1234g 56s 78c");
+  assert.equal(describeGoldTotal(gold({ totalKnownCopper: 12_345_678, charactersWithKnownGold: 3 }), NOW).value, "1,234g 56s 78c");
 });
 
 // --- stale and unobserved contributors ----------------------------------------------------------------------------

@@ -86,7 +86,7 @@ test("[SYNTHETIC] a multi-snapshot character with inventory changes gets compari
     assert.equal(t.previousGoldCopper, 588483674);
     assert.equal(t.currentGoldCopper, 606021464);
     assert.equal(t.goldDeltaCopper, 606021464 - 588483674);
-    assert.equal(t.goldDeltaFormatted, "+1753g 77s 90c");
+    assert.equal(t.goldDeltaFormatted, "+1,753g 77s 90c");
     assert.equal(t.playtimeDeltaSeconds, 504584 - 501684);
 
     assert.ok(t.inventory);
@@ -415,7 +415,7 @@ test("[SYNTHETIC] goldSummary.totalKnownFormatted is the correct deterministic f
     const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
     const [realm] = realmEntries(llm.versions["classic-era"].goldSummary);
     assert.equal(realm.totalKnownCopper, 92113121);
-    assert.equal(realm.totalKnownFormatted, "9211g 31s 21c");
+    assert.equal(realm.totalKnownFormatted, "9,211g 31s 21c");
   } finally {
     store.close();
   }
@@ -469,7 +469,7 @@ test("[SYNTHETIC] adding goldSummary leaves individual character goldCopper/gold
     const llm = buildLlmContext(store.buildAccountContext(FIXED_NOW));
     const alpha = llm.versions["classic-era"].characters.find((c) => c.name === "Alpha")!;
     assert.equal(alpha.goldCopper, 92113121);
-    assert.equal(alpha.goldFormatted, "9211g 31s 21c");
+    assert.equal(alpha.goldFormatted, "9,211g 31s 21c");
   } finally {
     store.close();
   }

@@ -84,3 +84,24 @@ test("items storage and bound filters round-trip in the hash", () => {
   assert.equal(again.storageFilter, "bags");
   assert.equal(again.boundFilter, "unbound");
 });
+
+test("round-trips professions with realm", () => {
+  const route = { ...defaultRoute("classic-era"), view: "professions" as const, realm: "Grobbulus" };
+  const again = parseHash(formatHash(route), "retail");
+  assert.equal(again.version, "classic-era");
+  assert.equal(again.view, "professions");
+  assert.equal(again.realm, "Grobbulus");
+  assert.ok(sameRoute(route, again));
+});
+
+test("detail from=professions survives round-trip", () => {
+  const route = {
+    ...defaultRoute("retail"),
+    view: "detail" as const,
+    identityKey: "retail::cairne::virek",
+    from: "professions" as const,
+  };
+  const again = parseHash(formatHash(route), "retail");
+  assert.equal(again.view, "detail");
+  assert.equal(again.from, "professions");
+});

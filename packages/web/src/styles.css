@@ -1110,3 +1110,25 @@ button.roster-name-link {
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* Professions tab */
+.professions-toolbar { display: flex; align-items: center; gap: 12px; margin: 8px 0 12px; flex-wrap: wrap; }
+.professions-toolbar .roster-search { max-width: 18rem; margin: 0; }
+.professions-table tbody tr { cursor: default; }
+.professions-table tbody tr:hover { background: transparent; }
+.profession-char-list, .profession-skill-list { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.profession-char-chip { white-space: nowrap; }
+.profession-skill-chip {
+  display: inline-block;
+  font-size: 0.8rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.professions-gap-block { margin-top: 10px; }
+.professions-gap-block:first-of-type { margin-top: 0; }
+.professions-summary { margin: 0; }
+.professions-summary:hover { color: var(--accent); }

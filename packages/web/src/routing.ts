@@ -3,6 +3,7 @@
 //   #/<version>/overview
 //   #/<version>/characters?realm=&q=&class=&age=&sort=
 //   #/<version>/economy?realm=
+//   #/<version>/professions?realm=
 //   #/<version>/shared
 //   #/<version>/items?q=&realm=&storage=&bound=
 //   #/<version>/c/<identityKey>[/snapshot/<id>]?from=overview|characters|...
@@ -11,7 +12,7 @@
 import type { VersionOrUnknown } from "./types.ts";
 import { WOW_VERSIONS } from "./versions.ts";
 
-export type RouteView = "overview" | "characters" | "economy" | "shared" | "items" | "detail";
+export type RouteView = "overview" | "characters" | "economy" | "professions" | "shared" | "items" | "detail";
 
 export interface AppRoute {
   version: VersionOrUnknown;
@@ -20,7 +21,7 @@ export interface AppRoute {
   snapshotId?: number;
   /** Realm scope for Classic Era / Anniversary. null = default (first realm / unset). */
   realm: string | null;
-  /** Where detail was opened from — drives in-app Back. */
+  /** Where detail was opened from â€” drives in-app Back. */
   from: RouteView | null;
   q: string;
   classFilter: string;
@@ -34,8 +35,8 @@ export interface AppRoute {
   boundFilter: string;
 }
 
-const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "shared", "items", "detail"]);
-const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "shared", "items"]);
+const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "detail"]);
+const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items"]);
 
 export function isVersion(value: string): value is VersionOrUnknown {
   return (WOW_VERSIONS as string[]).includes(value) || value === "unknown-version";

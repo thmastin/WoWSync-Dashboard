@@ -3,7 +3,7 @@ import { formatAgeSeconds, formatCopperDelta, formatRelativeTime, formatXpPercen
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
 
-export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void }) {
+export default function AccountOverview({ scoped, onOpenCharacter, onOpenProfessions }: { scoped: ScopedFacts; onOpenCharacter: (key: string) => void; onOpenProfessions: () => void }) {
   const facts = scoped;
   const characterCount = facts.characters.length;
   const goldTotal = describeGoldTotal(facts.gold, facts.now);
@@ -11,8 +11,19 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
   const attention = buildNeedsAttention(facts.characters, facts.now);
   const attentionGroups = groupNeedsAttentionByAgeBand(attention);
 
-  const covered = facts.professions.coverage.filter((c) => c.coverageStatus === "covered");
-  const missing = facts.professions.coverage.filter((c) => c.coverageStatus !== "covered");
+  const coveredCount = facts.professions.coverage.filter((c) => c.coverageStatus === "covered").length;
+  const noneCount = facts.professions.coverage.filter((c) => c.coverageStatus === "none").length;
+  const unknownCount = facts.professions.coverage.filter((c) => c.coverageStatus === "unknown").length;
+  const professionSummaryParts: string[] = [];
+  if (coveredCount > 0) professionSummaryParts.push(coveredCount + " covered");
+  if (noneCount > 0) professionSummaryParts.push(noneCount + " not covered");
+  if (unknownCount > 0) professionSummaryParts.push(unknownCount + " unknown");
+  const professionSummary =
+    facts.professions.coverage.length === 0
+      ? "No profession data observed yet"
+      : professionSummaryParts.length > 0
+        ? professionSummaryParts.join(", ")
+        : "No profession data observed yet";
   const lastSyncedAt = facts.characters
     .map((c) => c.lastObservedAt)
     .filter((t): t is number => t !== undefined)
@@ -113,32 +124,24 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
         </section>
 
         <section className="panel">
-          <h3>Professions coverage</h3>
-          {facts.professions.coverage.length === 0 && <p className="muted">No profession data observed for this version yet.</p>}
-          {covered.length === 0 && missing.length > 0 && <p className="muted">No professions covered yet.</p>}
-          <ul className="compact-list">
-            {covered.slice(0, 8).map((entry) => (
-              <li key={entry.profession}>
-                <strong>{entry.profession}</strong>{" "}
-                <span className="muted">{entry.characters.map((c) => `${c.name} (${c.skill ?? "?"}/${c.maxSkill ?? "?"}${c.tier ? ` - ${c.tier}` : ""})`).join(", ")}</span>
-              </li>
-            ))}
-          </ul>
-          {covered.length > 8 && <p className="muted small">+{covered.length - 8} more</p>}
-          {missing.length > 0 && (
-            <details className="coverage-missing">
-              <summary>
-                {missing.filter((m) => m.coverageStatus === "none").length} not covered
-                {missing.some((m) => m.coverageStatus === "unknown") ? `, ${missing.filter((m) => m.coverageStatus === "unknown").length} unknown` : ""}
-              </summary>
-              <ul className="compact-list">
-                {missing.map((entry) => (
-                  <li key={entry.profession} className="muted small">
-                    {entry.profession} — {entry.coverageStatus === "none" ? "none" : "unknown coverage"}
-                  </li>
-                ))}
-              </ul>
-            </details>
+          <h3>Professions</h3>
+          {facts.professions.coverage.length === 0 ? (
+            <p className="muted">No profession data observed for this version yet.</p>
+          ) : (
+            <p
+              className="clickable professions-summary"
+              onClick={onOpenProfessions}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onOpenProfessions();
+                }
+              }}
+            >
+              Professions: {professionSummary}
+            </p>
           )}
         </section>
       </div>
