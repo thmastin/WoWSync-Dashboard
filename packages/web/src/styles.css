@@ -486,6 +486,19 @@ h1, h2, h3 {
 .trainer-summary-line {
   margin-bottom: 8px;
 }
+.historical-snapshot-banner {
+  background: rgba(212, 168, 67, 0.12);
+  border: 1px solid rgba(212, 168, 67, 0.35);
+  color: var(--gold);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+.historical-snapshot-banner .link-button {
+  margin-left: 4px;
+  vertical-align: baseline;
+}
 .trainer-unlocks-banner {
   background: rgba(76, 175, 125, 0.12);
   border: 1px solid rgba(76, 175, 125, 0.3);

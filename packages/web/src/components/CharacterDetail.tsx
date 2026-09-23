@@ -9,6 +9,7 @@ import { VERSION_LABELS } from "../versions.ts";
 import { EMPTY_ITEM_INFO, describeItemInfo, itemInfoSuffix, type ItemInfoLookup } from "../itemMetadata.ts";
 import { useItemInfoLoader } from "../useItemInfo.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
+import { characterHeaderView, latestSnapshotId } from "../characterSnapshotView.ts";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
@@ -66,6 +67,8 @@ export default function CharacterDetail({
     return <div className="loading">Loading…</div>;
   }
 
+  const header = characterHeaderView(character, snapshot, snapshots);
+
   return (
     <div className="character-detail">
       {load.state.status === "error" && <ErrorNotice error={load.state.error} onRetry={load.retry} />}
@@ -75,14 +78,28 @@ export default function CharacterDetail({
       <div className="detail-header">
         <h1>{character.name}</h1>
         <div className="detail-subline">
-          {character.class ?? "?"} · Level {character.latestLevel ?? "?"} · {character.realm}
-          {character.faction ? ` · ${character.faction}` : ""}
+          {header.className} · Level {header.level} · {header.realm}
+          {header.faction ? ` · ${header.faction}` : ""}
         </div>
         <div className="detail-subline muted small">
-          Last synced {formatRelativeTime(character.latestGeneratedAt ?? character.latestImportedAt)} · {character.snapshotCount} snapshot
-          {character.snapshotCount === 1 ? "" : "s"} recorded
+          {header.viewingHistorical ? "This snapshot" : "Last synced"}{" "}
+          {formatRelativeTime(header.syncedAt)} · {header.snapshotCount} snapshot
+          {header.snapshotCount === 1 ? "" : "s"} recorded
         </div>
       </div>
+
+      {header.viewingHistorical && snapshot && (
+        <div className="historical-snapshot-banner" role="status">
+          Viewing snapshot from {formatAbsoluteTime(snapshot.generatedAt ?? snapshot.importedAt)} — not the latest.{" "}
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => setSelectedId(latestSnapshotId(snapshots))}
+          >
+            Jump to latest
+          </button>
+        </div>
+      )}
 
       {snapshots.length > 1 && (
         <div className="snapshot-picker">
@@ -90,7 +107,7 @@ export default function CharacterDetail({
           <select value={selectedId ?? ""} onChange={(e) => setSelectedId(Number(e.target.value))}>
             {snapshots.map((s) => (
               <option key={s.id} value={s.id}>
-                {formatAbsoluteTime(s.generatedAt)} (Level {s.parsed.character.level ?? "?"})
+                {formatAbsoluteTime(s.generatedAt ?? s.importedAt)} (Level {s.parsed.character.level ?? "?"})
               </option>
             ))}
           </select>

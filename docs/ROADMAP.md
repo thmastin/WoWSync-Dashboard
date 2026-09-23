@@ -1,4 +1,4 @@
-# WoWSync Roadmap
+﻿# WoWSync Roadmap
 
 Last updated: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
@@ -147,7 +147,7 @@ statements describe `797fc3d`, and the first trust wave has since landed.
 - [ ] Global item search
 - [ ] Deterministic **Needs Attention** digest
 - [ ] Freshness cleanup / age bands
-- [ ] Character-page old-snapshot banner
+- [x] Character-page old-snapshot banner (2026-09-23)
 - [ ] Per-section observed/freshness display
 - [ ] Display equipment item level
 - [ ] Version-tab information and default behavior
@@ -362,3 +362,4 @@ Guard against re-adding. This is not a changelog.
     surfacing, informationless-guild detail and delete-all-data ([Later](#later)).
 - Integration branch `feature/dashboard-integration` (`0f525a7`): main + trust hardening +
   Warband + Guild Bank + product review. Not yet merged to `main`.
+
