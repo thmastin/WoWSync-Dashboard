@@ -129,6 +129,41 @@ h1, h2, h3 {
   color: var(--text);
 }
 
+.version-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.version-tab-label {
+  white-space: nowrap;
+}
+.version-tab-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+  opacity: 0.9;
+}
+.version-tab-count {
+  color: var(--text-muted);
+  min-width: 1ch;
+}
+.version-tab.active .version-tab-count {
+  color: inherit;
+  opacity: 0.85;
+}
+.version-tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.version-tab-dot-recent { background: var(--good); }
+.version-tab-dot-stale { background: var(--warn); }
+.version-tab-dot-unknown { background: var(--text-muted); opacity: 0.45; }
+
 .scope-row {
   display: flex;
   align-items: center;

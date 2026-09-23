@@ -12,6 +12,7 @@ import type {
   StoredCharacterSummary,
   StoredSnapshot,
   VersionOrUnknown,
+  VersionSummary,
 } from "./types.ts";
 
 /**
@@ -134,6 +135,16 @@ export function fetchAccountFacts(version: VersionOrUnknown, signal?: AbortSigna
   return request<{ facts: AccountFacts }>(`/api/versions/${version}/account-facts`, undefined, {
     signal,
     validate: (body) => hasObject("facts")(body) && Array.isArray((body as { facts: { characters?: unknown } }).facts.characters),
+  });
+}
+export function fetchVersions(signal?: AbortSignal) {
+  return request<{ versions: VersionSummary[] }>("/api/versions", undefined, {
+    signal,
+    validate: (body) =>
+      hasArray("versions")(body) &&
+      (body as { versions: unknown[] }).versions.every(
+        (v) => isRecord(v) && typeof v.version === "string" && typeof v.characterCount === "number",
+      ),
   });
 }
 

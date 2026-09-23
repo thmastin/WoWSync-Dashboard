@@ -3,6 +3,17 @@
 // bundle never has to reason about the server-only SQLite storage code.
 
 export type VersionOrUnknown = "classic-era" | "tbc-anniversary" | "retail" | "forever" | "unknown-version";
+/** GET /api/versions row (server VersionSummary). Gold/playtime absent when unknown - never invent 0. */
+export interface VersionSummary {
+  version: VersionOrUnknown;
+  characterCount: number;
+  totalMoneyCopper?: number;
+  charactersWithKnownGold: number;
+  totalPlayedSeconds?: number;
+  charactersWithKnownPlaytime: number;
+  /** Most recent observation among latest snapshots for this version. */
+  lastUpdatedAt?: number;
+}
 
 export interface StoredCharacterSummary {
   id: number;

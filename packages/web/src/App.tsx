@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchAccountFacts } from "./api.ts";
+import { fetchAccountFacts, fetchVersions } from "./api.ts";
 import ErrorNotice from "./components/ErrorNotice.tsx";
 import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
@@ -14,12 +14,19 @@ import SharedStorageView from "./components/SharedStorageView.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
+import { formatRelativeTime, freshnessLabel } from "./format.ts";
+import { pickDefaultVersion, versionTabMeta } from "./versionTabs.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
-function loadStoredVersion(): VersionOrUnknown {
+function readStoredVersionPreference(): string | null {
   const stored = localStorage.getItem("wowsync.activeVersion");
-  if (stored && (WOW_VERSIONS as string[]).includes(stored)) return stored as VersionOrUnknown;
-  return "tbc-anniversary";
+  if (stored && (WOW_VERSIONS as string[]).includes(stored)) return stored;
+  return null;
+}
+
+/** Last-used version from localStorage, or temporary retail until /api/versions resolves a fresher default. */
+function loadStoredVersion(): VersionOrUnknown {
+  return (readStoredVersionPreference() as VersionOrUnknown | null) ?? "retail";
 }
 
 function readRoute(): AppRoute {
@@ -27,9 +34,15 @@ function readRoute(): AppRoute {
 }
 
 export default function App() {
+  // True only when first paint seeded an empty hash with no valid localStorage version.
+  // Cleared on any user-driven navigate so we never yank them off a click or deep link.
+  const [pendingFreshestDefault, setPendingFreshestDefault] = useState(() => {
+    const hashEmpty = !window.location.hash || window.location.hash === "#";
+    return hashEmpty && readStoredVersionPreference() === null;
+  });
   const [route, setRoute] = useState<AppRoute>(() => {
     const initial = readRoute();
-    // Empty hash → seed from localStorage so the first paint has a real address.
+    // Empty hash -> seed from localStorage so the first paint has a real address.
     if (!window.location.hash || window.location.hash === "#") {
       const seeded = defaultRoute(loadStoredVersion());
       history.replaceState(null, "", formatHash(seeded));
@@ -43,6 +56,7 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0);
 
   const navigate = useCallback((next: AppRoute, replace = false) => {
+    if (!replace) setPendingFreshestDefault(false);
     const hash = formatHash(next);
     if (replace) {
       history.replaceState(null, "", hash);
@@ -75,6 +89,21 @@ export default function App() {
   const loaded = factsLoad.state.data;
   const facts = loaded && loaded.version === activeVersion ? loaded : null;
   const scoped = facts ? scopeFacts(facts, route.realm) : null;
+
+  const versionsLoad = useAsync((signal) => fetchVersions(signal).then((r) => r.versions), "versions", refreshTick);
+  const versionSummaries = versionsLoad.state.data ?? null;
+
+  // N7: when empty-hash had no stored preference, replace temporary retail with freshest sync once summaries arrive.
+  useEffect(() => {
+    if (!pendingFreshestDefault || !versionSummaries) return;
+    const picked = pickDefaultVersion(versionSummaries);
+    if (picked === route.version) {
+      setPendingFreshestDefault(false);
+      return;
+    }
+    setPendingFreshestDefault(false);
+    navigate(defaultRoute(picked), true);
+  }, [pendingFreshestDefault, versionSummaries, route.version, navigate]);
 
   // If the URL names a realm that no longer exists in this version, clear it in the address.
   useEffect(() => {
@@ -141,17 +170,35 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="version-tabs">
-        {WOW_VERSIONS.map((v) => (
-          <button
-            key={v}
-            className={`version-tab ${v === activeVersion ? "active" : ""}`}
-            style={v === activeVersion ? { borderColor: VERSION_ACCENTS[v], color: VERSION_ACCENTS[v] } : undefined}
-            onClick={() => navigate(defaultRoute(v))}
-          >
-            {VERSION_LABELS[v]}
-          </button>
-        ))}
+      <nav className="version-tabs" role="tablist" aria-label="WoW version">
+        {WOW_VERSIONS.map((v) => {
+          const summary = versionSummaries?.find((s) => s.version === v);
+          const nowSeconds = Date.now() / 1000;
+          const meta = versionTabMeta(summary, nowSeconds);
+          const ageText = formatRelativeTime(summary?.lastUpdatedAt);
+          const title = `${VERSION_LABELS[v]}: ${meta.count} character${meta.count === 1 ? "" : "s"}, ${freshnessLabel(meta.freshness).toLowerCase()} (${ageText})`;
+          return (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={v === activeVersion}
+              className={`version-tab ${v === activeVersion ? "active" : ""}`}
+              style={v === activeVersion ? { borderColor: VERSION_ACCENTS[v], color: VERSION_ACCENTS[v] } : undefined}
+              title={title}
+              onClick={() => navigate(defaultRoute(v))}
+            >
+              <span className="version-tab-label">{VERSION_LABELS[v]}</span>
+              <span className="version-tab-meta">
+                <span className="version-tab-count">{meta.count}</span>
+                <span
+                  className={`version-tab-dot version-tab-dot-${meta.freshness}`}
+                  aria-label={freshnessLabel(meta.freshness)}
+                />
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
       <main className="app-main">
