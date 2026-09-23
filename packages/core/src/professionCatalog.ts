@@ -106,3 +106,64 @@ export function professionEntryIsEvidence(
   if (version !== "forever") return true;
   return (entry.skill ?? 0) > 0 || (entry.maxSkill ?? 0) > 0;
 }
+
+export type ProfessionPlanningKind = "crafting" | "gathering";
+
+const GATHERING_PROFESSIONS = new Set([
+  "herbalism",
+  "mining",
+  "skinning",
+  "fishing",
+]);
+
+/**
+ * Planning bucket for AccountProfessions UI (Crafting vs Gathering).
+ * Case-insensitive match on profession name. Unknown Forever observation-only
+ * names default to crafting so the UI stays two sections (not a third Other).
+ */
+export function professionPlanningKind(name: string): ProfessionPlanningKind {
+  const key = name.trim().toLowerCase();
+  if (GATHERING_PROFESSIONS.has(key)) return "gathering";
+  return "crafting";
+}
+
+/** Minimal character skill fields used to pick a covered-row primary. */
+export type ProfessionCharacterSkill = {
+  identityKey: string;
+  name: string;
+  skill?: number;
+  maxSkill?: number;
+};
+
+/**
+ * Primary character for a covered profession: highest observed skill;
+ * undefined skill sorts last (never as 0). Tie-break: higher maxSkill
+ * (undefined last), then name localeCompare. Not a saved designation.
+ */
+export function selectPrimaryProfessionCharacter<T extends ProfessionCharacterSkill>(
+  characters: readonly T[],
+): T | undefined {
+  if (characters.length === 0) return undefined;
+  return characters.slice().sort(compareProfessionCharacterPrimary)[0];
+}
+
+function compareOptionalNumberDesc(a: number | undefined, b: number | undefined): number {
+  const aMissing = a === undefined;
+  const bMissing = b === undefined;
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  return b - a;
+}
+
+function compareProfessionCharacterPrimary(
+  a: ProfessionCharacterSkill,
+  b: ProfessionCharacterSkill,
+): number {
+  const bySkill = compareOptionalNumberDesc(a.skill, b.skill);
+  if (bySkill !== 0) return bySkill;
+  const byMax = compareOptionalNumberDesc(a.maxSkill, b.maxSkill);
+  if (byMax !== 0) return byMax;
+  return a.name.localeCompare(b.name);
+}
+

@@ -1128,7 +1128,23 @@ button.roster-name-link {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.professions-gap-block { margin-top: 10px; }
-.professions-gap-block:first-of-type { margin-top: 0; }
+.professions-kind-block { margin-top: 14px; }
+.professions-kind-block:first-of-type { margin-top: 0; }
+.professions-gap-block { margin-top: 8px; }
+.professions-gap-subhead { margin: 0 0 4px; font-size: 0.85rem; font-weight: 600; }
+.professions-all-clear { margin: 4px 0 0; }
+.profession-more-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+  white-space: nowrap;
+}
+.profession-more-toggle:hover { text-decoration: underline; }
+.profession-more-row td { padding-top: 0; border-top: none; }
+.profession-more-list { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 2px 0 6px; }
+.profession-more-item { display: inline-flex; align-items: center; gap: 6px; }
 .professions-summary { margin: 0; }
 .professions-summary:hover { color: var(--accent); }
