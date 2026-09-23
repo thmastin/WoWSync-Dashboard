@@ -1,4 +1,4 @@
-﻿# WoWSync Roadmap
+# WoWSync Roadmap
 
 Last updated: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
@@ -148,7 +148,7 @@ statements describe `797fc3d`, and the first trust wave has since landed.
 - [ ] Deterministic **Needs Attention** digest
 - [ ] Freshness cleanup / age bands
 - [x] Character-page old-snapshot banner (2026-09-23)
-- [ ] Per-section observed/freshness display
+- [x] Per-section observed/freshness display (2026-09-23)
 - [ ] Display equipment item level
 - [ ] Version-tab information and default behavior
 - [ ] Fix the recent-changes cap after realm scoping

@@ -10,12 +10,25 @@ import { EMPTY_ITEM_INFO, describeItemInfo, itemInfoSuffix, type ItemInfoLookup 
 import { useItemInfoLoader } from "../useItemInfo.ts";
 import DeleteCharacterModal from "./DeleteCharacterModal.tsx";
 import { characterHeaderView, latestSnapshotId } from "../characterSnapshotView.ts";
+import { sectionFreshnessCaption } from "../sectionFreshness.ts";
+import type { SectionStatus } from "../types.ts";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
 
 function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
+}
+
+/** Relative age under a section heading; LAST_SEEN is "as of …", never current. */
+function SectionFreshnessLine({ status }: { status: SectionStatus }) {
+  const caption = sectionFreshnessCaption(status, Date.now() / 1000);
+  if (!caption) return null;
+  return (
+    <p className="muted small section-freshness" title={formatAbsoluteTime(caption.at)}>
+      {caption.text}
+    </p>
+  );
 }
 
 export default function CharacterDetail({
@@ -164,6 +177,7 @@ export default function CharacterDetail({
 
           <section className="detail-card">
             <h3>Location <StatusBadge state={snapshot.parsed.location.status.state} /></h3>
+            <SectionFreshnessLine status={snapshot.parsed.location.status} />
             <dl>
               <dt>Zone</dt>
               <dd>{snapshot.parsed.location.zone ?? "?"}</dd>
@@ -180,6 +194,7 @@ export default function CharacterDetail({
             <h3>
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
+            <SectionFreshnessLine status={snapshot.parsed.equipment.status} />
             {snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
@@ -214,6 +229,7 @@ export default function CharacterDetail({
             <h3>
               Professions <StatusBadge state={snapshot.parsed.professions.status.state} />
             </h3>
+            <SectionFreshnessLine status={snapshot.parsed.professions.status} />
             {snapshot.parsed.professions.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
@@ -243,6 +259,7 @@ export default function CharacterDetail({
             <h3>
               Known Spells <StatusBadge state={snapshot.parsed.spells.status.state} />
             </h3>
+            <SectionFreshnessLine status={snapshot.parsed.spells.status} />
             {snapshot.parsed.spells.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
@@ -254,6 +271,7 @@ export default function CharacterDetail({
             <h3>
               Trainers <StatusBadge state={snapshot.parsed.trainer.status.state} />
             </h3>
+            <SectionFreshnessLine status={snapshot.parsed.trainer.status} />
             {snapshot.trainerUnlocksSincePrevious && snapshot.trainerUnlocksSincePrevious.length > 0 && (
               <div className="trainer-unlocks-banner">
                 Trainer changes since last snapshot — unlocked:{" "}
@@ -354,6 +372,7 @@ export function InventoryCard({
       <h3>
         {title} <StatusBadge state={inv.status.state} />
       </h3>
+      <SectionFreshnessLine status={inv.status} />
       {note && <p className="muted small">{note}</p>}
       {actionLabel && onAction && (
         <button className="link-button" onClick={onAction}>
