@@ -1,9 +1,21 @@
 // Derives a single "current scope" view from AccountFacts: either one
 // realm (Classic Era/TBC Anniversary) or the whole account (Retail/
 // unknown-version). Keeps the view components (AccountOverview,
-// AccountEconomy, CharactersGrid) agnostic to realm-partitioning — they
+// AccountEconomy, CharactersGrid) agnostic to realm-partitioning -- they
 // just render whatever ScopedFacts they're handed.
 import type { AccountFacts, FreshnessSummary } from "./types.ts";
+
+/** Overview display bound applied after realm (or account-wide) scoping. */
+export const RECENT_CHANGES_DISPLAY_CAP = 20;
+
+/**
+ * Cap recent-changes for display after scope filtering.
+ * Store/AccountFacts stay uncapped so a realm is not starved by other realms' newer rows.
+ */
+export function capRecentChangesAfterScope<T>(changes: readonly T[], limit: number = RECENT_CHANGES_DISPLAY_CAP): T[] {
+  if (!(typeof limit === "number" && limit > 0)) return [...changes];
+  return changes.length > limit ? changes.slice(0, limit) : [...changes];
+}
 
 export interface ScopedFacts {
   /** The facts' own generation time (unix seconds): the "now" every age in the UI is measured against, never the browser clock. */
@@ -34,7 +46,7 @@ export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): S
       progression: facts.progression,
       professions: facts.professions,
       inventory: facts.inventory,
-      recentChanges: facts.recentChanges,
+      recentChanges: capRecentChangesAfterScope(facts.recentChanges),
       freshness: facts.freshness,
     };
   }
@@ -54,7 +66,9 @@ export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): S
     progression: realm.progression,
     professions: realm.professions,
     inventory: realm.inventory,
-    recentChanges: facts.recentChanges.filter((c) => realmIdentityKeys.has(c.identityKey)),
+    recentChanges: capRecentChangesAfterScope(
+      facts.recentChanges.filter((c) => realmIdentityKeys.has(c.identityKey)),
+    ),
     freshness: {
       recentCharacters: freshnessByCharacter.filter((c) => c.freshness === "recent").length,
       staleCharacters: freshnessByCharacter.filter((c) => c.freshness === "stale").length,

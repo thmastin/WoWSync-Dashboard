@@ -211,6 +211,11 @@ export interface SnapshotStore {
   getCharacter(identityKey: string): StoredCharacterSummary | undefined;
   listSnapshots(identityKey: string): StoredSnapshot[];
   getSnapshot(id: number): StoredSnapshot | undefined;
+  /**
+   * Meaningful consecutive-pair changes for one version, newest observation first.
+   * Pass a positive `limit` to slice; omit `limit` to return the full meaningful set.
+   * UI display caps belong after realm scoping, not as a store default.
+   */
   recentChanges(version: VersionOrUnknown, limit?: number): RecentChange[];
   /** The deterministic account-level facts layer for one version space. `now` defaults to the wall clock but can be pinned for deterministic tests. */
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;

@@ -872,7 +872,12 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return results;
   }
 
-  recentChanges(version: VersionOrUnknown, limit = 20): RecentChange[] {
+  /**
+   * Meaningful consecutive-pair changes for one version, newest observation first.
+   * Pass a positive `limit` to slice; omit it (undefined) to return the full meaningful set.
+   * Display caps belong after realm scoping (web), not as a store default.
+   */
+  recentChanges(version: VersionOrUnknown, limit?: number): RecentChange[] {
     const changes = this.allDiffs(version).filter(({ diff }) => {
       return (
         diff.level.delta ||
@@ -887,7 +892,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
     });
     // Newest OBSERVATION first (an old export imported late must not rank as "just now").
     changes.sort((a, b) => b.observedAt - a.observedAt || a.identityKey.localeCompare(b.identityKey));
-    return changes.slice(0, limit);
+    if (typeof limit === "number" && limit > 0) return changes.slice(0, limit);
+    return changes;
   }
 
   buildAccountFacts(version: VersionOrUnknown, now: number = Math.floor(Date.now() / 1000)): AccountFacts {

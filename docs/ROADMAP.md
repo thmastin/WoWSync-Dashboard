@@ -151,7 +151,7 @@ statements describe `797fc3d`, and the first trust wave has since landed.
 - [x] Per-section observed/freshness display (2026-09-23)
 - [x] Display equipment item level (2026-09-23)
 - [x] Version-tab information and default behavior
-- [ ] Fix the recent-changes cap after realm scoping
+- [x] Fix the recent-changes cap after realm scoping (2026-09-23)
 - [ ] Remove the stale LLM placeholder
 - [ ] De-duplicate the Professions presentation
 

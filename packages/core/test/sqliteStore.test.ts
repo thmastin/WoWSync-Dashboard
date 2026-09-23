@@ -108,3 +108,68 @@ test("recentChanges surfaces a deterministic level-up across snapshots", () => {
     store.close();
   }
 });
+
+test("recentChanges with no limit returns the full meaningful set; a positive limit slices", () => {
+  const store = freshStore();
+  try {
+    const base = 1_700_000_000;
+    for (let i = 0; i < 25; i++) {
+      const name = `Alt${String(i).padStart(2, "0")}`;
+      store.importSnapshot(buildWowSyncExport({
+        generatedAt: base + i * 10,
+        character: { name, realm: "Faerlina", clientVersion: "2.5.6", level: 10 },
+      }));
+      store.importSnapshot(buildWowSyncExport({
+        generatedAt: base + i * 10 + 5,
+        character: { name, realm: "Faerlina", clientVersion: "2.5.6", level: 11 },
+      }));
+    }
+    const all = store.recentChanges("tbc-anniversary");
+    assert.equal(all.length, 25);
+    assert.equal(store.recentChanges("tbc-anniversary", 5).length, 5);
+    assert.equal(store.recentChanges("tbc-anniversary", 20).length, 20);
+  } finally {
+    store.close();
+  }
+});
+
+test("buildAccountFacts keeps a realm-B change that would fall outside a version-wide top-20 cap", () => {
+  const store = freshStore();
+  try {
+    const base = 1_700_000_000;
+    // 21 newer meaningful changes on realm A dominate a version-wide top-20.
+    for (let i = 0; i < 21; i++) {
+      const name = `Dom${String(i).padStart(2, "0")}`;
+      store.importSnapshot(buildWowSyncExport({
+        generatedAt: base + 1000 + i * 10,
+        character: { name, realm: "Faerlina", clientVersion: "2.5.6", level: 20 },
+      }));
+      store.importSnapshot(buildWowSyncExport({
+        generatedAt: base + 1000 + i * 10 + 5,
+        character: { name, realm: "Faerlina", clientVersion: "2.5.6", level: 21 },
+      }));
+    }
+    // Older meaningful change on realm B — outside top-20 version-wide.
+    store.importSnapshot(buildWowSyncExport({
+      generatedAt: base,
+      character: { name: "Quiet", realm: "Grobbulus", clientVersion: "2.5.6", level: 30 },
+    }));
+    store.importSnapshot(buildWowSyncExport({
+      generatedAt: base + 5,
+      character: { name: "Quiet", realm: "Grobbulus", clientVersion: "2.5.6", level: 31 },
+    }));
+
+    const capped = store.recentChanges("tbc-anniversary", 20);
+    assert.equal(capped.length, 20);
+    assert.equal(capped.some((c) => c.characterName === "Quiet"), false, "Quiet must fall outside version-wide top-20");
+
+    const uncapped = store.recentChanges("tbc-anniversary");
+    assert.equal(uncapped.some((c) => c.characterName === "Quiet"), true);
+
+    const facts = store.buildAccountFacts("tbc-anniversary", base + 10_000);
+    assert.equal(facts.recentChanges.some((c) => c.characterName === "Quiet"), true, "AccountFacts must carry Quiet for post-scope display");
+    assert.ok(facts.recentChanges.length > 20);
+  } finally {
+    store.close();
+  }
+});

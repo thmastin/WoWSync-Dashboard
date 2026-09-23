@@ -96,8 +96,10 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   app.get("/api/versions/:version/recent-changes", (req, res) => {
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+    // HTTP-layer default of 20 when the query is omitted (keeps existing API clients bounded).
+    // AccountFacts uses store.recentChanges(version) with no limit so realm scoping can see the full set.
     // An invalid limit must be an error, not a silently empty or truncated list.
-    let limit: number | undefined;
+    let limit = 20;
     if (req.query.limit !== undefined) {
       const raw = req.query.limit;
       limit = typeof raw === "string" ? Number(raw) : NaN; // limit[]=1 / limit[a]=1 are arrays/objects, not a number
