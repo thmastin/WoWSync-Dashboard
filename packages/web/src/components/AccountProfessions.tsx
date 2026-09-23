@@ -1,5 +1,8 @@
 import { useMemo, useState } from "react";
 import {
+  classifyRetailProfessionCoverage,
+  highestProfessionExpansionLabel,
+  matchedRetailExpansionName,
   professionPlanningKind,
   selectPrimaryProfessionCharacter,
   type ProfessionPlanningKind,
@@ -7,11 +10,19 @@ import {
 import type { ScopedFacts } from "../scopedFacts.ts";
 import type { ProfessionCoverageEntry } from "../types.ts";
 
-function skillLabel(skill?: number, maxSkill?: number, tier?: string): string {
+function skillLabel(skill?: number, maxSkill?: number): string {
   const left = skill === undefined ? "?" : String(skill);
   const right = maxSkill === undefined ? "?" : String(maxSkill);
-  const base = `${left}/${right}`;
-  return tier ? `${base} - ${tier}` : base;
+  return `${left}/${right}`;
+}
+
+function expansionLabelForCharacter(c: { expansion?: string; tier?: string }): string | undefined {
+  return (
+    matchedRetailExpansionName(c.expansion) ??
+    matchedRetailExpansionName(c.tier) ??
+    (c.expansion && c.expansion.toLowerCase() !== "unknown" ? c.expansion : undefined) ??
+    c.tier
+  );
 }
 
 function matchesFilter(profession: string, filter: string): boolean {
@@ -55,6 +66,7 @@ export default function AccountProfessions({
 }) {
   const [filter, setFilter] = useState("");
   const coverage = scoped.professions.coverage;
+  const isRetail = scoped.version === "retail";
 
   const filtered = useMemo(
     () => coverage.filter((entry) => matchesFilter(entry.profession, filter)),
@@ -69,24 +81,59 @@ export default function AccountProfessions({
     () => splitByKind(filtered.filter((c) => c.coverageStatus === "unknown")),
     [filtered],
   );
+  const olderOnly = useMemo(
+    () =>
+      isRetail
+        ? splitByKind(
+            filtered.filter(
+              (c) =>
+                c.coverageStatus === "covered" && classifyRetailProfessionCoverage(c) === "olderOnly",
+            ),
+          )
+        : { crafting: [], gathering: [] },
+    [filtered, isRetail],
+  );
   const covered = useMemo(
-    () => splitByKind(filtered.filter((c) => c.coverageStatus === "covered")),
-    [filtered],
+    () =>
+      splitByKind(
+        filtered.filter((c) => {
+          if (c.coverageStatus !== "covered") return false;
+          if (!isRetail) return true;
+          return classifyRetailProfessionCoverage(c) === "currentCovered";
+        }),
+      ),
+    [filtered, isRetail],
   );
 
   const hasAny = coverage.length > 0;
   const filterActive = filter.trim().length > 0;
   const hasGaps =
-    none.crafting.length + none.gathering.length + unknown.crafting.length + unknown.gathering.length > 0;
+    none.crafting.length +
+      none.gathering.length +
+      olderOnly.crafting.length +
+      olderOnly.gathering.length +
+      unknown.crafting.length +
+      unknown.gathering.length >
+    0;
   const hasCovered = covered.crafting.length + covered.gathering.length > 0;
 
   return (
     <div className="professions">
       <div className="scope-label detail-card-wide">{scoped.scopeLabel}</div>
       <p className="muted small detail-card-wide" style={{ marginBottom: 8 }}>
-        Plan coverage by craft vs gather. One solid crafter per craft is usually enough for
-        account coverage; gathering tends to follow who you actually play. Unknown skill shows as
-        ?, never as 0. None and unknown gaps stay separate.
+        {isRetail ? (
+          <>
+            Plan Midnight coverage by craft vs gather. Primary is highest expansion then skill. Gaps
+            include professions with no Midnight holder (older expansion only), plus none and unknown.
+            Unknown skill shows as ?, never as 0.
+          </>
+        ) : (
+          <>
+            Plan coverage by craft vs gather. One solid crafter per craft is usually enough for
+            account coverage; gathering tends to follow who you actually play. Unknown skill shows as
+            ?, never as 0. None and unknown gaps stay separate.
+          </>
+        )}
       </p>
 
       <div className="professions-toolbar">
@@ -112,14 +159,18 @@ export default function AccountProfessions({
           <KindGapBlock
             kind="crafting"
             none={none.crafting}
+            olderOnly={olderOnly.crafting}
             unknown={unknown.crafting}
             showAllClear={!filterActive}
+            retailMidnightGaps={isRetail}
           />
           <KindGapBlock
             kind="gathering"
             none={none.gathering}
+            olderOnly={olderOnly.gathering}
             unknown={unknown.gathering}
             showAllClear={!filterActive}
+            retailMidnightGaps={isRetail}
           />
         </section>
       )}
@@ -132,12 +183,14 @@ export default function AccountProfessions({
             entries={covered.crafting}
             onOpenCharacter={onOpenCharacter}
             showEmpty={!filterActive}
+            showExpansion={isRetail}
           />
           <KindCoveredBlock
             kind="gathering"
             entries={covered.gathering}
             onOpenCharacter={onOpenCharacter}
             showEmpty={!filterActive}
+            showExpansion={isRetail}
           />
         </section>
       )}
@@ -148,16 +201,20 @@ export default function AccountProfessions({
 function KindGapBlock({
   kind,
   none,
+  olderOnly,
   unknown,
   showAllClear,
+  retailMidnightGaps,
 }: {
   kind: ProfessionPlanningKind;
   none: ProfessionCoverageEntry[];
+  olderOnly: ProfessionCoverageEntry[];
   unknown: ProfessionCoverageEntry[];
   showAllClear: boolean;
+  retailMidnightGaps: boolean;
 }) {
   const label = KIND_LABEL[kind];
-  if (none.length === 0 && unknown.length === 0) {
+  if (none.length === 0 && olderOnly.length === 0 && unknown.length === 0) {
     if (!showAllClear) return null;
     return (
       <div className="professions-kind-block">
@@ -184,6 +241,23 @@ function KindGapBlock({
           </ul>
         </div>
       )}
+      {retailMidnightGaps && olderOnly.length > 0 && (
+        <div className="professions-gap-block">
+          <h5 className="professions-gap-subhead">
+            Missing Midnight <span className="muted">({olderOnly.length})</span>
+          </h5>
+          <ul className="compact-list">
+            {olderOnly.map((entry) => {
+              const highest = highestProfessionExpansionLabel(entry.characters) ?? "?";
+              return (
+                <li key={entry.profession} className="muted">
+                  {entry.profession} - highest: {highest}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
       {unknown.length > 0 && (
         <div className="professions-gap-block">
           <h5 className="professions-gap-subhead">
@@ -207,11 +281,13 @@ function KindCoveredBlock({
   entries,
   onOpenCharacter,
   showEmpty,
+  showExpansion,
 }: {
   kind: ProfessionPlanningKind;
   entries: ProfessionCoverageEntry[];
   onOpenCharacter: (identityKey: string) => void;
   showEmpty: boolean;
+  showExpansion: boolean;
 }) {
   const label = KIND_LABEL[kind];
   if (entries.length === 0) {
@@ -235,13 +311,19 @@ function KindCoveredBlock({
             <tr>
               <th>Profession</th>
               <th>Primary</th>
+              {showExpansion && <th>Expansion</th>}
               <th>Skill</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {entries.map((entry) => (
-              <CoveredRow key={entry.profession} entry={entry} onOpenCharacter={onOpenCharacter} />
+              <CoveredRow
+                key={entry.profession}
+                entry={entry}
+                onOpenCharacter={onOpenCharacter}
+                showExpansion={showExpansion}
+              />
             ))}
           </tbody>
         </table>
@@ -253,9 +335,11 @@ function KindCoveredBlock({
 function CoveredRow({
   entry,
   onOpenCharacter,
+  showExpansion,
 }: {
   entry: ProfessionCoverageEntry;
   onOpenCharacter: (identityKey: string) => void;
+  showExpansion: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const primary = selectPrimaryProfessionCharacter(entry.characters);
@@ -266,6 +350,8 @@ function CoveredRow({
         .sort((a, b) => a.name.localeCompare(b.name))
     : [];
   const moreCount = others.length;
+  const colSpan = showExpansion ? 5 : 4;
+  const primaryExpansion = primary ? expansionLabelForCharacter(primary) : undefined;
 
   return (
     <>
@@ -286,9 +372,22 @@ function CoveredRow({
             <span className="muted">-</span>
           )}
         </td>
+        {showExpansion && (
+          <td>
+            {primaryExpansion ? (
+              <span className="profession-expansion-chip">{primaryExpansion}</span>
+            ) : (
+              <span className="muted">?</span>
+            )}
+          </td>
+        )}
         <td>
           {primary ? (
-            <span className="profession-skill-chip">{skillLabel(primary.skill, primary.maxSkill, primary.tier)}</span>
+            <span className="profession-skill-chip">
+              {showExpansion
+                ? skillLabel(primary.skill, primary.maxSkill)
+                : `${skillLabel(primary.skill, primary.maxSkill)}${primary.tier ? ` - ${primary.tier}` : ""}`}
+            </span>
           ) : (
             <span className="muted">?/?</span>
           )}
@@ -308,7 +407,7 @@ function CoveredRow({
       </tr>
       {expanded && moreCount > 0 && (
         <tr className="profession-more-row">
-          <td colSpan={4}>
+          <td colSpan={colSpan}>
             <div className="profession-more-list">
               {others.map((c) => (
                 <span key={c.identityKey} className="profession-more-item">
@@ -319,7 +418,16 @@ function CoveredRow({
                   >
                     {c.name}
                   </button>
-                  <span className="profession-skill-chip">{skillLabel(c.skill, c.maxSkill, c.tier)}</span>
+                  {showExpansion && (
+                    <span className="profession-expansion-chip">
+                      {expansionLabelForCharacter(c) ?? "?"}
+                    </span>
+                  )}
+                  <span className="profession-skill-chip">
+                    {showExpansion
+                      ? skillLabel(c.skill, c.maxSkill)
+                      : `${skillLabel(c.skill, c.maxSkill)}${c.tier ? ` - ${c.tier}` : ""}`}
+                  </span>
                 </span>
               ))}
             </div>

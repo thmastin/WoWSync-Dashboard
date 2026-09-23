@@ -127,18 +127,165 @@ export function professionPlanningKind(name: string): ProfessionPlanningKind {
   return "crafting";
 }
 
+/**
+ * Newest-first Retail profession expansion names (and common tier labels that
+ * name the same era). Matching is case-insensitive substring against
+ * expansion or tier strings from the export. Update when a new expansion ships.
+ */
+export const RETAIL_PROFESSION_EXPANSION_RANK = [
+  "Midnight",
+  "The War Within",
+  "Khaz Algar",
+  "Dragonflight",
+  "Dragon Isles",
+  "Shadowlands",
+  "Battle for Azeroth",
+  "Legion",
+  "Warlords of Draenor",
+  "Mists of Pandaria",
+  "Cataclysm",
+  "Wrath of the Lich King",
+  "The Burning Crusade",
+  "Classic",
+] as const;
+
+/** Planning target for Retail account coverage. Bump when a new expansion ships. */
+export const CURRENT_RETAIL_PROFESSION_EXPANSION = "Midnight";
+
+/** Extra substrings that imply a ranked expansion (tier names like Kul Tiran). */
+const RETAIL_EXPANSION_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "Battle for Azeroth": ["kul tiran", "zandalari", "bfa"],
+  "Warlords of Draenor": ["draenor", "wod"],
+  "Mists of Pandaria": ["pandaria", "mop"],
+  "Wrath of the Lich King": ["northrend", "wrath", "wotlk"],
+  "The Burning Crusade": ["burning crusade", "outland", "tbc"],
+  "The War Within": ["war within", "tww"],
+  Dragonflight: ["df"],
+};
+
+function matchTokensForExpansion(name: string): string[] {
+  const tokens = [name.toLowerCase()];
+  const aliases = RETAIL_EXPANSION_ALIASES[name];
+  if (aliases) {
+    for (const a of aliases) tokens.push(a.toLowerCase());
+  }
+  return tokens;
+}
+
+/**
+ * Higher = newer Retail profession expansion. Unknown / missing / literal
+ * "Unknown" => -1.
+ */
+export function expansionRank(label?: string): number {
+  if (label === undefined || label === null) return -1;
+  const hay = String(label).trim().toLowerCase();
+  if (!hay || hay === "unknown") return -1;
+  let best = -1;
+  const n = RETAIL_PROFESSION_EXPANSION_RANK.length;
+  for (let i = 0; i < n; i++) {
+    const name = RETAIL_PROFESSION_EXPANSION_RANK[i];
+    const rankValue = n - i;
+    for (const token of matchTokensForExpansion(name)) {
+      if (hay.includes(token)) {
+        if (rankValue > best) best = rankValue;
+      }
+    }
+  }
+  return best;
+}
+
+/** Canonical ranked name if label matches one, else undefined. */
+export function matchedRetailExpansionName(label?: string): string | undefined {
+  if (label === undefined || label === null) return undefined;
+  const hay = String(label).trim().toLowerCase();
+  if (!hay || hay === "unknown") return undefined;
+  let bestName: string | undefined;
+  let best = -1;
+  const n = RETAIL_PROFESSION_EXPANSION_RANK.length;
+  for (let i = 0; i < n; i++) {
+    const name = RETAIL_PROFESSION_EXPANSION_RANK[i];
+    const rankValue = n - i;
+    for (const token of matchTokensForExpansion(name)) {
+      if (hay.includes(token) && rankValue > best) {
+        best = rankValue;
+        bestName = name;
+      }
+    }
+  }
+  return bestName;
+}
+
+export function characterExpansionRank(c: { expansion?: string; tier?: string }): number {
+  return Math.max(expansionRank(c.expansion), expansionRank(c.tier));
+}
+
+/**
+ * True when expansion or tier indicates the current Retail planning target
+ * (substring / case-insensitive match on CURRENT_RETAIL_PROFESSION_EXPANSION).
+ */
+export function characterHasCurrentRetailExpansion(c: {
+  expansion?: string;
+  tier?: string;
+}): boolean {
+  const needle = CURRENT_RETAIL_PROFESSION_EXPANSION.toLowerCase();
+  const exp = c.expansion?.toLowerCase() ?? "";
+  const tier = c.tier?.toLowerCase() ?? "";
+  return exp.includes(needle) || tier.includes(needle);
+}
+
+export type RetailProfessionPlanningClass =
+  | "currentCovered"
+  | "olderOnly"
+  | "none"
+  | "unknown";
+
+/**
+ * Classify a coverage row for Retail Midnight planning.
+ * coverageStatus none/unknown unchanged; covered splits into current vs older-only.
+ */
+export function classifyRetailProfessionCoverage(entry: {
+  coverageStatus: "covered" | "none" | "unknown";
+  characters: readonly { expansion?: string; tier?: string }[];
+}): RetailProfessionPlanningClass {
+  if (entry.coverageStatus === "none") return "none";
+  if (entry.coverageStatus === "unknown") return "unknown";
+  if (entry.characters.some(characterHasCurrentRetailExpansion)) return "currentCovered";
+  return "olderOnly";
+}
+
+/** Best display label for the highest-ranked expansion among holders. */
+export function highestProfessionExpansionLabel(
+  characters: readonly { expansion?: string; tier?: string }[],
+): string | undefined {
+  let bestRank = -1;
+  let bestLabel: string | undefined;
+  for (const c of characters) {
+    for (const raw of [c.expansion, c.tier]) {
+      if (!raw) continue;
+      const rank = expansionRank(raw);
+      if (rank > bestRank) {
+        bestRank = rank;
+        bestLabel = matchedRetailExpansionName(raw) ?? raw;
+      }
+    }
+  }
+  return bestLabel;
+}
+
 /** Minimal character skill fields used to pick a covered-row primary. */
 export type ProfessionCharacterSkill = {
   identityKey: string;
   name: string;
   skill?: number;
   maxSkill?: number;
+  expansion?: string;
+  tier?: string;
 };
 
 /**
- * Primary character for a covered profession: highest observed skill;
- * undefined skill sorts last (never as 0). Tie-break: higher maxSkill
- * (undefined last), then name localeCompare. Not a saved designation.
+ * Primary character for a covered profession: highest expansionRank
+ * (expansion or tier), then skill, then maxSkill, then name.
+ * Undefined skill/maxSkill sort last (never as 0). Not a saved designation.
  */
 export function selectPrimaryProfessionCharacter<T extends ProfessionCharacterSkill>(
   characters: readonly T[],
@@ -160,10 +307,11 @@ function compareProfessionCharacterPrimary(
   a: ProfessionCharacterSkill,
   b: ProfessionCharacterSkill,
 ): number {
+  const byExpansion = characterExpansionRank(b) - characterExpansionRank(a);
+  if (byExpansion !== 0) return byExpansion;
   const bySkill = compareOptionalNumberDesc(a.skill, b.skill);
   if (bySkill !== 0) return bySkill;
   const byMax = compareOptionalNumberDesc(a.maxSkill, b.maxSkill);
   if (byMax !== 0) return byMax;
   return a.name.localeCompare(b.name);
 }
-

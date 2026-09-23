@@ -359,6 +359,7 @@ export interface CharacterProfessionEntry {
   skill?: number;
   maxSkill?: number;
   tier?: string;
+  expansion?: string;
   category?: string;
 }
 
@@ -375,7 +376,7 @@ export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
 export interface ProfessionCoverageEntry {
   profession: string;
   coverageStatus: ProfessionCoverageStatus;
-  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number; tier?: string; category?: string }[];
+  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number; tier?: string; expansion?: string; category?: string }[];
 }
 
 export interface ProfessionFacts {

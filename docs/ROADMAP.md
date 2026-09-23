@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-23 (Professions tab UX rebuild: craft/gather + primary). Prior: 2026-09-21 (milestones refreshed 2026-09-22 ET). Dashboard baseline: branch `feature/dashboard-integration` (not
+Last updated: 2026-09-23 (Retail Midnight profession gaps + primary-by-expansion). Prior: 2026-09-23 (Professions tab UX rebuild: craft/gather + primary). Dashboard baseline: branch `feature/dashboard-integration` (not
 merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
 milestone (C1-C6), the item-metadata consumer (parser, store, API, Shared Storage / inventory
 presentation) and the SavedVariables developer bridge. Tests at that baseline: core 471, server 161, web 150; typechecks clean;
@@ -215,7 +215,7 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 
 ### 9. Dashboard / UX follow-ups
 
-- [ ] Retail profession tier
+- [x] Retail profession expansion/Midnight planning (2026-09-23; primary by expansion then skill; Missing Midnight gaps)
 - [ ] Full bag/bank table
 - [ ] Multi-export import
 - [ ] Raw snapshot/export backup and download
@@ -338,6 +338,7 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- Retail Midnight profession planning: plumb `expansion`, rank expansions, Covered = Midnight holders only, Gaps add Missing Midnight (olderOnly); primary by expansion then skill; Overview Midnight gap counts; 2026-09-23 on `feature/dashboard-integration`
 - Top-level Professions tab (coverage table + gaps; Overview one-line summary navigates there); roster all-column sort; gold thousands commas via formatCopper; 2026-09-23 on `feature/dashboard-integration`
 - Professions tab UX rebuild: gaps-first (none then unknown), Crafting vs Gathering split, covered rows show one derived primary (+N more expand); `professionPlanningKind` + `selectPrimaryProfessionCharacter` in core; 2026-09-23 on `feature/dashboard-integration`
 - Trust hardening: unknown is not zero, freshness-aware totals, observation-time ordering

@@ -368,3 +368,39 @@ test("recentChanges (and therefore AccountFacts.recentChanges) now also surfaces
     store.close();
   }
 });
+
+test("[SYNTHETIC] Retail profession expansion is plumbed into byCharacter and coverage", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(
+      buildWowSyncExport({
+        character: { name: "Miner", realm: "R", clientVersion: "12.0.0", clientFamily: "Retail" },
+        professions: {
+          retail: true,
+          entries: [
+            {
+              name: "Mining",
+              skill: 61,
+              maxSkill: 100,
+              skillLineID: "186",
+              tier: "Midnight Mining",
+              expansion: "Unknown",
+              category: "PRIMARY",
+            },
+          ],
+        },
+      }),
+    );
+    const facts = store.buildAccountFacts("retail", FIXED_NOW);
+    const mining = facts.professions.byCharacter[0].professions.find((p) => p.name === "Mining");
+    assert.equal(mining?.tier, "Midnight Mining");
+    assert.equal(mining?.expansion, "Unknown");
+    assert.equal(mining?.category, "PRIMARY");
+    const coverage = facts.professions.coverage.find((c) => c.profession === "Mining");
+    assert.equal(coverage?.coverageStatus, "covered");
+    assert.equal(coverage?.characters[0].expansion, "Unknown");
+    assert.equal(coverage?.characters[0].tier, "Midnight Mining");
+  } finally {
+    store.close();
+  }
+});

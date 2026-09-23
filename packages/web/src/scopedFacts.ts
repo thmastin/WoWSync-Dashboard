@@ -3,7 +3,7 @@
 // unknown-version). Keeps the view components (AccountOverview,
 // AccountEconomy, CharactersGrid) agnostic to realm-partitioning -- they
 // just render whatever ScopedFacts they're handed.
-import type { AccountFacts, FreshnessSummary } from "./types.ts";
+import type { AccountFacts, FreshnessSummary, VersionOrUnknown } from "./types.ts";
 
 /** Overview display bound applied after realm (or account-wide) scoping. */
 export const RECENT_CHANGES_DISPLAY_CAP = 20;
@@ -20,6 +20,8 @@ export function capRecentChangesAfterScope<T>(changes: readonly T[], limit: numb
 export interface ScopedFacts {
   /** The facts' own generation time (unix seconds): the "now" every age in the UI is measured against, never the browser clock. */
   now: number;
+  /** Game version these facts belong to (from AccountFacts.version). */
+  version: VersionOrUnknown;
   scopeLabel: string;
   isRealmScoped: boolean;
   availableRealms: string[];
@@ -37,6 +39,7 @@ export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): S
   if (facts.aggregationScope === "account-wide" || facts.realms.length === 0) {
     return {
       now: facts.generatedAt,
+      version: facts.version,
       scopeLabel: "Account-wide",
       isRealmScoped: false,
       availableRealms: [],
@@ -57,6 +60,7 @@ export function scopeFacts(facts: AccountFacts, selectedRealm: string | null): S
 
   return {
     now: facts.generatedAt,
+    version: facts.version,
     scopeLabel: realm.realm,
     isRealmScoped: true,
     availableRealms: facts.realms.map((r) => r.realm),

@@ -1,4 +1,5 @@
 import { buildNeedsAttention, groupNeedsAttentionByAgeBand } from "@wowsync-dashboard/core/needsAttention.ts";
+import { classifyRetailProfessionCoverage } from "@wowsync-dashboard/core/professionCatalog.ts";
 import { formatAgeSeconds, formatCopperDelta, formatRelativeTime, formatXpPercent } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
@@ -11,18 +12,32 @@ export default function AccountOverview({ scoped, onOpenCharacter, onOpenProfess
   const attention = buildNeedsAttention(facts.characters, facts.now);
   const attentionGroups = groupNeedsAttentionByAgeBand(attention);
 
-  const coveredCount = facts.professions.coverage.filter((c) => c.coverageStatus === "covered").length;
-  const noneCount = facts.professions.coverage.filter((c) => c.coverageStatus === "none").length;
-  const unknownCount = facts.professions.coverage.filter((c) => c.coverageStatus === "unknown").length;
+  const isRetail = facts.version === "retail";
+  let coveredCount = 0;
+  let missingMidnightCount = 0;
+  let noneCount = 0;
+  let unknownCount = 0;
+  for (const c of facts.professions.coverage) {
+    if (isRetail) {
+      const kind = classifyRetailProfessionCoverage(c);
+      if (kind === "currentCovered") coveredCount += 1;
+      else if (kind === "olderOnly") missingMidnightCount += 1;
+      else if (kind === "none") noneCount += 1;
+      else unknownCount += 1;
+    } else if (c.coverageStatus === "covered") coveredCount += 1;
+    else if (c.coverageStatus === "none") noneCount += 1;
+    else unknownCount += 1;
+  }
   const professionSummaryParts: string[] = [];
   if (coveredCount > 0) professionSummaryParts.push(coveredCount + " covered");
+  if (isRetail && missingMidnightCount > 0) professionSummaryParts.push(missingMidnightCount + " missing Midnight");
   if (noneCount > 0) professionSummaryParts.push(noneCount + " not covered");
   if (unknownCount > 0) professionSummaryParts.push(unknownCount + " unknown");
   const professionSummary =
     facts.professions.coverage.length === 0
       ? "No profession data observed yet"
       : professionSummaryParts.length > 0
-        ? professionSummaryParts.join(", ")
+        ? professionSummaryParts.join(" · ")
         : "No profession data observed yet";
   const lastSyncedAt = facts.characters
     .map((c) => c.lastObservedAt)
