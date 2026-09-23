@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RECENT_THRESHOLD_SECONDS } from "@wowsync-dashboard/core/freshness.ts";
-import { pickDefaultVersion, versionTabMeta } from "../src/versionTabs.ts";
+import { pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "../src/versionTabs.ts";
 
 const NOW = 1_700_000_000;
 
@@ -83,4 +83,11 @@ test("versionTabMeta: count and freshness from lastUpdatedAt", () => {
     { count: 0, freshness: "unknown" },
   );
   assert.deepEqual(versionTabMeta(undefined, NOW), { count: 0, freshness: "unknown" });
+});
+
+test("versionTabDotTitle: color legend for each freshness", () => {
+  const days = Math.round(RECENT_THRESHOLD_SECONDS / 86400);
+  assert.equal(versionTabDotTitle("recent"), `Green: last sync for this version within ${days} days`);
+  assert.equal(versionTabDotTitle("stale"), `Yellow: last sync for this version older than ${days} days`);
+  assert.equal(versionTabDotTitle("unknown"), "Gray: no sync observed for this version yet");
 });

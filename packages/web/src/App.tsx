@@ -15,7 +15,7 @@ import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { formatRelativeTime, freshnessLabel } from "./format.ts";
-import { pickDefaultVersion, versionTabMeta } from "./versionTabs.ts";
+import { pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "./versionTabs.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
 function readStoredVersionPreference(): string | null {
@@ -193,7 +193,8 @@ export default function App() {
                 <span className="version-tab-count">{meta.count}</span>
                 <span
                   className={`version-tab-dot version-tab-dot-${meta.freshness}`}
-                  aria-label={freshnessLabel(meta.freshness)}
+                  title={versionTabDotTitle(meta.freshness)}
+                  aria-label={versionTabDotTitle(meta.freshness)}
                 />
               </span>
             </button>

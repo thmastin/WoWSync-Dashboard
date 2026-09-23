@@ -3,7 +3,7 @@
 // Default version prefers last-used localStorage, else newest observation,
 // else first non-empty version, else retail. Never defaults to unknown-version.
 
-import { classifyFreshness, type Freshness } from "@wowsync-dashboard/core/freshness.ts";
+import { classifyFreshness, RECENT_THRESHOLD_SECONDS, type Freshness } from "@wowsync-dashboard/core/freshness.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { WOW_VERSIONS } from "./versions.ts";
 
@@ -61,4 +61,16 @@ export function versionTabMeta(summary: VersionTabSummary | undefined, nowSecond
     count: summary?.characterCount ?? 0,
     freshness: classifyFreshness(summary?.lastUpdatedAt, nowSeconds),
   };
+}
+
+/** Native tooltip / aria text for the version-tab freshness dot (color legend). */
+export function versionTabDotTitle(freshness: Freshness): string {
+  const days = Math.round(RECENT_THRESHOLD_SECONDS / 86400);
+  if (freshness === "recent") {
+    return `Green: last sync for this version within ${days} days`;
+  }
+  if (freshness === "stale") {
+    return `Yellow: last sync for this version older than ${days} days`;
+  }
+  return "Gray: no sync observed for this version yet";
 }
