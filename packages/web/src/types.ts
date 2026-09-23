@@ -147,7 +147,7 @@ export interface ParsedSnapshot {
   professions: {
     status: SectionStatus;
     coverage?: string;
-    entries: { name: string; skill?: number; maxSkill?: number; category?: string }[];
+    entries: { name: string; skill?: number; maxSkill?: number; tier?: string; category?: string }[];
     noneMessage?: string;
   };
   spells: { status: SectionStatus; coverage?: string; entries: { spellID?: string; name?: string; rank?: string }[] };
@@ -358,6 +358,8 @@ export interface CharacterProfessionEntry {
   name: string;
   skill?: number;
   maxSkill?: number;
+  tier?: string;
+  category?: string;
 }
 
 export interface CharacterProfessions {
@@ -373,7 +375,7 @@ export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
 export interface ProfessionCoverageEntry {
   profession: string;
   coverageStatus: ProfessionCoverageStatus;
-  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
+  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number; tier?: string; category?: string }[];
 }
 
 export interface ProfessionFacts {

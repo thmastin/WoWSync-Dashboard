@@ -1,4 +1,6 @@
 import { formatCopper, formatRelativeTime, freshnessLabel } from "../format.ts";
+import { freshnessGlossary } from "../versionTabs.ts";
+import { formatBagSlots } from "../roster.ts";
 import { filterAndSortRoster, rosterClassOptions, ROSTER_AGE_OPTIONS, toggleSort, type RosterSortKey } from "../roster.ts";
 import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts } from "../types.ts";
@@ -95,13 +97,14 @@ export default function CharactersRoster({
               <th>{sortHeader("Level", "level")}</th>
               <th>{sortHeader("Gold", "gold")}</th>
               <th>Bank</th>
+              <th>Bags</th>
               <th>{sortHeader("Synced", "synced")}</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="muted">
+                <td colSpan={8} className="muted">
                   No characters match these filters.
                 </td>
               </tr>
@@ -121,13 +124,14 @@ export default function CharactersRoster({
                     >
                       {c.name}
                     </a>{" "}
-                    <span className={`freshness-badge freshness-${c.freshness}`}>{freshnessLabel(c.freshness)}</span>
+                    <span className={`freshness-badge freshness-${c.freshness}`} title={freshnessGlossary(c.freshness)}>{freshnessLabel(c.freshness)}</span>
                   </td>
                   <td>{c.realm}</td>
                   <td>{c.class ?? "—"}</td>
                   <td>{c.level ?? "—"}</td>
                   <td>{formatCopper(c.goldCopper)}</td>
                   <td>{c.bankStatus === "UNKNOWN" ? <span className="bank-chip">bank ?</span> : "seen"}</td>
+                  <td className="muted">{formatBagSlots(c.bagsFreeSlots, c.bagsTotalSlots)}</td>
                   <td className="muted">{formatRelativeTime(c.lastObservedAt)}</td>
                 </tr>
               );

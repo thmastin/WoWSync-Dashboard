@@ -168,6 +168,9 @@ export interface CharacterProfessionEntry {
   name: string;
   skill?: number;
   maxSkill?: number;
+  /** Retail expansion tier when the export provided it (e.g. Khaz Algar). */
+  tier?: string;
+  category?: string;
 }
 
 export interface CharacterProfessions {
@@ -202,7 +205,7 @@ export interface ProfessionCoverageEntry {
   profession: string;
   /** See the note on CharacterProfessions.observationStatus for why this isn't named `status`. */
   coverageStatus: ProfessionCoverageStatus;
-  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number }[];
+  characters: { identityKey: string; name: string; skill?: number; maxSkill?: number; tier?: string; category?: string }[];
 }
 
 export interface ProfessionFacts {
@@ -594,7 +597,12 @@ function buildProfessionsByCharacter(
       identityKey: c.identityKey,
       name: c.name,
       observationStatus: section?.status.state ?? "UNKNOWN",
-      professions: (section?.entries ?? []).map((e) => ({ name: e.name, skill: e.skill, maxSkill: e.maxSkill })),
+      professions: (section?.entries ?? []).map((e) => {
+        const entry: CharacterProfessionEntry = { name: e.name, skill: e.skill, maxSkill: e.maxSkill };
+        if (e.tier !== undefined) entry.tier = e.tier;
+        if (e.category !== undefined) entry.category = e.category;
+        return entry;
+      }),
     };
   });
 }
@@ -625,7 +633,15 @@ function buildProfessionCoverage(
         continue;
       }
       const list = byProfession.get(prof.name) ?? [];
-      list.push({ identityKey: cp.identityKey, name: cp.name, skill: prof.skill, maxSkill: prof.maxSkill });
+      const row: { identityKey: string; name: string; skill?: number; maxSkill?: number; tier?: string; category?: string } = {
+        identityKey: cp.identityKey,
+        name: cp.name,
+        skill: prof.skill,
+        maxSkill: prof.maxSkill,
+      };
+      if (prof.tier !== undefined) row.tier = prof.tier;
+      if (prof.category !== undefined) row.category = prof.category;
+      list.push(row);
       byProfession.set(prof.name, list);
     }
   }

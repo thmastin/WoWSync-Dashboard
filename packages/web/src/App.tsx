@@ -15,7 +15,7 @@ import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { formatRelativeTime, freshnessLabel } from "./format.ts";
-import { pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "./versionTabs.ts";
+import { formatVersionSyncStrip, pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "./versionTabs.ts";
 import { VERSION_ACCENTS, VERSION_LABELS, WOW_VERSIONS } from "./versions.ts";
 
 function readStoredVersionPreference(): string | null {
@@ -114,6 +114,8 @@ export default function App() {
   }, [scoped, route, navigate]);
 
   const accent = VERSION_ACCENTS[activeVersion];
+  const activeVersionSummary = versionSummaries?.find((v) => v.version === activeVersion);
+  const activeSyncStrip = formatVersionSyncStrip(activeVersionSummary);
 
   function refresh() {
     setRefreshTick((t) => t + 1);
@@ -201,6 +203,12 @@ export default function App() {
           );
         })}
       </nav>
+
+      {activeSyncStrip && (
+        <div className="sync-strip" role="status" aria-live="polite">
+          {activeSyncStrip}
+        </div>
+      )}
 
       <main className="app-main">
         {route.view === "detail" && route.identityKey ? (

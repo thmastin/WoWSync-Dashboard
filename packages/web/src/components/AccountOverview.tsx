@@ -120,7 +120,7 @@ export default function AccountOverview({ scoped, onOpenCharacter }: { scoped: S
             {covered.slice(0, 8).map((entry) => (
               <li key={entry.profession}>
                 <strong>{entry.profession}</strong>{" "}
-                <span className="muted">{entry.characters.map((c) => `${c.name} (${c.skill ?? "?"})`).join(", ")}</span>
+                <span className="muted">{entry.characters.map((c) => `${c.name} (${c.skill ?? "?"}/${c.maxSkill ?? "?"}${c.tier ? ` - ${c.tier}` : ""})`).join(", ")}</span>
               </li>
             ))}
           </ul>

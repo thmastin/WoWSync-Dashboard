@@ -32,6 +32,21 @@ function SectionFreshnessLine({ status }: { status: SectionStatus }) {
   );
 }
 
+type TocLink = { id: string; label: string };
+
+function DetailToc({ links }: { links: TocLink[] }) {
+  if (links.length === 0) return null;
+  return (
+    <nav className="detail-toc" aria-label="On this page">
+      {links.map((link) => (
+        <a key={link.id} href={"#" + link.id}>
+          {link.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
 export default function CharacterDetail({
   identityKey,
   refreshTick,
@@ -128,7 +143,24 @@ export default function CharacterDetail({
         </div>
       )}
 
-      {snapshot && (
+      {snapshot && (() => {
+        const detailTocLinks: TocLink[] = [
+          { id: "detail-location", label: "Location" },
+          { id: "detail-equipment", label: "Equipment" },
+          { id: "detail-bags", label: "Bags" },
+          { id: "detail-bank", label: "Bank" },
+        ];
+        if (snapshot.parsed.accountBank) detailTocLinks.push({ id: "detail-warband", label: "Warband" });
+        if (snapshot.parsed.guildBank) detailTocLinks.push({ id: "detail-guildbank", label: "Guild Bank" });
+        detailTocLinks.push(
+          { id: "detail-professions", label: "Professions" },
+          { id: "detail-spells", label: "Spells" },
+          { id: "detail-trainers", label: "Trainers" },
+          { id: "detail-snapshots", label: "Snapshots" },
+        );
+        return (
+        <>
+        <DetailToc links={detailTocLinks} />
         <div className="detail-grid">
           <section className="detail-card">
             <h3>Identity</h3>
@@ -176,7 +208,7 @@ export default function CharacterDetail({
             </dl>
           </section>
 
-          <section className="detail-card">
+          <section className="detail-card" id="detail-location">
             <h3>Location <StatusBadge state={snapshot.parsed.location.status.state} /></h3>
             <SectionFreshnessLine status={snapshot.parsed.location.status} />
             <dl>
@@ -191,7 +223,7 @@ export default function CharacterDetail({
             </dl>
           </section>
 
-          <section className="detail-card">
+          <section className="detail-card" id="detail-equipment">
             <h3>
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
@@ -243,10 +275,11 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <InventoryCard title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
-          <InventoryCard title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
+          <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
+          <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
           {snapshot.parsed.accountBank && (
             <InventoryCard
+              id="detail-warband"
               title={CARRIED_WARBAND_TITLE}
               inv={snapshot.parsed.accountBank}
               note={CARRIED_WARBAND_NOTE}
@@ -255,9 +288,13 @@ export default function CharacterDetail({
               onAction={onOpenSharedStorage}
             />
           )}
-          {snapshot.parsed.guildBank && <GuildBankCard guild={snapshot.parsed.guildBank} onOpenSharedStorage={onOpenSharedStorage} itemInfo={itemInfo} />}
+          {snapshot.parsed.guildBank && (
+            <div id="detail-guildbank">
+              <GuildBankCard guild={snapshot.parsed.guildBank} onOpenSharedStorage={onOpenSharedStorage} itemInfo={itemInfo} />
+            </div>
+          )}
 
-          <section className="detail-card">
+          <section className="detail-card" id="detail-professions">
             <h3>
               Professions <StatusBadge state={snapshot.parsed.professions.status.state} />
             </h3>
@@ -268,7 +305,10 @@ export default function CharacterDetail({
               <ul className="compact-list">
                 {snapshot.parsed.professions.entries.map((p) => (
                   <li key={p.name}>
-                    {p.name}: {p.skill ?? "?"}/{p.maxSkill ?? "?"}
+                    {p.name}
+                    {p.tier ? <span className="muted small"> ({p.tier})</span> : null}
+                    {p.category && p.category !== p.tier ? <span className="muted small"> [{p.category}]</span> : null}
+                    : {p.skill ?? "?"}/{p.maxSkill ?? "?"}
                     {!professionEntryIsEvidence(character.version, p) && (
                       <span
                         className="muted small"
@@ -287,7 +327,7 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <section className="detail-card">
+          <section className="detail-card" id="detail-spells">
             <h3>
               Known Spells <StatusBadge state={snapshot.parsed.spells.status.state} />
             </h3>
@@ -299,7 +339,7 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <section className="detail-card detail-card-wide">
+          <section className="detail-card detail-card-wide" id="detail-trainers">
             <h3>
               Trainers <StatusBadge state={snapshot.parsed.trainer.status.state} />
             </h3>
@@ -322,7 +362,7 @@ export default function CharacterDetail({
             ))}
           </section>
 
-          <section className="detail-card detail-card-wide">
+          <section className="detail-card detail-card-wide" id="detail-snapshots">
             <h3>Snapshot history ({snapshots.length})</h3>
             <div className="table-scroll">
               <table className="history-table">
@@ -350,7 +390,9 @@ export default function CharacterDetail({
             </div>
           </section>
         </div>
-      )}
+        </>
+        );
+      })()}
 
       <div className="danger-zone">
         <div className="muted small">
@@ -383,6 +425,7 @@ export default function CharacterDetail({
 }
 
 export function InventoryCard({
+  id,
   title,
   inv,
   note,
@@ -390,6 +433,7 @@ export function InventoryCard({
   onAction,
   itemInfo = EMPTY_ITEM_INFO,
 }: {
+  id?: string;
   title: string;
   /** Game-client item metadata for this character's game version; absent or empty means nothing extra is shown. */
   itemInfo?: ItemInfoLookup;
@@ -400,7 +444,7 @@ export function InventoryCard({
   onAction?: () => void;
 }) {
   return (
-    <section className="detail-card">
+    <section className="detail-card" id={id}>
       <h3>
         {title} <StatusBadge state={inv.status.state} />
       </h3>

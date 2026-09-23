@@ -4,6 +4,7 @@
 // else first non-empty version, else retail. Never defaults to unknown-version.
 
 import { classifyFreshness, RECENT_THRESHOLD_SECONDS, type Freshness } from "@wowsync-dashboard/core/freshness.ts";
+import { formatRelativeTime } from "./format.ts";
 import type { VersionOrUnknown } from "./types.ts";
 import { WOW_VERSIONS } from "./versions.ts";
 
@@ -63,14 +64,40 @@ export function versionTabMeta(summary: VersionTabSummary | undefined, nowSecond
   };
 }
 
-/** Native tooltip / aria text for the version-tab freshness dot (color legend). */
+/** Shared human glossary for the fixed RECENT_THRESHOLD_SECONDS window (3 days). */
+export function freshnessGlossary(freshness: Freshness): string {
+  const days = Math.round(RECENT_THRESHOLD_SECONDS / 86400);
+  if (freshness === "recent") {
+    return "Observed within the last " + days + " days";
+  }
+  if (freshness === "stale") {
+    return "Last observation older than " + days + " days";
+  }
+  return "No observation timestamp yet";
+}
+
+/** Native tooltip / aria text for the version-tab freshness dot (color legend + glossary). */
 export function versionTabDotTitle(freshness: Freshness): string {
   const days = Math.round(RECENT_THRESHOLD_SECONDS / 86400);
   if (freshness === "recent") {
-    return `Green: last sync for this version within ${days} days`;
+    return "Green: last sync for this version within " + days + " days";
   }
   if (freshness === "stale") {
-    return `Yellow: last sync for this version older than ${days} days`;
+    return "Yellow: last sync for this version older than " + days + " days";
   }
   return "Gray: no sync observed for this version yet";
+}
+
+/**
+ * Short sync health line for the active version.
+ * Returns null while summaries are still loading (do not invent zeros).
+ */
+export function formatVersionSyncStrip(summary: VersionTabSummary | undefined): string | null {
+  if (!summary) return null;
+  const n = summary.characterCount;
+  const charPart = n + " character" + (n === 1 ? "" : "s");
+  if (summary.lastUpdatedAt === undefined) {
+    return n > 0 ? "Never synced · " + charPart : "Never synced";
+  }
+  return "Last sync " + formatRelativeTime(summary.lastUpdatedAt) + " · " + charPart;
 }

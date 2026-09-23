@@ -132,3 +132,10 @@ export function toggleSort(current: string, key: RosterSortKey): string {
   }
   return parsed.descending ? key : `-${key}`;
 }
+/** Show free/total when known; never display unknown as 0. */
+export function formatBagSlots(free?: number, total?: number): string {
+  if (free === undefined && total === undefined) return "?";
+  const freeText = free === undefined ? "?" : String(free);
+  const totalText = total === undefined ? "?" : String(total);
+  return freeText + "/" + totalText;
+}

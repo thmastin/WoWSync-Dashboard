@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { filterAndSortRoster, parseSort, rosterClassOptions, toggleSort, type RosterFilters } from "../src/roster.ts";
+import { filterAndSortRoster, formatBagSlots, parseSort, rosterClassOptions, toggleSort, type RosterFilters } from "../src/roster.ts";
 import type { CharacterFacts } from "../src/types.ts";
 
 const NOW = 1_700_000_000;
@@ -108,4 +108,11 @@ test("toggleSort flips direction on the same key", () => {
 
 test("rosterClassOptions is sorted unique", () => {
   assert.deepEqual(rosterClassOptions(sample), ["Hunter", "Mage", "Priest", "Warrior"]);
+});
+test("formatBagSlots: never shows unknown as 0", () => {
+  assert.equal(formatBagSlots(undefined, undefined), "?");
+  assert.equal(formatBagSlots(undefined, 80), "?/80");
+  assert.equal(formatBagSlots(12, undefined), "12/?");
+  assert.equal(formatBagSlots(0, 80), "0/80");
+  assert.equal(formatBagSlots(12, 80), "12/80");
 });

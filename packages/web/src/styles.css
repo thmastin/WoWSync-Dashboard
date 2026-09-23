@@ -164,6 +164,33 @@ h1, h2, h3 {
 .version-tab-dot-stale { background: var(--warn); }
 .version-tab-dot-unknown { background: var(--text-muted); opacity: 0.45; }
 
+.sync-strip {
+  padding: 6px 20px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+}
+.detail-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  font-size: 0.8rem;
+}
+.detail-toc a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.detail-toc a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .scope-row {
   display: flex;
   align-items: center;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RECENT_THRESHOLD_SECONDS } from "@wowsync-dashboard/core/freshness.ts";
-import { pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "../src/versionTabs.ts";
+import { formatVersionSyncStrip, freshnessGlossary, pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "../src/versionTabs.ts";
 
 const NOW = 1_700_000_000;
 
@@ -90,4 +90,24 @@ test("versionTabDotTitle: color legend for each freshness", () => {
   assert.equal(versionTabDotTitle("recent"), `Green: last sync for this version within ${days} days`);
   assert.equal(versionTabDotTitle("stale"), `Yellow: last sync for this version older than ${days} days`);
   assert.equal(versionTabDotTitle("unknown"), "Gray: no sync observed for this version yet");
+});
+
+test("freshnessGlossary: shared 3-day window language", () => {
+  const days = Math.round(RECENT_THRESHOLD_SECONDS / 86400);
+  assert.equal(freshnessGlossary("recent"), "Observed within the last " + days + " days");
+  assert.equal(freshnessGlossary("stale"), "Last observation older than " + days + " days");
+  assert.equal(freshnessGlossary("unknown"), "No observation timestamp yet");
+});
+
+test("formatVersionSyncStrip: age and character count; never invent zeros while loading", () => {
+  assert.equal(formatVersionSyncStrip(undefined), null);
+  assert.equal(formatVersionSyncStrip({ version: "retail", characterCount: 0 }), "Never synced");
+  assert.equal(
+    formatVersionSyncStrip({ version: "retail", characterCount: 8, lastUpdatedAt: Math.floor(Date.now() / 1000) - 12 * 60 }),
+    "Last sync 12m ago · 8 characters",
+  );
+  assert.equal(
+    formatVersionSyncStrip({ version: "retail", characterCount: 1, lastUpdatedAt: Math.floor(Date.now() / 1000) - 5 }),
+    "Last sync just now · 1 character",
+  );
 });
