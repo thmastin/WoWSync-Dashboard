@@ -35,9 +35,23 @@ import {
   type SharedStorageProjection,
 } from "./sharedStorage.ts";
 import { UNKNOWN_VERSION, type ParsedSnapshot, type VersionOrUnknown, type WowVersion } from "./types.ts";
+import {
+  buildAccountCurrencies,
+  characterCurrenciesView,
+  currencyCarryReason,
+  normalizeCurrencySection,
+  pickCurrencySection,
+  type AccountCurrencies,
+  type CharacterCurrencies,
+  type CurrencyCarryReason,
+  type CurrencyImportOutcome,
+  type CurrencyValues,
+  type StoredCurrencySectionMeta,
+} from "./wowCurrencies.ts";
 import { WOW_VERSIONS, detectVersion } from "./version.ts";
 import type {
   DeleteCharacterResult,
+  ImportExtras,
   ImportResult,
   DeleteSharedStorageOwnerResult,
   RecentChange,
@@ -152,6 +166,54 @@ CREATE TABLE IF NOT EXISTS item_metadata_evidence (
   client_builds TEXT NOT NULL, -- JSON array of distinct builds, sorted
   PRIMARY KEY (game_version, base_item_id, facet, source, value)
 ) WITHOUT ROWID;
+
+-- Retail currencies (the Currency tab), from GearExport's STRUCTURED SavedVariables section
+-- WoWSyncDB.characters[guid].sections.currencies, sent by the bridge next to the export text (never parsed from the
+-- text, which is unchanged). One section row per snapshot that carried a READ currency list: no row means "never
+-- captured" (UNKNOWN), never zero. carried = 1 marks a list older than the snapshot's own session (see
+-- wowCurrencies.ts currencyCarryReason); reads show it as LAST_SEEN with observed_at. Every entry column is nullable:
+-- a field the game did not report stays NULL, never 0. Rows are removed only with their character (deleteCharacter).
+CREATE TABLE IF NOT EXISTS snapshot_currency_sections (
+  snapshot_id INTEGER PRIMARY KEY REFERENCES snapshots(id),
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  observed_at INTEGER,
+  list_read INTEGER NOT NULL CHECK (list_read IN (0, 1)),
+  completeness TEXT,
+  format_version INTEGER,
+  list_size INTEGER,
+  list_filter TEXT,
+  coverage TEXT,
+  carried INTEGER NOT NULL DEFAULT 0 CHECK (carried IN (0, 1)),
+  carried_reason TEXT,
+  last_attempt_error TEXT,
+  entry_count INTEGER NOT NULL,
+  dropped_entries INTEGER NOT NULL DEFAULT 0,
+  stored_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_currency_sections_character ON snapshot_currency_sections(character_id);
+
+CREATE TABLE IF NOT EXISTS snapshot_currencies (
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  currency_id INTEGER NOT NULL CHECK (currency_id > 0),
+  name TEXT,
+  header TEXT,
+  sub_header TEXT,
+  list_order INTEGER,
+  icon_file_id INTEGER,
+  quantity INTEGER,
+  max_quantity INTEGER,
+  quantity_earned_this_week INTEGER,
+  max_weekly_quantity INTEGER,
+  can_earn_per_week INTEGER CHECK (can_earn_per_week IN (0, 1)),
+  total_earned INTEGER,
+  use_total_earned_for_max_qty INTEGER CHECK (use_total_earned_for_max_qty IN (0, 1)),
+  is_account_wide INTEGER CHECK (is_account_wide IN (0, 1)),
+  is_account_transferable INTEGER CHECK (is_account_transferable IN (0, 1)),
+  transfer_percentage REAL,
+  PRIMARY KEY (snapshot_id, currency_id)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_currencies_character ON snapshot_currencies(character_id, currency_id);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -249,6 +311,85 @@ function toImportOutcome(section: RecordedSection): SharedStorageImportOutcome {
     ownerKey: section.ownerKey,
     becameCurrent: section.becameCurrent,
     informative: content ? isInformativeContent(content) : undefined,
+  };
+}
+
+interface CurrencySectionRow {
+  snapshot_id: number;
+  character_id: number;
+  observed_at: number | null;
+  list_read: number;
+  completeness: string | null;
+  format_version: number | null;
+  list_size: number | null;
+  list_filter: string | null;
+  coverage: string | null;
+  carried: number;
+  carried_reason: string | null;
+  last_attempt_error: string | null;
+  entry_count: number;
+  generated_at: number | null;
+  imported_at: number;
+}
+
+interface CurrencyRow {
+  currency_id: number;
+  name: string | null;
+  header: string | null;
+  sub_header: string | null;
+  list_order: number | null;
+  icon_file_id: number | null;
+  quantity: number | null;
+  max_quantity: number | null;
+  quantity_earned_this_week: number | null;
+  max_weekly_quantity: number | null;
+  can_earn_per_week: number | null;
+  total_earned: number | null;
+  use_total_earned_for_max_qty: number | null;
+  is_account_wide: number | null;
+  is_account_transferable: number | null;
+  transfer_percentage: number | null;
+}
+
+const flag = (v: boolean | null): number | null => (v === null ? null : v ? 1 : 0);
+const unflag = (v: number | null): boolean | null => (v === null ? null : v !== 0);
+
+function toCurrencySectionMeta(row: CurrencySectionRow): StoredCurrencySectionMeta {
+  return {
+    snapshotId: row.snapshot_id,
+    snapshotObservedAt: snapshotObservedAt(row.generated_at, row.imported_at),
+    observedAt: row.observed_at,
+    listRead: row.list_read === 1,
+    completeness: row.completeness,
+    formatVersion: row.format_version,
+    listSize: row.list_size,
+    listFilter: row.list_filter,
+    coverage: row.coverage,
+    carried: row.carried === 1,
+    carriedReason: (row.carried_reason as CurrencyCarryReason | null) ?? null,
+    lastAttemptError: row.last_attempt_error,
+    entryCount: row.entry_count,
+  };
+}
+
+function toCurrencyValues(row: CurrencyRow): CurrencyValues {
+  return {
+    currencyID: row.currency_id,
+    name: row.name,
+    header: row.header,
+    subHeader: row.sub_header,
+    listOrder: row.list_order,
+    iconFileID: row.icon_file_id,
+    quantity: row.quantity,
+    maxQuantity: row.max_quantity,
+    quantityEarnedThisWeek: row.quantity_earned_this_week,
+    maxWeeklyQuantity: row.max_weekly_quantity,
+    canEarnPerWeek: unflag(row.can_earn_per_week),
+    totalEarned: row.total_earned,
+    useTotalEarnedForMaxQty: unflag(row.use_total_earned_for_max_qty),
+    isAccountWide: unflag(row.is_account_wide),
+    isAccountTransferable: unflag(row.is_account_transferable),
+    transferPercentage: row.transfer_percentage,
   };
 }
 
@@ -357,6 +498,28 @@ export class SqliteSnapshotStore implements SnapshotStore {
           WHERE s.parsed_json LIKE '%"accountBank"%' OR s.parsed_json LIKE '%"guildBank"%'
           ORDER BY s.id`,
       ),
+      currencySectionForSnapshot: this.db.prepare("SELECT * FROM snapshot_currency_sections WHERE snapshot_id = ?"),
+      currencySectionsForCharacter: this.db.prepare(
+        `SELECT sec.*, s.generated_at AS generated_at, s.imported_at AS imported_at
+           FROM snapshot_currency_sections sec JOIN snapshots s ON s.id = sec.snapshot_id
+          WHERE sec.character_id = ?`,
+      ),
+      insertCurrencySection: this.db.prepare(
+        `INSERT INTO snapshot_currency_sections
+          (snapshot_id, character_id, observed_at, list_read, completeness, format_version, list_size, list_filter, coverage,
+           carried, carried_reason, last_attempt_error, entry_count, dropped_entries, stored_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      insertCurrency: this.db.prepare(
+        `INSERT INTO snapshot_currencies
+          (snapshot_id, character_id, currency_id, name, header, sub_header, list_order, icon_file_id, quantity, max_quantity,
+           quantity_earned_this_week, max_weekly_quantity, can_earn_per_week, total_earned, use_total_earned_for_max_qty,
+           is_account_wide, is_account_transferable, transfer_percentage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ),
+      currenciesForSnapshot: this.db.prepare("SELECT * FROM snapshot_currencies WHERE snapshot_id = ? ORDER BY list_order, currency_id"),
+      deleteCurrenciesForCharacter: this.db.prepare("DELETE FROM snapshot_currencies WHERE character_id = ?"),
+      deleteCurrencySectionsForCharacter: this.db.prepare("DELETE FROM snapshot_currency_sections WHERE character_id = ?"),
     };
     // One-time, idempotent: journals shared storage already present in stored snapshots.
     if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
@@ -384,7 +547,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     }
   }
 
-  importSnapshot(raw: string): ImportResult {
+  importSnapshot(raw: string, extras: ImportExtras = {}): ImportResult {
     // Parse first: a malformed export throws before anything is written.
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
@@ -407,6 +570,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
         );
         if (existing) {
           const newest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterRow.id);
+          // The text changes nothing. The only thing a duplicate may add is a currencies section the snapshot does not
+          // have yet (the same export sent before the bridge carried currencies): additive and idempotent.
+          const currencies =
+            extras.currencies === undefined ? undefined : this.recordCurrencies(characterRow.id, existing.id, version, extras.currencies, now, true);
           return {
             character: this.summarize(characterRow.id)!,
             snapshot: toStoredSnapshot(existing),
@@ -416,6 +583,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             isDuplicate: true,
             isLatest: newest?.id === existing.id,
             sharedStorage: [],
+            ...(currencies ? { currencies } : {}),
           };
         }
       } else {
@@ -490,6 +658,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
         );
       }
 
+      // The structured currencies section (if the bridge sent one) joins this snapshot in the same transaction.
+      const currencies =
+        extras.currencies === undefined ? undefined : this.recordCurrencies(characterRow.id, newId, version, extras.currencies, now, false);
+
       return {
         character: this.summarize(characterRow.id)!,
         snapshot,
@@ -499,8 +671,111 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isDuplicate: false,
         isLatest,
         sharedStorage,
+        ...(currencies ? { currencies } : {}),
       };
     });
+  }
+
+  // --- Currencies (structured SavedVariables section) ------------------------------------------------
+
+  /** Attaches a validated currencies section to one snapshot. Never alters the snapshot; a bad section is a skip, not an error. */
+  private recordCurrencies(characterId: number, snapshotId: number, version: VersionOrUnknown, input: unknown, now: number, duplicate: boolean): CurrencyImportOutcome {
+    if (version !== "retail") return { outcome: "skipped", reason: "unsupported-version", snapshotId };
+    const normalized = normalizeCurrencySection(input);
+    if (!normalized.ok) return { outcome: "skipped", reason: normalized.reason, snapshotId };
+    const stored = one<CurrencySectionRow>(this.stmts.currencySectionForSnapshot, snapshotId);
+    if (stored) {
+      return {
+        outcome: "already-stored",
+        snapshotId,
+        rows: stored.entry_count,
+        observedAt: stored.observed_at,
+        carried: stored.carried === 1,
+        ...(stored.carried_reason ? { carriedReason: stored.carried_reason as CurrencyCarryReason } : {}),
+      };
+    }
+    const section = normalized.section;
+    // Chronological position of the owning snapshot: its own observation time and its predecessor's.
+    const rows = many<SnapshotRow>(this.stmts.snapshotsForCharacter, characterId);
+    const index = rows.findIndex((row) => row.id === snapshotId);
+    const own = rows[index];
+    const predecessor = rows[index + 1];
+    const carriedReason = currencyCarryReason(
+      section.observedAt,
+      snapshotObservedAt(own.generated_at, own.imported_at),
+      predecessor ? snapshotObservedAt(predecessor.generated_at, predecessor.imported_at) : undefined,
+      section.lastAttemptError,
+    );
+    this.stmts.insertCurrencySection.run(
+      snapshotId,
+      characterId,
+      section.observedAt,
+      section.listRead ? 1 : 0,
+      section.completeness,
+      section.formatVersion,
+      section.listSize,
+      section.listFilter,
+      section.coverage,
+      carriedReason ? 1 : 0,
+      carriedReason ?? null,
+      section.lastAttemptError,
+      section.entries.length,
+      section.droppedEntries,
+      now,
+    );
+    for (const e of section.entries) {
+      this.stmts.insertCurrency.run(
+        snapshotId,
+        characterId,
+        e.currencyID,
+        e.name,
+        e.header,
+        e.subHeader,
+        e.listOrder,
+        e.iconFileID,
+        e.quantity,
+        e.maxQuantity,
+        e.quantityEarnedThisWeek,
+        e.maxWeeklyQuantity,
+        flag(e.canEarnPerWeek),
+        e.totalEarned,
+        flag(e.useTotalEarnedForMaxQty),
+        flag(e.isAccountWide),
+        flag(e.isAccountTransferable),
+        e.transferPercentage,
+      );
+    }
+    return {
+      outcome: duplicate ? "attached" : "stored",
+      snapshotId,
+      rows: section.entries.length,
+      droppedEntries: section.droppedEntries,
+      observedAt: section.observedAt,
+      carried: carriedReason !== undefined,
+      ...(carriedReason ? { carriedReason } : {}),
+    };
+  }
+
+  private resolveCurrencies(row: CharacterRow): CharacterCurrencies {
+    const latest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, row.id);
+    const metas = many<CurrencySectionRow>(this.stmts.currencySectionsForCharacter, row.id).map(toCurrencySectionMeta);
+    const pick = pickCurrencySection(latest?.id, metas);
+    const entries = pick ? many<CurrencyRow>(this.stmts.currenciesForSnapshot, pick.section.snapshotId).map(toCurrencyValues) : [];
+    return characterCurrenciesView(
+      { identityKey: row.identity_key, name: row.name, realm: row.realm, version: row.version as VersionOrUnknown },
+      pick,
+      entries,
+    );
+  }
+
+  getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
+    const row = one<CharacterRow>(this.stmts.findCharacterByKey, identityKey);
+    return row ? this.resolveCurrencies(row) : undefined;
+  }
+
+  listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies {
+    const rows = many<CharacterRow>(this.stmts.charactersByVersion, version);
+    return buildAccountCurrencies(version, rows.map((row) => this.resolveCurrencies(row)));
   }
 
   // --- Item metadata ----------------------------------------------------------------------------------
@@ -748,6 +1023,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
     // would no longer be reachable through any character) or a character
     // with a partial history.
     return this.inTransaction(() => {
+      this.stmts.deleteCurrenciesForCharacter.run(row.id);
+      this.stmts.deleteCurrencySectionsForCharacter.run(row.id);
       const snapshotsDeleted = Number(this.stmts.deleteSnapshotsForCharacter.run(row.id).changes);
       this.stmts.deleteCharacterById.run(row.id);
       return {

@@ -6,6 +6,7 @@ import type { ParsedSnapshot, VersionOrUnknown, WowVersion } from "./types.ts";
 import type { SnapshotDiff } from "./diff.ts";
 import type { AccountFacts } from "./accountFacts.ts";
 import type { AccountContext } from "./accountContext.ts";
+import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } from "./wowCurrencies.ts";
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 
@@ -106,6 +107,17 @@ export interface ImportResult {
    * (Warband, then Guild). Empty for a duplicate export (nothing was imported) and for an export with no shared sections.
    */
   sharedStorage: SharedStorageImportOutcome[];
+  /**
+   * What happened to the structured currencies section sent with the export (see wowCurrencies.ts). Absent when none
+   * was sent. Unlike everything else, a duplicate export may still ATTACH a section its snapshot did not have.
+   */
+  currencies?: CurrencyImportOutcome;
+}
+
+/** Optional structured data that travels with an export's text (never parsed from it). */
+export interface ImportExtras {
+  /** WoWSyncDB.characters[guid].sections.currencies as plain JSON (Lua tables converted), for the character the text is for. */
+  currencies?: unknown;
 }
 
 /** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */
@@ -151,7 +163,11 @@ export interface SnapshotStore {
    * export imported later becomes history, not current state. Atomic: a
    * failure leaves neither a partial snapshot nor a snapshot-less character.
    */
-  importSnapshot(raw: string): ImportResult;
+  importSnapshot(raw: string, extras?: ImportExtras): ImportResult;
+  /** The character's Retail currencies as OBSERVED / LAST_SEEN / UNKNOWN (never zero). Undefined when the character does not exist. */
+  getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined;
+  /** Per-currencyID account view for one version: every character's value and state; account-wide currencies once, never summed. */
+  listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies;
   /**
    * Permanently removes one character and every snapshot stored for it
    * (atomically - all or nothing). Returns what was removed, or undefined

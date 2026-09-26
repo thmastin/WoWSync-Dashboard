@@ -30,6 +30,7 @@ import {
   parseSavedExports,
   postImport,
   resolveDashboardUrl,
+  sidecarPayloadHash,
   type SavedExport,
 } from "./importSaved.ts";
 
@@ -107,6 +108,8 @@ export interface Watcher {
 interface Sent {
   generatedAt: number;
   sha256: string;
+  /** The structured Currency-tab payload is not part of text, so it needs independent deduplication. */
+  currenciesSha256: string;
 }
 
 export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
@@ -154,9 +157,11 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
       return;
     }
 
+    let records: SavedExport[];
     let chosen: SavedExport | undefined;
     try {
-      chosen = selectNewestExport(parseSavedExports(source, config.file));
+      records = parseSavedExports(source, config.file);
+      chosen = selectNewestExport(records);
     } catch (e) {
       if (e instanceof BridgeError) return stop(e.message);
       throw e;
@@ -167,6 +172,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     }
 
     const text = chosen.text!;
+    const currenciesSha256 = sidecarPayloadHash(chosen.currencies);
     const summary = describeExport(text);
     const problems = consistencyProblems(chosen, summary, { character: summary.name ?? chosen.name ?? "" });
     if (problems.length > 0) return stop(`Not sent: the newest saved export is not consistent.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
@@ -174,7 +180,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     const generatedAt = summary.generatedAt ?? chosen.generatedAt ?? 0;
     // What is actually known: when WoW last wrote the file, and when the newest export in it was generated. Not "no export since".
     out(`SavedVariables last written ${iso(Math.floor(mtimeMs / 1000))}; newest export in it: ${summary.name ?? "?"} · ${summary.realm ?? "?"}, generated ${iso(generatedAt)}.`);
-    if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256) {
+    if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256 && lastSent.currenciesSha256 === currenciesSha256) {
       out("  Same export as the one already sent: nothing to do.");
       return finish(0);
     }
@@ -183,11 +189,18 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
       return finish(0);
     }
 
+    if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256) {
+      out("  Same text with changed structured currencies: attaching the newer Currency-tab read.");
+    }
+    const stranded = records.filter((record) => record !== chosen && record.currencies !== undefined && record.text === undefined);
+    for (const record of stranded) {
+      out(`  Currency read for ${record.name ?? "?"} · ${record.realm ?? "?"} has no saved text export to attach to; run /wowsync on that character, then /reload or log out.`);
+    }
     out(`  Sending ${summary.bytes} bytes (SHA-256 ${summary.sha256}) to ${importEndpoint(config.origin)} ...`);
     try {
-      const result = await postImport(deps, config.origin, text);
+      const result = await postImport(deps, config.origin, text, chosen.currencies);
       for (const line of describeImportResult(result, summary.sha256)) out(`  ${line}`);
-      lastSent = { generatedAt, sha256: summary.sha256 };
+      lastSent = { generatedAt, sha256: summary.sha256, currenciesSha256 };
       sendFailures = 0;
       return finish(0);
     } catch (e) {

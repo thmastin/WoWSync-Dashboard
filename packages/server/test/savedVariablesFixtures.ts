@@ -12,6 +12,8 @@ export interface SavedRecord {
   /** The export text persisted as latestExport.text; omit for a character with no saved export. */
   text?: string;
   generatedAt?: number;
+  /** Raw Lua for `sections.currencies`, used only by bridge tests. */
+  currencies?: string;
 }
 
 export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: number | null; legacy?: string } = {}): string {
@@ -22,7 +24,9 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     lines.push(`[${q(r.guid)}] = {`, '["identity"] = {', `["guid"] = ${q(r.guid)},`);
     if (r.name !== undefined) lines.push(`["name"] = ${q(r.name)},`);
     if (r.realm !== undefined) lines.push(`["realm"] = ${q(r.realm)},`);
-    lines.push("},", '["sections"] = {', "},", '["visits"] = {', "},");
+    lines.push("},", '["sections"] = {');
+    if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
+    lines.push("},", '["visits"] = {', "},");
     if (r.text !== undefined) lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`, `["text"] = ${q(r.text)},`, "},");
     lines.push("},");
   }

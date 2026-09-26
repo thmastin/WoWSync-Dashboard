@@ -18,3 +18,4 @@ export * from "./sharedStorage.ts";
 export * from "./sharedStorageApi.ts";
 export * from "./itemMetadata.ts";
 export * from "./savedVariables.ts";
+export * from "./wowCurrencies.ts";

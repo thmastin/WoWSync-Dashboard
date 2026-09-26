@@ -285,3 +285,23 @@ export function luaGet(table: LuaValue | undefined, key: LuaKey): LuaValue | und
   return table instanceof Map ? table.get(key) : undefined;
 }
 export const isLuaTable = (value: LuaValue | undefined): value is LuaTable => value instanceof Map;
+
+/**
+ * A parsed Lua value as plain JSON, for sending structured SavedVariables data over HTTP. A table whose keys are
+ * exactly the integers 1..n becomes an array (Lua's sequence), any other table an object with string keys. Nothing is
+ * evaluated or invented: nil entries simply do not exist in the parsed table, so they stay absent.
+ */
+export function luaToPlain(value: LuaValue): unknown {
+  if (!(value instanceof Map)) return value;
+  const size = value.size;
+  let sequence = size > 0;
+  for (let i = 1; sequence && i <= size; i++) if (!value.has(i)) sequence = false;
+  if (sequence) {
+    const out: unknown[] = [];
+    for (let i = 1; i <= size; i++) out.push(luaToPlain(value.get(i) as LuaValue));
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of value) out[String(k)] = luaToPlain(v);
+  return out;
+}

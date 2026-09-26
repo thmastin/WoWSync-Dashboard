@@ -25,6 +25,7 @@ import {
   detectVersion,
   isLuaTable,
   luaGet,
+  luaToPlain,
   parseSavedVariables,
   parseWowSyncExport,
   type LuaValue,
@@ -199,6 +200,22 @@ export interface SavedExport {
   generatedAt?: number;
   /** `latestExport.text`, exactly as GearExport persisted it. Absent when the record has none. */
   text?: string;
+  /**
+   * The record's STRUCTURED `sections.currencies` (Retail Currency tab) as plain JSON, when GearExport saved one.
+   * Not part of the text export; sent alongside it and validated by the server. Absent when the record has none.
+   */
+  currencies?: unknown;
+  /** When this character's structured Currency-tab list was read, if it has one. */
+  currencyObservedAt?: number;
+}
+
+/**
+ * The currency sidecar deliberately travels outside the immutable text export.
+ * Its stable serialized digest lets the watcher tell an unchanged text export
+ * from a new Currency-tab observation without becoming a second importer.
+ */
+export function sidecarPayloadHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value ?? null), "utf8").digest("hex");
 }
 
 /** Refuses a file too large to be what GearExport writes, before it is read. */
@@ -247,11 +264,15 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const generatedAt = luaGet(latest, "generatedAt");
     const name = luaGet(identity, "name");
     const realm = luaGet(identity, "realm");
+    const currencies = luaGet(luaGet(record, "sections"), "currencies");
+    const currencyObservedAt = luaGet(currencies, "observedAt");
     out.push({
       name: typeof name === "string" ? name : undefined,
       realm: typeof realm === "string" ? realm : undefined,
       generatedAt: typeof generatedAt === "number" ? generatedAt : undefined,
       text: typeof text === "string" && text.length > 0 ? text : undefined,
+      ...(isLuaTable(currencies) ? { currencies: luaToPlain(currencies) } : {}),
+      ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
     });
   }
   return out.sort(
@@ -548,13 +569,14 @@ export const importEndpoint = (origin: string): string => `${origin}/api/import`
  * send, shared by `import:saved` and `watch:saved`: neither has any import logic of its own. Throws {@link ImportPostError}
  * (a BridgeError) with the reason; nothing has been imported when it does.
  */
-export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string): Promise<any> {
+export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown): Promise<any> {
   let response: Response;
   try {
     response = await deps.fetch(importEndpoint(origin), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      // `currencies` (the record's structured section) rides along only when the record has one; the text is untouched.
+      body: JSON.stringify(currencies === undefined ? { text } : { text, currencies }),
       signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
     });
   } catch (err) {
@@ -585,7 +607,11 @@ export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin
 /** What the server reported for one import, as report lines. `sentSha256` is the hash of the text that was sent. */
 export function describeImportResult(result: any, sentSha256: string): string[] {
   const lines = [
-    result.isDuplicate ? "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing." : "Result: imported as a new snapshot.",
+    result.isDuplicate
+      ? result.currencies?.outcome === "attached"
+        ? "Result: ALREADY IMPORTED (duplicate): the snapshot is unchanged; its currencies section was attached."
+        : "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing."
+      : "Result: imported as a new snapshot.",
     `  character:     ${result.character?.identityKey ?? "?"}`,
     `  snapshot id:   ${result.snapshot.id}${result.isLatest === undefined ? "" : result.isLatest ? " (now the character's latest)" : " (older than the character's latest)"}`,
   ];
@@ -600,6 +626,17 @@ export function describeImportResult(result: any, sentSha256: string): string[] 
   const shared = Array.isArray(result.sharedStorage) ? result.sharedStorage : [];
   for (const s of shared) lines.push(`  shared storage: ${s.section}: ${s.outcome}${s.reason ? ` (${s.reason})` : ""}${s.ownerKey ? ` [${s.ownerKey}]` : ""}${s.becameCurrent ? " (became current)" : ""}`);
   if (result.snapshot.parsed?.itemMetadata) lines.push(`  item metadata: ${result.snapshot.parsed.itemMetadata.rows?.length ?? "?"} rows carried`);
+  const c = result.currencies;
+  if (c && typeof c.outcome === "string") {
+    lines.push(
+      `  currencies:    ${c.outcome}` +
+        (c.reason ? ` (${c.reason})` : "") +
+        (typeof c.rows === "number" ? `, ${c.rows} rows` : "") +
+        (c.droppedEntries ? `, ${c.droppedEntries} dropped` : "") +
+        (typeof c.observedAt === "number" ? `, read ${iso(c.observedAt)}` : "") +
+        (c.carried ? ` - LAST_SEEN (${c.carriedReason ?? "carried"})` : ""),
+    );
+  }
   return lines;
 }
 
@@ -644,7 +681,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) stderr.push(`warning: ${target.warning}`);
     out(`Sending to ${importEndpoint(target.origin)} ...`);
-    out(...describeImportResult(await postImport(deps, target.origin, text), summary.sha256));
+    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies), summary.sha256));
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
     if (err instanceof BridgeError) {

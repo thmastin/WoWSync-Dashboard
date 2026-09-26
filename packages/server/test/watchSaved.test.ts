@@ -221,6 +221,39 @@ test("identical content re-flushed is NOT posted again (every WoW save rewrites 
   assert.equal(JSON.parse(h.calls[1].body!).text, later.text);
 });
 
+test("a changed Currency-tab sidecar is attached even when WoW's saved text export is unchanged", async () => {
+  const currencies = (quantity: number) => `{
+["observedAt"] = ${1_790_030_001 + quantity},
+["data"] = { ["formatVersion"] = 1, ["listRead"] = true, ["currencies"] = {
+  { ["currencyID"] = 3442, ["name"] = "Adventurer Mistcrest", ["quantity"] = ${quantity} },
+} },
+}`;
+  const current = record("Virek", 1_790_030_000, { currencies: currencies(5) });
+  const h = harness(savedVariables([current]), ok());
+  await h.w.tick();
+  h.fs.set(FILE, savedVariables([current]) + " ");
+  await h.settle();
+  assert.equal(h.calls.length, 1);
+  assert.equal(JSON.parse(h.calls[0].body!).currencies.data.currencies[0].quantity, 5);
+
+  const changed = { ...current, currencies: currencies(10) };
+  h.fs.set(FILE, savedVariables([changed]));
+  await h.settle();
+  assert.equal(h.calls.length, 2, "currency-only updates must not be swallowed by text deduplication");
+  assert.equal(JSON.parse(h.calls[1].body!).currencies.data.currencies[0].quantity, 10);
+  assert.match(all(h.out), /Same text with changed structured currencies/);
+});
+
+test("a currency read without that character's text export is reported instead of silently lost", async () => {
+  const currencies = `{ ["observedAt"] = 1790030001, ["data"] = { ["formatVersion"] = 1, ["listRead"] = true, ["currencies"] = {} } }`;
+  const h = harness(VIREK_SV, ok());
+  await h.w.tick();
+  h.fs.set(FILE, savedVariables([VIREK, { guid: "Player-1-OTHER", name: "Other", realm: "Cairne", currencies }]));
+  await h.settle();
+  assert.equal(h.calls.length, 1);
+  assert.match(all(h.out), /Currency read for Other · Cairne has no saved text export to attach/);
+});
+
 test("only the newest export in the file is sent, and an older one never displaces a newer one", async () => {
   const h = harness(VIREK_SV, ok());
   await h.w.tick();

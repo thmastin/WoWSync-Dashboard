@@ -12,6 +12,7 @@ import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
+import MidnightResearch from "./components/MidnightResearch.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -248,6 +249,9 @@ export default function App() {
                 <button className={tabView === "items" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "items", q: route.q }))}>
                   Items
                 </button>
+                <button className={tabView === "research" ? "active" : ""} onClick={() => navigate(patchRoute(route, { version: "retail", view: "research" }))}>
+                  Research
+                </button>
                 {activeVersion === "retail" && (
                   <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
                     Shared Storage
@@ -276,6 +280,7 @@ export default function App() {
             </div>
 
             {route.view === "shared" && <SharedStorageView />}
+            {route.view === "research" && <MidnightResearch />}
             {scoped && route.view === "items" && (
               <ItemsSearch
                 inventory={scoped.inventory}
@@ -285,10 +290,10 @@ export default function App() {
                 onOpenCharacter={openCharacter}
               />
             )}
-            {route.view !== "shared" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && route.view !== "research" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && route.view !== "research" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster

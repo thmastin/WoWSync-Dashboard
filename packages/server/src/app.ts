@@ -120,6 +120,15 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   // base item id for ONE game version, with the Dashboard-derived expansion label. An item with no evidence is
   // absent (all facets UNKNOWN). A pure read; it changes no stored observation and is not part of any total,
   // search, diff, AccountContext or LLM context.
+  // Account view of Retail currencies for ONE version, per currencyID: every character's value and state.
+  // Account-wide currencies (isAccountWide) are reported once in `account`, never summed; character-scoped totals
+  // sum KNOWN values only and are omitted when nothing is known (UNKNOWN is never zero).
+  app.get("/api/versions/:version/currencies", (req, res) => {
+    const { version } = req.params;
+    if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+    res.json(store.listVersionCurrencies(version));
+  });
+
   app.get("/api/versions/:version/item-metadata", (req, res) => {
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
@@ -242,6 +251,15 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json({ deleted });
   });
 
+  // Retail currencies for one character, from the structured SavedVariables section stored with its snapshots:
+  // state OBSERVED (latest snapshot, fresh), LAST_SEEN (older list, with its date) or UNKNOWN (never exported one -
+  // `currencies` is null, never an empty/zero list). Absent fields are null.
+  app.get("/api/characters/:identityKey/currencies", (req, res) => {
+    const body = store.getCharacterCurrencies(req.params.identityKey);
+    if (!body) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    res.json(body);
+  });
+
   app.get("/api/characters/:identityKey/snapshots", (req, res) => {
     // Newest first. For each snapshot (other than the oldest), also compute
     // what newly unlocked at the trainer since the immediately preceding
@@ -268,8 +286,11 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     if (typeof text !== "string" || text.trim().length === 0) {
       return res.status(400).json({ error: "Missing export text. Paste a WOWSYNC v1 export and try again." });
     }
+    // Optional structured data that travels with the text (the bridge's `currencies`, from WoWSyncDB ... sections.currencies).
+    // It never changes how the text is parsed; the store validates it and reports what it did in result.currencies.
+    const currencies: unknown = req.body?.currencies;
     try {
-      const result = store.importSnapshot(text);
+      const result = store.importSnapshot(text, currencies === undefined || currencies === null ? {} : { currencies });
       res.json({
         result: {
           ...result,
