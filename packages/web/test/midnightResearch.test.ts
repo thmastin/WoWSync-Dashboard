@@ -15,6 +15,8 @@ test("Research renders the current Midnight Renown companion topic with provenan
   assert.match(html, /Unknown does not mean unavailable or completed/);
   assert.match(html, /docs\/MIDNIGHT_12_1_RENOWN_REPUTATION_RESEARCH\.md/);
   assert.match(html, /renown-quest-rewards-reset-and-now-item-level-279-in-patch-12-1/);
+  assert.match(html, /Rank-by-rank: what every major Renown level actually unlocks/);
+  assert.match(html, /Every row below is an unlock explanation/);
 });
 
 test("Research navigation exposes Renown without removing established topics", () => {
