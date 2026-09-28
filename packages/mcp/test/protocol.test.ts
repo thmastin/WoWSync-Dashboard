@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -152,6 +153,123 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   } finally {
     await client.close();
     assert.equal(digest(databasePath), databaseBefore, "the spawned MCP process did not modify the primary fixture database");
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("the direct Node STDIO entrypoint supports modern discovery with protocol-only stdout", async () => {
+  const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-modern-"));
+  const databasePath = path.join(temporaryDirectory, "fixture.sqlite");
+  const writer = new SqliteSnapshotStore(databasePath);
+  try {
+    writer.importSnapshot(retail("Probe", "Cairne"));
+  } finally {
+    writer.close();
+  }
+  const databaseBefore = digest(databasePath);
+  const child = spawn(process.execPath, [entrypoint], {
+    cwd: packageRoot,
+    env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+
+  let stdoutBuffer = "";
+  let stderr = "";
+  const frames: Array<Record<string, unknown>> = [];
+  const parseErrors: string[] = [];
+  const responseWaiters = new Map<string | number, Array<(message: Record<string, unknown>) => void>>();
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdoutBuffer += chunk;
+    let newline = stdoutBuffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = stdoutBuffer.slice(0, newline).replace(/\r$/, "");
+      stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      if (line.length === 0) {
+        parseErrors.push("<empty stdout line>");
+      } else {
+        try {
+          const message = JSON.parse(line) as Record<string, unknown>;
+          frames.push(message);
+          const id = message.id;
+          if (typeof id === "string" || typeof id === "number") {
+            const waiters = responseWaiters.get(id) ?? [];
+            responseWaiters.delete(id);
+            for (const resolve of waiters) resolve(message);
+          }
+        } catch {
+          parseErrors.push(line);
+        }
+      }
+      newline = stdoutBuffer.indexOf("\n");
+    }
+  });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+
+  const waitForResponse = (id: number): Promise<Record<string, unknown>> => {
+    const existing = frames.find((frame) => frame.id === id);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Timed out waiting for MCP response ${id}; stderr: ${stderr}`)), 5_000);
+      const waiters = responseWaiters.get(id) ?? [];
+      waiters.push((message) => {
+        clearTimeout(timeout);
+        resolve(message);
+      });
+      responseWaiters.set(id, waiters);
+    });
+  };
+  const send = (message: unknown) => {
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+  const modernMeta = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+  };
+
+  try {
+    send({ jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: modernMeta } });
+    const discovery = await waitForResponse(1);
+    assert.equal(discovery.error, undefined, JSON.stringify(discovery.error));
+    const discoveryResult = discovery.result as { supportedVersions?: string[] };
+    assert.ok(discoveryResult.supportedVersions?.includes("2026-07-28"));
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: modernMeta } });
+    const toolListResponse = await waitForResponse(2);
+    assert.equal(toolListResponse.error, undefined, JSON.stringify(toolListResponse.error));
+    const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
+    assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
+      "get_character_currencies",
+      "get_character_equipment",
+      "get_character_professions",
+      "get_character_summary",
+      "get_profession_coverage",
+      "get_renown",
+      "get_research_section",
+      "list_characters",
+      "list_research_documents",
+      "list_versions",
+      "search_research",
+    ]);
+  } finally {
+    child.stdin.end();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error("Modern MCP stdio child did not exit after stdin closed"));
+      }, 5_000);
+      child.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    assert.equal(stdoutBuffer.trim(), "", "the process left a partial stdout frame");
+    assert.deepEqual(parseErrors, [], "stdout included non-JSON protocol content");
+    assert.equal(frames.length, 2, "stdout contained an unexpected MCP frame");
+    assert.doesNotMatch(stderr, /WoWSync MCP startup failed/);
+    assert.equal(digest(databasePath), databaseBefore, "the MCP process did not modify the fixture database");
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });

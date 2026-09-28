@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import {
   DASHBOARD_RESEARCH_REGISTRATIONS,
   DashboardReadModel,
@@ -87,8 +87,20 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   const registry = new ResearchRegistry(configuration.researchRoot ?? defaults.researchRoot, DASHBOARD_RESEARCH_REGISTRATIONS);
   const server = new McpServer(
     { name: "wowsync-readonly", version: "0.1.0" },
-    { instructions: "Read-only WoWSync retrieval. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance." },
+    {
+      instructions: "Read-only WoWSync retrieval. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance.",
+      supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
+    },
   );
+  let storeClosed = false;
+  const closeStore = () => {
+    if (storeClosed) return;
+    storeClosed = true;
+    store.close();
+  };
+  // serveStdio owns and closes each factory-created server instance. Close its
+  // associated read-only database connection when the SDK closes this server.
+  server.server.onclose = closeStore;
 
   server.registerTool("list_versions", {
     title: "List WoWSync version buckets",
@@ -212,7 +224,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   return {
     server,
     async close() {
-      try { await server.close(); } finally { store.close(); }
+      try { await server.close(); } finally { closeStore(); }
     },
   };
 }
