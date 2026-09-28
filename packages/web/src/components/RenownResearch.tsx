@@ -62,7 +62,27 @@ export default function RenownResearch() {
         </tbody></table></div>
       </div></details>
 
-      <details className="mechanic-detail"><summary><span>2</span>Season 2 power rewards: useful fill-ins, not a class ranking</summary><div className="tutorial-body">
+      <details className="mechanic-detail" open><summary><span>2</span>How to earn Renown: the practical weekly loop</summary><div className="tutorial-body">
+        <p><strong>The short version:</strong> do the campaign and side quests in the zone whose track you need; then, each reset, choose that zone's World Quests, Special Assignment, zone event and weekly opportunities. This is not a separate alt grind: qualifying reputation advances the shared Warband track no matter which character earns it.</p>
+        <ol>
+          <li><strong>Choose one actual breakpoint.</strong> For example, Singularity 9 for Virek's Alchemy/Engineering Knowledge books, or Amani 6 for Mining/Skinning. Do not try to push every faction at once.</li>
+          <li><strong>Open the zone map and do its marked World Quests.</strong> They are the repeatable, targeted baseline. Complete the zone campaign and side quests first when available; those are substantial one-time progress, not a daily farm.</li>
+          <li><strong>Prioritize the Special Assignment and the zone's named event/weekly.</strong> These are the higher-value recurring opportunities. They reset or rotate, so inspect the live tooltip rather than assuming an old guide's cadence.</li>
+          <li><strong>Take overlap you already enjoy.</strong> Bountiful Delve caches, the first weekly rare kills, and the Silvermoon dungeon weekly can add Renown while also advancing gear, Vault, or world-content goals.</li>
+          <li><strong>Use exactly one Contract only when it has a purpose.</strong> An Inscription Contract adds the selected track's reputation to qualifying World Quests. Replace it when your next useful breakpoint changes; it does not award reputation to every faction simultaneously.</li>
+        </ol>
+        <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Source</th><th>What you actually do</th><th>Cadence / safety note</th></tr></thead><tbody>
+          <tr><th>Campaign, side quests, treasures and lore</th><td>Quest through the faction's zone and complete its discovery content.</td><td>Mostly one-time progress. Great while leveling/unlocking, but never a repeatable post-cap route.</td></tr>
+          <tr><th>World Quests</th><td>Open the appropriate zone map and complete its current faction/zone World Quests.</td><td>Recurring targeted baseline. A matching active Contract adds extra reputation here.</td></tr>
+          <tr><th>Special Assignment</th><td>Complete the larger map-marked zone objective once it is available.</td><td>Recurring opportunity; its live UI communicates the current reset/requirements.</td></tr>
+          <tr><th>Zone event and zone weekly</th><td>Join the activity native to that zone: Soiree/Runestone, Abundance, Legends of the Haranir, Stormarion Assault, or Coiled Isle activities.</td><td>Choose it when it also gives an activity reward you value; event rewards are commonly limited by a weekly/daily cadence.</td></tr>
+          <tr><th>First weekly rare kills and Bountiful Delve caches</th><td>Kill eligible zone rares or finish a Bountiful Delve.</td><td>Useful overlap, not evidence that endlessly repeating the same rare or Delve is an unlimited Renown farm.</td></tr>
+          <tr><th>Halduron's Silvermoon dungeon weekly</th><td>Complete the current dungeon-weekly objective and choose its offered faction.</td><td>It chooses <strong>one</strong> faction for that week, not a reward for every track.</td></tr>
+        </tbody></table></div>
+        <div className="research-callout"><strong>Do not grind blindly:</strong> after one-time quests, treasures, first rare rewards and the current weekly/event opportunities are exhausted, ordinary repeat activity is usually poor Renown efficiency. Let the next cycle arrive or play another endgame lane instead. <SourceLink href={SOURCE.amani}>Current primary-track sources</SourceLink> <span aria-hidden="true">·</span> <SourceLink href={SOURCE.zuljarra}>Current 12.1 Zul'jarra source</SourceLink></div>
+      </div></details>
+
+      <details className="mechanic-detail"><summary><span>3</span>Season 2 power rewards: useful fill-ins, not a class ranking</summary><div className="tutorial-body">
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Faction / rank</th><th>Event</th><th>Reward</th><th>Use</th></tr></thead><tbody>
           <tr><th>Silvermoon Court 9</th><td>Saltheril's Soiree / Runestone</td><td>Helm, ilvl 279</td><td>Armor/stat fill-in only.</td></tr>
           <tr><th>Amani Tribe 9</th><td>Abundance</td><td>Neck, ilvl 279</td><td>Targeted early fill-in.</td></tr>
@@ -72,7 +92,7 @@ export default function RenownResearch() {
         <p><strong>Confirmed:</strong> Patch 12.1 reset these quest rewards and raised them to ilvl 279. <strong>UNKNOWN / needs a live check:</strong> exact upgrade track, per-alt claim entitlement, repeat-claim behavior, and precise prerequisite flags. Unknown does not mean unavailable or completed.</p>
       </div></details>
 
-      <details className="mechanic-detail"><summary><span>3</span>Profession priorities: the real account differentiation</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>4</span>Profession priorities: the real account differentiation</summary><div className="tutorial-body">
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Profession(s)</th><th>Renown target</th><th>Reason</th></tr></thead><tbody>
           <tr><th>Alchemy, Blacksmithing, Engineering</th><td>Singularity 9</td><td>One-time +10 Knowledge book for each profession holder.</td></tr>
           <tr><th>Enchanting, Jewelcrafting, Tailoring</th><td>Silvermoon Court 6</td><td>One-time +10 Knowledge books.</td></tr>
@@ -84,7 +104,7 @@ export default function RenownResearch() {
         <p><strong>Roster guidance:</strong> Virek's best profession target is Singularity 9 (Engineering + Alchemy); Janne benefits from Hara'ti 6 (Herbalism) and Amani 6 (Mining); Squashpot benefits from Amani 6 (Skinning). There is no verified Hunter/BM-only Renown exception. <SourceLink href={SOURCE.knowledge}>Knowledge and Moxie source</SourceLink></p>
       </div></details>
 
-      <details className="mechanic-detail"><summary><span>4</span>Efficient overlap, minor systems, and Journeys</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>5</span>Efficient overlap, minor systems, and Journeys</summary><div className="tutorial-body">
         <p>Advance major tracks through zone campaign/side quests, World Quests, Special Assignments, zone events, weekly rare first kills, Bountiful Delve caches, and the Silvermoon dungeon weekly. The dungeon weekly selects one faction; one Inscription contract can be active. Coiled Isle WQs, Curse Sites and Vaults of Atal'Utek naturally advance Zul'jarra while doing 12.1 outdoor content. <SourceLink href={SOURCE.zuljarra}>Zul'jarra sources</SourceLink></p>
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>System</th><th>What it rewards</th><th>Decision</th></tr></thead><tbody>
           <tr><th>Captain Tokka</th><td>Coiled Isle fishing standing; Cursed Angler profession recipes, then fishing rod/mount/collection</td><td>Fishing-focused; full Warband standing scope is UNKNOWN.</td></tr>
@@ -94,7 +114,7 @@ export default function RenownResearch() {
         </tbody></table></div>
         <p><strong>Version boundary:</strong> Aqir Research Enclave is 12.1.5 PTR material and excluded. Adventure Guide → Journeys centralizes visible Renown/cultural reputation, Delves, Prey and a Vault shortcut. It does not prove unclaimed rewards, learned recipes, weekly caps, or account/character ownership. WoWSync does not yet capture live Renown/Journeys state; any future work must retain observed, derived, unknown, and last-seen separately. <SourceLink href={SOURCE.journeys}>Blizzard Journeys source</SourceLink> <span aria-hidden="true">·</span> <SourceLink href={SOURCE.captain}>Captain Tokka source</SourceLink> <span aria-hidden="true">·</span> <SourceLink href={SOURCE.ritualSites}>Ritual Sites source</SourceLink></p>
       </div></details>
-      <details className="mechanic-detail"><summary><span>5</span>Rank-by-rank: what every major Renown level actually unlocks</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>6</span>Rank-by-rank: what every major Renown level actually unlocks</summary><div className="tutorial-body">
         <p>Every row below is an unlock explanation, not a recommendation. A “collection/vendor gate” means it opens cosmetics, decor, pets, mounts, titles, or vendor stock; it does not improve combat power. The four Season 2 gear rows override the old Season 1 guide values.</p>
         {RANK_BREAKDOWN.map(([faction, rewards]) => <div key={faction} className="research-table-wrap"><table className="research-table"><caption>{faction}</caption><thead><tr><th>Rank</th><th>What it actually does</th></tr></thead><tbody>{rewards.map((reward, index) => <tr key={index + 1}><th>{index + 1}</th><td>{reward}</td></tr>)}</tbody></table></div>)}
       </div></details>

@@ -47,6 +47,15 @@ The original four tracks and 12.1's Zul'jarra's Forces are 20-rank, Warband-shar
 
 For each major track, normal sources are its zone campaign/side quests, World Quests, Special Assignments, first weekly rare kills, its zone event and weekly, Bountiful Delve caches, and Halduron's Silvermoon dungeon weekly. The dungeon weekly chooses **one** faction for that week; it is not five weekly rewards. An Inscription contract adds its selected track's reputation to World Quests; only one contract can be active at once. Do not infer that all sources are indefinitely farmable: campaign, treasures/lore, first rare kills, and many event rewards are one-time/weekly; ordinary repeat activity after its reward cadence is usually poor rep efficiency.
 
+### How to earn Renown without turning it into a blind grind
+
+1. Choose the next account breakpoint (for example, Singularity 9 for Engineering/Alchemy Knowledge, or Amani 6 for Mining/Skinning Knowledge).
+2. Complete that faction's campaign and side quests while they are available. They are substantial **one-time** progress and unlock normal zone play; they are not a daily route.
+3. On the relevant zone map, prioritize its current World Quests and Special Assignment. A matching Inscription Contract adds reputation to qualifying World Quests, but only **one** contract can be active.
+4. Do that zone's event/weekly when it also appeals on its own merits: Silvermoon Soiree/Runestone, Amani Abundance, Hara'ti Legends of the Haranir, Singularity Stormarion Assault, or Coiled Isle activity.
+5. Take the overlap already on your schedule: Bountiful Delve caches, first weekly rare kills, and Halduron's dungeon weekly. The dungeon weekly selects **one** faction, never all tracks.
+6. Stop treating ordinary repeat kills/runs as a Renown farm after the current one-time and weekly/event rewards are gone. Wait for the next cycle or do the activity for its other rewards.
+
 | Track | Natural event overlap | Best reason to choose its contract |
 |---|---|---|
 | Silvermoon | Saltheril's Soiree / Runestone weekly | pursuing Court 9 / Court recipes or social-standing cosmetics |
