@@ -104,6 +104,10 @@ The table records every rank's meaningful purpose without pretending that every 
 
 **Freshness caution:** rows 2–20 are structure/reward-category evidence from the linked pre-S2 primary guides except Zul'jarra (12.1 guide). The four bold player-power rows are explicitly superseded by current 12.1 evidence. No current evidence found that ordinary vendor gear remains relevant endgame power beyond the refreshed quests.
 
+### Named quartermaster stock and costs
+
+The Dashboard companion now contains an explicit rank-gated vendor catalog (rank, named stock, and documented Voidlight Marl/Moxie cost) for all five major tracks. It intentionally separates this from the rank matrix because a rank can unlock a quest, system feature, activity benefit, title, or currency claim without adding purchasable stock. The catalog's direct sources are the five linked Icy Veins faction vendor tables; their primary-faction structure is **pre-S2** evidence, so verify a live tooltip before spending a large amount of currency. The Season 2 Renown power rewards remain quests, not old vendor inventory: Court 9 helm, Amani 9 neck, Hara'ti 8 waist, and Singularity 7 trinket are current 279 rewards.
+
 ## Profession-to-Renown map
 
 ### Reading the rank rewards: what the labels mean
