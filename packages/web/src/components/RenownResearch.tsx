@@ -61,6 +61,45 @@ const PURCHASE_CATALOG = [
   ] },
 ] as const;
 
+// The guide sources sometimes give a range or a shared price in prose. Keep
+// the exceptions here rather than repeating that prose against every item.
+// An omitted row intentionally means every entry has the shared row cost.
+const PURCHASE_ITEM_COSTS: Record<string, readonly string[]> = {
+  "Silvermoon Court:2": ["750 Marl each", "5,000 Marl", "3,000 Marl"],
+  "Silvermoon Court:7": ["250 Marl", "500 Marl", "250 Marl", "250 Marl", "250 Marl"],
+  "Silvermoon Court:11": ["250 Marl", "500 Marl"],
+  "Silvermoon Court:15": ["250 Marl", "250 Marl", "500 Marl", "250 Marl"],
+  "Amani Tribe:2": ["750 Marl each", "750 Marl each", "2,500 Marl"],
+  "Amani Tribe:5": ["1,500 Marl + 150 Scribe Moxie", "1,500 Marl", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie"],
+  "Amani Tribe:11": ["250 Marl", "150 Marl"],
+  "Hara'ti:2": ["750 Marl each", "2,500 Marl each"],
+  "Hara'ti:7": ["150 Marl", "250 Marl", "150 Marl"],
+  "The Singularity:3": ["250 Marl", "250 Marl", "150 Marl"],
+  "The Singularity:5": ["150 Marl", "250 Marl", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "1,500 Marl + 150 relevant Moxie", "250 Marl", "1,500 Marl + 150 relevant Moxie", "250 Marl", "1,500 Marl + 150 Scribe Moxie", "1,500 Marl + 150 relevant Moxie"],
+  "The Singularity:8": ["150 Marl", "250 Marl", "250 Marl"],
+  "The Singularity:12": ["250 Marl", "250 Marl", "150 Marl"],
+  "The Singularity:18": ["250 Marl", "250 Marl", "500 Marl"],
+  "Zul'jarra's Forces:7": ["150 Marl", "150 Marl", "250 Marl"],
+  "Zul'jarra's Forces:15": ["150 Marl", "150 Marl", "250 Marl", "5,000 Marl"],
+  "Zul'jarra's Forces:18": ["250 Marl", "250 Marl", "250 Marl", "5,000 Marl each"],
+};
+
+const PURCHASE_ROLLUP_LABELS: Record<string, string> = {
+  "Silvermoon Court:2": "armor-type helms, regalia, and cloak",
+  "Amani Tribe:2": "starter neck choices and a cloak",
+  "Hara'ti:2": "armor-type waists and cloaks",
+  "The Singularity:2": "armor-type gloves",
+  "Zul'jarra's Forces:2": "Cloak of the Hash'ura",
+};
+
+function describePurchaseRollup(faction: string, rank: number, stock: readonly string[]) {
+  const label = PURCHASE_ROLLUP_LABELS[`${faction}:${rank}`];
+  if (label) return label;
+  if (stock.length <= 2) return stock.join(" and ");
+  if (stock.length === 3) return `${stock[0]}, ${stock[1]}, and ${stock[2]}`;
+  return `${stock[0]}, ${stock[1]}, and ${stock.length - 2} more`;
+}
+
 export default function RenownResearch() {
   return (
     <section id="renown" className="research-section" aria-labelledby="renown-heading">
@@ -155,7 +194,14 @@ export default function RenownResearch() {
       <details className="mechanic-detail"><summary><span>7</span>Exactly what each Renown vendor sells at a newly unlocked rank</summary><div className="tutorial-body">
         <p>This is the companion to the breakpoint table: every row names the documented <strong>purchasable</strong> stock unlocked at that Renown rank and its documented price. It deliberately excludes ranks that only grant an activity/system benefit, a title, a quest, or a currency claim. A rank unlock is <em>eligibility</em>; it does not give you the item or consume its Moxie for you.</p>
         <div className="research-evidence"><strong>Version safety:</strong> this catalog is current vendor-structure evidence, but the four Season 2 power rewards remain <strong>quests</strong>, not an old vendor purchase: Court 9 helm, Amani 9 neck, Hara'ti 8 waist, and Singularity 7 trinket. Their current ilvl is 279; do not read the old ilvl-180 starter stock as a fresh-90 upgrade recommendation. Confirm a live vendor tooltip before spending a large amount of Voidlight Marl or Moxie.</div>
-        {PURCHASE_CATALOG.map(({ faction, source, rows }) => <div key={faction} className="research-table-wrap"><h3>{faction} — <SourceLink href={source}>vendor source</SourceLink></h3>{rows.map(([rank, items, cost]) => { const stock = items.split("; "); return <details className="mechanic-detail" key={rank}><summary><span>R{rank}</span>{stock.length} newly available purchase{stock.length === 1 ? "" : "s"}</summary><div className="tutorial-body"><div className="research-table-wrap"><table className="research-table"><thead><tr><th>Named stock</th><th>Documented cost / currency note</th></tr></thead><tbody>{stock.map((item) => <tr key={item}><td>{item}</td><td>{cost}</td></tr>)}</tbody></table></div></div></details>})}</div>)}
+        {PURCHASE_CATALOG.map(({ faction, source, rows }) => <div key={faction} className="research-table-wrap"><h3>{faction} — <SourceLink href={source}>vendor source</SourceLink></h3>{rows.map(([rank, items, cost]) => {
+          const stock = items.split("; ");
+          const itemCosts = PURCHASE_ITEM_COSTS[`${faction}:${rank}`] ?? stock.map(() => cost);
+          return <details className="mechanic-detail" key={rank}>
+            <summary><span>R{rank}</span>{describePurchaseRollup(faction, rank, stock)}</summary>
+            <div className="tutorial-body"><div className="research-table-wrap"><table className="research-table"><thead><tr><th>Named stock</th><th>Documented cost / currency note</th></tr></thead><tbody>{stock.map((item, index) => <tr key={item}><td>{item}</td><td>{itemCosts[index] ?? cost}</td></tr>)}</tbody></table></div></div>
+          </details>;
+        })}</div>)}
         <p><strong>What “not listed” means:</strong> it is not a missing rank. It means the current research describes that rank as a system unlock, event benefit, quest, currency claim, title, or generic collection gate rather than new named quartermaster stock. Silvermoon social-standing vendors use Brimming Arcana and a separate social rank, so they are intentionally not folded into Court Renown rows.</p>
       </div></details>
       <p className="research-footnote">Detailed rank matrix, exact recipe mapping, source freshness and disagreement log: <code>docs/MIDNIGHT_12_1_RENOWN_REPUTATION_RESEARCH.md</code>. Broader context: <code>docs/MIDNIGHT_12_1_ENDGAME_RESEARCH.md</code>.</p>
