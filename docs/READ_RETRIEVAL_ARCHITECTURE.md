@@ -34,6 +34,29 @@ empty. Snapshot history deliberately returns compact metadata, not raw exports.
 Renown is deliberately `UNKNOWN` until WoWSync captures it. This is separate
 from research retrieval about how Renown works.
 
+## Read-only storage boundary
+
+The normal Dashboard/import path uses `SnapshotStore`, which extends the
+smaller `SnapshotReadStore` with explicit mutation operations. External
+deterministic consumers must accept only `SnapshotReadStore` and must open the
+database through `SqliteSnapshotReadStore`, never `SqliteSnapshotStore`.
+
+`SqliteSnapshotReadStore` opens an existing database with Node SQLite's
+`readOnly: true` connection option. It refuses missing files, validates every
+table needed by the current schema, and fails clearly for invalid or
+incompatible files. It never creates a database, runs schema creation or
+migration SQL, changes `journal_mode`, or runs the shared-storage backfill.
+The ordinary Dashboard/import store remains responsible for all initialization
+and writes.
+
+SQLite in WAL mode may create transient `-wal` / `-shm` coordination sidecars
+while a read-only connection is open. This is SQLite's read coordination, not a
+schema or journal-mode change: the primary database remains unchanged and the
+read path executes no persistent-write PRAGMA. Do not substitute SQLite's
+`immutable=1` URI flag for this live reader; that mode is only safe when the
+database and its WAL state cannot change, which is not true while the Dashboard
+may import new data.
+
 ## Research registry
 
 `ResearchRegistry` indexes explicitly registered Markdown documents only. Each

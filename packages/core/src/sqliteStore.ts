@@ -1,4 +1,5 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
 import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
 import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } from "./chronology.ts";
@@ -57,6 +58,7 @@ import type {
   RecentChange,
   SharedStorageBackfillResult,
   SharedStorageImportOutcome,
+  SnapshotReadStore,
   SnapshotStore,
   StoredCharacterSummary,
   StoredSnapshot,
@@ -410,15 +412,52 @@ function toStoredSnapshot(row: SnapshotRow): StoredSnapshot {
   };
 }
 
+export class SnapshotReadStoreOpenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SnapshotReadStoreOpenError";
+  }
+}
+
+interface SqliteStoreOpenOptions {
+  /** Internal support for the narrow SqliteSnapshotReadStore wrapper only. */
+  readOnly?: boolean;
+}
+
+const READ_ONLY_REQUIRED_TABLES = [
+  "characters",
+  "snapshots",
+  "store_meta",
+  "shared_observations",
+  "shared_observation_sources",
+  "shared_owner_clears",
+  "snapshot_currency_sections",
+  "snapshot_currencies",
+  "item_metadata_evidence",
+] as const;
+
 export class SqliteSnapshotStore implements SnapshotStore {
   private db: DatabaseSync;
   private stmts: Record<string, StatementSync>;
+  private readonly readOnly: boolean;
 
-  constructor(path: string) {
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA journal_mode = WAL;");
-    this.db.exec(SCHEMA);
-    this.stmts = {
+  constructor(path: string, options: SqliteStoreOpenOptions = {}) {
+    this.readOnly = options.readOnly === true;
+    if (this.readOnly && (path === ":memory:" || !existsSync(path))) {
+      throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: the database file does not exist (${path}).`);
+    }
+    try {
+      this.db = this.readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path);
+    } catch (error) {
+      if (this.readOnly) throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+    if (!this.readOnly) {
+      this.db.exec("PRAGMA journal_mode = WAL;");
+      this.db.exec(SCHEMA);
+    }
+    try {
+      this.stmts = {
       findCharacterByKey: this.db.prepare("SELECT * FROM characters WHERE identity_key = ?"),
       insertCharacter: this.db.prepare(
         "INSERT INTO characters (version, realm, name, identity_key, class, faction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -521,8 +560,29 @@ export class SqliteSnapshotStore implements SnapshotStore {
       deleteCurrenciesForCharacter: this.db.prepare("DELETE FROM snapshot_currencies WHERE character_id = ?"),
       deleteCurrencySectionsForCharacter: this.db.prepare("DELETE FROM snapshot_currency_sections WHERE character_id = ?"),
     };
-    // One-time, idempotent: journals shared storage already present in stored snapshots.
-    if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
+      if (this.readOnly) {
+        this.assertReadOnlySchema();
+      } else {
+        // One-time, idempotent: journals shared storage already present in stored snapshots.
+        if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
+      }
+    } catch (error) {
+      this.db.close();
+      if (this.readOnly) {
+        if (error instanceof SnapshotReadStoreOpenError) throw error;
+        throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
+    }
+  }
+
+  private assertReadOnlySchema(): void {
+    const rows = many<{ name: string }>(this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'"));
+    const tables = new Set(rows.map((row) => row.name));
+    const missing = READ_ONLY_REQUIRED_TABLES.filter((table) => !tables.has(table));
+    if (missing.length > 0) {
+      throw new SnapshotReadStoreOpenError(`WoWSync database schema is missing required table(s): ${missing.join(", ")}. Open it through the normal Dashboard/import path to create or migrate it.`);
+    }
   }
 
   /**
@@ -1201,5 +1261,40 @@ export class SqliteSnapshotStore implements SnapshotStore {
 
   close(): void {
     this.db.close();
+  }
+}
+
+/**
+ * External-consumer SQLite entry point. It owns a DatabaseSync connection
+ * opened with Node's readOnly option and exposes only SnapshotReadStore.
+ * It never runs WAL/schema setup or the shared-storage backfill.
+ */
+export class SqliteSnapshotReadStore implements SnapshotReadStore {
+  private readonly store: SqliteSnapshotStore;
+
+  constructor(path: string) {
+    this.store = new SqliteSnapshotStore(path, { readOnly: true });
+  }
+
+  getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
+    return this.store.getCharacterCurrencies(identityKey);
+  }
+  projectSharedStorage(): SharedStorageProjection {
+    return this.store.projectSharedStorage();
+  }
+  listVersions(): VersionSummary[] {
+    return this.store.listVersions();
+  }
+  listCharacters(version: VersionOrUnknown): StoredCharacterSummary[] {
+    return this.store.listCharacters(version);
+  }
+  listSnapshots(identityKey: string): StoredSnapshot[] {
+    return this.store.listSnapshots(identityKey);
+  }
+  buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts {
+    return this.store.buildAccountFacts(version, now);
+  }
+  close(): void {
+    this.store.close();
   }
 }

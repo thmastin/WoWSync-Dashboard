@@ -156,7 +156,26 @@ export interface DeleteCharacterResult {
   snapshotsDeleted: number;
 }
 
-export interface SnapshotStore {
+/**
+ * Narrow deterministic read dependency for external consumers. It deliberately
+ * excludes every import, deletion, journal-admission, and metadata-write
+ * operation exposed by SnapshotStore.
+ */
+export interface SnapshotReadStore {
+  /** The character's Retail currencies as OBSERVED / LAST_SEEN / UNKNOWN (never zero). */
+  getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined;
+  /** The current state of every shared-storage owner, derived at read time. */
+  projectSharedStorage(): SharedStorageProjection;
+  listVersions(): VersionSummary[];
+  listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
+  listSnapshots(identityKey: string): StoredSnapshot[];
+  /** Deterministic account-level facts for one explicit version space. */
+  buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
+  close(): void;
+}
+
+/** The normal Dashboard/import store: SnapshotReadStore plus explicit mutation APIs. */
+export interface SnapshotStore extends SnapshotReadStore {
   /**
    * Imports one export. Idempotent: the same export twice is a no-op
    * (`isDuplicate`). Snapshots are ordered by observation time, so an older
@@ -164,8 +183,6 @@ export interface SnapshotStore {
    * failure leaves neither a partial snapshot nor a snapshot-less character.
    */
   importSnapshot(raw: string, extras?: ImportExtras): ImportResult;
-  /** The character's Retail currencies as OBSERVED / LAST_SEEN / UNKNOWN (never zero). Undefined when the character does not exist. */
-  getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined;
   /** Per-currencyID account view for one version: every character's value and state; account-wide currencies once, never summed. */
   listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies;
   /**
@@ -184,8 +201,6 @@ export interface SnapshotStore {
    * shared-storage domain model. Character deletion never removes anything from it.
    */
   loadSharedJournal(): SharedJournal;
-  /** The current state of every shared-storage owner: `projectJournal(loadSharedJournal())`. Read-time and DERIVED; nothing is cached. */
-  projectSharedStorage(): SharedStorageProjection;
   /**
    * EXPLICIT, owner-scoped, destructive: deletes that one owner's entire journal history (every
    * observation and every provenance row), atomically. The caller names the owner with the typed
@@ -222,10 +237,7 @@ export interface SnapshotStore {
   listItemMetadata(version: VersionOrUnknown): ItemMetadataView[];
   /** The stored item-metadata evidence (with provenance) for one game version, for diagnostics and tests. */
   loadItemEvidence(version: WowVersion): ItemFacetEvidence[];
-  listVersions(): VersionSummary[];
-  listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   getCharacter(identityKey: string): StoredCharacterSummary | undefined;
-  listSnapshots(identityKey: string): StoredSnapshot[];
   getSnapshot(id: number): StoredSnapshot | undefined;
   /**
    * Meaningful consecutive-pair changes for one version, newest observation first.
@@ -233,9 +245,6 @@ export interface SnapshotStore {
    * UI display caps belong after realm scoping, not as a store default.
    */
   recentChanges(version: VersionOrUnknown, limit?: number): RecentChange[];
-  /** The deterministic account-level facts layer for one version space. `now` defaults to the wall clock but can be pinned for deterministic tests. */
-  buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
   /** The full, all-versions deterministic export used by the "Export Dashboard Context" developer tool. `now` defaults to the wall clock but can be pinned for deterministic tests. */
   buildAccountContext(now?: number): AccountContext;
-  close(): void;
 }

@@ -13,7 +13,7 @@ export * from "./accountFacts.ts";
 export * from "./accountContext.ts";
 export * from "./llmContext.ts";
 export * from "./store.ts";
-export { SqliteSnapshotStore } from "./sqliteStore.ts";
+export { SqliteSnapshotStore, SqliteSnapshotReadStore, SnapshotReadStoreOpenError } from "./sqliteStore.ts";
 export * from "./sharedStorage.ts";
 export * from "./sharedStorageApi.ts";
 export * from "./itemMetadata.ts";

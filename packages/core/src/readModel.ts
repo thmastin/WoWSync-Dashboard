@@ -5,7 +5,7 @@ import { buildSharedStorageResponse, type SharedStorageResponse } from "./shared
 import type { AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import type { CharacterCurrencies } from "./wowCurrencies.ts";
 import type { EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
-import type { SnapshotStore, StoredCharacterSummary, StoredSnapshot, VersionSummary } from "./store.ts";
+import type { SnapshotReadStore, StoredCharacterSummary, StoredSnapshot, VersionSummary } from "./store.ts";
 import { WOW_VERSIONS } from "./version.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
@@ -51,9 +51,9 @@ function requireVersion(version: unknown): asserts version is VersionOrUnknown {
 }
 
 export class DashboardReadModel {
-  private readonly store: SnapshotStore;
+  private readonly store: SnapshotReadStore;
   private readonly now: () => number;
-  constructor(store: SnapshotStore, now: () => number = () => Math.floor(Date.now() / 1000)) {
+  constructor(store: SnapshotReadStore, now: () => number = () => Math.floor(Date.now() / 1000)) {
     this.store = store;
     this.now = now;
   }
