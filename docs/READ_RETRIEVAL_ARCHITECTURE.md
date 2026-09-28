@@ -49,13 +49,13 @@ migration SQL, changes `journal_mode`, or runs the shared-storage backfill.
 The ordinary Dashboard/import store remains responsible for all initialization
 and writes.
 
-SQLite in WAL mode may create transient `-wal` / `-shm` coordination sidecars
-while a read-only connection is open. This is SQLite's read coordination, not a
-schema or journal-mode change: the primary database remains unchanged and the
-read path executes no persistent-write PRAGMA. Do not substitute SQLite's
-`immutable=1` URI flag for this live reader; that mode is only safe when the
-database and its WAL state cannot change, which is not true while the Dashboard
-may import new data.
+SQLite in WAL mode may create empty `-wal` / `-shm` coordination sidecars for a
+read-only connection; SQLite may leave those coordination files after close.
+This is not a schema or journal-mode change: the primary database remains
+unchanged and the read path executes no persistent-write PRAGMA. Do not
+substitute SQLite's `immutable=1` URI flag for this live reader; that mode is
+only safe when the database and its WAL state cannot change, which is not true
+while the Dashboard may import new data.
 
 ## Research registry
 
