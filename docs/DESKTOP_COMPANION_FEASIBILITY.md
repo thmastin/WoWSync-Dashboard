@@ -1,7 +1,6 @@
 # Desktop companion: feasibility checkpoint (ROADMAP item 8)
 
-Status: **Slice 1 implemented, awaiting review** (`npm run watch:saved`; see [section 8](#8-smallest-vertical-slice-after-approval-and-stop-for-review-checklist)
-and [Review decisions](#review-decisions-recorded-when-slice-1-was-approved)). Nothing beyond Slice 1 exists: no tray, installer,
+Status: **Slice 1 implemented** (`npm run watch:saved`; review decisions are recorded below). Nothing beyond Slice 1 exists: no tray, installer,
 autostart, multi-file watching or Electron. The rest of this document is the design it was built from.
 Written 2026-09-21 against branch `feature/dashboard-integration`.
 
@@ -208,7 +207,7 @@ program running on your machine can still call the API."
 
 ## 8. Smallest vertical slice after approval, and stop-for-review checklist
 
-### Slice (implemented; awaiting review)
+### Slice (implemented; packaging deferred)
 
 As built: `packages/server/src/watchSaved.ts` (pure core: injected filesystem, clock, fetch and output; `tick()` is one
 deterministic step), `watchSavedCli.ts` (thin entry), `packages/server/test/watchSaved.test.ts`, the `watch:saved` script, and the POST /

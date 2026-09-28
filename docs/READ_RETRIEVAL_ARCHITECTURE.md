@@ -1,16 +1,19 @@
 # Provider-Neutral Read and Research Retrieval
 
-Status: Phase 5 local-only MCP development. The provider-neutral core is now
-consumed by a local STDIO adapter; no ChatGPT MCP App, Secure MCP Tunnel,
-network listener, or LLM-provider integration is configured.
+Status: Phase 6 complete and live-validated (2026-09-28). The provider-neutral
+core is consumed by a dedicated stdio MCP adapter, connected to ChatGPT through
+OpenAI Secure MCP Tunnel. This does not change the existing Ask My Account
+provider path or make the Dashboard HTTP server public. See
+[`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for operations and acceptance
+evidence.
 
 ## Purpose
 
 `DashboardReadModel` is a narrowly scoped, deterministic read surface over the
-existing `SnapshotStore`. It is intentionally not an HTTP wrapper, SQL query
-surface, filesystem browser, or provider adapter. Its consumers may eventually
-include Dashboard UI, Ask My Account, and separately authorized external
-adapters, but it imports no provider-specific code.
+`SnapshotReadStore` interface. It is intentionally not an HTTP wrapper, SQL query
+surface, filesystem browser, or provider adapter. The current external
+consumer is `packages/mcp`; Dashboard UI and Ask My Account could adopt this
+provider-neutral core later. The core imports no LLM-provider-specific code.
 
 Every stateful character/account operation requires an explicit recognized
 WoW version. Character lookup is constrained to that version and returns an
@@ -51,21 +54,22 @@ migration SQL, changes `journal_mode`, or runs the shared-storage backfill.
 The ordinary Dashboard/import store remains responsible for all initialization
 and writes.
 
-## Local MCP adapter
+## Local MCP adapter and private ChatGPT connection
 
-`packages/mcp` is a thin, provider-specific edge adapter; `packages/core`
+`packages/mcp` is a thin MCP-protocol edge adapter; `packages/core`
 does not depend on it. The MCP process instantiates only
 `SqliteSnapshotReadStore`, `DashboardReadModel`, and the fixed
 `ResearchRegistry` manifest. It never instantiates `SqliteSnapshotStore`.
-Its sole Phase 5 transport is local STDIO, so it opens no listener or public
+Its transport is local STDIO, so the MCP process opens no listener or public
 endpoint. Its eleven registered tools are closed-world, bounded, and marked
 read-only; it exposes no mutation, raw SQL, filesystem, shell, raw-export, or
 generic Dashboard-API proxy tool.
 
 MCP serialization preserves the core's version isolation, character ambiguity,
-and provenance contract. ChatGPT plugin/MCP-App setup and Secure MCP Tunnel
-remain separate future work. See `MCP_DEVELOPMENT.md` for local startup and
-protocol-validation instructions.
+and provenance contract. The personal ChatGPT MCP App and Secure MCP Tunnel
+have now passed live discovery and invocation acceptance. The process still
+has no public listener; `tunnel-client` maintains the outbound private tunnel.
+See `MCP_DEVELOPMENT.md` for local startup, operations, and acceptance details.
 
 SQLite in WAL mode may create empty `-wal` / `-shm` coordination sidecars for a
 read-only connection; SQLite may leave those coordination files after close.
@@ -83,22 +87,32 @@ version/patch scope where known, deterministic SHA-256 content hash, parsed
 heading sections, and extractable source URLs. It does not fetch URLs, execute
 Markdown, or permit caller-supplied file paths.
 
-The current transition manifest points to the four existing Dashboard `docs/`
+The current registration manifest points to the four existing Dashboard `docs/`
 Midnight documents because they are the only extant copies. `D:\dev\wow-stuff\truth`
 remains the intended long-term canonical truth repository, but migration is
 deferred until its research layout exists and all Dashboard references can be
 updated deliberately. A future derived/presentation copy can record the
 registry document ID plus content hash for stale-copy detection.
 
+Sections are derived deterministically from Markdown headings, retaining their
+hierarchy in stable section IDs. Search is bounded deterministic keyword search
+over registered titles, headings, and body text with supported version/patch/
+season/document-class filters. Section retrieval returns one registered
+section, its available citations, and explicit truncation metadata at the
+20,000-character bound. It does not fetch external URLs. Content hashes allow
+later checks of declared derived copies; the current React Research UI is not
+automatically semantically compared to Markdown.
+
 Document classes prevent versioned researched game documentation from being
 silently treated as equal evidence to operational truth. Search defaults are a
 consumer decision; callers should use `VERSIONED_RESEARCH` for game-mechanic
 questions and explicitly opt into `OPERATIONAL_TRUTH` when appropriate.
 
-## Future adapter audit recommendation
+## Audit logging (not implemented)
 
-No audit logger exists in this phase because no external adapter exists. A
-future local-only adapter should retain a rolling ~30 days of compact events:
+The MCP adapter does not write an audit log into the WoWSync database. If a
+future operational requirement adds local audit logging, prefer a rolling ~30
+days of compact events:
 timestamp, operation/tool name, version and non-secret scope identifiers,
 success/error, and optional duration. It must exclude credentials, API keys,
 complete research bodies, and raw exports unless narrowly enabled for debugging.

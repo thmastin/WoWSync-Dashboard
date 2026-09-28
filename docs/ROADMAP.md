@@ -1,10 +1,11 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-23 (Retail Midnight profession gaps + primary-by-expansion). Prior: 2026-09-23 (Professions tab UX rebuild: craft/gather + primary). Dashboard baseline: branch `feature/dashboard-integration` (not
-merged to `main`, which is at `797fc3d`), including the closed shared-storage reconciliation
-milestone (C1-C6), the item-metadata consumer (parser, store, API, Shared Storage / inventory
-presentation) and the SavedVariables developer bridge. Tests at that baseline: core 471, server 161, web 150; typechecks clean;
-production build succeeds.
+Last updated: 2026-09-28 (Phase 6 WoWSync MCP + Secure MCP Tunnel live acceptance and documentation reconciliation).
+Historical product baseline (2026-09-23; not a description of today's full branch state):
+`feature/dashboard-integration` had not yet merged to `main` (then at `797fc3d`)
+and included the closed shared-storage reconciliation milestone (C1-C6), item-metadata
+consumer, and SavedVariables developer bridge. Validation at that baseline was core
+471, server 161, web 150; typechecks clean and production build successful.
 
 ## How to use this roadmap
 
@@ -62,7 +63,7 @@ Work happening now.
   `--list` and `--dry-run` contact nothing. It replaced the scratch extraction used to validate item metadata. It is a
   command run by hand: it does **not** watch files, react to `/wowsync`, force a `/reload`, run in the background or start the
   server, so it is **not** the Desktop companion (item 8 below; its Slice 1, `npm run watch:saved`, is the same bridge run by a
-  foreground watch loop and is awaiting review). Detail: [README.md](../README.md) ("Developer
+  foreground watch loop; Slice 1 is implemented and packaging remains deferred). Detail: [README.md](../README.md) ("Developer
   bridge"), [ARCHITECTURE.md](ARCHITECTURE.md) ("SavedVariables developer bridge").
 
 - [x] **Richer item metadata / expansion awareness: producer and Dashboard consumer done and validated
@@ -338,6 +339,7 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **Phase 6 external read integration: complete and live-validated (2026-09-28).** The provider-neutral read model, strict SQLite read-only store, registered research retrieval, and dedicated MCP server are implemented. The personal ChatGPT MCP App was connected through Secure MCP Tunnel and invoked successfully. See [MCP development, operations, and acceptance](MCP_DEVELOPMENT.md), [read/research retrieval architecture](READ_RETRIEVAL_ARCHITECTURE.md), and [architecture](ARCHITECTURE.md). This does not implement Renown capture, arbitrary account queries, MCP mutation, or public Dashboard access. No Phase 7 work is started or implied.
 - Retail Midnight profession planning: plumb `expansion`, rank expansions, Covered = Midnight holders only, Gaps add Missing Midnight (olderOnly); primary by expansion then skill; Overview Midnight gap counts; 2026-09-23 on `feature/dashboard-integration`
 - Top-level Professions tab (coverage table + gaps; Overview one-line summary navigates there); roster all-column sort; gold thousands commas via formatCopper; 2026-09-23 on `feature/dashboard-integration`
 - Professions tab UX rebuild: gaps-first (none then unknown), Crafting vs Gathering split, covered rows show one derived primary (+N more expand); `professionPlanningKind` + `selectPrimaryProfessionCharacter` in core; 2026-09-23 on `feature/dashboard-integration`
@@ -366,6 +368,7 @@ Guard against re-adding. This is not a changelog.
   - Still open, recorded above: stable Warband account discriminator and guild region question ([Needs
     Decision](#needs-decision)); per-tab Guild item rows (addon); shared-storage consumers, import-dialog
     surfacing, informationless-guild detail and delete-all-data ([Later](#later)).
-- Integration branch `feature/dashboard-integration` (`0f525a7`): main + trust hardening +
-  Warband + Guild Bank + product review. Not yet merged to `main`.
-
+- Integration branch `feature/dashboard-integration` includes the Dashboard
+  trust hardening, shared storage, item metadata, provider-neutral read model,
+  strict read-only MCP, and Phase 6 live ChatGPT/Tunnel validation. It remains
+  a feature branch and has not been merged to `main`.

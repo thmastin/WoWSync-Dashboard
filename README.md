@@ -41,7 +41,7 @@ is quarantined into an `unknown-version` space rather than guessed.
 
 ## Local-first architecture
 
-Everything runs on your machine:
+The Dashboard itself runs on your machine:
 
 - **Storage:** SQLite (Node's built-in `node:sqlite`), one file at
   `data/wowsync.sqlite` by default. No hosted backend, no telemetry, no
@@ -52,11 +52,33 @@ Everything runs on your machine:
 - **Parser/diff engine:** `packages/core` — pure TypeScript, no I/O beyond
   the storage abstraction it's handed.
 
-Nothing is transmitted anywhere unless you explicitly use **Ask My
-Account** (below), an experimental, opt-in feature that sends one
-question and the current account context to an LLM provider you
-configure. Everything else in this app makes zero outbound network
-calls.
+The ordinary Dashboard does not synchronize data to a hosted service. Two
+separate, explicitly configured features can send selected information
+outbound: **Ask My Account** sends its request context to the configured LLM
+provider, and the optional read-only MCP integration sends only requested MCP
+tool results through OpenAI Secure MCP Tunnel. The MCP server and Dashboard
+remain local; the tunnel is a separate process and does not expose the
+Dashboard's HTTP API. See [MCP development and operations](docs/MCP_DEVELOPMENT.md).
+
+## Architecture and research references
+
+The core data model keeps Retail, Classic Era, TBC Anniversary, Forever, and
+unrecognized-version data isolated. Values retain their evidence state:
+`OBSERVED`, `DERIVED`, `LAST_SEEN`, or `UNKNOWN`; unknown is not zero and
+historical `LAST_SEEN` data is not presented as current. The optional external
+retrieval path has a separate strict read-only SQLite store and a registered
+research index; it does not reuse the writable Dashboard API as an integration
+boundary.
+
+- [Architecture](docs/ARCHITECTURE.md) — packages, storage, provenance, and
+  read boundaries.
+- [Read/research retrieval design](docs/READ_RETRIEVAL_ARCHITECTURE.md) —
+  provider-neutral deterministic queries and registered Markdown research.
+- [MCP development, Secure MCP Tunnel runbook, and Phase 6 acceptance](docs/MCP_DEVELOPMENT.md) —
+  optional ChatGPT connection. MCP is not required to run the Dashboard.
+- [Roadmap](docs/ROADMAP.md) — current implementation status and open work.
+- [Midnight research index](docs/MIDNIGHT_12_1_ENDGAME_RESEARCH.md) — current
+  game research and linked profession/Renown references.
 
 ## Import workflow
 
@@ -64,7 +86,7 @@ Click **Import WoWSync**, then either paste an export (copy from
 `WOWSYNC v1` through `[END]` in-game) or drop a `.txt` file. The importer:
 
 1. Validates the export starts with `WOWSYNC v1`.
-2. Parses all eight sections deterministically (not with loose regexes).
+2. Parses the currently supported export sections deterministically (including the optional additive item-metadata section; not with loose regexes).
 3. Detects the WoW version from the client info.
 4. Resolves character identity (version + realm + name — see
    `packages/core/src/identity.ts` for why GUID isn't part of the key yet).
@@ -148,7 +170,7 @@ force a save or run in the background. To have the same import happen when WoW s
 
 `npm run watch:saved` is the bridge above run by a loop, so you no longer have to remember to run it. It is a **foreground command**
 (stop it with Ctrl+C), not a tray app, installer, service or autostart. It is the first slice of the desktop companion
-([ROADMAP](docs/ROADMAP.md) item 8, design in [docs/DESKTOP_COMPANION_FEASIBILITY.md](docs/DESKTOP_COMPANION_FEASIBILITY.md)) and is awaiting review.
+([ROADMAP](docs/ROADMAP.md) item 8, design in [docs/DESKTOP_COMPANION_FEASIBILITY.md](docs/DESKTOP_COMPANION_FEASIBILITY.md)); Slice 1 is implemented, with packaging and persistent startup still deferred.
 
 ```
 npm start                                                          # the Dashboard, in one terminal
@@ -415,7 +437,7 @@ Manual paste, a dropped `.txt` file, and a hypothetical future
 auto-generated snapshot file all go through the exact same importer. The one thing that exists today is the
 [developer bridge](#developer-bridge-import-a-saved-export-from-wows-savedvariables), a command you run by hand that reads what
 GearExport already saved and sends it to the same endpoint, and the [watcher](#watcher-import-automatically-when-wow-saves-slice-1)
-(`npm run watch:saved`, a foreground command awaiting review) runs the same import when WoW saves the file. A packaged desktop
+(`npm run watch:saved`, a foreground command) runs the same import when WoW saves the file. A packaged desktop
 companion (tray, installer, autostart, several accounts) is still future work.
 
 ## Export Dashboard Context (developer tool)
@@ -457,9 +479,10 @@ WoWSync addon → Dashboard SQLite → AccountFacts → GET /api/account-context
 
 A small **Ask My Account** button in the header (next to Developer)
 opens a box: type a question, click **Ask**, get an answer. This is the
-**first and only** feature in this app that talks to an external service
+**first feature in the Dashboard UI** that talks to an external service
 — everything described above (import, overview, economy, Developer
-export) stays 100% local. Treat this feature as an experimental proof of
+export) stays local. The separate MCP/Tunnel process is documented below and
+is not used by this UI flow. Treat this feature as an experimental proof of
 concept, not a polished product surface.
 
 **Setup.** Requires an OpenAI API key. Create `.env` at the repo root
@@ -519,8 +542,8 @@ the database, not in the browser), and there's no multi-turn memory.
 - Say what's missing rather than guess when the context doesn't answer
   the question.
 
-**What this is not.** No autonomous agent, no tool/function calling, no
-MCP, no memory, no RAG/vector DB, no scheduled or background jobs, no
+**What this Ask My Account feature is not.** No autonomous agent, no
+tool/function calling in this route, no MCP in this route, no memory, no RAG/vector DB, no scheduled or background jobs, no
 WoW API access, no addon write-back, no gameplay automation. It answers
 one question with one provider call and stops.
 
@@ -543,11 +566,15 @@ and real imported character data.
 
 - Local-first: your character data lives in a SQLite file on your disk.
 - No analytics, no telemetry.
-- Every feature except **Ask My Account** (above) makes zero network
-  calls. Ask My Account is opt-in per question and sends only a system
-  prompt, the account context JSON, and your question to the provider you
-  configure — see the data boundary above for the full list of what is
-  and isn't sent.
+- Ask My Account is opt-in per question and sends its documented prompt,
+  account-context JSON, and question to the provider you configure.
+- The optional WoWSync MCP connection is separately opt-in: when the local
+  `tunnel-client` runs, it makes outbound HTTPS connections to OpenAI and
+  relays requested, bounded results from the dedicated read-only MCP process.
+  It does not make the Dashboard API public or upload the SQLite database.
+- Without either feature being used, the Dashboard's account data remains on
+  this machine. See [MCP operations](docs/MCP_DEVELOPMENT.md) for the local
+  process and trust boundary.
 
 ## Network exposure
 
@@ -575,6 +602,10 @@ protection.** Only do it on a network you trust; the server prints a warning
 at startup when the bind is not loopback. An invalid `WOWSYNC_HOST` makes the
 server refuse to start rather than guess a wider bind. (Only `WOWSYNC_HOST`
 is read — never the generic `HOST`/`HOSTNAME` variables.)
+
+The optional WoWSync MCP integration does not require a LAN bind: keep the
+Dashboard on loopback and use its separate outbound Secure MCP Tunnel process.
+Do not widen `WOWSYNC_HOST` as a ChatGPT connectivity workaround.
 
 **Upgrading from an older build:** stop any running WoWSync server first. Older
 builds listened on every network interface, and the new server refuses to start

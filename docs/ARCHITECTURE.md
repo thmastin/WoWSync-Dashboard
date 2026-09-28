@@ -56,6 +56,66 @@ Ask My Account (POC)           packages/server/src/llm.ts, app.ts
    LLM provider (OpenAI-compatible, configured via env vars)
 ```
 
+## Current external read and research path (Phase 6 validated)
+
+The MCP integration is a separate, optional read path; it does not route
+ChatGPT through the Dashboard Express API or replace the normal import/UI path:
+
+```text
+WoWSync export -> normal writable SqliteSnapshotStore -> Dashboard UI/import
+                         |
+                         +-> SQLite opened by SqliteSnapshotReadStore
+                               -> DashboardReadModel
+                               -> fixed ResearchRegistry
+                               -> packages/mcp (11 read-only tools, stdio)
+                               -> tunnel-client (outbound Secure MCP Tunnel)
+                               -> personal ChatGPT MCP App (normal-chat invocation validated)
+```
+
+The normal Dashboard store can import and perform the explicitly supported
+local management operations. The external path is structurally narrower:
+`DashboardReadModel` depends on `SnapshotReadStore`, and the MCP process opens
+SQLite with `readOnly: true` through `SqliteSnapshotReadStore`. It never opens
+the writable `SqliteSnapshotStore`, initializes or migrates schema, or performs
+database backfills. Schema upgrades belong to the normal writable application
+path, not to MCP startup. A live WAL database may create SQLite coordination
+sidecars when opened read-only; those are not schema changes or account-data
+writes.
+
+The tunnel client starts the dedicated stdio MCP process and calls OpenAI over
+outbound HTTPS. Neither the MCP process nor the Dashboard has a public listener
+for this integration. The MCP boundary exposes no generic SQL, arbitrary
+filesystem paths, shell execution, generic HTTP proxy, raw exports, or mutation
+API. The tunnel runtime credential is supplied outside the repository through
+`CONTROL_PLANE_API_KEY`; it must not be committed or logged.
+
+All account-state requests choose exactly one recognized version (`retail`,
+`classic-era`, `tbc-anniversary`, or `forever`). Unrecognized imports remain
+quarantined as `unknown-version`; that quarantine is not a queryable substitute
+for a recognized version. There is no default-to-Retail or cross-version
+fallback. Results retain `OBSERVED`, `DERIVED`, `LAST_SEEN`, or `UNKNOWN`;
+`UNKNOWN` is not zero, and `LAST_SEEN` is not current. Renown is currently
+`UNKNOWN` because WoWSync does not capture it.
+
+Research is retrieved separately from account state. `ResearchRegistry` serves
+only registered Markdown documents under its configured root, with stable
+document/section identities, version/patch/season metadata, source URLs, and a
+SHA-256 content hash. It does not read arbitrary caller paths or fetch source
+URLs. Dashboard docs remain the current registered runtime corpus; the separate
+`wow-stuff/truth` repository is not read directly by the MCP process.
+
+Profession `coverageStatus: "covered"` means at least one character in that
+version's captured account state has the profession. It does not by itself
+prove current Midnight-tier coverage; consumers must inspect the character's
+profession tier/expansion details. Profession coverage is returned as
+`DERIVED` from the characters included in that version's calculation.
+
+The app and tunnel were live-validated on 2026-09-28. Project-specific
+invocation was not separately asserted by that acceptance record. The exact tool surface,
+normal ChatGPT invocation results, version isolation, provenance checks, and
+current unsupported capabilities are recorded in
+[`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md#phase-6-live-chatgpt-acceptance-2026-09-28).
+
 ## Package layout
 
 - **`packages/core`** — no I/O beyond the storage abstraction it owns.
