@@ -19,3 +19,5 @@ export * from "./sharedStorageApi.ts";
 export * from "./itemMetadata.ts";
 export * from "./savedVariables.ts";
 export * from "./wowCurrencies.ts";
+export * from "./readModel.ts";
+export * from "./researchRegistry.ts";
