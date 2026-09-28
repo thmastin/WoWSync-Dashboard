@@ -1,6 +1,8 @@
 # Provider-Neutral Read and Research Retrieval
 
-Status: Phase 2 foundation (no network adapter, MCP server, or LLM integration).
+Status: Phase 5 local-only MCP development. The provider-neutral core is now
+consumed by a local STDIO adapter; no ChatGPT MCP App, Secure MCP Tunnel,
+network listener, or LLM-provider integration is configured.
 
 ## Purpose
 
@@ -48,6 +50,22 @@ incompatible files. It never creates a database, runs schema creation or
 migration SQL, changes `journal_mode`, or runs the shared-storage backfill.
 The ordinary Dashboard/import store remains responsible for all initialization
 and writes.
+
+## Local MCP adapter
+
+`packages/mcp` is a thin, provider-specific edge adapter; `packages/core`
+does not depend on it. The MCP process instantiates only
+`SqliteSnapshotReadStore`, `DashboardReadModel`, and the fixed
+`ResearchRegistry` manifest. It never instantiates `SqliteSnapshotStore`.
+Its sole Phase 5 transport is local STDIO, so it opens no listener or public
+endpoint. Its eleven registered tools are closed-world, bounded, and marked
+read-only; it exposes no mutation, raw SQL, filesystem, shell, raw-export, or
+generic Dashboard-API proxy tool.
+
+MCP serialization preserves the core's version isolation, character ambiguity,
+and provenance contract. ChatGPT plugin/MCP-App setup and Secure MCP Tunnel
+remain separate future work. See `MCP_DEVELOPMENT.md` for local startup and
+protocol-validation instructions.
 
 SQLite in WAL mode may create empty `-wal` / `-shm` coordination sidecars for a
 read-only connection; SQLite may leave those coordination files after close.
