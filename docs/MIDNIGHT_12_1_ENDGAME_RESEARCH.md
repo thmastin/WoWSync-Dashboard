@@ -14,6 +14,8 @@ Modern gearing is a set of parallel reward lanes, not a single dungeon ladder. O
 
 The recurring decision is: choose content you enjoy that (a) upgrades a weak slot now, (b) advances a weekly Vault option at a level you can reliably complete, or (c) earns the Mistcrest needed by an item you expect to keep. Do not convert this into a requirement to fill every row weekly.
 
+> **28 September 2026 research supplement:** Renown/reputation, 12.1 refreshes, profession breakpoints, minor standings, Journeys, and WoWSync research implications are maintained in `MIDNIGHT_12_1_RENOWN_REPUTATION_RESEARCH.md`. Its current-12.1 evidence supersedes any older Renown gear values in this reference.
+
 ## What 12.1 / Season 2 changed
 
 | Change | Current consequence |

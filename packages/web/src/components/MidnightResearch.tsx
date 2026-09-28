@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { EndgameMechanicsAtlas } from "./EndgameMechanicsAtlas";
+import { EndgameMechanicsAtlas } from "./EndgameMechanicsAtlas.tsx";
+import RenownResearch from "./RenownResearch.tsx";
 
 const SOURCE = {
   blizzardNotes: "https://worldofwarcraft.blizzard.com/en-us/news/24293281/curse-of-ulatek-content-update-notes",
@@ -26,7 +27,7 @@ function ExternalLink({ href, children }: { href: string; children: ReactNode })
 
 const NAV = [
   ["overview", "Overview"], ["atlas", "Endgame map"], ["solo-outdoor", "Delves & Prey"], ["instance-doors", "Group content"], ["power-systems", "Power systems"],
-  ["ladder", "Gearing ladder"], ["vault", "Great Vault"], ["mythic", "Mythic+"], ["crafting", "Crafting"], ["crafter-guide", "Crafter’s guide"], ["tutorials", "Tutorials"], ["social", "Social play"], ["routes", "Routes"], ["verification", "Verification log"],
+  ["ladder", "Gearing ladder"], ["vault", "Great Vault"], ["mythic", "Mythic+"], ["crafting", "Crafting"], ["crafter-guide", "Crafter’s guide"], ["tutorials", "Tutorials"], ["social", "Social play"], ["renown", "Renown & rep"], ["routes", "Routes"], ["verification", "Verification log"],
 ] as const;
 
 export default function MidnightResearch() {
@@ -249,6 +250,8 @@ export default function MidnightResearch() {
         <div className="research-grid research-grid-2"><div><h3>First/main character</h3><ol><li>Finish campaign and 12.1/Vault intro unlocks.</li><li>Use outdoor rewards, Heroics and comfortable Bountiful Delves to replace obvious holes.</li><li>Establish one World Vault option; try LFR/Normal or low M+ only when you want that experience.</li><li>Craft only after choosing a durable weak slot/embellishment.</li><li>Move into M0, Normal raid, +2–5, then Heroic/+6–10 as desired.</li></ol></div><div><h3>Future alt</h3><ol><li>Use the Warband unlocks and transferable gear actually available.</li><li>Pick a stop: playable, reasonably geared, or serious.</li><li>For playable: easy outdoor/Heroic plus a few Bountiful Delves.</li><li>For reasonable: T7–8 Bountiful and one desired Vault row.</li><li>For serious: its own Vault, Catalyst/tier and Spark plan—these are not shared by the main.</li></ol></div></div>
         <p className="research-footnote">Skip repeated account-unlock story and obsolete outdoor farming. Do not skip character-specific weekly progress because another character has done it.</p>
       </section>
+
+      <RenownResearch />
 
       <section id="verification" className="research-section">
         <h2>Verification log</h2>
