@@ -97,6 +97,18 @@ The table records every rank's meaningful purpose without pretending that every 
 
 ## Profession-to-Renown map
 
+### Reading the rank rewards: what the labels mean
+
+- **Profession recipe:** permission for the matching profession holder to buy and learn that named recipe. It does not give materials, craft an item, or teach every alt.
+- **Knowledge tome:** a one-time, character/profession-specific +10 Knowledge Point consumable. This is permanent crafting specialization progress, not account-wide learned skill.
+- **Voidlight Marl:** vendor currency. The rank makes an item eligible; Marl is still separately spent to acquire it.
+- **Soiree / Brimming Arcana:** Eversong's social weekly and its currency. Court-rank Arcana boosts increase currency earned for the four social-standing vendors; their wares are primarily themed cosmetics/decor and some profession-flavor recipes.
+- **Amani Spoils / Abyss Angler / Fused Vitality:** Zul'Aman outdoor treasure, diving-event, and rank-gated Abundance-vendor systems. They expand optional outdoor activity/currency choices; read the live item tooltip before treating an event purchase as a gear upgrade.
+- **Moth hunting / Luminous Dust:** optional Harandar exploration. Rank gates the moth sets; collected moths grant cosmetic-vendor currency, not Hara'ti reputation or combat power.
+- **Research Console / samples / cores / mercenaries:** Voidstorm activity-system access and efficiency. These are not unnamed permanent stat increases; inspect the live Console for the current selection/reward.
+- **Curse Surge / Corrosive Soul:** 12.1 Coiled Isle event. The rank makes the first daily boss eligible for a resource drop; it does not guarantee daily gear.
+- **Collection/vendor gate:** an unlock for a mount, pet, ensemble, decor, title, weapon appearance, or other collection stock. It is a genuine account collection reward but not player power.
+
 ### Permanent +10 Knowledge books (highest priority)
 
 These books are one-time per profession character. Current cross-source consensus is **75 of the relevant Artisan's Moxie and no Voidlight Marl**, although Wowhead's rendered table has an icon/number display conflict; confirm at the live vendor before purchase.

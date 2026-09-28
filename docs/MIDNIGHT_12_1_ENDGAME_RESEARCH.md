@@ -133,6 +133,16 @@ Important: Icy Veins' Spark page was last numerically updated **before** S2 laun
 
 ## Warband versus character
 
+## Secondary professions: Fishing and Cooking
+
+Fishing and Cooking are secondary professions: they do not consume either primary-profession slot, and unlike modern primary professions they have no Knowledge Point specialization tree, Concentration, craft quality model, or work-order role. They are self-sufficiency, gathering, consumable, and collection systems—not item-level progression requirements.
+
+**Fishing (Midnight skill 1–300).** Learn Midnight Fishing before expecting catches to level the Midnight line. Current sources recommend open water through approximately skill 125 for simple early skill, then pools for 125–300 because pools yield the useful targeted fish. Zone guidance is Eversong 1/1, Zul'Aman 75/100, Harandar 100/225, Voidstorm 225/300 (minimum/recommended). Zul'Aman's one-time *Bait and Tackle* treasure provides a Lucky Loa Lure and a +3 Fishlog; the Fishlog is Warbound, so alts can send theirs to the fisher you are actually leveling. A rod and hat improve Fishing skill/gathering stats, not combat output. [Wowhead Fishing overview](https://www.wowhead.com/guide/midnight/professions/fishing-overview-trainer-locations-pools-tools) · [Method's 1–300 route](https://www.method.gg/guides/midnight-fishing-profession-guide)
+
+**Cooking (Midnight skill 1–100).** It is intentionally cheap/simple: current trainer recipes reach skill 85 and no food quality/specialization calculation exists. A low-cost route is Spiced Biscuits to 25, Felberry Figs to 35, then Hearty Food (converting five food servings) to 100. Yellow/green recipes can fail to award skill, so use it as a flexible batch method rather than a guaranteed shopping count. At higher skill, use the food that matches the desired combat/profession benefit and current material price; do not level to 100 merely because it exists. [Wowhead Cooking 1–100](https://www.wowhead.com/guide/midnight/professions/cooking-leveling-1-100)
+
+Patch 12.1's Coiled Isle fishing adds venomous pools, Coiled Filament, achievements, and rod progression. Captain Tokka is a separate fishing standing—not major Renown—with Cursed Angler recipes for Alchemy, Engineering, Leatherworking and Jewelcrafting, followed mainly by fishing/collection rewards. It is optional unless its products or collection loop appeal.
+
 | State | Scope / implication |
 |---|---|
 | Vault progress/reward, gear, Spark use, M+ keys/rating, raid lockout, Catalyst charges | character-specific |

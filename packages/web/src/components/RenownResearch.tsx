@@ -45,7 +45,24 @@ export default function RenownResearch() {
       </tbody></table></div>
       <p>Rank unlocks are account eligibility, not an automatic learned-recipe grant. Buy and consume a Moxie-gated book or recipe on the intended profession character. Paragon progress continues after rank 20. <SourceLink href={SOURCE.amani}>Framework and activity sources</SourceLink></p>
 
-      <details className="mechanic-detail" open><summary><span>1</span>Season 2 power rewards: useful fill-ins, not a class ranking</summary><div className="tutorial-body">
+      <details className="mechanic-detail" open><summary><span>1</span>Plain-language guide to the things these ranks unlock</summary><div className="tutorial-body">
+        <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Unlock</th><th>What it actually is</th><th>Why it matters / does not matter</th></tr></thead><tbody>
+          <tr><th>Profession recipe</th><td>Permission for the matching profession holder to buy and learn a named recipe from that faction's vendor. The rank does not craft it, supply materials, spend a Spark, or teach it to every alt.</td><td>Useful only if the account has that profession and wants that product. It is an economy/profession unlock, not automatic player power.</td></tr>
+          <tr><th>+10 Knowledge book</th><td>A one-time, profession-specific consumable that gives its reader ten permanent Knowledge Points for that Midnight profession.</td><td>This changes that crafter's specialization options and long-term crafting capability. It is the most durable non-gear value in the primary tracks.</td></tr>
+          <tr><th>Voidlight Marl</th><td>Faction-vendor currency claimed or spent at the quartermaster on rank-gated recipes, cosmetics, mounts, decor, and early gear.</td><td>It does not directly raise item level. Save it for a purchase you actually want; faction eligibility and having enough Marl are separate conditions.</td></tr>
+          <tr><th>Saltheril's Soiree / Brimming Arcana</th><td>Eversong's social weekly. Choose one noble faction, do its Runestone weekly, and earn Brimming Arcana—the currency used by the Court's four social-standing vendors.</td><td>Higher Court ranks increase Arcana income. The social standings unlock themed outfits, decor and a few profession-flavor recipes; they are not a Hunter, tank, or healer power tree.</td></tr>
+          <tr><th>Amani Spoils / Abyss Angler / Fused Vitality</th><td>Spoils are Zul'Aman treasure chests. Abyss Angler is a diving world-event loop. Fused Vitality is a rank-gated purchase from Abundance event vendors.</td><td>These expand outdoor activity and collection/currency options. Read the live item tooltip before treating Fused Vitality as a gearing upgrade.</td></tr>
+          <tr><th>Traveler Loa blessing</th><td>A selectable outdoor blessing from Wi'lama at Amani'Zar, unlocked at Amani 8.</td><td>It supports the relevant outdoor/Delve play loop; it is not permanent class talent power or an account-wide replacement for normal gear.</td></tr>
+          <tr><th>Moth hunting / Luminous Dust</th><td>Harandar collection activity: rank gates reveal/collect sets of moths. Collected moths award Luminous Dust for moth-vendor cosmetics.</td><td>It does not award Hara'ti reputation itself and does not increase combat power. It is an optional exploration/collection system.</td></tr>
+          <tr><th>Research Console / samples / cores / mercenaries</th><td>Voidstorm's Singularity activity system. Its ranks progressively open the Console and improve access to related samples, cores, rare-event benefits and event helpers.</td><td>Useful to players engaging with Voidstorm outdoor content. The rank labels are system access/efficiency, not an unexplained stat increase; inspect the live Console for the current selectable reward.</td></tr>
+          <tr><th>Curse Surge / Corrosive Soul</th><td>Coiled Isle 12.1 outdoor event. Zul'jarra 4 makes the first Surge boss each day eligible to drop a Corrosive Soul.</td><td>This is a chance at a named event resource, not a guaranteed daily gear drop. It naturally overlaps Curse Sites and Vaults of Atal'Utek activity.</td></tr>
+          <tr><th>Counter-Curse Bounty</th><td>Zul'jarra 2 quest unlocked by the Renown track; it awards 272 Veteran bracers.</td><td>A fresh-90 slot fill-in. It is below the four 279 refreshed primary-faction quests and becomes obsolete once the slot is better.</td></tr>
+          <tr><th>Finery Funds, decor, ensembles, titles, pets, mounts</th><td>Collection currencies and vendor gates: housing pieces, appearance sets, titles, pets and mounts.</td><td>These are real account collection rewards, but they do not increase PvE combat performance. “Collection/vendor gate” in the rank table intentionally means this.</td></tr>
+          <tr><th>Contract</th><td>Inscription-made weekly buff selecting one major faction to receive extra reputation from qualifying World Quests.</td><td>Only one contract is active at a time. Use it to focus the account's next real breakpoint, not as an additional reputation source for all factions at once.</td></tr>
+        </tbody></table></div>
+      </div></details>
+
+      <details className="mechanic-detail"><summary><span>2</span>Season 2 power rewards: useful fill-ins, not a class ranking</summary><div className="tutorial-body">
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Faction / rank</th><th>Event</th><th>Reward</th><th>Use</th></tr></thead><tbody>
           <tr><th>Silvermoon Court 9</th><td>Saltheril's Soiree / Runestone</td><td>Helm, ilvl 279</td><td>Armor/stat fill-in only.</td></tr>
           <tr><th>Amani Tribe 9</th><td>Abundance</td><td>Neck, ilvl 279</td><td>Targeted early fill-in.</td></tr>
@@ -55,7 +72,7 @@ export default function RenownResearch() {
         <p><strong>Confirmed:</strong> Patch 12.1 reset these quest rewards and raised them to ilvl 279. <strong>UNKNOWN / needs a live check:</strong> exact upgrade track, per-alt claim entitlement, repeat-claim behavior, and precise prerequisite flags. Unknown does not mean unavailable or completed.</p>
       </div></details>
 
-      <details className="mechanic-detail"><summary><span>2</span>Profession priorities: the real account differentiation</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>3</span>Profession priorities: the real account differentiation</summary><div className="tutorial-body">
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>Profession(s)</th><th>Renown target</th><th>Reason</th></tr></thead><tbody>
           <tr><th>Alchemy, Blacksmithing, Engineering</th><td>Singularity 9</td><td>One-time +10 Knowledge book for each profession holder.</td></tr>
           <tr><th>Enchanting, Jewelcrafting, Tailoring</th><td>Silvermoon Court 6</td><td>One-time +10 Knowledge books.</td></tr>
@@ -67,7 +84,7 @@ export default function RenownResearch() {
         <p><strong>Roster guidance:</strong> Virek's best profession target is Singularity 9 (Engineering + Alchemy); Janne benefits from Hara'ti 6 (Herbalism) and Amani 6 (Mining); Squashpot benefits from Amani 6 (Skinning). There is no verified Hunter/BM-only Renown exception. <SourceLink href={SOURCE.knowledge}>Knowledge and Moxie source</SourceLink></p>
       </div></details>
 
-      <details className="mechanic-detail"><summary><span>3</span>Efficient overlap, minor systems, and Journeys</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>4</span>Efficient overlap, minor systems, and Journeys</summary><div className="tutorial-body">
         <p>Advance major tracks through zone campaign/side quests, World Quests, Special Assignments, zone events, weekly rare first kills, Bountiful Delve caches, and the Silvermoon dungeon weekly. The dungeon weekly selects one faction; one Inscription contract can be active. Coiled Isle WQs, Curse Sites and Vaults of Atal'Utek naturally advance Zul'jarra while doing 12.1 outdoor content. <SourceLink href={SOURCE.zuljarra}>Zul'jarra sources</SourceLink></p>
         <div className="research-table-wrap"><table className="research-table"><thead><tr><th>System</th><th>What it rewards</th><th>Decision</th></tr></thead><tbody>
           <tr><th>Captain Tokka</th><td>Coiled Isle fishing standing; Cursed Angler profession recipes, then fishing rod/mount/collection</td><td>Fishing-focused; full Warband standing scope is UNKNOWN.</td></tr>
@@ -77,7 +94,7 @@ export default function RenownResearch() {
         </tbody></table></div>
         <p><strong>Version boundary:</strong> Aqir Research Enclave is 12.1.5 PTR material and excluded. Adventure Guide → Journeys centralizes visible Renown/cultural reputation, Delves, Prey and a Vault shortcut. It does not prove unclaimed rewards, learned recipes, weekly caps, or account/character ownership. WoWSync does not yet capture live Renown/Journeys state; any future work must retain observed, derived, unknown, and last-seen separately. <SourceLink href={SOURCE.journeys}>Blizzard Journeys source</SourceLink> <span aria-hidden="true">·</span> <SourceLink href={SOURCE.captain}>Captain Tokka source</SourceLink> <span aria-hidden="true">·</span> <SourceLink href={SOURCE.ritualSites}>Ritual Sites source</SourceLink></p>
       </div></details>
-      <details className="mechanic-detail"><summary><span>4</span>Rank-by-rank: what every major Renown level actually unlocks</summary><div className="tutorial-body">
+      <details className="mechanic-detail"><summary><span>5</span>Rank-by-rank: what every major Renown level actually unlocks</summary><div className="tutorial-body">
         <p>Every row below is an unlock explanation, not a recommendation. A “collection/vendor gate” means it opens cosmetics, decor, pets, mounts, titles, or vendor stock; it does not improve combat power. The four Season 2 gear rows override the old Season 1 guide values.</p>
         {RANK_BREAKDOWN.map(([faction, rewards]) => <div key={faction} className="research-table-wrap"><table className="research-table"><caption>{faction}</caption><thead><tr><th>Rank</th><th>What it actually does</th></tr></thead><tbody>{rewards.map((reward, index) => <tr key={index + 1}><th>{index + 1}</th><td>{reward}</td></tr>)}</tbody></table></div>)}
       </div></details>
