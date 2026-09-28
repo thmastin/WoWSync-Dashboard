@@ -27,6 +27,9 @@ test("Research renders the current Midnight Renown companion topic with provenan
   assert.match(html, /Fishing and Cooking: a useful loop, not a gear obligation/);
   assert.match(html, /Fishing 1–300: a calm, current-leveling route/);
   assert.match(html, /Cooking 1–100: simple leveling, then make food you will use/);
+  assert.match(html, /Combat food: class\/spec suggestions and activity choices/);
+  assert.match(html, /Venom-Spiced Cutlets/);
+  assert.match(html, /Rated PvP/);
 });
 
 test("Research navigation exposes Renown without removing established topics", () => {
