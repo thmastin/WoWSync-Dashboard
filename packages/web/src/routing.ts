@@ -103,7 +103,7 @@ export function parseHash(hash: string, fallbackVersion: VersionOrUnknown): AppR
   if (segment === "detail") {
     return { ...base, view: "overview" };
   }
-  if (!VIEWS.has(segment) || segment === "detail") {
+  if (!VIEWS.has(segment)) {
     return { ...base, view: "overview" };
   }
   // Shared storage is Retail-only in the UI; keep the route but App can coerce.

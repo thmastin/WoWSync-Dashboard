@@ -712,10 +712,10 @@ test("two product files change independently: each POSTs its own export (lastSen
   fs.set(FILE_A, savedVariables([record("Virek", 1_790_022_739)]));
   fs.set(FILE_B, savedVariables([record("Torahn", 1_700_000_000)]));
   let t = 0;
-  const calls = [];
-  const out = [];
-  const err = [];
-  const baseDeps = {
+  const calls: Array<{ url: string; body: string }> = [];
+  const out: string[] = [];
+  const err: string[] = [];
+  const baseDeps: WatchDeps = {
     fs,
     clock: () => t,
     out: (l) => out.push(l),

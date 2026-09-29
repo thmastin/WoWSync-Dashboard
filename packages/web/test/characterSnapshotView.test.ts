@@ -10,7 +10,9 @@ import type { ParsedSnapshot, StoredCharacterSummary, StoredSnapshot } from "../
 
 function emptyParsed(over: Partial<ParsedSnapshot["character"]>): ParsedSnapshot {
   return {
+    raw: "",
     character: {
+      status: { state: "OBSERVED" },
       name: "Virek",
       realm: "Cairne",
       class: "Hunter",
@@ -20,12 +22,12 @@ function emptyParsed(over: Partial<ParsedSnapshot["character"]>): ParsedSnapshot
     },
     location: { status: { state: "OBSERVED" }, zone: "Silvermoon" },
     equipment: { status: { state: "UNKNOWN" }, slots: [] },
-    bags: { status: { state: "UNKNOWN" }, items: [] },
-    bank: { status: { state: "UNKNOWN" }, items: [] },
+    bags: { status: { state: "UNKNOWN" }, itemsKnownEmpty: false, items: [] },
+    bank: { status: { state: "UNKNOWN" }, itemsKnownEmpty: false, items: [] },
     professions: { status: { state: "UNKNOWN" }, entries: [] },
     spells: { status: { state: "UNKNOWN" }, entries: [] },
     trainer: { status: { state: "UNKNOWN" }, categories: [] },
-  } as ParsedSnapshot;
+  };
 }
 
 function snap(over: Partial<StoredSnapshot> & Pick<StoredSnapshot, "id" | "parsed">): StoredSnapshot {
@@ -37,6 +39,7 @@ function snap(over: Partial<StoredSnapshot> & Pick<StoredSnapshot, "id" | "parse
 }
 
 const character: StoredCharacterSummary = {
+  id: 1,
   identityKey: "retail::cairne::virek",
   version: "retail",
   name: "Virek",

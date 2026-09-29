@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RECENT_THRESHOLD_SECONDS } from "@wowsync-dashboard/core/freshness.ts";
-import { formatVersionSyncStrip, freshnessGlossary, pickDefaultVersion, versionTabDotTitle, versionTabMeta } from "../src/versionTabs.ts";
+import { formatVersionSyncStrip, freshnessGlossary, pickDefaultVersion, versionTabDotTitle, versionTabMeta, type VersionTabSummary } from "../src/versionTabs.ts";
 
 const NOW = 1_700_000_000;
 
 test("pickDefaultVersion: valid stored preference wins over freshest", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "retail", characterCount: 5, lastUpdatedAt: NOW },
     { version: "tbc-anniversary", characterCount: 1, lastUpdatedAt: NOW - 10 },
   ];
@@ -15,7 +15,7 @@ test("pickDefaultVersion: valid stored preference wins over freshest", () => {
 });
 
 test("pickDefaultVersion: ignores invalid or unknown-version stored values", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "retail", characterCount: 2, lastUpdatedAt: NOW - 100 },
     { version: "forever", characterCount: 1, lastUpdatedAt: NOW },
   ];
@@ -26,7 +26,7 @@ test("pickDefaultVersion: ignores invalid or unknown-version stored values", () 
 });
 
 test("pickDefaultVersion: chooses max lastUpdatedAt among known versions", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "classic-era", characterCount: 3, lastUpdatedAt: NOW - 50 },
     { version: "tbc-anniversary", characterCount: 9, lastUpdatedAt: NOW - 10 },
     { version: "retail", characterCount: 1, lastUpdatedAt: NOW - 100 },
@@ -37,7 +37,7 @@ test("pickDefaultVersion: chooses max lastUpdatedAt among known versions", () =>
 });
 
 test("pickDefaultVersion: never returns unknown-version even if it is the only timestamped row", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "unknown-version", characterCount: 5, lastUpdatedAt: NOW },
     { version: "classic-era", characterCount: 0 },
     { version: "retail", characterCount: 0 },
@@ -46,7 +46,7 @@ test("pickDefaultVersion: never returns unknown-version even if it is the only t
 });
 
 test("pickDefaultVersion: with no timestamps, prefers first version that has characters", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "classic-era", characterCount: 0 },
     { version: "tbc-anniversary", characterCount: 2 },
     { version: "retail", characterCount: 4 },
@@ -56,7 +56,7 @@ test("pickDefaultVersion: with no timestamps, prefers first version that has cha
 });
 
 test("pickDefaultVersion: all empty falls back to retail, not tbc-anniversary", () => {
-  const summaries = [
+  const summaries: VersionTabSummary[] = [
     { version: "classic-era", characterCount: 0 },
     { version: "tbc-anniversary", characterCount: 0 },
     { version: "retail", characterCount: 0 },

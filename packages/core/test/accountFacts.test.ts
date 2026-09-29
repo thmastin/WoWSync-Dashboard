@@ -382,7 +382,7 @@ test("[SYNTHETIC] Retail profession expansion is plumbed into byCharacter and co
               name: "Mining",
               skill: 61,
               maxSkill: 100,
-              skillLineID: "186",
+              skillLineID: 186,
               tier: "Midnight Mining",
               expansion: "Unknown",
               category: "PRIMARY",

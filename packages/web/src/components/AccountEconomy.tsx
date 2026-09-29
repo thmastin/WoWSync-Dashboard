@@ -2,7 +2,7 @@ import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import { describeGoldTotal, describePlaytimeTotal } from "../totals.ts";
 
-export default function AccountEconomy({ scoped }: { scoped: ScopedFacts; onOpenCharacter?: (key: string) => void }) {
+export default function AccountEconomy({ scoped, onOpenCharacter }: { scoped: ScopedFacts; onOpenCharacter?: (key: string) => void }) {
   const facts = scoped;
   const goldTotal = describeGoldTotal(facts.gold, facts.now);
   const playtimeTotal = describePlaytimeTotal(facts.playtime, facts.characters.length, facts.now);
