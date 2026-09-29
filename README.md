@@ -207,6 +207,7 @@ has not yet been measured against a live client.)
 **DEV remote receiver.** The watcher can send to the dedicated authenticated `POST /api/captures` endpoint and retain each immutable capture
 in a local outbox until the receiver returns a matching durable receipt. Select the destination explicitly; the target name is part of every
 capture, so a DEV sender cannot silently treat an endpoint configured as LIVE as DEV.
+Step-by-step Windows instructions are in [WINDOWS_CAPTURE_SETUP.md](docs/WINDOWS_CAPTURE_SETUP.md).
 
 For the current Omarchy DEV host, keep the Dashboard loopback-bound and create a private SSH local forward from Windows:
 
