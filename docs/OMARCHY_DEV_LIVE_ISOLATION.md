@@ -77,11 +77,22 @@ explicit DEV URL/port; their defaults target 4173.
 
 UFW is the host firewall. Both `/etc/ufw/before.rules` and `before6.rules`
 place `wowsync-dev` UID rules **before** UFW's loopback and established-connection
-accepts. DEV may reach its Dashboard on local TCP 4174 and local DNS on TCP/UDP
-53; other host-local TCP/UDP and UDP multicast (plus IPv4 broadcast) are denied.
+accepts. A narrow `ESTABLISHED` TCP reply exception lets DEV complete connections
+to its own Dashboard; new connection rules remain in force. DEV may reach its
+Dashboard on local TCP 4174 and local DNS on TCP/UDP 53; other host-local TCP/UDP
+and UDP multicast (plus IPv4 broadcast) are denied.
 An explicit TCP 4173 denial also covers any destination address, including a
 future LAN-bound listener. Before activating any new LIVE API port, extend and
 retest this UID policy. Never expose the unauthenticated Dashboard API to LAN.
+
+The host-local deny also blocks the random loopback ports used by server tests.
+Run networkless tests from a DEV Herdr pane in a private user/network namespace:
+`unshare --user --map-root-user --net -- /usr/bin/bash -c 'ip link set lo up; npm test'`.
+This gives the tests their own loopback without exposing host-local personal or
+LIVE listeners. The mapped root is root only inside the new user namespace;
+host files remain subject to `wowsync-dev` permissions. Do not open an ephemeral
+host port range for tests. The full suite passed under this workflow on
+2026-09-29; direct host-network execution failed on loopback-dependent cases.
 
 The root-owned proxy socket, not `SocketBindDeny=` alone, prevents DEV from
 impersonating the expected LIVE loopback endpoint. `SocketBindDeny=4173` on
@@ -130,12 +141,18 @@ not a migration or health gate. Explicit role-specific MCP DB/research and
 import/watch destination settings must be part of that later deployment.
 
 The DEV-only checkout has a local `.codex/config.toml` with `approval_policy =
-"never"`, `sandbox_mode = "workspace-write"`, network disabled, and only the
-DEV Herdr configuration directory as an additional writable root. The
-`wowsync-dev` user config only trusts that checkout. Neither config is copied
-to the personal `thmastin` checkout; `.gitignore` excludes the DEV-local
-project config. Each new DEV worktree must receive the same local config
-before a Codex worker starts. These settings are not considered accepted until
-a fresh DEV lead proves effective sandbox behavior, DEV-only orchestration,
-and inability to access personal or LIVE controls. DEV Codex authentication
-must be provisioned separately without copying personal credentials.
+"never"`, `sandbox_mode = "workspace-write"`, network enabled, and the DEV Herdr
+configuration directory as an additional writable root. This was validated in a
+fresh DEV Codex session: Herdr and the DEV Dashboard were reachable; LIVE IPv4/
+IPv6, personal Herdr/control listeners, and Docker remained denied. The tested
+filesystem boundary also denies DEV access to LIVE data/config/secrets. The
+`wowsync-dev` user config trusts only that checkout. Neither config is copied to
+the personal `thmastin` checkout; `.gitignore` excludes the DEV-local project
+config. Each new DEV worktree must receive the same local config before Codex
+starts. DEV Codex authentication is provisioned separately, not copied from the
+personal account. See repository `AGENTS.md` for the single-primary-agent
+operating model and human gates.
+The DEV CLI installation needs the `codex-code-mode-host` executable beside
+the matching `codex` binary in `/opt/wowsync/dev-tools`; a bare CLI binary can
+authenticate and pass `codex doctor` yet fail every shell tool call. Upgrade
+the two root-owned executables together and re-run a fresh DEV tool probe.
