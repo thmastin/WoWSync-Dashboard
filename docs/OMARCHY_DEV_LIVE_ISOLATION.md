@@ -50,8 +50,15 @@ WoWSync identity may have any sudo command privilege.
 
 Root-managed `wowsync-dev-dashboard.service` uses `User=wowsync-dev`, explicit
 `WOWSYNC_DATA_DIR` and `WOWSYNC_DB_PATH`, and `127.0.0.1:4174`.
-`wowsync-live-dashboard.service` uses `User=wowsync-live`, explicit LIVE paths,
-and `127.0.0.1:4173`; it remains disabled and has an existing-DB condition.
+`wowsync-live-dashboard.service` remains disabled and has an existing-DB
+condition. Its pinned release and TCP bind are **not cutover-ready**: before any
+LIVE start, promote a release containing `WOWSYNC_LISTEN_SOCKET` support and
+configure it to listen on `/run/wowsync-live/dashboard.sock` under a private
+`RuntimeDirectory=wowsync-live` with mode `0700`.
+Root-managed `wowsync-live-proxy.socket` reserves both `127.0.0.1:4173` and
+`[::1]:4173` even while LIVE is offline. Its socket-activated proxy forwards
+to that private LIVE Unix socket; without a LIVE backend, it serves no account
+data. Neither LIVE Dashboard nor importer is running.
 `wowsync-dev-herdr.service` runs the DEV control plane as `wowsync-dev` with a
 socket in that account's private Herdr configuration. LIVE has no Herdr unit.
 The existing personal Herdr server is separate and remains under `thmastin`.
@@ -69,20 +76,21 @@ explicit DEV URL/port; their defaults target 4173.
 ## Network boundary
 
 UFW is the host firewall. Both `/etc/ufw/before.rules` and `before6.rules`
-place a `wowsync-dev` owner-match TCP rejection for destination port 4173
-**before** UFW's loopback and established-connection accepts. The rule has no
-destination-address restriction, so it covers IPv4, IPv6, loopback, and a
-future LAN-bound listener on that port. Ports alone do not provide isolation;
-private storage and credentials remain necessary. Before activating any new
-LIVE HTTP/API port, extend and retest this UID policy. Do not bind the current
-unauthenticated Dashboard API to the LAN.
-The OUTPUT rule does not prevent DEV from binding port 4173 while LIVE is
-absent, and the planned LIVE unit binds IPv4 only. Before any authoritative
-LIVE HTTP service starts, verify listener ownership, reserve its port against
-DEV impersonation, test both address families and aliases, and ensure clients
-cannot reach a DEV listener through another local proxy. The current local
-OpenClaw and Docker-related endpoints are not part of the validated boundary;
-review them before granting unattended agent control.
+place `wowsync-dev` UID rules **before** UFW's loopback and established-connection
+accepts. DEV may reach its Dashboard on local TCP 4174 and local DNS on TCP/UDP
+53; other host-local TCP/UDP and UDP multicast (plus IPv4 broadcast) are denied.
+An explicit TCP 4173 denial also covers any destination address, including a
+future LAN-bound listener. Before activating any new LIVE API port, extend and
+retest this UID policy. Never expose the unauthenticated Dashboard API to LAN.
+
+The root-owned proxy socket, not `SocketBindDeny=` alone, prevents DEV from
+impersonating the expected LIVE loopback endpoint. `SocketBindDeny=4173` on
+the DEV Herdr and Dashboard units adds defense within those service cgroups.
+SSH denies logins by both WoWSync service identities, including the host's
+world-connectable local SSH socket; DEV service namespaces also hide that
+socket, personal home/user bus, LIVE trees, and system D-Bus/CUPS sockets.
+DEV has no personal Herdr, Docker, sudo, LIVE credential, or LIVE file access.
+Ports and worktrees are not substitutes for the Unix identity boundary.
 
 ## Validation and rollback
 
@@ -106,13 +114,28 @@ the saved file can be moved back to `/etc/sudoers.d/asdcontrol` after confirming
 the target is absent, followed by `visudo -cf /etc/sudoers`. It must stay
 disabled while the WoWSync DEV identity is an autonomous agent principal.
 
+For the autonomy bootstrap specifically, the administrator backup directory
+reported by the host apply script contains the previous UFW and DEV unit files.
+Rollback must also disable `wowsync-live-proxy.socket`, remove its two unit
+files and the WoWSync SSH deny drop-in, reload UFW/systemd, and remove the
+root-owned DEV Codex binary/templates under `/opt/wowsync/dev-tools` if the
+DEV control plane is being retired. DEV-home Codex configuration and skill
+files are removed only as `wowsync-dev`, after stopping DEV agents. Never remove
+the personal Herdr server or the LIVE data tree as part of this rollback.
+
 Before a LIVE start, promote and validate a complete pinned runtime release
 (including dependencies and web build). The current `ConditionPathExists=`
 checks only that a DB path exists; a zero-byte file could satisfy it, so it is
 not a migration or health gate. Explicit role-specific MCP DB/research and
 import/watch destination settings must be part of that later deployment.
 
-The later autonomy bootstrap must move lead/worker execution into the
-`wowsync-dev` identity and its Herdr control plane before enabling
-`approval_policy = "never"`. It must not grant the DEV agent access to the
-personal Herdr socket, `wheel`, Docker, or LIVE credentials.
+The DEV-only checkout has a local `.codex/config.toml` with `approval_policy =
+"never"`, `sandbox_mode = "workspace-write"`, network disabled, and only the
+DEV Herdr configuration directory as an additional writable root. The
+`wowsync-dev` user config only trusts that checkout. Neither config is copied
+to the personal `thmastin` checkout; `.gitignore` excludes the DEV-local
+project config. Each new DEV worktree must receive the same local config
+before a Codex worker starts. These settings are not considered accepted until
+a fresh DEV lead proves effective sandbox behavior, DEV-only orchestration,
+and inability to access personal or LIVE controls. DEV Codex authentication
+must be provisioned separately without copying personal credentials.

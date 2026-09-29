@@ -10,9 +10,11 @@ import {
   classifyAddress,
   describeListening,
   exposureWarning,
+  listenOnUnixSocket,
   listenOnce,
   loopbackOrigin,
   resolveHost,
+  resolveListenSocket,
   resolvePort,
   type ResolvedHost,
 } from "./net.ts";
@@ -30,9 +32,11 @@ try {
 // every network interface).
 let bind: ResolvedHost;
 let port: number;
+let listenSocket: string | undefined;
 try {
   bind = resolveHost(process.env);
   port = resolvePort(process.env);
+  listenSocket = resolveListenSocket(process.env);
 } catch (err) {
   console.error(err instanceof ConfigError ? err.message : err);
   process.exit(1);
@@ -56,7 +60,7 @@ const app = createApp(store, port, webDist, {
 
 let server: http.Server;
 try {
-  server = await listenOnce(app, bind.host, port);
+  server = listenSocket ? await listenOnUnixSocket(app, listenSocket) : await listenOnce(app, bind.host, port);
 } catch (err) {
   console.error(err instanceof ConfigError ? err.message : err);
   store.close();
@@ -66,7 +70,9 @@ try {
 // Report what the OS actually bound (not what was asked for): the exposure warning and the
 // startup line are based on the real socket address, so no spelling of a wildcard can slip through.
 const address = server.address();
-if (address && typeof address === "object") {
+if (typeof address === "string") {
+  console.log(`WoWSync Dashboard server listening on Unix socket ${address}`);
+} else if (address && typeof address === "object") {
   console.log(`WoWSync Dashboard server listening on ${describeListening(address)}`);
   const warning = exposureWarning({ host: address.address, exposure: classifyAddress(address.address) }, address.port);
   if (warning) console.warn(`\n${warning}\n`);

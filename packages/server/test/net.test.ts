@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
@@ -16,9 +18,11 @@ import {
   DEFAULT_PORT,
   LOOPBACK_HOSTNAMES,
   exposureWarning,
+  listenOnUnixSocket,
   listenOnce,
   loopbackOrigin,
   resolveHost,
+  resolveListenSocket,
   resolvePort,
 } from "../src/net.ts";
 
@@ -96,6 +100,33 @@ test("PORT is parsed strictly: empty means the default, anything else invalid is
   assert.equal(resolvePort({ PORT: " 8080 " }), 8080);
   for (const bad of ["abc", "0", "-1", "65536", "70000", "80.5", "1e3", "0x50"]) {
     assert.throws(() => resolvePort({ PORT: bad }), (e: unknown) => e instanceof ConfigError && /PORT/.test(e.message), bad);
+  }
+});
+
+test("private Unix listener requires an explicit absolute path and serves HTTP without a TCP bind", async () => {
+  assert.equal(resolveListenSocket({}), undefined);
+  assert.equal(resolveListenSocket({ WOWSYNC_LISTEN_SOCKET: "  " }), undefined);
+  for (const bad of ["relative.sock", "../socket", "/tmp/bad\npath", "/tmp/bad\0path"]) {
+    assert.throws(() => resolveListenSocket({ WOWSYNC_LISTEN_SOCKET: bad }), ConfigError);
+  }
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wowsync-private-socket-"));
+  const socketPath = path.join(dir, "dashboard.sock");
+  const server = await listenOnUnixSocket((_req, res) => res.end("private"), resolveListenSocket({ WOWSYNC_LISTEN_SOCKET: socketPath })!);
+  try {
+    assert.equal(server.address(), socketPath);
+    const body = await new Promise<string>((resolve, reject) => {
+      http.get({ socketPath, path: "/" }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => resolve(Buffer.concat(chunks).toString()));
+        response.on("error", reject);
+      }).on("error", reject);
+    });
+    assert.equal(body, "private");
+  } finally {
+    await closeServer(server);
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

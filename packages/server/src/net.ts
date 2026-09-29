@@ -8,10 +8,21 @@
 // only the bootstrap that calls it).
 import http from "node:http";
 import net from "node:net";
+import path from "node:path";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 
 export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4173;
+
+/** An optional private Unix listener for a root-owned local proxy. */
+export function resolveListenSocket(env: Record<string, string | undefined>): string | undefined {
+  const value = env.WOWSYNC_LISTEN_SOCKET?.trim();
+  if (!value) return undefined;
+  if (!path.isAbsolute(value) || value.includes("\0") || value.includes("\n")) {
+    throw new ConfigError("WOWSYNC_LISTEN_SOCKET must be an absolute Unix socket path.");
+  }
+  return value;
+}
 
 /** A configuration mistake the user can fix - reported plainly, not as a stack trace. */
 export class ConfigError extends Error {
@@ -185,6 +196,19 @@ export async function listenOnce(handler: http.RequestListener, host: string, po
     const onError = (err: NodeJS.ErrnoException) => reject(new ConfigError(friendlyListenError(err, host, port)));
     server.once("error", onError);
     server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve(server);
+    });
+  });
+}
+
+/** Listen only on the configured private Unix socket. The runtime directory owner controls access. */
+export function listenOnUnixSocket(handler: http.RequestListener, socketPath: string): Promise<http.Server> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(handler);
+    const onError = (err: NodeJS.ErrnoException) => reject(new ConfigError(`Could not listen on ${socketPath}: ${err.message}`));
+    server.once("error", onError);
+    server.listen(socketPath, () => {
       server.off("error", onError);
       resolve(server);
     });

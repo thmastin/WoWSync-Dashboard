@@ -4,6 +4,7 @@ dist/
 *.log
 .env
 .env.local
+/.codex/config.toml
 data/*.sqlite
 data/*.sqlite-journal
 data/*.sqlite-wal
