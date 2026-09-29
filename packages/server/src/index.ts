@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "./app.ts";
+import { createCaptureApp } from "./captureReceiver.ts";
 import {
   ConfigError,
   allowedHostsFor,
@@ -33,12 +34,31 @@ try {
 let bind: ResolvedHost;
 let port: number;
 let listenSocket: string | undefined;
+let capturePort: number;
 try {
   bind = resolveHost(process.env);
   port = resolvePort(process.env);
   listenSocket = resolveListenSocket(process.env);
+  capturePort = process.env.WOWSYNC_CAPTURE_PORT?.trim() ? resolvePort({ PORT: process.env.WOWSYNC_CAPTURE_PORT }) : 4175;
 } catch (err) {
   console.error(err instanceof ConfigError ? err.message : err);
+  process.exit(1);
+}
+
+const captureToken = process.env.WOWSYNC_CAPTURE_TOKEN?.trim();
+const captureDirectory = process.env.WOWSYNC_CAPTURE_DIR?.trim();
+const captureTarget = process.env.WOWSYNC_CAPTURE_TARGET?.trim();
+const captureRequested = !!(captureToken || captureDirectory || captureTarget);
+if (captureRequested && (!captureToken || !captureDirectory || !captureTarget)) {
+  console.error("Authenticated capture receiver configuration is incomplete: set WOWSYNC_CAPTURE_TOKEN, WOWSYNC_CAPTURE_DIR, and WOWSYNC_CAPTURE_TARGET together.");
+  process.exit(1);
+}
+if (captureRequested && (captureToken!.length < 32 || !path.isAbsolute(captureDirectory!) || !/^[A-Z][A-Z0-9_-]{1,15}$/.test(captureTarget!))) {
+  console.error("Capture receiver configuration is invalid: token must be 32+ characters, directory absolute, and target a short uppercase name.");
+  process.exit(1);
+}
+if (captureRequested && capturePort === port) {
+  console.error("WOWSYNC_CAPTURE_PORT must differ from the Dashboard PORT.");
   process.exit(1);
 }
 
@@ -58,11 +78,24 @@ const app = createApp(store, port, webDist, {
   allowedHosts: allowedHostsFor(bind),
 });
 
-let server: http.Server;
+let server: http.Server | undefined;
+let captureServer: http.Server | undefined;
 try {
   server = listenSocket ? await listenOnUnixSocket(app, listenSocket) : await listenOnce(app, bind.host, port);
+  if (captureRequested) {
+    const captureApp = createCaptureApp(store, { token: captureToken!, directory: captureDirectory!, target: captureTarget! });
+    captureServer = await listenOnce(captureApp, "127.0.0.1", capturePort);
+    console.log(`Authenticated capture receiver listening on http://127.0.0.1:${capturePort} (loopback only; target ${captureTarget})`);
+  }
 } catch (err) {
   console.error(err instanceof ConfigError ? err.message : err);
+  server?.close();
+  captureServer?.close();
+  store.close();
+  process.exit(1);
+}
+
+if (!server) {
   store.close();
   process.exit(1);
 }
@@ -88,7 +121,8 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 function shutdown() {
-  server.close();
+  server?.close();
+  captureServer?.close();
   store.close();
   process.exit(0);
 }

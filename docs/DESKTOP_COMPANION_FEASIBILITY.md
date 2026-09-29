@@ -1,7 +1,8 @@
 # Desktop companion: feasibility checkpoint (ROADMAP item 8)
 
-Status: **Slice 1 implemented** (`npm run watch:saved`; review decisions are recorded below). Nothing beyond Slice 1 exists: no tray, installer,
-autostart, multi-file watching or Electron. The rest of this document is the design it was built from.
+Status: **Local watcher and authenticated capture transport implemented** (`npm run watch:saved`). The Windows-to-Omarchy DEV runtime route is
+not provisioned or rehearsed yet. There is no tray, installer, autostart or Electron. This document began as the Slice 1 feasibility/design record;
+the current receiver protocol is summarized in [README.md](../README.md#watcher-and-windows-capture-transport).
 Written 2026-09-21 against branch `feature/dashboard-integration`.
 
 ## Review decisions (recorded when Slice 1 was approved)
@@ -12,7 +13,7 @@ Tate approved this document and Slice 1 with these decisions. They are recorded,
   mid-session `/wowsync`. It stays **UNVERIFIED**; the experiment in the checklist is an optional follow-up and did not block coding.
 - **Deleted characters:** Slice 1 **accepts** that the newest export may reappear after the character was deleted in the
   Dashboard (point 4 of section 4). No tombstone or persisted watermark in this slice; that would be a server change and its own milestone.
-- **Token:** **no token for Slice 1**; the watcher is a loopback-only client (it refuses a non-loopback `--url`).
+- **Token:** **no token for local Slice 1**. Remote capture uses the dedicated token added in the later transport slice.
 - **Addon citations:** repo-doc evidence is accepted as-is for this slice; nothing about GearExport's source was verified.
 
 ## Scope and evidence basis
@@ -136,8 +137,8 @@ Rules:
 | --- | --- |
 | **Truncated SV mid-write** | Two layers. (1) Stable-file detection: act only when `size` and `mtimeMs` are unchanged across two polls at least a quiet window apart (start with 3 s). (2) The reader **fails loudly on any incomplete table, string or file** (`savedVariables.ts`: "Unexpected end of file ... caught while WoW was writing it"), so a half-written file is rejected, never partly read. On rejection: send nothing, log once, and retry on the next change, not in a tight loop. Untested unknown: whether WoW writes in place or via temp+rename. The design must tolerate both, including a transient sharing violation on Windows (retry the read, bounded). A cut exactly between two complete top-level assignments still yields a complete `WoWSyncDB`; its text is intact and the server validates it (`[END]` required), so that case is harmless. |
 | **Reader OOM / hostile file** | Existing 256 MiB cap (`MAX_SAVED_VARIABLES_BYTES`), bounded nesting, no evaluation. Server body limit is 10 MB (`express.json({limit:"10mb"})`, `app.ts:70`); an export over that gets a server error and is reported, not retried forever. |
-| **Multi-account paths** | Files are `WTF/Account/<account>/SavedVariables/GearExport.lua`. `findSavedVariablesFiles` skips the account-independent `WTF/Account/SavedVariables`. Different accounts have different files, hence different watch targets. Slice 1 keeps the bridge's rule: exactly one resolved file or refuse with the candidate list. Watching several is a later, explicit choice. |
-| **Multi-product** (`_retail_`, `_classic_era_`, `_classic_`, `_anniversary_`, `_classic_beta_`) | Same: one file per product per account, and discovery refuses ambiguity. The product **folder name is not authority**: the Dashboard routes by the export's own `Client` / `ClientFamily` (`detectVersion`), so a mislabelled folder cannot mis-route data. Add a warning (not a block) when the folder's product and the export's detected version disagree. `_classic_beta_` is where Forever lives. |
+| **Multi-account paths** | Files are `WTF/Account/<account>/SavedVariables/GearExport.lua`. `findSavedVariablesFiles` skips the account-independent `WTF/Account/SavedVariables`. `watch:saved` watches every discovered file and maintains per-file state; `import:saved` still refuses ambiguous selection. |
+| **Multi-product** (`_retail_`, `_classic_era_`, `_classic_`, `_anniversary_`, `_classic_beta_`) | Watcher can observe one file per product/account. The product **folder name is not authority**: the Dashboard routes by the export's own `Client` / `ClientFamily` (`detectVersion`), so a mislabelled folder cannot mis-route data. Add a warning (not a block) when the folder's product and export version disagree. `_classic_beta_` is where Forever lives. |
 | **Identical re-import** | The server already dedupes (same character, same `Generated`, same text after CRLF/trailing-whitespace normalisation) and reports `isDuplicate` with no change (README "Importing the same export twice is harmless"; ARCHITECTURE "idempotent import"). The companion keeps an **in-memory** last-sent SHA-256 per `(file, record)` to avoid re-POSTing on every unrelated flush. It persists nothing, so a restart re-POSTs once and the server no-ops. No second store. |
 | **Every flush rewrites the file** | WoW rewrites the whole file each save even when `latestExport` is unchanged, so an mtime change does **not** mean a new export. Trigger on content: compare the chosen record's `generatedAt` + SHA-256 with what was last sent, not on mtime. |
 | **mtime != observation time** | mtime is only a "look now" trigger. Observation time is the export's own `Generated` (and `latestExport.generatedAt`); the Dashboard orders by it (`chronology.ts`) and treats a future `Generated` as observed at import. The companion never stamps, rewrites or infers a time from mtime, and never displays mtime as "synced at". An export flushed hours after `/wowsync` correctly keeps its old `Generated`. |
@@ -153,26 +154,27 @@ on a loopback bind, `hostGuard` rejects any `Host` not in `localhost` / `127.0.0
 rejects a present-but-foreign `Origin` on non-GET/HEAD/OPTIONS requests. No CORS. Documented as "not authentication: any
 program running on your machine can still call the API."
 
-- **Loopback bind: keep.** The companion adds **no listener**; it is a pure HTTP client, so it adds no inbound attack
-  surface. It must connect to a loopback address and refuse anything else by default (it would be sending a character's
-  export off-machine).
+- **Loopback bind: keep.** The Windows watcher adds **no listener**. Local import mode is loopback-only. Authenticated capture mode may use a
+  loopback SSH forward or an HTTPS remote receiver; it never sends to a non-loopback plain-HTTP URL.
 - **Host / Origin: already compatible.** A Node `fetch` to `http://127.0.0.1:4173` sends `Host: 127.0.0.1:4173`, allowed.
   It sends **no `Origin`**, which the guard permits (`origin !== undefined` check). So the guard does **not** distinguish the
   companion from any other local program. It only stops browsers. That is fine for the threat it targets (DNS rebinding /
   hostile web pages; a cross-origin browser POST always carries `Origin`, and `express.json` requires
   `Content-Type: application/json`, which a plain cross-site form cannot send).
-- **Is a local token needed? Not for slice 1.** Reasoning: the only new capability a token would protect is "import an
+- **Is a local token needed? Not for local Slice 1.** Reasoning: the only new capability a token would protect is "import an
   export". A same-user local process can already read the SavedVariables file and the SQLite file, and can call the whole
   existing API, which includes delete and Ask (spending the API key). A token that the companion has to be able to read
   from a file the same user can read adds no protection against that adversary and adds setup friction. Imports are also
   validated (the parser rejects non-exports) and idempotent.
-- **When to revisit (any one of these means add a token/secret):** the server is bound beyond loopback; the machine has
-  other users who should not be able to write to the Dashboard (a loopback port is reachable by all local users); the
-  companion becomes a background service other apps talk to; or the companion accepts inbound connections. Record the
-  decision in ROADMAP "Needs Decision" ("Local companion API authentication") after review; this doc does not change it.
+- **Remote transport changes that decision.** The Windows-to-Omarchy/cloud sender uses a separate token, explicit `DEV`/`LIVE` target, TLS
+  for non-loopback URLs, a durable sender outbox and receiver-side durable receipt. For Omarchy DEV the planned path is a Windows-initiated SSH
+  local forward to a separate loopback-only capture listener; the unauthenticated general API remains loopback-only and is not forwarded. This code exists, but no DEV token,
+  receiver directory, Windows SSH setup or capture rehearsal has been provisioned.
+- **Local token decision remains scoped to local Slice 1.** Remote transport already requires its separate target-scoped token. A future
+  change that widens the general Dashboard API still needs its own authentication review; the capture token does not protect other routes.
 - **Hostile SavedVariables:** the reader is data-only (no evaluation), depth-bounded, size-capped. The companion never
   logs full export text or the GUID, and never sends the GUID (the bridge already reads it only to walk the file).
-- **Privacy:** outbound traffic is one loopback POST. No new network destination.
+- **Privacy:** local mode sends one loopback POST. Capture mode sends only to its configured receiver over the SSH tunnel or HTTPS.
 
 ## 6. Identity: SavedVariables GUID keys vs export name/realm
 
@@ -209,23 +211,22 @@ program running on your machine can still call the API."
 
 ### Slice (implemented; packaging deferred)
 
-As built: `packages/server/src/watchSaved.ts` (pure core: injected filesystem, clock, fetch and output; `tick()` is one
-deterministic step), `watchSavedCli.ts` (thin entry), `packages/server/test/watchSaved.test.ts`, the `watch:saved` script, and the POST /
-result-report / file-parse pieces extracted from `importSaved.ts` (`postImport`, `describeImportResult`, `parseSavedExports`) so the bridge and the
-watcher share one implementation. Run it with `npm run watch:saved -- --wow-dir <one product folder>` (or `--file`); add `--once` for a single
-catch-up import. Deviations from the sketch below: a non-loopback URL is refused with **no override flag** (loopback-only, per the token decision);
-the "folder product vs export version" warning from section 4 is not implemented yet.
+As built: `watchSaved.ts` remains the stable-file detector and reuses `importSaved.ts` parsing and local POST code. `captureTransport.ts`
+implements the durable Windows outbox; `captureReceiver.ts` exposes the separate authenticated receiver and durable receipts; `app.ts` registers
+the endpoint only when configured. Run with `npm run watch:saved -- --wow-dir <WoW install root>` (or one product folder/`--file`); add `--once`
+for catch-up. Local mode stays loopback-only. Capture mode uses its own loopback-only port (4175 by default), requires an explicit target, 32+ character token and absolute spool path; remote
+non-loopback URLs require HTTPS. For current DEV, use a Windows-initiated SSH local forward to `127.0.0.1:4174` and target `DEV`.
 
 `npm run watch:saved -- --wow-dir <path-to-one-product-folder>` (or `--file`), foreground:
 
-1. Resolve exactly one `GearExport.lua` with the existing `discoverSavedVariables` (same ambiguity refusal, same env
-   vars). "Active product" means the one product folder you pointed at; no process detection.
+1. Resolve explicit `--file`, or every `GearExport.lua` below the install/product folder with `discoverWatchTargets`; no process detection.
 2. Poll `stat` every ~2 s. On `size`/`mtimeMs` change, wait until unchanged for the quiet window (3 s), then read once.
 3. `readSavedExports` (data-only). On a `SavedVariablesParseError` or a sharing/IO error: log, retry on the next change.
 4. Choose the **newest `latestExport` by `generatedAt`** across the file's records (ties with differing text refuse).
    Run `describeExport` + `consistencyProblems`.
-5. If `(generatedAt, sha256)` equals the last one sent in this process, do nothing. Otherwise POST `{text}` to the loopback
-   Dashboard via the shared POST function; print the result (imported / already imported / latest / hash match).
+5. If `(generatedAt, sha256)` equals the last one sent in this process, do nothing. Local mode posts through `/api/import`. Capture mode first
+   atomically writes `{captureId,target,sha256,payloadSha256,text,currencies?}` into the Windows outbox, then posts to `/api/captures`; it
+   removes that file only after the receiver's matching durable receipt.
 6. Ignore the file's state at startup unless `--once` is given (one catch-up import of the newest export, then exit).
    By default only a change observed after start triggers an import, which limits the deleted-character resurrection
    window described in point 4.
@@ -251,9 +252,14 @@ source contains no write/spawn/eval (extend the existing scan); the file and fol
 - [x] **Token decision recorded** in ROADMAP "Needs Decision": no token for Slice 1, loopback-only client.
 - [x] **Scope confirmed:** one file, one product, foreground CLI; multi-account/multi-product watching, tray/installer and
   autostart are explicitly deferred.
-- [ ] **No second implementation:** *(for the reviewer)* confirm in the diff that the watcher contains no parser, no SQLite access,
+- [x] **No second implementation:** watcher and receiver call the same core reader and `SnapshotStore.importSnapshot`; neither implements a
+  second parser or writes SQLite directly. (See focused tests.)
+- [x] **Transport identity:** receiver pins both text and complete-payload digests to one capture UUID and target; mismatched retries are refused.
+- [ ] **No second implementation:** *(historical Slice 1 checklist item; review against current diff)* confirm in the diff that the watcher contains no parser, no SQLite access,
   and no copy of the import POST. A test pins the absence of the parsers, `importSnapshot`, `JSON.stringify` and the POST literals in the watcher source.
 - [ ] **Guarantees intact:** *(for the reviewer)* the no-write/no-spawn/no-eval scan covers `watchSaved.ts` and `watchSavedCli.ts`, and a test
   pins that a watch run leaves the file and folder byte- and mtime-identical. A real run against a real WoW folder has not been done.
 - [x] **Docs updated together:** README, ARCHITECTURE, ROADMAP item 8 status.
+- [ ] **DEV transport deployment/rehearsal:** provision an isolated DEV token and receiver directory, make a Windows-initiated private SSH
+  forward to loopback 4174, and verify accepted/replayed/offline captures against non-authoritative DEV data. Keep the target `DEV`.
 - [ ] **Human review checkpoint before any packaging** (tray, installer, autostart, multiple accounts): this Slice 1 review.

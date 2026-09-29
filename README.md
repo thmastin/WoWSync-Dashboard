@@ -164,13 +164,13 @@ product folder or pass `--file`.
 
 This is a **developer convenience, not the desktop companion**. It runs when you run it; it does not watch files, react to WoW,
 force a save or run in the background. To have the same import happen when WoW saves, see the
-[watcher](#watcher-import-automatically-when-wow-saves-slice-1) below.
+[watcher](#watcher-and-windows-capture-transport) below.
 
-## Watcher: import automatically when WoW saves (Slice 1)
+## Watcher and Windows capture transport
 
 `npm run watch:saved` is the bridge above run by a loop, so you no longer have to remember to run it. It is a **foreground command**
 (stop it with Ctrl+C), not a tray app, installer, service or autostart. It is the first slice of the desktop companion
-([ROADMAP](docs/ROADMAP.md) item 8, design in [docs/DESKTOP_COMPANION_FEASIBILITY.md](docs/DESKTOP_COMPANION_FEASIBILITY.md)); Slice 1 is implemented, with packaging and persistent startup still deferred.
+([ROADMAP](docs/ROADMAP.md) item 8, design in [docs/DESKTOP_COMPANION_FEASIBILITY.md](docs/DESKTOP_COMPANION_FEASIBILITY.md)); local watching and capture transport are implemented, with packaging and persistent startup still deferred.
 
 ```
 npm start                                                          # the Dashboard, in one terminal
@@ -178,9 +178,10 @@ npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft"   # all products; 
 npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft" --once   # catch-up import from every product file, then exit
 ```
 
-**Bridge vs watcher.** They share one implementation (same file reader, same checks, same `POST /api/import`); the difference is who
-decides when. `import:saved` imports **one character you name, when you run it**. `watch:saved` polls **every matching GearExport.lua** (install root = all products; one product folder = that client) and, whenever WoW saves
-it, imports **the single newest export in it**, without you naming anyone. Neither has an importer of its own.
+**Bridge vs watcher.** They share the same file reader and checks. Local mode uses `POST /api/import`; capture mode uses the authenticated
+receiver protocol. `import:saved` imports **one character you name, when you run it**. `watch:saved` polls **every matching GearExport.lua**
+(install root = all products; one product folder = that client) and, whenever WoW saves it, imports **the single newest export in it**, without
+you naming anyone. Neither has an importer of its own.
 
 **When it can act.** WoW writes SavedVariables on `/reload`, logout and exit, **not** when you run `/wowsync` (the addon holds the export
 in memory until then). So the flow is: `/wowsync`, then `/reload` or log out, and the watcher sends it within a few seconds. It cannot
@@ -203,20 +204,53 @@ has not yet been measured against a live client.)
 - If the Dashboard is not running it says so and retries with backoff (5 s, 10 s, 20 s, up to 60 s); the file is the source, so nothing is
   lost. If the Dashboard answers and **refuses** the export, it reports it once and waits for the next save.
 
-**Guarantees.** Read-only (only stat and read; never writes, renames, locks or spawns anything in the WoW folder, and a test pins that the
-source contains no write, spawn or eval call and that a run leaves the file and folder byte- and mtime-identical); data-only reader (nothing is
-executed); no second parser, database or import POST. It sends **only to a loopback Dashboard** and **refuses** any other `--url`. There is no
-token: like the rest of the API it relies on loopback binding and the Host/Origin check, which stop browsers, not other programs on the machine.
+**DEV remote receiver.** The watcher can send to the dedicated authenticated `POST /api/captures` endpoint and retain each immutable capture
+in a local outbox until the receiver returns a matching durable receipt. Select the destination explicitly; the target name is part of every
+capture, so a DEV sender cannot silently treat an endpoint configured as LIVE as DEV.
 
-**Known limits (Slice 1).**
+For the current Omarchy DEV host, keep the Dashboard loopback-bound and create a private SSH local forward from Windows:
 
-- One file, one product, no autostart or tray. Watching several accounts or products is a later, explicit choice.
+```powershell
+ssh -N -L 127.0.0.1:4175:127.0.0.1:4175 <ssh-user>@<omarchy-host>
+```
+
+Then configure the Windows watcher with the DEV receiver URL, target, dedicated 32+ character capture token, and an absolute local spool path:
+
+```powershell
+$env:WOWSYNC_URL = "http://127.0.0.1:4175"
+$env:WOWSYNC_CAPTURE_TARGET = "DEV"
+$env:WOWSYNC_CAPTURE_TOKEN = "<DEV-only token provisioned on both ends>"
+$env:WOWSYNC_CAPTURE_SPOOL_DIR = "$env:LOCALAPPDATA\WoWSync\outbox"
+npm run watch:saved -- --wow-dir "C:\Games\World of Warcraft"
+```
+
+On the DEV Dashboard service, set `WOWSYNC_CAPTURE_TARGET=DEV`, `WOWSYNC_CAPTURE_TOKEN` to the same DEV-only token, and
+`WOWSYNC_CAPTURE_DIR` to a private writable directory on the same host as its SQLite database. The receiver is disabled unless all three are
+configured; it starts a separate loopback-only listener on port 4175 by default (`WOWSYNC_CAPTURE_PORT` can change it). That listener serves
+only the capture endpoint, so the tunnel does not expose Dashboard read/delete/Ask routes. For a later cloud host, put this receiver behind an
+HTTPS reverse proxy and use the same sender protocol with an HTTPS `WOWSYNC_URL` and a distinct target token. Keep DEV and LIVE
+spool, token, receipt directories and databases separate.
+
+**Transport guarantees.** The sender writes a capture to disk before sending and removes it only after the receiver acknowledges the same
+capture ID, target and SHA-256. The receiver stages the exact payload, imports through the ordinary parser/store transaction, then writes a
+durable receipt. If the response is lost, retrying the same ID is safe; a reused ID with different content is refused. Receiver storage is
+separate from the Dashboard database but lives on the same host. The general browser import API is unchanged. The receiver should be reachable
+from Windows through a private tunnel now or HTTPS at a cloud host later; do not expose the unauthenticated Dashboard API to a LAN.
+
+**Read-only guarantee.** The watcher still only stats and reads WoW's SavedVariables file. It never writes, renames, locks or spawns anything
+in the WoW folder. The restricted Lua reader never evaluates the file; the server remains the only parser/importer/database writer.
+
+**Known limits.**
+
+- No autostart or tray; the watcher is a foreground command. It can watch every discovered product/account under the WoW install root.
 - A character you deleted in the Dashboard can **reappear** if its export is the newest in the file (deleting is not a tombstone). Accepted for
   this slice; see the ROADMAP's Needs Decision table.
 - Only the newest export is sent per save. A `/wowsync` on character A followed by one on character B before a single `/reload` sends B; A
   reaches the Dashboard by pasting it, `import:saved --character A`, or a later `/wowsync` and save.
-- Options: `--file`, `--wow-dir`, `--url` (loopback only), `--once`, `--help`; environment: `WOWSYNC_SAVED_VARIABLES`, `WOWSYNC_WOW_DIR`,
-  `WOWSYNC_URL` (a `.env` file works).
+- Remote capture requires `--capture-target` (or `WOWSYNC_CAPTURE_TARGET`), `WOWSYNC_CAPTURE_TOKEN` and an absolute `--spool-dir` (or
+  `WOWSYNC_CAPTURE_SPOOL_DIR`). Non-loopback URLs require HTTPS. A loopback URL is appropriate for the SSH forward shown above.
+- The transport is implemented, but the Omarchy DEV service has not been provisioned with a receiver token/directory, and no Windows SSH tunnel
+  or sender configuration has been set up. The path is not live until those settings and one DEV capture are verified.
 
 ## What the totals mean (unknown, zero, and stale)
 
@@ -436,7 +470,7 @@ only depends on receiving WOWSYNC v1 text, not on *how* that text arrived.
 Manual paste, a dropped `.txt` file, and a hypothetical future
 auto-generated snapshot file all go through the exact same importer. The one thing that exists today is the
 [developer bridge](#developer-bridge-import-a-saved-export-from-wows-savedvariables), a command you run by hand that reads what
-GearExport already saved and sends it to the same endpoint, and the [watcher](#watcher-import-automatically-when-wow-saves-slice-1)
+GearExport already saved and sends it to the same endpoint, and the [watcher](#watcher-and-windows-capture-transport)
 (`npm run watch:saved`, a foreground command) runs the same import when WoW saves the file. A packaged desktop
 companion (tray, installer, autostart, several accounts) is still future work.
 

@@ -732,18 +732,20 @@ the boundaries are deliberate:
 It is not the desktop companion (see the roadmap): it does not watch files, monitor WoW, force a save, run in the background or
 start the server.
 
-## SavedVariables watcher (desktop companion, Slice 1)
+## SavedVariables watcher and receiver transport
 
 `watch:saved` may poll **multiple** `GearExport.lua` files when `--wow-dir` is the install root (or otherwise finds several): each file gets its own watcher state so Retail and Classic never share `lastSent`. `import:saved` still refuses ambiguity.
 
-`npm run watch:saved` (`packages/server/src/watchSaved.ts`, entry `watchSavedCli.ts`) is the developer bridge driven by a foreground poll
-loop; design and decisions are in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md). It adds no listener, no parser, no
-database and no import logic:
+`npm run watch:saved` (`packages/server/src/watchSaved.ts`, entry `watchSavedCli.ts`) is a foreground file poller. The default local mode uses
+the browser import endpoint. Explicit authenticated capture mode writes an immutable envelope into a sender outbox and posts it to the
+receiver endpoint; design and decisions are in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md):
 
 ```
 GearExport.lua ──stat every 2s──▶ stable? (size+mtime unchanged 3s) ──read once──▶ parseSavedExports (core data-only reader)
    ──▶ newest latestExport by generatedAt ──▶ describeExport + consistencyProblems ──▶ (generatedAt, sha256) already sent? skip
-   ──▶ postImport({text}) ──▶ POST /api/import (existing; loopback) ──▶ server: parse, dedupe, snapshots, shared storage, item metadata
+   ──▶ local: postImport({text}) ──▶ POST /api/import
+   └── remote: durable outbox {captureId,target,sha256,payloadSha256,text} ──▶ loopback receiver listener:4175 /api/captures (Bearer token)
+       ──▶ durable staging ──▶ existing parse/import transaction ──▶ durable receipt ──▶ ACK ──▶ remove outbox entry
 ```
 
 - **Shared with the bridge, not copied.** `importSaved.ts` exports the pieces both use: `discoverSavedVariables`, `parseSavedExports`,
@@ -760,12 +762,16 @@ GearExport.lua ──stat every 2s──▶ stable? (size+mtime unchanged 3s) �
 - **Failure handling.** A partial or non-data file is rejected by the reader (nothing sent; wait for the next change). A transient read error
   (a Windows sharing violation) is retried up to 3 times. An unreachable Dashboard is retried with capped backoff (5 s doubling to 60 s); a
   Dashboard that answers and refuses is reported once. `--once` makes a single attempt.
-- **Read-only, loopback-only, no token.** Only `stat` and `read`; the source-scan test covers these files, and a test pins that a watch run
-  leaves the file and folder byte- and mtime-identical. It refuses a non-loopback target rather than warning. No token is used in this slice
-  (a same-user local process can already read the file and call the whole API); revisit per the feasibility doc if that changes.
+- **Read-only source, authenticated receiver.** The watcher only stats/reads SavedVariables; it never writes into the WoW folder. The receiver
+  runs on a separate loopback listener and exposes only `POST /api/captures`, not the Dashboard's general query/delete/Ask routes. Local mode is
+  loopback-only. Remote mode requires an explicit target, a dedicated token, an absolute durable spool directory, and HTTPS for non-loopback
+  URLs. The receiver is disabled until `WOWSYNC_CAPTURE_TOKEN`, `WOWSYNC_CAPTURE_DIR` and `WOWSYNC_CAPTURE_TARGET` are all configured. It has no
+  authority over browser routes and imports through the same `SnapshotStore` transaction.
+- **Relocation.** DEV and future LIVE use separate service environment, target token, receiver journal, outbox and SQLite database. The
+  capture envelope stays the same when LIVE moves from this machine to a cloud HTTPS endpoint; no SQLite file transfer is part of capture.
 - **Timing.** SavedVariables reach disk at `/reload`, logout and exit, so an export is delivered then, not at `/wowsync`. That is an accepted,
   not yet measured, assumption.
-- **Known limits.** One file; a deleted character can reappear if its export is the newest (no tombstone); only the newest export per save is
+- **Known limits.** A deleted character can reappear if its export is the newest (no tombstone); only the newest export per save is
   sent; no folder-product-vs-export-version warning yet.
 
 ## Snapshot chronology and idempotent import

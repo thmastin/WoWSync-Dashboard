@@ -35,8 +35,9 @@ WoWSync identity may have any sudo command privilege.
   Each database's `-wal` and `-shm` files stay beside it on the local filesystem.
   LIVE SQLite does not exist until the later migration.
 - Per-role `inbox/{staging,accepted,quarantine}`, `receipts`, and `state` live
-  under `/var/lib/wowsync-{dev,live}`. Windows capture/transfer and importer
-  services are later milestones; these directories are not active receivers.
+  under `/var/lib/wowsync-{dev,live}`. The repository now has an authenticated
+  receiver and durable sender protocol, but no capture token/directory is
+  configured and no receiver is active on this host yet.
 - Per-role non-secret config directories: `/etc/wowsync/{dev,live}`. They are
   root-owned, group-readable only by the matching role. No production
   credentials are installed in this milestone.

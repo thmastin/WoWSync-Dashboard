@@ -15,6 +15,7 @@
 // Pure of process state like importSaved.ts: filesystem, clock, fetch and output are injected, and `tick()` is a single
 // deterministic step, so the tests drive a fake clock over a fake filesystem. `watchSavedCli.ts` is the thin process entry.
 import { readFileSync, statSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import {
   BridgeError,
@@ -33,6 +34,8 @@ import {
   sidecarPayloadHash,
   type SavedExport,
 } from "./importSaved.ts";
+import type { createCaptureTransport } from "./captureTransport.ts";
+import { createCaptureTransport as makeCaptureTransport } from "./captureTransport.ts";
 
 export const DEFAULT_POLL_MS = 2_000;
 /** How long the file must stay unchanged (size and mtime) before it is read: WoW may still be writing it. */
@@ -94,6 +97,8 @@ export interface WatchDeps {
   timeoutMs?: number;
   out: (line: string) => void;
   err: (line: string) => void;
+  /** Optional authenticated remote receiver with a durable local outbox. */
+  captureTransport?: ReturnType<typeof createCaptureTransport>;
 }
 
 export interface Watcher {
@@ -196,8 +201,15 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     for (const record of stranded) {
       out(`  Currency read for ${record.name ?? "?"} · ${record.realm ?? "?"} has no saved text export to attach to; run /wowsync on that character, then /reload or log out.`);
     }
-    out(`  Sending ${summary.bytes} bytes (SHA-256 ${summary.sha256}) to ${importEndpoint(config.origin)} ...`);
+    out(`  Sending ${summary.bytes} bytes (SHA-256 ${summary.sha256}) to ${deps.captureTransport ? `${config.origin}/api/captures` : importEndpoint(config.origin)} ...`);
     try {
+      if (deps.captureTransport) {
+        const capture = await deps.captureTransport.send(text, chosen.currencies);
+        out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
+        lastSent = { generatedAt, sha256: summary.sha256, currenciesSha256 };
+        sendFailures = 0;
+        return finish(0);
+      }
       const result = await postImport(deps, config.origin, text, chosen.currencies);
       for (const line of describeImportResult(result, summary.sha256)) out(`  ${line}`);
       lastSent = { generatedAt, sha256: summary.sha256, currenciesSha256 };
@@ -289,12 +301,15 @@ WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /w
 
   --file <path>          One GearExport.lua SavedVariables file.
   --wow-dir <path>       WoW install root (all products) or ONE product folder such as _retail_.
-  --url <url>            The Dashboard's address (default: from PORT / WOWSYNC_HOST, else http://127.0.0.1:4173). Loopback only.
+  --url <url>            Receiver URL (default: from PORT / WOWSYNC_HOST, else http://127.0.0.1:4173).
+  --capture-target <id>  Send to the authenticated capture receiver (for example DEV); requires token and spool directory.
+  --spool-dir <path>     Absolute durable outbox path (or WOWSYNC_CAPTURE_SPOOL_DIR).
   --once                 Import the newest saved export from each watched file now, then exit (a catch-up). Without it, each file's
                          state at startup is ignored and only later saves are imported.
   --help                 This text.
 
-Environment (a .env file works too): WOWSYNC_SAVED_VARIABLES, WOWSYNC_WOW_DIR, WOWSYNC_URL.`;
+Environment (a .env file works too): WOWSYNC_SAVED_VARIABLES, WOWSYNC_WOW_DIR, WOWSYNC_URL,
+WOWSYNC_CAPTURE_TARGET, WOWSYNC_CAPTURE_TOKEN, WOWSYNC_CAPTURE_SPOOL_DIR.`;
 
 export interface WatchOptions {
   once: boolean;
@@ -302,6 +317,8 @@ export interface WatchOptions {
   file?: string;
   wowDir?: string;
   url?: string;
+  captureTarget?: string;
+  spoolDir?: string;
 }
 
 export function parseWatchOptions(argv: readonly string[]): WatchOptions {
@@ -316,10 +333,12 @@ export function parseWatchOptions(argv: readonly string[]): WatchOptions {
         file: { type: "string" },
         "wow-dir": { type: "string" },
         url: { type: "string" },
+        "capture-target": { type: "string" },
+        "spool-dir": { type: "string" },
       },
     });
     if (positionals.length > 0) throw new BridgeError(`Unexpected argument "${positionals[0]}".`, true);
-    return { once: values.once === true, help: values.help === true, file: values.file, wowDir: values["wow-dir"], url: values.url };
+    return { once: values.once === true, help: values.help === true, file: values.file, wowDir: values["wow-dir"], url: values.url, captureTarget: values["capture-target"], spoolDir: values["spool-dir"] };
   } catch (err) {
     if (err instanceof BridgeError) throw err;
     throw new BridgeError((err as Error).message, true);
@@ -344,8 +363,19 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
     }
     const found = discoverWatchTargets({ file: options.file, wowDir: options.wowDir, env: deps.env });
     const target = resolveDashboardUrl(options, deps.env);
-    if (target.warning) {
-      throw new BridgeError(`Refusing to watch: ${target.warning}\n  The watcher only sends to this machine. Use a loopback --url (e.g. http://127.0.0.1:4173).`);
+    const captureTarget = options.captureTarget?.trim() || deps.env.WOWSYNC_CAPTURE_TARGET?.trim();
+    if (target.warning && !captureTarget) {
+      throw new BridgeError(`Refusing to watch: ${target.warning}\n  Remote capture requires --capture-target, a dedicated token, and a durable outbox.`);
+    }
+    if (target.warning && new URL(target.origin).protocol !== "https:") throw new BridgeError("Remote capture requires HTTPS. For the current DEV host, use a private SSH tunnel and a loopback URL.");
+    let captureTransport: WatchDeps["captureTransport"];
+    if (captureTarget) {
+      const token = deps.env.WOWSYNC_CAPTURE_TOKEN?.trim();
+      const spoolDirectory = options.spoolDir?.trim() || deps.env.WOWSYNC_CAPTURE_SPOOL_DIR?.trim();
+      if (!token || token.length < 32) throw new BridgeError("Authenticated capture needs WOWSYNC_CAPTURE_TOKEN (at least 32 characters).", true);
+      if (!spoolDirectory || !path.isAbsolute(spoolDirectory)) throw new BridgeError("Authenticated capture needs an absolute --spool-dir or WOWSYNC_CAPTURE_SPOOL_DIR.", true);
+      if (!/^[A-Z][A-Z0-9_-]{1,15}$/.test(captureTarget)) throw new BridgeError("Capture target must be a short uppercase name such as DEV.", true);
+      captureTransport = makeCaptureTransport({ origin: target.origin, token, target: captureTarget, spoolDirectory, fetch: deps.fetch, timeoutMs: deps.timeoutMs });
     }
     const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
     const quietMs = deps.quietMs ?? DEFAULT_QUIET_MS;
@@ -356,7 +386,7 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
     } else {
       deps.out(`Watching ${found[0].path}  (from ${found[0].via}; read-only)`);
     }
-    deps.out(`Dashboard:  ${importEndpoint(target.origin)}`);
+    deps.out(`${captureTarget ? `Capture receiver (${captureTarget})` : "Dashboard"}:  ${captureTarget ? `${target.origin}/api/captures` : importEndpoint(target.origin)}`);
     deps.out(`Polling every ${pollMs / 1000}s; a change is read once the file has been unchanged for ${quietMs / 1000}s.`);
     if (!options.once) {
       deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. Each file's current contents are ignored (use --once to import the newest saved export now).");
@@ -367,6 +397,7 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
       const prefix = multi ? `[${label}] ` : "";
       const fileDeps: WatchDeps = {
         ...deps,
+        captureTransport,
         out: (line) => deps.out(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
         err: (line) => deps.err(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
       };
@@ -374,6 +405,10 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
     });
 
     while (!signal.aborted && !watchers.every((w) => w.finished)) {
+      if (captureTransport) {
+        try { await captureTransport.flush(); }
+        catch (err) { deps.err(err instanceof Error ? err.message : String(err)); }
+      }
       for (const w of watchers) {
         if (!w.finished) await w.tick();
       }

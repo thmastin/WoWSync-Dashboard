@@ -3,7 +3,7 @@
 // exact, not a race), plus real temp files for the read-only guarantees and one real server on an ephemeral port.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -448,6 +448,24 @@ test("--once imports the newest saved export after the file has been stable, the
   assert.match(all(d.out), /Result: imported as a new snapshot/);
 });
 
+test("--capture-target stages a durable capture and removes it only after matching remote acknowledgement", async () => {
+  const file = realFile(VIREK_SV);
+  const spool = join(root, `outbox-${counter++}`);
+  mkdirSync(spool);
+  const d = runDeps(nodeFs, (call) => {
+    assert.equal(call.url, "https://receiver.example/api/captures");
+    assert.equal(call.headers?.Authorization, `Bearer ${"x".repeat(40)}`);
+    const capture = JSON.parse(call.body!);
+    assert.equal(capture.target, "DEV");
+    assert.equal(capture.text, VIREK.text);
+    return json(200, { target: "DEV", receipt: { captureId: capture.captureId, sha256: capture.sha256, payloadSha256: capture.payloadSha256 } });
+  }, { WOWSYNC_CAPTURE_TOKEN: "x".repeat(40) });
+  assert.equal(await run(["--file", file, "--once", "--url", "https://receiver.example", "--capture-target", "DEV", "--spool-dir", spool], d), 0);
+  assert.equal(d.calls.length, 1);
+  assert.equal(readdirSync(spool).length, 0);
+  assert.match(all(d.out), /durable outbox copy removed/);
+});
+
 test("--once exits 1 when there is nothing to import, when the file is not readable as data, or when the Dashboard is down (no retry)", async () => {
   const none = realFile(savedVariables([{ guid: "Player-1-F", name: "Fresh", realm: "Cairne" }]));
   const a = runDeps(nodeFs);
@@ -505,7 +523,7 @@ test("a non-loopback Dashboard URL is REFUSED (the bridge only warns): nothing i
     const d = runDeps(nodeFs);
     assert.equal(await run(["--file", file, "--once", "--url", url], d), 1, url);
     assert.match(all(d.err), /Refusing to watch: .* is not this machine/);
-    assert.match(all(d.err), /loopback --url/);
+    assert.match(all(d.err), /Remote capture requires --capture-target/);
     assert.equal(d.calls.length, 0);
     assert.equal(d.out.length, 0);
   }

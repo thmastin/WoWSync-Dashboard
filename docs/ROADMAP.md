@@ -178,14 +178,17 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 
 ## Soon
 
-- [ ] **8. Desktop companion / automatic ingestion.** (The manual [developer bridge](#active) exists; this item is the automatic,
-  user-facing product and is not started.) A real product need: the user
+- [ ] **8. Desktop companion / automatic ingestion.** The local watcher exists and the authenticated capture transport is implemented;
+  the Windows-to-Omarchy route still needs DEV setup and rehearsal. A real product need: the user
   sometimes forgets to paste `/wowsync` output into the Dashboard. Goal: reduce or
   eliminate that manual handoff.
-  - **Status: Slice 1 shipped** (`ad5fc79` on `feature/dashboard-integration`; live-validated: `/wowsync` → `/reload` → auto-import).
-    `npm run watch:saved -- --wow-dir <one product folder>` (`--once` for a single catch-up import) polls one GearExport SavedVariables
-    file and POSTs the newest `latestExport.text` through existing `POST /api/import` (loopback only; read-only; no second parser/DB).
-    Delivery is still at the next WoW save (`/reload`, logout, exit). **Next dependency for "no manual report":** GearExport in-memory
+  - **Status: local Slice 1 shipped and capture transport implemented; DEV transport not yet provisioned/rehearsed.** (`ad5fc79` shipped the local watcher.)
+    `watch:saved` now also supports an authenticated receiver envelope, explicit DEV/LIVE target, durable Windows outbox and durable receiver receipt;
+    Omarchy still needs DEV-only token/directory configuration and a private Windows tunnel before the first DEV capture test.
+    `npm run watch:saved -- --wow-dir <WoW install root>` polls each discovered GearExport SavedVariables file and delivers the newest
+    `latestExport.text`. Local mode uses `POST /api/import`; authenticated transport mode uses the receiver and durable outbox. Both reuse the
+    existing parser/import/store (read-only access to SavedVariables). Delivery is still at the next WoW save (`/reload`, logout, exit).
+    **Next dependency for "no manual report":** GearExport in-memory
     auto-refresh (see [Next](#next)). Still open on the companion itself: tray/installer/autostart, multi-file/multi-account watching,
     deleted-character tombstone. See [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
   - **Began with a design/feasibility checkpoint (approved); Slice 1 was built from it. Packaging (tray, installer, autostart) needs its own review first.**
@@ -196,7 +199,7 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
   - Addon-side schema already anticipates a read-only SavedVariables companion with a
     deterministic trigger engine, optional LLM layer, and notifications (GearExport
     `WOWSYNC_SCHEMA.md`, "Read-only external companion").
-  - Open feasibility questions to answer first:
+  - Remaining feasibility questions:
     - `WoWSyncDB.characters[guid].latestExport` exists after `/wowsync`, but SavedVariables
       normally reach disk only on logout/reload. A plain file watcher may **not** deliver
       the immediate post-`/wowsync` handoff while the user stays logged in. Find the best
@@ -204,8 +207,8 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
     - SavedVariables must be parsed as restricted data, never executed as Lua; incomplete
       writes must be rejected; the companion must never trigger a reload.
     - File modification time is **not** observation time.
-    - The Dashboard API has no auth/token and relies on loopback binding plus a
-      Host/Origin guard.
+    - The general Dashboard API has no auth/token and relies on loopback binding plus a
+      Host/Origin guard. The dedicated capture receiver has a separate token; DEV tunneling and cloud TLS still need deployment setup.
     - SavedVariables keys characters by GUID; the text export carries none.
     - Activity History is expected to use a separate transport artifact/channel.
   - Existing note: [README.md](../README.md) → "Future automatic snapshot ingestion".
@@ -311,7 +314,7 @@ where it is written up) when it is made; open parts stay listed.
 | Deletion semantics for shared observations | — (decided) | **Decided and implemented:** deleting a character or snapshot never deletes shared observations; an explicit per-owner clear removes that owner's observations and provenance, is not a tombstone (a new export may recreate the owner) and cannot be undone by backfill from already-stored snapshots; typed confirmation plus "Clears stored shared-storage history. A later WoWSync export may add it again." |
 | Character identity / GUID strategy, especially rename/transfer | Identity, companion, Activity History | Identity is `version::realm::name`; the text export carries no GUID while SavedVariables is GUID-keyed |
 | Desktop companion transport / handoff | Desktop companion | **Decided for Slice 1:** poll the SavedVariables file and POST the newest `latestExport.text`; delivery is at the next WoW save (`/reload`, logout, exit), not at `/wowsync`. The flush timing is an accepted assumption, still **UNVERIFIED** (optional experiment in the feasibility checklist). Open: a dedicated handoff artifact (addon side) |
-| Local companion API authentication | Desktop companion | **Decided for Slice 1: no token; loopback-only client** (the watcher refuses a non-loopback `--url`). Revisit if the server binds beyond loopback, other local users matter, or the companion becomes a background service or accepts inbound connections ([feasibility doc](DESKTOP_COMPANION_FEASIBILITY.md), section 5) |
+| Local companion API authentication | Desktop companion | **Decided for local Slice 1: no token; loopback-only client.** Authenticated transport mode uses a separate capture-only listener and target token; it does not enable access to other API routes. Widening the general Dashboard API remains a separate security decision ([feasibility doc](DESKTOP_COMPANION_FEASIBILITY.md), section 5) |
 | Deleted-in-Dashboard character vs the companion | Desktop companion | **Accepted for Slice 1:** the newest export can reappear after a Dashboard delete (delete is not a tombstone; the watcher sends only the single newest export, and only after a change seen since it started, or with `--once`). Needs a persisted watermark or a server-side tombstone (its own milestone) before the companion runs unattended |
 | Activity History transport path | Activity History | Expected to be separate from the snapshot export |
 | When/if the explicit full-account export ships | Account context | Normal `/wowsync` stays current-character plus compact summary |
