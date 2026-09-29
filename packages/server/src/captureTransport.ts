@@ -19,6 +19,7 @@ export interface CaptureTransportOptions {
   spoolDirectory: string;
   fetch: typeof fetch;
   timeoutMs?: number;
+  onConnectivity?: (state: "connected" | "unavailable", checkedAt: string) => void;
 }
 
 function digest(text: string): string {
@@ -51,6 +52,7 @@ export function createCaptureTransport(options: CaptureTransportOptions) {
   const directory = path.resolve(options.spoolDirectory);
   let failures = 0;
   let retryAt = 0;
+  let lastProbeAt = 0;
   const acknowledged = new Map<string, CaptureEnvelope>();
 
   async function deliver(file: string, capture: CaptureEnvelope): Promise<void> {
@@ -63,11 +65,13 @@ export function createCaptureTransport(options: CaptureTransportOptions) {
         signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
       });
     } catch (error) {
+      options.onConnectivity?.("unavailable", new Date().toISOString());
       const why = (error as Error).name === "TimeoutError" ? "request timed out" : ((error as Error & { cause?: { code?: string } }).cause?.code ?? (error as Error).message);
       const delay = Math.min(60_000, 5_000 * 2 ** failures++);
       retryAt = Date.now() + delay;
       throw new ImportPostError(`Capture receiver at ${options.origin} is unreachable (${why}); the capture remains in ${file}. Retry in ${Math.ceil(delay / 1000)}s.`, "unreachable");
     }
+    options.onConnectivity?.("connected", new Date().toISOString());
     const raw = await response.text();
     let body: any;
     try { body = raw ? JSON.parse(raw) : undefined; } catch { body = undefined; }
@@ -121,5 +125,27 @@ export function createCaptureTransport(options: CaptureTransportOptions) {
     return capture;
   }
 
-  return { flush: () => flush(), send };
+  function pendingCount(): number {
+    return readdirSync(directory).filter((name) => name.endsWith(".json")).length;
+  }
+
+  async function probe(force = false): Promise<void> {
+    if (!force && Date.now() - lastProbeAt < 30_000) return;
+    lastProbeAt = Date.now();
+    let state: "connected" | "unavailable" = "unavailable";
+    try {
+      const response = await options.fetch(`${options.origin}/api/captures`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: AbortSignal.timeout(Math.min(options.timeoutMs ?? 30_000, 5_000)),
+      });
+      // This capture-only endpoint authenticates before validating request content.
+      // Its expected 401 proves connectivity without sending or logging the token.
+      if (response.status === 401) state = "connected";
+    } catch { /* unavailable */ }
+    options.onConnectivity?.(state, new Date().toISOString());
+  }
+
+  return { flush: () => flush(), send, pendingCount, probe };
 }

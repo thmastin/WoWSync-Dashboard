@@ -1,123 +1,139 @@
-# Windows → Omarchy DEV capture setup
+# Persistent WoWSync DEV on Windows and Omarchy
 
-This guide runs the WoWSync SavedVariables watcher on Windows and sends captures to the **Omarchy DEV Dashboard receiver**. It does not change
-the Windows Dashboard/database destination, and it does not send to LIVE. The watcher reads `GearExport.lua`; it never writes to the WoW folder.
+The one-file Windows → Omarchy DEV capture path was manually proven on
+2026-09-29. This runbook replaces its routine terminal steps with a hidden
+Windows logon task and systemd-managed Omarchy DEV startup. It does not change
+the Windows Dashboard/database destination or configure LIVE. The watcher is
+read-only with respect to WoW files.
 
-## Before starting
+## Omarchy DEV setup and operation
 
-The Omarchy DEV receiver must first be provisioned and running. Get these three DEV-only values from its setup:
+The DEV Dashboard process hosts both the browser UI on loopback `4174` and the
+separate authenticated capture-only receiver on loopback `4175`. Provision its
+DEV-only environment once as described in the existing receiver setup steps.
+Keep `/etc/wowsync/dev/capture.env` root-owned and group-readable only by
+`wowsync-dev`; it must contain `WOWSYNC_CAPTURE_TARGET=DEV`, the receiver
+directory, port `4175`, and the dedicated DEV token. The token must never enter
+the repository or logs.
 
-- SSH username and host name (or IP) that Windows can reach.
-- The matching DEV capture token. Do not use a production or LIVE token.
-- Confirmation that the capture-only receiver is listening on Omarchy loopback port `4175` with target `DEV`.
+From the Omarchy checkout, install the single DEV systemd operator interface:
 
-Until then, the tunnel and watcher cannot connect. Keep the Windows Dashboard destination and any LIVE settings unchanged.
-
-## 1. Update the WoWSync checkout
-
-Open PowerShell in the Windows WoWSync-Dashboard checkout. Check for local changes first; preserve them before switching branches or updating.
-
-```powershell
-git status --short --branch
-git switch feature/dashboard-integration
-git pull --ff-only origin feature/dashboard-integration
+```bash
+tools/omarchy/install-wowsync-dev.sh
 ```
 
-The capture transport is in commit `1d5bc08` or later. Node.js 24 or later is required:
+This enables `wowsync-dev.target` at boot and groups only the DEV Dashboard
+service. The capture receiver is part of that same process. It leaves the LIVE
+Dashboard/proxy units untouched. Use one command for normal operation:
 
-```powershell
-node --version
-npm ci
+```bash
+sudo wowsync-dev start
+sudo wowsync-dev stop
+sudo wowsync-dev restart
+wowsync-dev status
 ```
 
-If `node --version` is below 24, install/update Node.js on Windows, open a new PowerShell window, and check again.
+Status checks the DEV unit, Dashboard web response, and the receiver's expected
+unauthenticated `401` response. The target uses `systemd`; no shell or terminal
+needs to stay open.
 
-## 2. Open the private SSH tunnel
+## One-time Windows setup
 
-In a separate PowerShell window, replace the placeholders with the SSH values from the Omarchy setup and leave this window open:
+On Windows, update the WoWSync checkout to `feature/dashboard-integration`,
+install Node.js 24 or later and run `npm ci`. Confirm Windows OpenSSH can reach
+Omarchy non-interactively after sign-in: its key/agent must be available and
+the Omarchy host key already trusted. The SSH key should be limited to the
+Windows user's existing Omarchy access; the tunnel binds only to Windows
+loopback and forwards only `4174` (Dashboard browser) and `4175` (capture).
+No Dashboard port is opened on the LAN.
+
+In PowerShell at the updated repository root, install the hidden logon task:
 
 ```powershell
-ssh -N -L 127.0.0.1:4175:127.0.0.1:4175 <ssh-user>@<omarchy-host>
+.\tools\windows\WoWSync-Capture.ps1 -Mode Install `
+  -WowRoot "C:\Games\World of Warcraft" `
+  -SshTarget "YOUR_OMARCHY_SSH_USER@YOUR_OMARCHY_HOST" `
+  -RepoRoot (Get-Location).Path
 ```
 
-Accept the host key only if it matches the one you expect for this Omarchy machine. This forwards only the capture receiver. The regular
-Dashboard port and its read/delete/Ask routes are not forwarded.
+The one-time installer obtains the DEV capture token directly over SSH from
+the restricted Omarchy config file, prompts for the least-privilege Secure MCP
+Tunnel runtime key (Tunnels Read + Use), and stores each credential separately
+with current-user Windows DPAPI under `%LOCALAPPDATA%\WoWSync`. Neither value
+is printed, passed in process arguments, or stored in the repository. The MCP
+profile at `%APPDATA%\tunnel-client\wowsync.yaml` and its read-only database
+path are reused unchanged. The installer registers a Task Scheduler task for
+Windows user sign-in and starts it hidden.
 
-## 3. Configure this PowerShell session
+After setup, the background supervisor maintains three processes: the private
+SSH forward, the SavedVariables watcher, and the existing Secure MCP Tunnel
+client. It restarts disconnected children with backoff. The capture watcher
+discovers `GearExport.lua` files under the selected WoW install for Retail,
+Classic BCC Anniversary, Classic Era, and other supported product folders, and
+continues discovering account/product files created later. Each file retains
+its own state; the export parser/server keep the version identity and unknown
+or ambiguous identities are not guessed. On startup it catches up the newest
+persisted export per discovered file. When Omarchy is unavailable, capture
+envelopes stay in the durable Windows outbox and retry; after reconnection the
+receiver's matching durable acknowledgement removes them. Re-sending an
+accepted capture remains safe.
 
-Use the exact `GearExport.lua` path for one WoW account/product for the first run. It is usually under:
+The SSH task forwards `127.0.0.1:4174` for the normal Dashboard UI and
+`127.0.0.1:4175` for capture. Open the DEV Dashboard in a Windows browser at:
 
 ```text
-<WoW install>\_retail_\WTF\Account\<account>\SavedVariables\GearExport.lua
+http://127.0.0.1:4174
 ```
 
-For Classic clients, replace `_retail_` with the relevant product folder. Enter the values below, replacing the SavedVariables path and token.
-The secure prompt avoids putting the token in PowerShell command history. The token remains available to child processes in this PowerShell
-session until you remove it or close the window.
+The web page uses its normal same-origin API. Both ports remain loopback-only
+on Windows and Omarchy; the normal Dashboard API is not exposed to the LAN.
+
+## Windows operator status
+
+The installer places one operator script in the user's local WoWSync folder:
 
 ```powershell
-$env:WOWSYNC_URL = "http://127.0.0.1:4175"
-$env:WOWSYNC_CAPTURE_TARGET = "DEV"
-$env:WOWSYNC_CAPTURE_SPOOL_DIR = Join-Path $env:LOCALAPPDATA "WoWSync\outbox"
-$env:WOWSYNC_SAVED_VARIABLES = "C:\Games\World of Warcraft\_retail_\WTF\Account\YOUR_ACCOUNT\SavedVariables\GearExport.lua"
-
-$secureToken = Read-Host "Omarchy DEV capture token" -AsSecureString
-$tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-try {
-    $env:WOWSYNC_CAPTURE_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer)
-} finally {
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer)
-}
+$wowsync = Join-Path $env:LOCALAPPDATA 'WoWSync\WoWSync-Capture.ps1'
+& $wowsync -Mode Start
+& $wowsync -Mode Stop
+& $wowsync -Mode Restart
+& $wowsync -Mode Status
 ```
 
-Do not put these values in the repository's `.env`, commit them, or reuse the token for another target. The spool is local to this Windows user;
-pending capture files stay there until Omarchy acknowledges them.
+Status reports the Task Scheduler/supervisor state, SSH and MCP tunnel process
+state, DEV target, browser URL, last SavedVariables observation, last
+acknowledgement with character/product/version, pending outbox count, latest
+receiver connectivity check, backlog-draining state, and most recent useful
+error. It never displays either credential. The status JSON and logs are local
+to the Windows user under `%LOCALAPPDATA%\WoWSync`; the status record contains
+no token or export text.
 
-## 4. Send one saved capture to DEV
+## Outages and first validation
 
-Run this from the repository root, using the same PowerShell session where you set the values:
+If Omarchy is off, the SSH child retries and captures stay in the Windows
+outbox. If Windows is off, the startup catch-up reads the newest persisted
+export from each discovered file after sign-in. When both machines return, the
+outbox drains using the existing receiver receipts. It still requires WoW to
+save SavedVariables (reload, logout, or exit); `/wowsync` alone does not write
+the file.
 
-```powershell
-npm run watch:saved -- --file "$env:WOWSYNC_SAVED_VARIABLES" --once
-```
+The first real-machine acceptance should verify:
 
-This imports the newest saved export in that one file into DEV. It does not change the Windows database. Check that the output names target
-`DEV`, reports a receiver acknowledgement, and the outbox is empty:
+1. Windows sign-in starts the task hidden; no PowerShell window remains.
+2. `Status` shows the SSH tunnel, watcher and MCP tunnel running, and the DEV
+   Dashboard opens at `http://127.0.0.1:4174`.
+3. A normal WoW save produces a DEV acknowledgement and clears the outbox.
+4. With Omarchy stopped, a subsequent save remains queued; restart Omarchy with
+   `sudo wowsync-dev start` (or reboot it), then confirm the backlog drains.
+5. `sudo wowsync-dev status` reports the DEV Dashboard HTTP response and
+   capture receiver HTTP 401. The Windows status shows the receiver connected.
+6. In a normal ChatGPT conversation with the existing **WoWSync** app, invoke
+   `list_versions`, then a version-scoped character read. Confirm the response
+   still reflects the narrow read-only MCP surface. This external call is
+   required; local protocol tests alone do not prove the ChatGPT tunnel.
 
-```powershell
-Get-ChildItem "$env:WOWSYNC_CAPTURE_SPOOL_DIR"
-```
-
-An empty outbox means each queued capture received a matching durable acknowledgement. If the receiver is temporarily unreachable, the file
-stays in the outbox and is retried; do not delete it to clear an error.
-
-## 5. Keep capture watching
-
-After the one-capture check succeeds, start the watcher in the same PowerShell session:
-
-```powershell
-npm run watch:saved -- --file "$env:WOWSYNC_SAVED_VARIABLES"
-```
-
-Leave both PowerShell windows open. The watcher ignores the file's current contents at startup; later it sends a new export after WoW saves
-SavedVariables, such as after `/reload`, logout, or exit. It cannot see an in-memory `/wowsync` export before WoW saves it. Stop the watcher
-with Ctrl+C.
-
-To watch all products/accounts later, use `--wow-dir "<WoW install root>"` instead of `--file`; each discovered SavedVariables file has
-independent watcher state. The first check intentionally uses one explicit file to limit what enters DEV.
-
-When finished, close the watcher and tunnel windows, then clear the session token:
-
-```powershell
-Remove-Item Env:WOWSYNC_CAPTURE_TOKEN
-```
-
-## Common errors
-
-- **SSH connection fails:** confirm Windows can reach the Omarchy SSH host and that the username/key is correct. No Dashboard port needs to be
-  opened on the LAN; the SSH tunnel carries the local connection.
-- **Connection refused on `127.0.0.1:4175`:** the Omarchy DEV receiver is not running/configured yet, or the tunnel window is closed.
-- **HTTP 401:** token mismatch. Re-enter the DEV token provisioned on Omarchy; do not substitute a LIVE token.
-- **Target mismatch:** this receiver is not configured as `DEV`; stop and check the URL and receiver target before retrying.
-- **Capture remains in the outbox:** keep it. The watcher retries with backoff, and resending the same capture ID is safe.
-- **No saved export:** run `/wowsync`, then let WoW save SavedVariables (`/reload`, logout, or exit), and retry.
+The MCP runtime and its eleven-tool contract are unchanged. Its tunnel profile
+remains outbound and private; this setup does not add a public MCP or Dashboard
+listener. If the existing tunnel client/profile/runtime key is unavailable,
+keep the current MCP setup intact and resolve that credential/profile issue
+before claiming full infrastructure acceptance.

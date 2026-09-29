@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
@@ -515,6 +515,42 @@ test("several accounts or products are ALL watched (each file independent); one 
   assert.equal(await run(["--wow-dir", join(dir, "_classic_era_"), "--once"], one), 0);
   assert.match(all(one.out), /from --wow-dir/);
   assert.match(all(one.out), /Watching .*GearExport\.lua/);
+});
+
+test("persistent service waits for new product/account files and catches up each latest export", async () => {
+  const wow = join(root, `service-wow-${counter++}`);
+  const retail = join(wow, "_retail_", "WTF", "Account", "A1", "SavedVariables", "GearExport.lua");
+  const era = join(wow, "_classic_era_", "WTF", "Account", "A2", "SavedVariables", "GearExport.lua");
+  mkdirSync(join(wow, "_retail_", "WTF", "Account"), { recursive: true });
+  mkdirSync(join(wow, "_classic_era_", "WTF", "Account"), { recursive: true });
+  const spool = join(root, `service-outbox-${counter++}`);
+  const d = runDeps(nodeFs, (call) => {
+    if (call.headers?.Authorization === undefined) return json(401, { code: "CAPTURE_UNAUTHORIZED" });
+    const capture = JSON.parse(call.body!);
+    assert.equal(capture.target, "DEV");
+    return json(200, { target: "DEV", receipt: { captureId: capture.captureId, sha256: capture.sha256, payloadSha256: capture.payloadSha256 } });
+  }, { WOWSYNC_CAPTURE_TOKEN: "x".repeat(40) });
+  const controller = new AbortController();
+  let ticks = 0;
+  const sleep = d.deps.sleep;
+  d.deps.sleep = async (ms, signal) => {
+    await sleep(ms, signal);
+    if (++ticks === 1) {
+      mkdirSync(dirname(retail), { recursive: true });
+      writeFileSync(retail, VIREK_SV);
+      mkdirSync(dirname(era), { recursive: true });
+      writeFileSync(era, VIREK_SV);
+    }
+    if (ticks === 5) controller.abort();
+  };
+  const status: unknown[] = [];
+  d.deps.status = (event) => status.push(event);
+  assert.equal(await runWatchSaved(["--service", "--wow-dir", wow, "--url", "https://receiver.example", "--capture-target", "DEV", "--spool-dir", spool], d.deps, controller.signal), 0, all(d.err) || all(d.out));
+  assert.equal(d.calls.filter((call) => call.headers?.Authorization).length, 1, "identical payloads across files share one acknowledged capture");
+  assert.equal(readdirSync(spool).length, 0);
+  assert.ok(status.some((e: any) => e.type === "targets" && e.files.some((f: any) => f.product === "_retail_")));
+  assert.ok(status.some((e: any) => e.type === "targets" && e.files.some((f: any) => f.product === "_classic_era_")));
+  assert.equal(status.filter((e: any) => e.type === "acknowledgement").length, 2);
 });
 
 test("a non-loopback Dashboard URL is REFUSED (the bridge only warns): nothing is watched or sent", async () => {

@@ -150,29 +150,34 @@ only; diagnostics go to stderr.
    .\tools\tunnel-client\tunnel-client.exe doctor --profile wowsync --explain
    ```
 
-4. Start and leave the foreground process running while ChatGPT needs WoWSync:
+4. The persistent Windows setup starts and supervises this process at user
+   sign-in after storing the least-privilege key once with current-user DPAPI.
+   For one-off troubleshooting only, the foreground form is:
 
    ```powershell
    .\tools\tunnel-client\tunnel-client.exe run --profile wowsync
    ```
 
-5. Stop with **Ctrl+C** in that window. WoWSync tool calls will fail until
-   the tunnel client is started again.
+5. Use the WoWSync Windows supervisor's `-Mode Stop` / `-Mode Start` commands
+   to stop or resume its child processes. Do not leave a second manual
+   `tunnel-client run` instance competing with the scheduled task.
 
 `tunnel-client` also has local operator/health surfaces. Leave their default
 loopback binding in place; do not enable remote UI access for this integration.
 
-The installed v0.0.15 CLI exposes `run` as its long-lived poller. It also has
+The original MCP acceptance used the installed v0.0.15 CLI as a manually
+started foreground poller. It also has
 `runtimes connect/status/stop` commands for native local runtime supervision;
 its own help describes `connect` as the long-lived runtime path managed by
 Codex. That mode was not configured or tested here. It is not documented by
-the CLI help as a Windows service, scheduled task, or OS startup integration.
-OpenAI's current deployment guide mentions VM/systemd and container patterns,
-but does not establish a supported Windows service recipe. Keep the manually
-started foreground process as today's recommendation; no persistent startup
-is configured. If Codex-managed supervision is considered later, review its
-credential/profile storage and lifecycle separately. This does not authorize
-installing the optional Codex tunnel plugin.
+the CLI help as a native Windows service. The WoWSync infrastructure setup now
+supervises the existing `run --profile wowsync` process with Windows Task
+Scheduler at user sign-in; it keeps the same stdio MCP target/profile and
+restarts the client if it exits. The task stores its least-privilege runtime
+key separately with current-user DPAPI and supplies `CONTROL_PLANE_API_KEY`
+only to the tunnel client process tree. Task Scheduler behavior and the
+external ChatGPT path still require real Windows/ChatGPT acceptance. This
+does not install the optional Codex tunnel plugin or alter the MCP app.
 
 ### ChatGPT connection
 

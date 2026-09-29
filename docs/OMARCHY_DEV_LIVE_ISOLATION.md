@@ -34,10 +34,10 @@ WoWSync identity may have any sudo command privilege.
 - DEV and future LIVE SQLite: `/var/lib/wowsync-{dev,live}/db/wowsync.sqlite`.
   Each database's `-wal` and `-shm` files stay beside it on the local filesystem.
   LIVE SQLite does not exist until the later migration.
-- Per-role `inbox/{staging,accepted,quarantine}`, `receipts`, and `state` live
-  under `/var/lib/wowsync-{dev,live}`. The repository now has an authenticated
-  receiver and durable sender protocol, but no capture token/directory is
-  configured and no receiver is active on this host yet.
+- DEV's authenticated capture receiver keeps its journal and receipts under a
+  private directory in `/var/lib/wowsync-dev`; the durable sender spool remains
+  on Windows. The receiver starts only with its DEV token, directory, and target
+  configured together.
 - Per-role non-secret config directories: `/etc/wowsync/{dev,live}`. They are
   root-owned, group-readable only by the matching role. No production
   credentials are installed in this milestone.
@@ -50,7 +50,17 @@ WoWSync identity may have any sudo command privilege.
   with `RuntimeDirectory=` when a service actually needs one.
 
 Root-managed `wowsync-dev-dashboard.service` uses `User=wowsync-dev`, explicit
-`WOWSYNC_DATA_DIR` and `WOWSYNC_DB_PATH`, and `127.0.0.1:4174`.
+`WOWSYNC_DATA_DIR` and `WOWSYNC_DB_PATH`, and `127.0.0.1:4174`. With the DEV
+capture environment configured, that same process starts the separate
+authenticated, loopback-only receiver on `127.0.0.1:4175`, which exposes only
+`POST /api/captures`.
+`tools/omarchy/install-wowsync-dev.sh` installs `wowsync-dev.target` and the
+`wowsync-dev` operator. The target starts the Dashboard/receiver together at
+boot and groups start/stop/restart/status. A `PartOf=` drop-in makes stopping
+the target stop the DEV Dashboard too. The Windows supervisor privately
+forwards `4175` for captures and `4174` for the Dashboard browser on Windows
+loopback. Neither listener is opened on the LAN; the capture listener is not a
+proxy to general Dashboard routes.
 `wowsync-live-dashboard.service` remains disabled and has an existing-DB
 condition. Its pinned release and TCP bind are **not cutover-ready**: before any
 LIVE start, promote a release containing `WOWSYNC_LISTEN_SOCKET` support and
@@ -67,12 +77,12 @@ These are system units with explicit `User=` settings; they do not depend on
 `thmastin`'s enabled systemd user linger.
 
 The server path/port selectors are implemented in
-`packages/server/src/index.ts` and `packages/server/src/net.ts`. The MCP uses
-`WOWSYNC_MCP_DB_PATH` and `WOWSYNC_MCP_RESEARCH_ROOT` in
-`packages/mcp/src/index.ts`. No MCP/tunnel unit is activated yet. Future MCP
-launches must set those values explicitly and use the matching role's data and
-research tree. DEV import/watch commands and the Vite proxy also need an
-explicit DEV URL/port; their defaults target 4173.
+`packages/server/src/index.ts` and `packages/server/src/net.ts`. The existing
+read-only MCP and Secure MCP Tunnel profile remain on Windows; the Windows
+supervisor can restart the existing tunnel client without changing its profile
+or database path. Normal ChatGPT invocation remains an external acceptance
+check. DEV import/watch commands and the Vite proxy also need an explicit DEV
+URL/port; their defaults target 4173.
 
 ## Network boundary
 

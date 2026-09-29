@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command="${1:-status}"
+case "$command" in
+  start) sudo systemctl start wowsync-dev.target ;;
+  stop) sudo systemctl stop wowsync-dev.target ;;
+  restart) sudo systemctl restart wowsync-dev.target ;;
+  status)
+    systemctl --no-pager --full status wowsync-dev.target wowsync-dev-dashboard.service
+    printf '\nDashboard: '
+    curl --silent --show-error --max-time 3 --output /dev/null --write-out 'HTTP %{http_code}\n' http://127.0.0.1:4174/
+    printf 'Capture receiver: '
+    code="$(curl --silent --show-error --max-time 3 --output /dev/null --write-out '%{http_code}' \
+      --request POST --header 'Content-Type: application/json' --data '{}' http://127.0.0.1:4175/api/captures || true)"
+    if [[ "$code" == "401" ]]; then
+      printf 'HTTP 401 (receiver reachable; authentication required)\n'
+    else
+      printf 'HTTP %s (expected 401)\n' "${code:-unavailable}"
+      exit 1
+    fi
+    ;;
+  *)
+    printf 'Usage: wowsync-dev {start|stop|restart|status}\n' >&2
+    exit 2
+    ;;
+esac

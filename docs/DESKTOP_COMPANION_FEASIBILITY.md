@@ -1,8 +1,10 @@
 # Desktop companion: feasibility checkpoint (ROADMAP item 8)
 
-Status: **Local watcher and authenticated capture transport implemented** (`npm run watch:saved`). The Windows-to-Omarchy DEV runtime route is
-not provisioned or rehearsed yet. There is no tray, installer, autostart or Electron. This document began as the Slice 1 feasibility/design record;
-the current receiver protocol is summarized in [README.md](../README.md#watcher-and-windows-capture-transport).
+Status: the manual Windows → Omarchy DEV capture route has been proven. This infrastructure slice adds a Task Scheduler supervisor,
+systemd-managed Omarchy DEV startup, service discovery and durable status; real Windows reboot/outage/browser validation remains pending.
+This remains the original Slice 1 feasibility/design record. The current operational runbook is
+[WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md), and the receiver protocol is summarized in
+[README.md](../README.md#watcher-and-windows-capture-transport).
 Written 2026-09-21 against branch `feature/dashboard-integration`.
 
 ## Review decisions (recorded when Slice 1 was approved)

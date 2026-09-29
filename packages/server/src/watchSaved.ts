@@ -25,6 +25,7 @@ import {
   describeExport,
   describeImportResult,
   discoverWatchTargets,
+  findSavedVariablesFiles,
   importEndpoint,
   watchTargetLabel,
   iso,
@@ -87,7 +88,19 @@ export interface WatchConfig {
   once: boolean;
   pollMs: number;
   quietMs: number;
+  /** Import the latest persisted export when a persistent service attaches to a file. */
+  initialImport?: boolean;
 }
+
+export type CaptureStatusEvent =
+  | { type: "service"; state: "running" | "waiting-for-files" | "stopped"; watchRoot?: string }
+  | { type: "targets"; files: Array<{ path: string; product: string }> }
+  | { type: "pending"; count: number; draining: boolean }
+  | { type: "observation"; at: string; file: string; product: string }
+  | { type: "export"; at: string; file: string; product: string; character?: string; realm?: string; version?: string }
+  | { type: "acknowledgement"; at: string; file: string; product: string; captureId: string; character?: string; realm?: string; version?: string }
+  | { type: "connectivity"; state: "connected" | "unavailable"; checkedAt: string }
+  | { type: "error"; at: string; message: string };
 
 export interface WatchDeps {
   fs: WatchFs;
@@ -99,6 +112,7 @@ export interface WatchDeps {
   err: (line: string) => void;
   /** Optional authenticated remote receiver with a durable local outbox. */
   captureTransport?: ReturnType<typeof createCaptureTransport>;
+  status?: (event: CaptureStatusEvent) => void;
 }
 
 export interface Watcher {
@@ -142,6 +156,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
   };
   /** Give up on this version of the file; the next change to it is tried afresh. */
   const stop = (message: string) => {
+    deps.status?.({ type: "error", at: new Date().toISOString(), message });
     err(config.once ? message : `${message}\n  Waiting for the file to change again.`);
     finish(1);
   };
@@ -183,6 +198,8 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     if (problems.length > 0) return stop(`Not sent: the newest saved export is not consistent.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
 
     const generatedAt = summary.generatedAt ?? chosen.generatedAt ?? 0;
+    const product = watchTargetLabel(config.file);
+    deps.status?.({ type: "export", at: new Date().toISOString(), file: config.file, product, character: summary.name, realm: summary.realm, version: summary.version });
     // What is actually known: when WoW last wrote the file, and when the newest export in it was generated. Not "no export since".
     out(`SavedVariables last written ${iso(Math.floor(mtimeMs / 1000))}; newest export in it: ${summary.name ?? "?"} · ${summary.realm ?? "?"}, generated ${iso(generatedAt)}.`);
     if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256 && lastSent.currenciesSha256 === currenciesSha256) {
@@ -205,6 +222,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     try {
       if (deps.captureTransport) {
         const capture = await deps.captureTransport.send(text, chosen.currencies);
+        deps.status?.({ type: "acknowledgement", at: new Date().toISOString(), file: config.file, product, captureId: capture.captureId, character: summary.name, realm: summary.realm, version: summary.version });
         out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
         lastSent = { generatedAt, sha256: summary.sha256, currenciesSha256 };
         sendFailures = 0;
@@ -220,6 +238,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
         // The file is the source of truth, so nothing is lost: retry with capped backoff until the Dashboard is back.
         const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** sendFailures++);
         retryAt = now + delay;
+        deps.status?.({ type: "error", at: new Date().toISOString(), message: e.message });
         err(`${e.message}\n  Will retry in ${Math.round(delay / 1000)}s.`);
         return;
       }
@@ -256,10 +275,14 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
         started = true;
         signature = next;
         changedAt = now;
+        if (next !== undefined) deps.status?.({ type: "observation", at: new Date().toISOString(), file: config.file, product: watchTargetLabel(config.file) });
         if (config.once) {
           if (next === undefined) return stop("The SavedVariables file cannot be read.");
           pending = true;
           out("Waiting for the file to be stable, then importing the newest saved export once.");
+        } else if (config.initialImport && next !== undefined) {
+          pending = true;
+          out("Persistent capture attached to this SavedVariables file; checking its latest persisted export.");
         }
       } else if (next !== signature) {
         signature = next;
@@ -304,12 +327,13 @@ WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /w
   --url <url>            Receiver URL (default: from PORT / WOWSYNC_HOST, else http://127.0.0.1:4173).
   --capture-target <id>  Send to the authenticated capture receiver (for example DEV); requires token and spool directory.
   --spool-dir <path>     Absolute durable outbox path (or WOWSYNC_CAPTURE_SPOOL_DIR).
+  --service              Persistent mode: discover new files and catch up the latest saved export after startup.
   --once                 Import the newest saved export from each watched file now, then exit (a catch-up). Without it, each file's
                          state at startup is ignored and only later saves are imported.
   --help                 This text.
 
 Environment (a .env file works too): WOWSYNC_SAVED_VARIABLES, WOWSYNC_WOW_DIR, WOWSYNC_URL,
-WOWSYNC_CAPTURE_TARGET, WOWSYNC_CAPTURE_TOKEN, WOWSYNC_CAPTURE_SPOOL_DIR.`;
+WOWSYNC_CAPTURE_TARGET, WOWSYNC_CAPTURE_TOKEN, WOWSYNC_CAPTURE_SPOOL_DIR, WOWSYNC_CAPTURE_STATUS_PATH.`;
 
 export interface WatchOptions {
   once: boolean;
@@ -319,6 +343,7 @@ export interface WatchOptions {
   url?: string;
   captureTarget?: string;
   spoolDir?: string;
+  service: boolean;
 }
 
 export function parseWatchOptions(argv: readonly string[]): WatchOptions {
@@ -335,10 +360,11 @@ export function parseWatchOptions(argv: readonly string[]): WatchOptions {
         url: { type: "string" },
         "capture-target": { type: "string" },
         "spool-dir": { type: "string" },
+        service: { type: "boolean" },
       },
     });
     if (positionals.length > 0) throw new BridgeError(`Unexpected argument "${positionals[0]}".`, true);
-    return { once: values.once === true, help: values.help === true, file: values.file, wowDir: values["wow-dir"], url: values.url, captureTarget: values["capture-target"], spoolDir: values["spool-dir"] };
+    return { once: values.once === true, help: values.help === true, file: values.file, wowDir: values["wow-dir"], url: values.url, captureTarget: values["capture-target"], spoolDir: values["spool-dir"], service: values.service === true };
   } catch (err) {
     if (err instanceof BridgeError) throw err;
     throw new BridgeError((err as Error).message, true);
@@ -361,7 +387,19 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
       for (const line of USAGE.split("\n")) deps.out(line);
       return 0;
     }
-    const found = discoverWatchTargets({ file: options.file, wowDir: options.wowDir, env: deps.env });
+    let found: ReturnType<typeof discoverWatchTargets>;
+    let serviceRoot: string | undefined;
+    if (options.service) {
+      if (options.file) throw new BridgeError("Persistent service mode requires --wow-dir so product/account files can be discovered.", true);
+      const root = options.wowDir?.trim() || deps.env.WOWSYNC_WOW_DIR?.trim();
+      if (!root) throw new BridgeError("Persistent service mode requires --wow-dir or WOWSYNC_WOW_DIR.", true);
+      serviceRoot = path.resolve(root);
+      try { if (!statSync(serviceRoot).isDirectory()) throw new Error("not a directory"); }
+      catch { throw new BridgeError(`WoW install folder not found: ${serviceRoot}`, true); }
+      found = findSavedVariablesFiles(serviceRoot).map((file) => ({ path: file, via: "--service product/account discovery" }));
+    } else {
+      found = discoverWatchTargets({ file: options.file, wowDir: options.wowDir, env: deps.env });
+    }
     const target = resolveDashboardUrl(options, deps.env);
     const captureTarget = options.captureTarget?.trim() || deps.env.WOWSYNC_CAPTURE_TARGET?.trim();
     if (target.warning && !captureTarget) {
@@ -375,12 +413,15 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
       if (!token || token.length < 32) throw new BridgeError("Authenticated capture needs WOWSYNC_CAPTURE_TOKEN (at least 32 characters).", true);
       if (!spoolDirectory || !path.isAbsolute(spoolDirectory)) throw new BridgeError("Authenticated capture needs an absolute --spool-dir or WOWSYNC_CAPTURE_SPOOL_DIR.", true);
       if (!/^[A-Z][A-Z0-9_-]{1,15}$/.test(captureTarget)) throw new BridgeError("Capture target must be a short uppercase name such as DEV.", true);
-      captureTransport = makeCaptureTransport({ origin: target.origin, token, target: captureTarget, spoolDirectory, fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+      captureTransport = makeCaptureTransport({ origin: target.origin, token, target: captureTarget, spoolDirectory, fetch: deps.fetch, timeoutMs: deps.timeoutMs, onConnectivity: (state, checkedAt) => deps.status?.({ type: "connectivity", state, checkedAt }) });
     }
     const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
     const quietMs = deps.quietMs ?? DEFAULT_QUIET_MS;
-    const multi = found.length > 1;
-    if (multi) {
+    const multi = options.service || found.length > 1;
+    if (options.service) {
+      deps.out(`Persistent capture discovery under ${serviceRoot}; new product/account files are added automatically.`);
+      if (found.length === 0) deps.out("No GearExport.lua SavedVariables files exist yet; waiting for WoW to create them.");
+    } else if (multi) {
       deps.out(`Watching ${found.length} SavedVariables files  (from ${found[0].via}; read-only)`);
       for (const f of found) deps.out(`  [${watchTargetLabel(f.path)}] ${f.path}`);
     } else {
@@ -388,11 +429,13 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
     }
     deps.out(`${captureTarget ? `Capture receiver (${captureTarget})` : "Dashboard"}:  ${captureTarget ? `${target.origin}/api/captures` : importEndpoint(target.origin)}`);
     deps.out(`Polling every ${pollMs / 1000}s; a change is read once the file has been unchanged for ${quietMs / 1000}s.`);
-    if (!options.once) {
+    if (!options.once && !options.service) {
       deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. Each file's current contents are ignored (use --once to import the newest saved export now).");
     }
 
-    const watchers = found.map((f) => {
+    const watchers = new Map<string, Watcher>();
+    const addWatcher = (f: { path: string; via: string }) => {
+      if (watchers.has(f.path)) return;
       const label = watchTargetLabel(f.path);
       const prefix = multi ? `[${label}] ` : "";
       const fileDeps: WatchDeps = {
@@ -401,22 +444,44 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
         out: (line) => deps.out(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
         err: (line) => deps.err(line.startsWith(" ") || line === "" ? line : `${prefix}${line}`),
       };
-      return createWatcher({ file: f.path, origin: target.origin, once: options.once, pollMs, quietMs }, fileDeps);
-    });
+      watchers.set(f.path, createWatcher({ file: f.path, origin: target.origin, once: options.once, pollMs, quietMs, initialImport: options.service }, fileDeps));
+    };
+    for (const f of found) addWatcher(f);
+    const reportTargets = () => {
+      const files = [...watchers.keys()].map((file) => ({ path: file, product: watchTargetLabel(file) }));
+      deps.status?.({ type: "targets", files });
+      if (options.service) deps.status?.({ type: "service", state: files.length ? "running" : "waiting-for-files", watchRoot: serviceRoot });
+    };
+    reportTargets();
 
-    while (!signal.aborted && !watchers.every((w) => w.finished)) {
-      if (captureTransport) {
-        try { await captureTransport.flush(); }
-        catch (err) { deps.err(err instanceof Error ? err.message : String(err)); }
+    while (!signal.aborted && (options.service || ![...watchers.values()].every((w) => w.finished))) {
+      if (options.service && serviceRoot) {
+        const before = watchers.size;
+        for (const file of findSavedVariablesFiles(serviceRoot)) addWatcher({ path: file, via: "--service product/account discovery" });
+        if (watchers.size !== before) reportTargets();
       }
-      for (const w of watchers) {
+      const pendingBefore = captureTransport?.pendingCount() ?? 0;
+      if (pendingBefore > 0) deps.status?.({ type: "pending", count: pendingBefore, draining: true });
+      if (captureTransport) {
+        if (options.service) await captureTransport.probe();
+        try { await captureTransport.flush(); }
+        catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.err(message);
+          deps.status?.({ type: "error", at: new Date().toISOString(), message });
+        }
+      }
+      for (const w of watchers.values()) {
         if (!w.finished) await w.tick();
       }
-      if (watchers.every((w) => w.finished)) break;
+      const pendingAfter = captureTransport?.pendingCount() ?? 0;
+      deps.status?.({ type: "pending", count: pendingAfter, draining: pendingAfter > 0 && pendingAfter < pendingBefore });
+      if (!options.service && [...watchers.values()].every((w) => w.finished)) break;
       await deps.sleep(pollMs, signal);
     }
-    if (!watchers.some((w) => w.finished)) return 0;
-    return Math.max(...watchers.map((w) => w.exitCode));
+    if (options.service) deps.status?.({ type: "service", state: "stopped", watchRoot: serviceRoot });
+    if (![...watchers.values()].some((w) => w.finished)) return 0;
+    return Math.max(...[...watchers.values()].map((w) => w.exitCode));
   } catch (err) {
     if (err instanceof BridgeError) {
       deps.err(`error: ${err.message}`);

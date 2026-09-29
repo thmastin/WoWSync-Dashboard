@@ -89,3 +89,23 @@ test("sender outbox removes a capture only after the receiver returns the matchi
     });
   } finally { rmSync(spool, { recursive: true, force: true }); }
 });
+
+test("receiver probe checks capture HTTP reachability without sending the token", async () => {
+  const spool = mkdtempSync(join(tmpdir(), "wowsync-probe-"));
+  const states: string[] = [];
+  try {
+    const transport = createCaptureTransport({
+      origin: "http://127.0.0.1:4175", token, target: "DEV", spoolDirectory: spool,
+      onConnectivity: (state) => states.push(state),
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        assert.equal(init?.method, "POST");
+        assert.equal((init?.headers as Record<string, string>).Authorization, undefined);
+        assert.equal(init?.body, "{}");
+        return new Response(JSON.stringify({ code: "CAPTURE_UNAUTHORIZED" }), { status: 401 });
+      }) as typeof fetch,
+    });
+    await transport.probe(true);
+    assert.deepEqual(states, ["connected"]);
+    assert.equal(transport.pendingCount(), 0);
+  } finally { rmSync(spool, { recursive: true, force: true }); }
+});

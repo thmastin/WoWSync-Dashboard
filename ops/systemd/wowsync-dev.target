@@ -1,0 +1,9 @@
+[Unit]
+Description=WoWSync DEV runtime
+Documentation=file:/home/wowsync-dev/src/WoWSync-Dashboard/docs/OMARCHY_DEV_LIVE_ISOLATION.md
+Requires=wowsync-dev-dashboard.service
+After=network.target wowsync-dev-dashboard.service
+Wants=network.target
+
+[Install]
+WantedBy=multi-user.target

@@ -178,20 +178,19 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 
 ## Soon
 
-- [ ] **8. Desktop companion / automatic ingestion.** The local watcher exists and the authenticated capture transport is implemented;
-  the Windows-to-Omarchy route still needs DEV setup and rehearsal. A real product need: the user
-  sometimes forgets to paste `/wowsync` output into the Dashboard. Goal: reduce or
-  eliminate that manual handoff.
-  - **Status: local Slice 1 shipped and capture transport implemented; DEV transport not yet provisioned/rehearsed.** (`ad5fc79` shipped the local watcher.)
-    `watch:saved` now also supports an authenticated receiver envelope, explicit DEV/LIVE target, durable Windows outbox and durable receiver receipt;
-    Omarchy still needs DEV-only token/directory configuration and a private Windows tunnel before the first DEV capture test.
-    `npm run watch:saved -- --wow-dir <WoW install root>` polls each discovered GearExport SavedVariables file and delivers the newest
-    `latestExport.text`. Local mode uses `POST /api/import`; authenticated transport mode uses the receiver and durable outbox. Both reuse the
-    existing parser/import/store (read-only access to SavedVariables). Delivery is still at the next WoW save (`/reload`, logout, exit).
-    **Next dependency for "no manual report":** GearExport in-memory
-    auto-refresh (see [Next](#next)). Still open on the companion itself: tray/installer/autostart, multi-file/multi-account watching,
-    deleted-character tombstone. See [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
-  - **Began with a design/feasibility checkpoint (approved); Slice 1 was built from it. Packaging (tray, installer, autostart) needs its own review first.**
+- [ ] **8. Desktop companion / automatic ingestion.** The watcher, authenticated DEV receiver, durable sender spool and receiver receipts are
+  implemented. The persistent Windows Task Scheduler supervisor, hidden SSH forwards, DPAPI credential storage, multi-file service discovery,
+  durable status file, and Omarchy systemd DEV operator are implemented in this infrastructure slice. The manual Windows → Omarchy DEV
+  capture path has already been proven; do not spend another validation cycle re-proving that basic transport.
+  - **Status: awaiting real Windows setup/reboot/outage/browser validation and a normal ChatGPT MCP invocation after startup changes.** Use
+    [WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md) for the exact acceptance steps. Local automated coverage verifies restart catch-up,
+    new product/account discovery, durable outbox status, credential-free observability, and receiver probe behavior.
+  - The existing read-only MCP contract remains 11 tools and its Windows Secure MCP Tunnel profile/database path are reused unchanged.
+    Local protocol tests are not evidence that normal ChatGPT can invoke the external tunnel; perform the documented real ChatGPT acceptance.
+  - Delivery remains tied to WoW saving SavedVariables (`/reload`, logout or exit); this watcher cannot force a save. Any GearExport in-memory
+    auto-refresh remains separate future addon work and requires explicit authorization in GearExport's repository.
+  - The original foreground CLI feasibility checkpoint is preserved in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
+    A tray/Electron client is not part of this infrastructure slice.
   - Reuse, do not duplicate: `POST /api/import`, idempotent imports, observation-time
     ordering, transactional persistence, `parseWowSyncExport`,
     `SnapshotStore.importSnapshot`, `ImportResult` semantics. The companion must not
@@ -252,6 +251,22 @@ triggers".
 
 Repository-backed deferred ideas (GearExport `README.md`, "deferred"). Keep later unless
 dependencies change.
+
+- [ ] **WoW addon performance audit and optimization.** Future measurement-first
+  maintenance work for GearExport/WoWSync and, where relevant, BankCleanup. This
+  entry does not authorize edits to either separate repository; get Tate's
+  explicit authorization before implementation begins. Establish per-client
+  baselines (Retail/Midnight, Classic BCC Anniversary, Classic Era, Forever,
+  Hardcore/SSF) for normal/combat CPU, memory and allocation pressure, event
+  registrations and handler cost, OnUpdate/timers, SavedVariables size and
+  serialization, login/reload/logout, export generation, inventory/bank/guild
+  scans, item metadata calls/caching, and idle work. Rank measured hotspots by
+  gameplay impact; optimize only where evidence shows a meaningful gain, then
+  re-measure while preserving correctness and export semantics. Pay particular
+  attention to high-frequency events and defer, cache, or coalesce work when
+  appropriate. If measured overhead is already negligible, document the result
+  and stop without speculative rewrites. Schedule after the current
+  infrastructure milestone.
 
 - [ ] TSM price enrichment
 - [ ] Mailbox / Auction House capture
