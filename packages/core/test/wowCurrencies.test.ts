@@ -289,10 +289,9 @@ test("account view: account-wide currencies are reported once and never summed; 
     assert.equal(crest.characters.find((c) => c.name === "Altria")!.currency, null);
 
     const badge = account.currencies.find((c) => c.currencyID === 1166)!;
-    assert.equal(badge.totals!.charactersWithKnownQuantity, 0);
-    assert.equal(badge.totals!.charactersListedWithoutQuantity, 2);
-    assert.equal("totalKnownQuantity" in badge.totals!, false, "a sum over nothing is omitted, never 0");
-    assert.equal("oldestKnownQuantityObservedAt" in badge.totals!, false);
+    assert.equal(badge.scope, "UNKNOWN", "unknown ownership facets do not imply character scope");
+    assert.equal(badge.account, null);
+    assert.equal(badge.totals, null, "an unknown ownership scope is never aggregated");
 
     assert.deepEqual(account.currencies.map((c) => c.currencyID), [3008, 2803, 3028, 3290, 1166]);
   });

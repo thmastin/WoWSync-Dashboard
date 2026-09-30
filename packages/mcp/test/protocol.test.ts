@@ -21,6 +21,8 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
     character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", level, ...(moneyCopper !== undefined ? { moneyCopper } : {}) },
     equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: `item:${equipmentItem}`, name: "Observed Helm", itemLevel: 279 }] },
     professions: professions ? { entries: [{ name: "Engineering", skill: 100, maxSkill: 100 }, { name: "Alchemy", skill: 100, maxSkill: 100 }], retail: true } : undefined,
+    spells: { coverage: "Protocol fixture player spellbook", entries: [{ spellID: 1234, name: "Protocol Spell", rank: "" }] },
+    trainer: { categories: [{ category: "CLASS", name: "Protocol Trainer", services: [{ spellID: 1234, ability: "Protocol Spell", status: "known" }, { spellID: 1235, ability: "Available Spell", status: "available", requiredLevel: 90 }, { spellID: 1236, ability: "Later Spell", status: "unavailable", requiredLevel: 91 }] }] },
     bags: { containers: [{ id: 0, capacity: 20, free: 19, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }] }] },
     bank: { lastSeen: bankLastSeen, containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:888", name: "Observed Bank Item", qty: 1 }] }] },
   });
@@ -48,14 +50,14 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
         data: {
           listRead: true,
           formatVersion: 1,
-          currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index })),
+          currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index, isAccountWide: index === 0 })),
         },
       },
     });
     writer.importSnapshot(retail("Virek", "Cairne", true, 500, true, now - 10, 90, 2), {
       currencies: {
         observedAt: now - 10,
-        data: { listRead: true, formatVersion: 1, currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index + 1 })) },
+        data: { listRead: true, formatVersion: 1, currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index + 1, isAccountWide: index === 0 })) },
       },
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
@@ -80,18 +82,23 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
+      "get_account_changes",
+      "get_account_currencies",
       "get_account_overview",
       "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_spells",
       "get_character_state",
       "get_character_storage",
       "get_character_summary",
+      "get_character_trainer",
       "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
+      "get_research_document",
       "get_research_section",
       "get_shared_storage",
       "list_characters",
@@ -125,6 +132,22 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.match(currentState.value?.data?.bank.provenance.warning ?? "", /Historical/);
     assert.equal(currentState.value?.data?.professions.entries?.length, 2);
     assert.ok(["OBSERVED", "LAST_SEEN"].includes(currentState.value?.data?.currencies.state ?? ""));
+
+    const spells = structured<{ status: string; value?: { data?: { sectionState: string; coverage?: string; spells?: { items: Array<{ spellID?: string; name?: string }>; totalCount: number; truncated: boolean }; snapshot?: { snapshotId: number } }; provenance: { state: string; freshness?: string } } }>(await client.callTool({ name: "get_character_spells", arguments: { version: "retail", name: "Virek", realm: "Cairne", query: "Protocol", limit: 1 } }));
+    assert.equal(spells.status, "FOUND");
+    assert.equal(spells.value?.provenance.state, "OBSERVED");
+    assert.match(spells.value?.data?.coverage ?? "", /player spellbook/);
+    assert.equal(spells.value?.data?.spells?.items[0]?.name, "Protocol Spell");
+    assert.equal(spells.value?.data?.spells?.truncated, false);
+    const trainer = structured<{ status: string; value?: { data?: { sectionState: string; services: Array<{ ability?: string; statusAtVisit?: string }>; categories: Array<{ trainerName?: string; statusCounts: { known: number; available: number } }> }; provenance: { state: string } } }>(await client.callTool({ name: "get_character_trainer", arguments: { version: "retail", name: "Virek", realm: "Cairne", status: "available" } }));
+    assert.equal(trainer.status, "FOUND");
+    assert.equal(trainer.value?.data?.services[0]?.ability, "Available Spell");
+    assert.equal(trainer.value?.data?.services[0]?.statusAtVisit, "available");
+    assert.equal(trainer.value?.data?.categories[0]?.trainerName, "Protocol Trainer");
+    const selectedTrainer = await client.callTool({ name: "get_character_trainer", arguments: { version: "retail", name: "Virek", realm: "Cairne", snapshotId: spells.value?.data?.snapshot?.snapshotId } });
+    assert.equal(selectedTrainer.isError, undefined);
+    const wrongCharacterSnapshot = await client.callTool({ name: "get_character_spells", arguments: { version: "retail", name: "Zero", realm: "Cairne", snapshotId: spells.value?.data?.snapshot?.snapshotId } });
+    assert.equal(wrongCharacterSnapshot.isError, true);
 
     const history = structured<{ status: string; value?: { data?: { items: Array<{ snapshotId: number; level: number }>; totalCount: number; truncated: boolean } } }>(await client.callTool({ name: "get_character_history", arguments: { version: "retail", name: "Virek", realm: "Cairne", limit: 1 } }));
     assert.equal(history.status, "FOUND");
@@ -164,6 +187,23 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(unknownState.value?.data?.playtime.playedSeconds, undefined);
     assert.equal(accountOverview.data?.storageCoverage.sharedStorage.guilds.owners.length, 1);
     assert.equal(accountOverview.data?.currencies.returnedCount, 20);
+    const detailedCurrencies = structured<{ data?: { aggregationScope: string; coverage: { unknownCharacters: number }; currencies: { items: Array<{ currencyID: number; scope: string; account?: { quantity?: number | null } | null; characterTotalCount: number; charactersTruncated: boolean }> } }; provenance: { state: string } }>(await client.callTool({ name: "get_account_currencies", arguments: { version: "retail", currencyID: 1, characterLimit: 1 } }));
+    assert.equal(detailedCurrencies.data?.aggregationScope, "account-wide");
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.scope, "ACCOUNT");
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.account?.quantity, 0, "an observed account-wide zero is preserved and not summed with other characters");
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.characterTotalCount, 4);
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.charactersTruncated, true);
+    assert.equal(detailedCurrencies.provenance.state, "DERIVED");
+    const realmCurrencyWithoutRealm = await client.callTool({ name: "get_account_currencies", arguments: { version: "classic-era" } });
+    assert.equal(realmCurrencyWithoutRealm.isError, true);
+    const realmCurrencies = structured<{ data?: { aggregationScope: string; realm?: string; coverage: { totalCharacters: number } } }>(await client.callTool({ name: "get_account_currencies", arguments: { version: "classic-era", realm: "Era" } }));
+    assert.equal(realmCurrencies.data?.aggregationScope, "realm");
+    assert.equal(realmCurrencies.data?.realm, "Era");
+    const accountChanges = structured<{ data?: { items: Array<{ realm: string }>; totalCount: number; truncated: boolean } }>(await client.callTool({ name: "get_account_changes", arguments: { version: "retail", limit: 1 } }));
+    assert.ok((accountChanges.data?.totalCount ?? 0) > 0);
+    assert.equal(accountChanges.data?.items.length, 1);
+    assert.equal(accountChanges.data?.items[0]?.realm, "Cairne");
+    assert.equal(accountChanges.data?.truncated, false);
     assert.equal(accountOverview.data?.currencies.truncated, true);
     const eraOverview = structured<{ data?: { version: string; aggregationScope: string; gold: Array<{ realm: string; gold: { totalKnownCopper?: number } }>; playtime: Array<{ realm: string; playtime: { totalKnownPlayedSeconds?: number } }>; currencies: { scope: string; byRealm?: Array<{ realm: string; coverage: { unknownCharacters: number } }> } } }>(await client.callTool({ name: "get_account_overview", arguments: { version: "classic-era" } }));
     assert.equal(eraOverview.data?.version, "classic-era");
@@ -229,6 +269,21 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(currencies.value?.totalCount, 101);
     assert.equal(currencies.value?.truncated, true);
     assert.equal(currencies.value?.data?.currencies?.length, 100);
+
+    const documents = structured<{ documents: Array<{ documentId: string; sections: Array<{ sectionId: string; heading: string }>; sectionsTotal: number; sectionsTruncated: boolean }> }>(await client.callTool({ name: "list_research_documents", arguments: { version: "retail" } }));
+    assert.ok(documents.documents.length > 0);
+    assert.ok(documents.documents[0]!.sections.length > 0);
+    assert.equal(documents.documents[0]!.sectionsTruncated, false);
+    assert.equal("markdown" in documents.documents[0]!, false);
+    const researchDocument = structured<{ document: { documentId: string; contentHash: string }; markdown: string; returnedCharacters: number; totalCharacters: number; truncated: boolean; source: string }>(await client.callTool({ name: "get_research_document", arguments: { documentId: "midnight-12-1-renown" } }));
+    assert.equal(researchDocument.document.documentId, "midnight-12-1-renown");
+    assert.match(researchDocument.document.contentHash, /^sha256:/);
+    assert.equal(researchDocument.source, "registered research document");
+    assert.ok(researchDocument.returnedCharacters <= 40_000);
+    assert.equal(researchDocument.truncated, false);
+    const unregisteredDocument = await client.callTool({ name: "get_research_document", arguments: { documentId: "outside-root" } });
+    assert.equal(unregisteredDocument.isError, true);
+    assert.match(JSON.stringify(unregisteredDocument.structuredContent), /RESEARCH_DOCUMENT_NOT_FOUND/);
 
     const search = structured<{ matches: Array<{ document: { documentId: string }; section: { sectionId: string }; citations: unknown[] }> }>(await client.callTool({ name: "search_research", arguments: { query: "Ritual Sites", version: "retail", patch: "12.1.x" } }));
     assert.ok(search.matches.length > 0 && search.matches.length <= 5);
@@ -344,18 +399,23 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     assert.equal(toolListResponse.error, undefined, JSON.stringify(toolListResponse.error));
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
+      "get_account_changes",
+      "get_account_currencies",
       "get_account_overview",
       "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_spells",
       "get_character_state",
       "get_character_storage",
       "get_character_summary",
+      "get_character_trainer",
       "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
+      "get_research_document",
       "get_research_section",
       "get_shared_storage",
       "list_characters",

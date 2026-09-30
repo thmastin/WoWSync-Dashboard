@@ -2,9 +2,9 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
-import type { AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
-import type { CharacterCurrencies } from "./wowCurrencies.ts";
-import type { EquipmentSection, InventorySection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
+import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
+import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
+import type { EquipmentSection, InventorySection, ProfessionsSection, SectionState, VersionOrUnknown, SpellEntry, TrainerService, TrainerCategorySnapshot } from "./types.ts";
 import type { SnapshotReadStore, StoredCharacterSummary, StoredSnapshot, VersionSummary } from "./store.ts";
 import { WOW_VERSIONS } from "./version.ts";
 import { itemIdFromItemRef, type ItemMetadataView } from "./itemMetadata.ts";
@@ -35,6 +35,11 @@ export type CharacterResolution<T> =
   | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> };
 
 export interface CharacterQuery { version: VersionOrUnknown; name: string; realm?: string }
+export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
+export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
+export interface CharacterTrainerQuery extends CharacterSnapshotQuery { category?: string; query?: string; status?: "known" | "available" | "unavailable" | "other"; offset?: number; limit?: number }
+export interface AccountChangesQuery { version: VersionOrUnknown; realm?: string; offset?: number; limit?: number }
+export interface AccountCurrenciesQuery { version: VersionOrUnknown; realm?: string; currencyID?: number; query?: string; offset?: number; limit?: number; characterOffset?: number; characterLimit?: number }
 export interface HistoryQuery extends CharacterQuery { offset?: number; limit?: number }
 /**
  * Deliberately compact history record. Raw export text remains an import
@@ -82,6 +87,41 @@ export interface CharacterChangesRead {
 }
 
 export interface BoundedPage<T> { items: T[]; offset: number; limit: number; totalCount: number; truncated: boolean }
+export interface CharacterSpellsRead {
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
+  snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  sectionState: SectionState;
+  coverage?: string;
+  spells?: BoundedPage<SpellEntry>;
+  reason?: string;
+}
+export interface CharacterTrainerRead {
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
+  snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  sectionState: SectionState;
+  categories: Array<{ category: string; state: SectionState; observedAt?: number; freshness: "recent" | "stale" | "unknown"; trainerName?: string; trainerType?: string; coverage?: string; filters?: string; serviceCount: number; statusCounts: { known: number; available: number; unavailable: number; other: number } }>;
+  services: Array<{ category: string; categoryState: SectionState; observedAt?: number; freshness: "recent" | "stale" | "unknown"; spellID?: string; ability?: string; rank?: string; statusAtVisit?: string; requiredLevel?: string; costCopper?: number; requirementsAtVisit?: string }>;
+  categoryCount: number;
+  categoriesTruncated: boolean;
+  offset: number;
+  limit: number;
+  totalCount: number;
+  truncated: boolean;
+  reason?: string;
+}
+export interface AccountCurrencyDetail {
+  currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN";
+  account: AccountCurrencies["currencies"][number]["account"];
+  totals: AccountCurrencies["currencies"][number]["totals"];
+  characters: Array<AccountCurrencies["currencies"][number]["characters"][number]>;
+  characterOffset: number; characterLimit: number; characterTotalCount: number; charactersTruncated: boolean;
+}
+export interface AccountCurrenciesRead {
+  version: VersionOrUnknown; aggregationScope: "account-wide" | "realm"; realm?: string;
+  coverage: { totalCharacters: number; observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number };
+  currencies: BoundedPage<AccountCurrencyDetail>;
+}
+export interface AccountChangeRead extends AccountChangeSummary { realm: string; freshness: "recent" | "stale" | "unknown" }
 export type InventorySearchLocation = InventoryAggregateEntry["locations"][number] & { state: "OBSERVED" | "LAST_SEEN"; observedAt?: number; importedAt: number; snapshotId: number; freshness: "recent" | "stale" | "unknown" };
 export interface ItemWithMetadata { item: Omit<InventoryAggregateEntry, "locations"> & { locations: InventorySearchLocation[] }; metadataState: "KNOWN" | "UNKNOWN"; metadata?: ItemMetadataView }
 export interface ItemSearchQuery { version: VersionOrUnknown; query: string; storage?: StorageLocation; offset?: number; limit?: number }
@@ -113,7 +153,7 @@ export interface AccountOverviewRead {
   recentChanges: { items: AccountFacts["recentChanges"]; returnedCount: number; totalCount: number; truncated: boolean };
   professions: { coverage: AccountFacts["professions"]["coverage"]; returnedCount: number; totalCount: number; truncated: boolean };
   storageCoverage: { charactersWithObservedBags: number; charactersWithLastSeenBags: number; charactersWithUnknownBags: number; charactersWithObservedBank: number; charactersWithLastSeenBank: number; charactersWithUnknownBank: number; sharedStorage: { warband: { state: "DERIVED" | "UNKNOWN"; ownerKey?: string; completeness?: "complete" | "partial"; observedAt?: number; freshness?: string; warning: string }; guilds: { coverageState: "PARTIAL" | "UNKNOWN"; owners: Array<{ state: "DERIVED" | "UNKNOWN"; ownerKey: string; guildClubId: string; guildName?: string; completeness?: "complete" | "partial"; observedAt?: number; freshness?: string; inaccessibleTabs?: number; unconfirmedTabs?: number }>; returnedCount: number; totalCount: number; truncated: boolean } } };
-  currencies: { coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; scope: "account-wide"; items: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER"; quantity?: number | null; state?: string; knownCharacters?: number; unknownCharacters?: number; notListedCharacters?: number; listedWithoutQuantity?: number }>; returnedCount: number; totalCount: number; truncated: boolean } | { scope: "realm"; byRealm: Array<{ realm: string; coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; items: Array<{ currencyID: number; name: string | null; quantity?: number; knownCharacters: number; unknownCharacters: number; notListedCharacters: number; listedWithoutQuantity: number }>; returnedCount: number; totalCount: number; truncated: boolean }> };
+  currencies: { coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; scope: "account-wide"; items: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; quantity?: number | null; state?: string; knownCharacters?: number; unknownCharacters?: number; notListedCharacters?: number; listedWithoutQuantity?: number }>; returnedCount: number; totalCount: number; truncated: boolean } | { scope: "realm"; byRealm: Array<{ realm: string; coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; items: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; quantity?: number; knownCharacters: number; unknownCharacters: number; notListedCharacters: number; listedWithoutQuantity: number }>; returnedCount: number; totalCount: number; truncated: boolean }> };
 }
 export interface CharacterCurrentState {
   identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string; class?: string; faction?: string; level?: number };
@@ -226,9 +266,11 @@ export class DashboardReadModel {
     const currencies = this.store.listVersionCurrencies(query.version);
     const currencyItems = currencies.currencies.map((entry) => entry.scope === "ACCOUNT"
       ? { currencyID: entry.currencyID, name: entry.name, scope: entry.scope, quantity: entry.account?.quantity, state: entry.account?.state }
-      : { currencyID: entry.currencyID, name: entry.name, scope: entry.scope, ...(entry.totals?.totalKnownQuantity !== undefined ? { quantity: entry.totals.totalKnownQuantity } : {}), knownCharacters: entry.totals?.charactersWithKnownQuantity ?? 0, unknownCharacters: entry.totals?.charactersUnknown ?? 0 });
+      : entry.scope === "CHARACTER"
+        ? { currencyID: entry.currencyID, name: entry.name, scope: entry.scope, ...(entry.totals?.totalKnownQuantity !== undefined ? { quantity: entry.totals.totalKnownQuantity } : {}), knownCharacters: entry.totals?.charactersWithKnownQuantity ?? 0, unknownCharacters: entry.totals?.charactersUnknown ?? 0 }
+        : { currencyID: entry.currencyID, name: entry.name, scope: entry.scope, knownCharacters: 0, unknownCharacters: entry.characters.length });
     const realmCurrencySummaries = facts.realms.map((realm) => {
-      const items = currencies.currencies.flatMap((entry) => {
+      const items = currencies.currencies.flatMap<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; quantity?: number; knownCharacters: number; unknownCharacters: number; notListedCharacters: number; listedWithoutQuantity: number }>((entry) => {
         const rows = entry.characters.filter((row) => row.realm === realm.realm);
         const known = rows.flatMap((row) => row.currency?.quantity === null || row.currency?.quantity === undefined ? [] : [row.currency.quantity]);
         const unknownCharacters = rows.filter((row) => row.state === "UNKNOWN" || (row.currency !== null && row.currency.quantity === null)).length;
@@ -236,9 +278,10 @@ export class DashboardReadModel {
         const listedWithoutQuantity = rows.filter((row) => row.currency !== null && row.currency.quantity === null).length;
         if (entry.scope === "ACCOUNT") {
           const amount = entry.account?.quantity;
-          return [{ currencyID: entry.currencyID, name: entry.name, ...(amount !== null && amount !== undefined ? { quantity: amount } : {}), knownCharacters: amount !== null && amount !== undefined ? 1 : 0, unknownCharacters: amount !== null && amount !== undefined ? 0 : rows.length, notListedCharacters: 0, listedWithoutQuantity: 0 }];
+          return [{ currencyID: entry.currencyID, name: entry.name, scope: entry.scope, ...(amount !== null && amount !== undefined ? { quantity: amount } : {}), knownCharacters: amount !== null && amount !== undefined ? 1 : 0, unknownCharacters: amount !== null && amount !== undefined ? 0 : rows.length, notListedCharacters: 0, listedWithoutQuantity: 0 }];
         }
-        return [{ currencyID: entry.currencyID, name: entry.name, ...(known.length ? { quantity: known.reduce((sum, quantity) => sum + quantity, 0) } : {}), knownCharacters: known.length, unknownCharacters, notListedCharacters, listedWithoutQuantity }];
+        if (entry.scope === "UNKNOWN") return [{ currencyID: entry.currencyID, name: entry.name, scope: entry.scope, knownCharacters: 0, unknownCharacters: rows.length, notListedCharacters: 0, listedWithoutQuantity: 0 }];
+        return [{ currencyID: entry.currencyID, name: entry.name, scope: entry.scope, ...(known.length ? { quantity: known.reduce((sum, quantity) => sum + quantity, 0) } : {}), knownCharacters: known.length, unknownCharacters, notListedCharacters, listedWithoutQuantity }];
       }).filter((item) => item.knownCharacters > 0 || item.unknownCharacters > 0);
       const realmCurrencyCoverage = currencies.characters.filter((character) => character.realm === realm.realm);
       return { realm: realm.realm, coverage: { observedCharacters: realmCurrencyCoverage.filter((character) => character.state === "OBSERVED").length, lastSeenCharacters: realmCurrencyCoverage.filter((character) => character.state === "LAST_SEEN").length, unknownCharacters: realmCurrencyCoverage.filter((character) => character.state === "UNKNOWN").length }, items: items.slice(0, 20), returnedCount: Math.min(items.length, 20), totalCount: items.length, truncated: items.length > 20 };
@@ -292,6 +335,53 @@ export class DashboardReadModel {
     };
   }
 
+  /** Detailed currency evidence. Realm-partitioned/unknown clients require one explicit realm. */
+  getAccountCurrencies(query: AccountCurrenciesQuery): ReadValue<AccountCurrenciesRead> {
+    requireVersion(query.version);
+    if (query.currencyID !== undefined && (!Number.isSafeInteger(query.currencyID) || query.currencyID < 1)) throw new TypeError("currencyID must be a positive integer");
+    const facts = this.store.buildAccountFacts(query.version, this.now());
+    const realmScoped = query.version !== "retail";
+    if (realmScoped && !query.realm) throw new TypeError("realm is required for currencies in realm-partitioned or unrecognized WoW versions");
+    if (!realmScoped && query.realm) throw new TypeError("realm filtering is not supported for Retail account currency reads");
+    const characters = this.store.listCharacters(query.version).filter((character) => !realmScoped || character.realm === query.realm);
+    if (realmScoped && characters.length === 0) throw new TypeError(`No characters exist in realm "${query.realm}" for version "${query.version}"`);
+    const currencies = realmScoped
+      ? buildAccountCurrencies(query.version, characters.map((character) => this.store.getCharacterCurrencies(character.identityKey)!).filter(Boolean))
+      : this.store.listVersionCurrencies(query.version);
+    const needle = query.query?.trim().toLocaleLowerCase();
+    const matched = currencies.currencies.filter((currency) => (query.currencyID === undefined || currency.currencyID === query.currencyID) && (!needle || `${currency.name ?? ""} ${currency.header ?? ""} ${currency.subHeader ?? ""}`.toLocaleLowerCase().includes(needle)));
+    const page = pageBounds(query.offset ?? 0, query.limit ?? 20);
+    const characterPage = pageBounds(query.characterOffset ?? 0, query.characterLimit ?? 25);
+    const entries: AccountCurrencyDetail[] = matched.slice(page.offset, page.offset + page.limit).map((currency) => {
+      const selectedCharacters = currency.characters.slice(characterPage.offset, characterPage.offset + characterPage.limit);
+      return {
+        currencyID: currency.currencyID, name: currency.name, scope: currency.scope, account: currency.account, totals: currency.totals,
+        characters: selectedCharacters, characterOffset: characterPage.offset, characterLimit: characterPage.limit,
+        characterTotalCount: currency.characters.length, charactersTruncated: characterPage.offset + selectedCharacters.length < currency.characters.length,
+      };
+    });
+    const scopeCharacters = currencies.characters;
+    return {
+      data: {
+        version: query.version, aggregationScope: realmScoped ? "realm" : "account-wide", ...(query.realm ? { realm: query.realm } : {}),
+        coverage: { totalCharacters: scopeCharacters.length, observedCharacters: scopeCharacters.filter((character) => character.state === "OBSERVED").length, lastSeenCharacters: scopeCharacters.filter((character) => character.state === "LAST_SEEN").length, unknownCharacters: scopeCharacters.filter((character) => character.state === "UNKNOWN").length },
+        currencies: { items: entries, offset: page.offset, limit: page.limit, totalCount: matched.length, truncated: page.offset + entries.length < matched.length },
+      },
+      provenance: { state: "DERIVED", version: query.version, source: "buildAccountCurrencies over version-scoped structured currency observations", derivedFrom: scopeCharacters.slice(0, 100).map((character) => character.identityKey), warning: realmScoped ? "This currency projection is limited to one requested realm; balances from other realm economies are excluded." : "Account-wide currency balances are represented once; character-scoped totals include known values only and preserve per-character coverage." },
+    };
+  }
+
+  /** Paged account-level meaningful changes, reusing AccountFacts ordering and derivation. */
+  getAccountChanges(query: AccountChangesQuery): ReadValue<BoundedPage<AccountChangeRead> & { version: VersionOrUnknown; scopeNote?: string }> {
+    requireVersion(query.version);
+    const facts = this.store.buildAccountFacts(query.version, this.now());
+    const realmByIdentity = new Map(facts.characters.map((character) => [character.identityKey, character.realm]));
+    const all = facts.recentChanges.filter((change) => !query.realm || realmByIdentity.get(change.identityKey) === query.realm).map((change) => ({ ...change, realm: realmByIdentity.get(change.identityKey) ?? "?", freshness: classifyFreshness(change.observedAt ?? change.importedAt, this.now()) }));
+    const page = pageBounds(query.offset ?? 0, query.limit ?? 20);
+    const items = all.slice(page.offset, page.offset + page.limit);
+    return { data: { version: query.version, ...(query.version !== "retail" ? { scopeNote: "Entries retain their character and realm identities; no cross-realm balances are combined." } : {}), items, offset: page.offset, limit: page.limit, totalCount: all.length, truncated: page.offset + items.length < all.length }, provenance: { state: "DERIVED", version: query.version, source: "AccountFacts.recentChanges meaningful consecutive snapshot changes", ...(items[0]?.observedAt !== undefined ? { observedAt: items[0].observedAt } : {}), warning: "These compact AccountFacts summaries show captured meaningful transitions, not a cause. Use get_character_changes for section comparability and UNKNOWN/LAST_SEEN detail." } };
+  }
+
   /** Compact current snapshot state. Section provenance stays independent so historical/unknown sections remain explicit. */
   getCharacterState(query: CharacterQuery): CharacterResolution<ReadValue<CharacterCurrentState>> {
     return this.resolve(query, (character, snapshot) => {
@@ -336,6 +426,63 @@ export class DashboardReadModel {
       const currencies = this.store.getCharacterCurrencies(character.identityKey);
       if (!currencies || currencies.state === "UNKNOWN") return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "WoWSync has not captured a currency list for this character." } };
       return { data: currencies, provenance: { state: currencies.state, version: query.version, identityKey: character.identityKey, observedAt: currencies.observedAt ?? undefined, snapshotId: currencies.snapshotId ?? undefined, source: "WoWSync structured currencies", ...(currencies.state === "LAST_SEEN" ? { warning: currencies.lastSeenReason ?? "Historical currency observation." } : {}) } };
+    });
+  }
+
+  /** Bounded current or explicitly selected spellbook observation. */
+  getCharacterSpells(query: CharacterSpellsQuery): CharacterResolution<ReadValue<CharacterSpellsRead>> {
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      const identity = { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm };
+      if (!snapshot) return { data: { identity, sectionState: "UNKNOWN", reason: "No stored snapshot exists for this character." }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshot exists for this character." } };
+      const section = snapshot.parsed.spells;
+      const status = section.status.state;
+      const observedAt = section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      const freshness = classifyFreshness(observedAt, this.now());
+      const needle = query.query?.trim().toLocaleLowerCase();
+      const matches = status === "UNKNOWN" ? [] : section.entries.filter((spell) => !needle || `${spell.spellID ?? ""} ${spell.name ?? ""} ${spell.rank ?? ""}`.toLocaleLowerCase().includes(needle));
+      const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
+      const entries = matches.slice(page.offset, page.offset + page.limit);
+      return {
+        data: { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt ?? undefined, observedAt, importedAt: snapshot.importedAt, freshness }, sectionState: status, ...(section.coverage ? { coverage: section.coverage } : {}), ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Known-spell capture is UNKNOWN in this snapshot." } : { spells: { items: entries, offset: page.offset, limit: page.limit, totalCount: matches.length, truncated: page.offset + entries.length < matches.length } }) },
+        provenance: { state: status, version: query.version, identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness, source: "WOWSYNC v1 known-spells section", ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Known-spell capture is UNKNOWN." } : {}), ...(status === "LAST_SEEN" ? { warning: "Historical spellbook observation; not current." } : {}) },
+      };
+    });
+  }
+
+  /** Bounded captured trainer-visit evidence; captured status strings remain verbatim and are not upgraded into learned/trainable claims. */
+  getCharacterTrainer(query: CharacterTrainerQuery): CharacterResolution<ReadValue<CharacterTrainerRead>> {
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      const identity = { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm };
+      if (!snapshot) return { data: { identity, sectionState: "UNKNOWN", categories: [], services: [], offset: 0, limit: query.limit ?? 50, totalCount: 0, truncated: false, categoryCount: 0, categoriesTruncated: false, reason: "No stored snapshot exists for this character." }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshot exists for this character." } };
+      const section = snapshot.parsed.trainer;
+      const status = section.status.state;
+      const selectedCategories = [...section.categories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
+      const categoryRead = selectedCategories.map((category) => {
+        const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+        const counts = { known: 0, available: 0, unavailable: 0, other: 0 };
+        for (const service of category.services) {
+          const state = service.statusAtVisit?.toLowerCase();
+          if (state === "known" || state === "available" || state === "unavailable") counts[state]++;
+          else counts.other++;
+        }
+        return { category, observedAt, freshness: classifyFreshness(observedAt, this.now()), counts };
+      });
+      const needle = query.query?.trim().toLocaleLowerCase();
+      const services = categoryRead.flatMap(({ category, observedAt, freshness }) => category.services
+        .filter((service) => {
+          const state = service.statusAtVisit?.toLowerCase();
+          if (query.status && (query.status === "other" ? state === "known" || state === "available" || state === "unavailable" : state !== query.status)) return false;
+          return !needle || `${service.spellID ?? ""} ${service.ability ?? ""} ${service.rank ?? ""} ${service.requirementsAtVisit ?? ""}`.toLocaleLowerCase().includes(needle);
+        })
+        .map((service) => ({ category: category.category, categoryState: category.status.state, observedAt, freshness, spellID: service.spellID, ability: service.ability, rank: service.rank, statusAtVisit: service.statusAtVisit, requiredLevel: service.requiredLevel, costCopper: service.costCopper, requirementsAtVisit: service.requirementsAtVisit })));
+      const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
+      const pageServices = services.slice(page.offset, page.offset + page.limit);
+      const categories = categoryRead.slice(0, 50).map(({ category, observedAt, freshness, counts }) => ({ category: category.category, state: category.status.state, observedAt, freshness, trainerName: category.name, trainerType: category.trainerType, coverage: category.coverage, filters: category.filters, serviceCount: category.services.length, statusCounts: counts }));
+      const observedAt = section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      return {
+        data: { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt ?? undefined, observedAt: snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), importedAt: snapshot.importedAt, freshness: classifyFreshness(snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), this.now()) }, sectionState: status, categories, categoryCount: categoryRead.length, categoriesTruncated: categoryRead.length > categories.length, services: pageServices, offset: page.offset, limit: page.limit, totalCount: services.length, truncated: page.offset + pageServices.length < services.length, ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Trainer visits have not been observed in this snapshot." } : {}) },
+        provenance: { state: status, version: query.version, identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: "WOWSYNC v1 captured trainer visit observations", ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Trainer visits have not been observed." } : {}), ...(status === "LAST_SEEN" || categoryRead.some(({ category }) => category.status.state === "LAST_SEEN") ? { warning: "One or more trainer categories are historical observations; they are not current." } : {}) },
+      };
     });
   }
 
@@ -580,6 +727,19 @@ export class DashboardReadModel {
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const character = candidates[0];
     return { status: "FOUND", value: build(character, this.store.listSnapshots(character.identityKey)[0]) };
+  }
+
+  private resolveSelectedSnapshot<T>(query: CharacterSnapshotQuery, build: (character: StoredCharacterSummary, snapshot: StoredSnapshot | undefined) => T): CharacterResolution<T> {
+    requireVersion(query.version);
+    if (query.snapshotId !== undefined && (!Number.isSafeInteger(query.snapshotId) || query.snapshotId < 1)) throw new TypeError("snapshotId must be a positive integer");
+    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    const character = candidates[0]!;
+    const snapshots = this.store.listSnapshots(character.identityKey);
+    const snapshot = query.snapshotId === undefined ? snapshots[0] : snapshots.find((entry) => entry.id === query.snapshotId);
+    if (query.snapshotId !== undefined && !snapshot) throw new TypeError("snapshotId must belong to the resolved character in the requested WoW version");
+    return { status: "FOUND", value: build(character, snapshot) };
   }
 
   private resolveSection<T extends EquipmentSection | ProfessionsSection>(query: CharacterQuery, section: "equipment" | "professions"): CharacterResolution<ReadValue<T>> {

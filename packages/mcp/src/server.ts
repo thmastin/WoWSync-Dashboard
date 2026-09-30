@@ -21,6 +21,7 @@ const MAX_CURRENCIES = 100;
 const DEFAULT_RESEARCH_HITS = 5;
 const MAX_RESEARCH_HITS = 8;
 const MAX_SECTION_CHARACTERS = 20_000;
+const MAX_DOCUMENT_CHARACTERS = 40_000;
 
 const versionSchema = z.enum(READ_MODEL_VERSIONS as unknown as [VersionOrUnknown, ...VersionOrUnknown[]]);
 const nameSchema = z.string().trim().min(1).max(64);
@@ -132,6 +133,18 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterState(query)));
+  server.registerTool("get_character_spells", {
+    title: "Get captured character spellbook",
+    description: "Returns a bounded known-spell section from the latest or one selected snapshot. Coverage describes what the client captured; this is not a complete recipe catalogue or pet spellbook.",
+    inputSchema: z.object({ ...characterQuery.shape, snapshotId: z.number().int().positive().optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterSpells(query)));
+  server.registerTool("get_character_trainer", {
+    title: "Get captured trainer observations",
+    description: "Returns bounded trainer visit evidence from the latest or one selected character snapshot. statusAtVisit is preserved verbatim; available/known/unavailable are observations at visit time, not inferred current learnability or a complete recipe list.",
+    inputSchema: z.object({ ...characterQuery.shape, snapshotId: z.number().int().positive().optional(), category: z.string().trim().min(1).max(64).optional(), status: z.enum(["known", "available", "unavailable", "other"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterTrainer(query)));
   server.registerTool("get_character_history", {
     title: "Get recent character snapshot history",
     description: "Returns a compact newest-first timeline for one explicit-version character. Defaults to 20 snapshots, caps at 100, and uses offset paging; raw snapshots are never returned.",
@@ -150,6 +163,18 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: versionSchema }).strict(),
     annotations: toolAnnotations,
   }, async ({ version }) => textResult(readModel.getAccountOverview({ version })));
+  server.registerTool("get_account_currencies", {
+    title: "Get detailed version-scoped currency evidence",
+    description: "Returns bounded currency scope, aggregate evidence, and per-character capture coverage. Realm-partitioned or unrecognized versions require one explicit realm; account-wide balances are represented once and character totals use known quantities only.",
+    inputSchema: z.object({ version: versionSchema, realm: realmSchema.optional(), currencyID: z.number().int().positive().optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), characterOffset: z.number().int().min(0).optional(), characterLimit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getAccountCurrencies(query)));
+  server.registerTool("get_account_changes", {
+    title: "Get recent version-scoped account changes",
+    description: "Returns a bounded page of AccountFacts meaningful character changes, newest observation first. Each entry retains character identity and realm; realm-partitioned version entries are not combined into an economy.",
+    inputSchema: z.object({ version: versionSchema, realm: realmSchema.optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getAccountChanges(query)));
   server.registerTool("get_character_equipment", {
     title: "Get latest-known character equipment",
     description: "Returns normal equipment slots from the latest-known explicit-version snapshot, with OBSERVED, LAST_SEEN, or UNKNOWN provenance.",
@@ -224,13 +249,13 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   server.registerTool("list_research_documents", {
     title: "List registered WoW research documents",
-    description: "Lists compact metadata for registered research only. It never reads caller-supplied filesystem paths or returns full documents.",
+    description: "Lists compact metadata and a bounded section outline for registered research only. It never reads caller-supplied filesystem paths or returns document bodies.",
     inputSchema: z.object({ version: z.string().max(64).optional(), patch: z.string().max(64).optional(), season: z.string().max(64).optional(), documentClass: documentClassSchema.optional() }).strict(),
     annotations: toolAnnotations,
   }, async ({ version, patch, season, documentClass }) => {
     const documents = registry.listDocuments(documentClass as ResearchDocumentClass | undefined)
       .filter((document) => (!version || document.version === version) && (!patch || document.patch === patch) && (!season || document.season === season))
-      .map(documentMetadata);
+      .map((document) => ({ ...documentMetadata(document), sections: document.sections.slice(0, 100).map(({ sectionId, heading, level, parentSectionId }) => ({ sectionId, heading, level, parentSectionId })), sectionsReturned: Math.min(document.sections.length, 100), sectionsTotal: document.sections.length, sectionsTruncated: document.sections.length > 100 }));
     return textResult({ documents, returnedCount: documents.length });
   });
   server.registerTool("search_research", {
@@ -268,6 +293,17 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       totalCharacters,
       truncated: markdown.length < totalCharacters,
     });
+  });
+  server.registerTool("get_research_document", {
+    title: "Get one registered WoW research document",
+    description: "Returns the bounded Markdown body and metadata for one registered research document. Document IDs resolve only through the fixed registry, never caller-supplied paths.",
+    inputSchema: z.object({ documentId: z.string().regex(/^[a-z0-9-]+$/).max(128) }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ documentId }) => {
+    const document = registry.getDocument(documentId);
+    if (!document) return safeFailure("RESEARCH_DOCUMENT_NOT_FOUND", "The registered research document was not found.");
+    const markdown = document.markdown.slice(0, MAX_DOCUMENT_CHARACTERS);
+    return textResult({ document: documentMetadata(document), markdown, returnedCharacters: markdown.length, totalCharacters: document.markdown.length, truncated: markdown.length < document.markdown.length, source: "registered research document" });
   });
 
   return {

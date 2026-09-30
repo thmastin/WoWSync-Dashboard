@@ -353,7 +353,8 @@ export interface AccountCurrency {
   iconFileID: number | null;
   listOrder: number | null;
   /** ACCOUNT: isAccountWide - one shared balance, reported once in `account`, never summed. CHARACTER: per-character balances. */
-  scope: "ACCOUNT" | "CHARACTER";
+  /** UNKNOWN means captured ownership flags were absent or conflicted; no cross-character total is manufactured. */
+  scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN";
   /** ACCOUNT scope only: the most recent reading of the shared balance. Null for CHARACTER scope. */
   account: AccountWideCurrencyValue | null;
   /** CHARACTER scope only (known values only, see CharacterCurrencyTotals). Null for ACCOUNT scope. */
@@ -409,10 +410,13 @@ export function buildAccountCurrencies(version: VersionOrUnknown, perCharacter: 
       const mine = c.currencies?.find((e) => e.currencyID === currencyID);
       return mine ? [{ c, mine }] : [];
     });
-    const accountWide = readings.some((r) => r.mine.isAccountWide === true);
+    const scopeEvidence = new Set(readings.map((r) => r.mine.isAccountWide));
+    const scope = scopeEvidence.size === 1 && scopeEvidence.has(true) ? "ACCOUNT" as const
+      : scopeEvidence.size === 1 && scopeEvidence.has(false) ? "CHARACTER" as const
+      : "UNKNOWN" as const;
     let account: AccountWideCurrencyValue | null = null;
     let totals: CharacterCurrencyTotals | null = null;
-    if (accountWide) {
+    if (scope === "ACCOUNT") {
       const latest = [...readings].sort((a, b) => rank(b.c) - rank(a.c) || (a.c.state === "OBSERVED" ? -1 : 0) - (b.c.state === "OBSERVED" ? -1 : 0))[0];
       account = {
         quantity: latest.mine.quantity,
@@ -424,7 +428,7 @@ export function buildAccountCurrencies(version: VersionOrUnknown, perCharacter: 
         observedAt: latest.c.observedAt,
         sourceIdentityKey: latest.c.character.identityKey,
       };
-    } else {
+    } else if (scope === "CHARACTER") {
       const known = readings.filter((r) => r.mine.quantity !== null);
       const observedTimes = known.map((r) => r.c.observedAt).filter((t): t is number => t !== null);
       totals = {
@@ -444,7 +448,7 @@ export function buildAccountCurrencies(version: VersionOrUnknown, perCharacter: 
       subHeader: descriptor.subHeader,
       iconFileID: descriptor.iconFileID,
       listOrder: descriptor.listOrder,
-      scope: accountWide ? "ACCOUNT" : "CHARACTER",
+      scope,
       account,
       totals,
       characters: rows,

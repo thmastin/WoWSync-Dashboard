@@ -96,13 +96,18 @@ imports may update the database.
 | `get_character_state` | Return bounded current character state with section-level provenance. |
 | `get_character_history` | Return a compact, newest-first paged snapshot timeline for one character. |
 | `get_character_changes` | Compare the previous/latest snapshots or two explicit snapshots for one character. |
+| `get_character_spells` | Return bounded known-spellbook evidence from the current or selected snapshot. |
+| `get_character_trainer` | Return bounded trainer-visit services and the exact captured status at visit. |
 | `get_account_overview` | Return bounded version-scoped account/economy facts, currencies and storage coverage. |
+| `get_account_currencies` | Return detailed bounded currency evidence with ownership scope and per-character coverage. |
+| `get_account_changes` | Page the existing AccountFacts recent meaningful-change summaries. |
 | `get_character_equipment` | Return latest-known slot equipment with provenance. |
 | `get_character_professions` | Return captured profession observations and their provenance. |
 | `get_character_currencies` | Return captured currency data, bounded to 100 records. |
 | `get_profession_coverage` | Return per-version account profession coverage as derived data. |
 | `get_renown` | Return captured Renown state; currently `UNKNOWN` because WoWSync does not capture it. |
-| `list_research_documents` | List registered research metadata, not document bodies. |
+| `list_research_documents` | List registered research metadata with a bounded section outline, not document bodies. |
+| `get_research_document` | Retrieve one registered document, capped at 40,000 characters. |
 | `search_research` | Search registered research with a default 5 / hard 8 result limit. |
 | `get_research_section` | Retrieve one registered heading section, capped at 20,000 characters with explicit truncation. |
 | `search_items` | Search item metadata from the selected version's captured data. |
@@ -116,9 +121,13 @@ lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently
 an intentional `UNKNOWN`, because WoWSync has not captured it.
 
-Results are bounded: characters default to 50 and cap at 100, currencies cap
-at 100, research search defaults to 5 and caps at 8, and a single research
-section caps at 20,000 characters with explicit truncation metadata.
+Results are bounded: characters default to 50 and cap at 100; currency and
+account-change pages default to 20 and cap at 100; per-currency character rows
+default to 25 and cap at 100; spell pages default to 50 and cap at 100; trainer
+service pages default to 50 and cap at 100, with at most 50 categories; research
+search defaults to 5 and caps at 8; research outlines return at most 100 rows
+per document; a section caps at 20,000 characters and a document at 40,000
+characters, both with explicit truncation metadata.
 
 The account overview caps per-character detail at 25, realms and recorded guild
 owners at 20, profession coverage at 25, currency summaries at 20 per account or
@@ -155,6 +164,79 @@ Currencies compare only matching IDs with known quantities and unchanged
 ownership scope in two observed lists; deltas label ACCOUNT, CHARACTER, or
 UNKNOWN scope. Unlisted currencies are not treated as zero or removed. Independent
 Warband and guild journal observations are outside character snapshot diffs.
+
+`get_character_spells` accepts `{version, name, realm?, snapshotId?, query?,
+offset?, limit?}`. It returns captured spellbook rows only, with section state,
+coverage text, snapshot provenance, freshness, and bounded paging. UNKNOWN
+sections have no fabricated empty spell list. The capture is scoped to the
+snapshot's recorded spellbook coverage; it is not a promise of every spell the
+character could learn.
+
+`get_character_trainer` accepts `{version, name, realm?, snapshotId?,
+category?, status?, query?, offset?, limit?}`. Service `statusAtVisit` values
+are returned as captured (known, available, unavailable, or unclassified),
+alongside category observation time, state, and freshness. “Available” means
+the trainer observation said available at that visit; it does not establish
+that the character later trained it. LAST_SEEN trainer categories remain
+historical. No trainer recipe catalogue or known profession-recipe list is
+captured by the current schema.
+
+`get_account_currencies` accepts `{version, realm?, currencyID?, query?,
+offset?, limit?, characterOffset?, characterLimit?}`. Retail reads are
+explicitly account-wide; realm-partitioned versions require a realm and return
+only that realm's projection. Account-wide balances are represented once,
+character currencies sum known per-character quantities only, and an absent or
+conflicting ownership flag yields scope `UNKNOWN` with no aggregate. Every
+currency row retains per-character state and quantity evidence, including
+known zero, unknown, and not-listed distinctions.
+
+`get_account_changes` accepts `{version, realm?, offset?, limit?}` and pages
+the canonical `AccountFacts.recentChanges` ordering/derivation. Each result
+includes realm and freshness. This is a high-level character transition
+summary; use `get_character_changes` for section comparability and explicit
+UNKNOWN/LAST_SEEN reasons.
+
+`list_research_documents` now includes up to 100 heading-outline entries per
+registered document, plus total/returned/truncation counts. `get_research_document`
+accepts only a registered `documentId`; caller paths are not accepted. It
+returns registered metadata, content hash, and at most 40,000 characters with
+explicit truncation. Existing exact section retrieval remains capped at
+20,000 characters.
+
+## Fresh MCP parity audit (2026-09-30)
+
+| Area | Status | Source / boundary |
+|---|---|---|
+| Account overview / economy | MCP PARITY | `AccountFacts`, structured currencies, shared-storage journal; shared owners never enter personal wealth. |
+| Character identity/current state | MCP PARITY | `DashboardReadModel` over version-scoped `SnapshotReadStore`. |
+| Equipment | MCP PARITY | Typed equipment sections and semantic history diff. |
+| Bags | MCP PARITY | Typed inventory reads and semantic diff. |
+| Character bank | MCP PARITY | Typed storage read; `LAST_SEEN` marked historical. |
+| Shared Warband storage | MCP PARITY | Retail shared-storage journal; account ownership kept distinct. |
+| Guild storage/accessibility | MCP PARITY | Journal coverage exposes inaccessible/unconfirmed tabs, not empty tabs. |
+| Item metadata | MCP PARITY | Deterministic registered item metadata lookup. |
+| Item search | MCP PARITY | Bounded search over typed version-scoped read projections. |
+| Professions | MCP PARITY | Current bounded character profession state. |
+| Profession coverage | MCP PARITY | Derived by `AccountFacts` / provider-neutral coverage. |
+| Known profession recipes | NOT CAPTURED | No recipe catalogue/known-recipe capture in current schema. |
+| Trainer observations | MCP PARITY | `spells`/`trainer` snapshot sections; exact visit statuses and freshness retained. |
+| Known spells / spellbook | MCP PARITY | Captured spellbook section; capture coverage may be limited by client/spec. |
+| Character currencies | MCP PARITY | Structured currency list, per-character state and quantities. |
+| Account-wide/shared currencies | MCP PARITY | `buildAccountCurrencies`; scope requires captured ownership evidence. |
+| Renown | NOT CAPTURED | `get_renown` reports UNKNOWN; research documents do not establish character Renown. |
+| Other progression/account facts | PARTIAL MCP PARITY | Captured level/XP/location and derived account facts are available; unrecorded progression remains unknown. |
+| Snapshot history | MCP PARITY | Bounded compact `SnapshotReadStore` timeline. |
+| Semantic snapshot changes | MCP PARITY | Provider-neutral `diffSnapshots`; missing or historical evidence does not invent removals. |
+| Research list/search/section | MCP PARITY | Fixed `ResearchRegistry`, registered-only. |
+| Research metadata/outline/full registered doc | MCP PARITY | Registry metadata, bounded outline and 40,000-character registered document read. |
+| Spell/trainer historical comparison | CAPTURED BUT NOT MCP-EXPOSED | Snapshot diff does not compare these sections: spellbook capture coverage can vary and trainer visits are point-in-time observations, not learned-state transitions. |
+| External game data, auction prices, arbitrary paths/SQL, raw snapshots, mutations | INTENTIONALLY OUT OF MCP SCOPE | Not a provider-neutral captured read capability; no such MCP surface is exposed. |
+
+This pass adds five tools, bringing the implementation to 24 registered tools;
+the five-tool addition is pending external ChatGPT acceptance after the DEV MCP
+reload. No addon/capture changes were made. Remaining capture-dependent gaps
+are known recipes and Renown; spellbook coverage completeness is also bounded
+by what the client captured.
 
 ## Validate locally
 
@@ -309,7 +391,8 @@ of the acceptance results summarized above.
 ## Omarchy DEV external ChatGPT acceptance (2026-09-30)
 
 The separate **WoWSync DEV** connection was accepted from a normal ChatGPT
-conversation through the Omarchy Secure MCP Tunnel. All 15 tools were visible;
+conversation through the Omarchy Secure MCP Tunnel. At that historical
+acceptance point, all 15 then-registered tools were visible;
 `list_versions` and Retail Squashpot storage retrieval succeeded against the
 Omarchy DEV database. Squashpot's bags were `OBSERVED` with 94 item stacks,
 28 free of 126 slots, and no truncation. Deterministic item metadata was

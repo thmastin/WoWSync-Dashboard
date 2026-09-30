@@ -61,9 +61,10 @@ does not depend on it. The MCP process instantiates only
 `SqliteSnapshotReadStore`, `DashboardReadModel`, and the fixed
 `ResearchRegistry` manifest. It never instantiates `SqliteSnapshotStore`.
 Its transport is local STDIO, so the MCP process opens no listener or public
-endpoint. Its eleven registered tools are closed-world, bounded, and marked
-read-only; it exposes no mutation, raw SQL, filesystem, shell, raw-export, or
-generic Dashboard-API proxy tool.
+endpoint. Its registered tools are closed-world, bounded, and marked
+read-only; see the current registry and parity table in
+[`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md). It exposes no mutation, raw SQL,
+filesystem, shell, raw-export, or generic Dashboard-API proxy tool.
 
 MCP serialization preserves the core's version isolation, character ambiguity,
 and provenance contract. The personal ChatGPT MCP App and Secure MCP Tunnel
