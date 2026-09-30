@@ -163,7 +163,9 @@ config. Each new DEV worktree must receive the same local config before Codex
 starts. DEV Codex authentication is provisioned separately, not copied from the
 personal account. See repository `AGENTS.md` for the single-primary-agent
 operating model and human gates.
-The DEV CLI installation needs the `codex-code-mode-host` executable beside
-the matching `codex` binary in `/opt/wowsync/dev-tools`; a bare CLI binary can
-authenticate and pass `codex doctor` yet fail every shell tool call. Upgrade
-the two root-owned executables together and re-run a fresh DEV tool probe.
+The DEV CLI uses a complete packaged 0.157.1 installation at
+`/opt/wowsync/dev-tools/codex-npm-0.157.1`; the existing
+`/usr/local/bin/wowsync-codex` launcher resolves it and enters the DEV checkout.
+This was validated from a fresh launched session on 2026-09-30. See
+[DEV_CODEX_PACKAGE_REPAIR.md](DEV_CODEX_PACKAGE_REPAIR.md) for package history
+and remaining host-only daemon checks.
