@@ -126,6 +126,18 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterSummary(query)));
+  server.registerTool("get_character_state", {
+    title: "Get compact current character state",
+    description: "Returns a bounded current snapshot summary for one explicit-version character, with section-level OBSERVED, LAST_SEEN, or UNKNOWN provenance. Historical bank data is never described as current.",
+    inputSchema: characterQuery,
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterState(query)));
+  server.registerTool("get_account_overview", {
+    title: "Get version-scoped account overview and economy",
+    description: "Returns bounded version-scoped account facts, known gold and playtime, progression, profession/currency summaries, and storage coverage. Unknown values remain unknown; Warband and guild storage are not counted as character wealth.",
+    inputSchema: z.object({ version: versionSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version }) => textResult(readModel.getAccountOverview({ version })));
   server.registerTool("get_character_equipment", {
     title: "Get latest-known character equipment",
     description: "Returns normal equipment slots from the latest-known explicit-version snapshot, with OBSERVED, LAST_SEEN, or UNKNOWN provenance.",

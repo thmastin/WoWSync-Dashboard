@@ -93,6 +93,8 @@ imports may update the database.
 | `list_versions` | List isolated version buckets known to WoWSync. |
 | `list_characters` | List compact character summaries for one required version. |
 | `get_character_summary` | Resolve one character and return its deterministic summary. |
+| `get_character_state` | Return bounded current character state with section-level provenance. |
+| `get_account_overview` | Return bounded version-scoped account/economy facts, currencies and storage coverage. |
 | `get_character_equipment` | Return latest-known slot equipment with provenance. |
 | `get_character_professions` | Return captured profession observations and their provenance. |
 | `get_character_currencies` | Return captured currency data, bounded to 100 records. |
@@ -115,6 +117,18 @@ an intentional `UNKNOWN`, because WoWSync has not captured it.
 Results are bounded: characters default to 50 and cap at 100, currencies cap
 at 100, research search defaults to 5 and caps at 8, and a single research
 section caps at 20,000 characters with explicit truncation metadata.
+
+The account overview caps per-character detail at 25, realms and recorded guild
+owners at 20, profession coverage at 25, currency summaries at 20 per account or
+realm, and recent change/level-up highlights at 10. The compact
+character state caps professions at 10 and currencies at 20. Missing gold totals
+remain omitted when no character gold is known; a captured zero remains an explicit
+zero. Warband and guild observations are reported separately from character wealth.
+
+`get_character_state` reports character bank state from the latest character snapshot;
+`LAST_SEEN` includes an explicit historical warning and is never represented as live.
+The account overview reports shared storage coverage and freshness without assigning
+market values to stored assets.
 
 ## Validate locally
 

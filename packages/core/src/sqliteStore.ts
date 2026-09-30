@@ -1296,6 +1296,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
     return this.store.getCharacterCurrencies(identityKey);
   }
+  listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies {
+    return this.store.listVersionCurrencies(version);
+  }
   getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[] {
     return this.store.getItemMetadata(version, baseItemIds);
   }
