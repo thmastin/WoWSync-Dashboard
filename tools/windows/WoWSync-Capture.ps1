@@ -71,12 +71,6 @@ function Start-WatcherProcess($Config, [string[]]$Arguments, [string]$Token) {
     finally { Remove-Item Env:WOWSYNC_CAPTURE_TOKEN -ErrorAction SilentlyContinue }
 }
 
-function Start-McpTunnelProcess($Config, [string]$Key) {
-    $env:CONTROL_PLANE_API_KEY = $Key
-    try { Start-Child $Config.McpTunnelPath @('run', '--profile', 'wowsync') $AppDir 'mcp-tunnel' }
-    finally { Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue }
-}
-
 function Install-Capture {
     if ([string]::IsNullOrWhiteSpace($WowRoot)) { $WowRoot = Read-Host 'WoW install folder (contains _retail_ / _classic_*)' }
     if ([string]::IsNullOrWhiteSpace($SshTarget)) { $SshTarget = Read-Host 'Omarchy SSH target (user@host)' }
@@ -176,12 +170,6 @@ function Run-Supervisor {
     $tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
     try { $tokenValue = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer); $secureToken.Dispose() }
-    $secureMcpCipher = Get-Content -LiteralPath $McpTokenPath -Raw
-    $secureMcpKey = ConvertTo-SecureString $secureMcpCipher
-    $mcpPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureMcpKey)
-    try { $mcpKeyValue = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($mcpPointer) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($mcpPointer); $secureMcpKey.Dispose() }
-
     $env:WOWSYNC_URL = 'http://127.0.0.1:4175'
     $env:WOWSYNC_CAPTURE_TARGET = 'DEV'
     $env:WOWSYNC_CAPTURE_SPOOL_DIR = Join-Path $AppDir 'outbox'
@@ -192,13 +180,10 @@ function Run-Supervisor {
     $watchArgs = @('--disable-warning=ExperimentalWarning', $watcherScript, '--service', '--wow-dir', $config.WowRoot, '--url', 'http://127.0.0.1:4175', '--capture-target', 'DEV', '--spool-dir', $env:WOWSYNC_CAPTURE_SPOOL_DIR)
     $ssh = $null
     $watcher = $null
-    $mcp = $null
     $tunnelRestarts = 0
     $nextTunnelStart = Get-Date
     $watcherRestarts = 0
     $nextWatcherStart = Get-Date
-    $mcpRestarts = 0
-    $nextMcpStart = Get-Date
     Remove-Item -LiteralPath $StopPath -Force -ErrorAction SilentlyContinue
     try {
         while ($true) {
@@ -215,21 +200,15 @@ function Run-Supervisor {
                 $watcher = Start-WatcherProcess $config $watchArgs $tokenValue
                 $nextWatcherStart = $now.AddSeconds(10)
             }
-            if (($null -eq $mcp -or $mcp.HasExited) -and $now -ge $nextMcpStart) {
-                if ($null -ne $mcp) { $mcpRestarts++; $mcp.Dispose() }
-                $mcp = Start-McpTunnelProcess $config $mcpKeyValue
-                $nextMcpStart = $now.AddSeconds([Math]::Min(60, [Math]::Pow(2, [Math]::Min(6, $mcpRestarts + 1))))
-            }
             $sshAlive = $null -ne $ssh -and -not $ssh.HasExited
             $watcherAlive = $null -ne $watcher -and -not $watcher.HasExited
-            $mcpAlive = $null -ne $mcp -and -not $mcp.HasExited
             Write-JsonAtomic $SupervisorPath ([ordered]@{
                 target = 'DEV'; state = 'running'; heartbeatAt = $now.ToUniversalTime().ToString('o')
-                tunnelRunning = $sshAlive; watcherRunning = $watcherAlive; mcpTunnelRunning = $mcpAlive
+                tunnelRunning = $sshAlive; watcherRunning = $watcherAlive; mcpTunnelRunning = $false
                 tunnelPid = if ($sshAlive) { $ssh.Id } else { $null }
                 watcherPid = if ($watcherAlive) { $watcher.Id } else { $null }
-                mcpTunnelPid = if ($mcpAlive) { $mcp.Id } else { $null }
-                tunnelRestarts = $tunnelRestarts; watcherRestarts = $watcherRestarts; mcpTunnelRestarts = $mcpRestarts
+                mcpTunnelPid = $null
+                tunnelRestarts = $tunnelRestarts; watcherRestarts = $watcherRestarts
                 dashboardUrl = 'http://127.0.0.1:4174'
             })
             Start-Sleep -Seconds 2
@@ -237,11 +216,8 @@ function Run-Supervisor {
     } finally {
         Stop-Child $watcher
         Stop-Child $ssh
-        Stop-Child $mcp
         Remove-Item Env:WOWSYNC_CAPTURE_TOKEN -ErrorAction SilentlyContinue
         Remove-Variable tokenValue -ErrorAction SilentlyContinue
-        Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
-        Remove-Variable mcpKeyValue -ErrorAction SilentlyContinue
         Write-JsonAtomic $SupervisorPath ([ordered]@{ target = 'DEV'; state = 'stopped'; heartbeatAt = (Get-Date).ToUniversalTime().ToString('o'); tunnelRunning = $false; watcherRunning = $false; mcpTunnelRunning = $false; dashboardUrl = 'http://127.0.0.1:4174' })
     }
 }
