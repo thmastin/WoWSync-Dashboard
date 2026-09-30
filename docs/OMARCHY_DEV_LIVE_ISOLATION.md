@@ -77,12 +77,19 @@ These are system units with explicit `User=` settings; they do not depend on
 `thmastin`'s enabled systemd user linger.
 
 The server path/port selectors are implemented in
-`packages/server/src/index.ts` and `packages/server/src/net.ts`. The existing
-read-only MCP and Secure MCP Tunnel profile remain on Windows; the Windows
-supervisor can restart the existing tunnel client without changing its profile
-or database path. Normal ChatGPT invocation remains an external acceptance
-check. DEV import/watch commands and the Vite proxy also need an explicit DEV
-URL/port; their defaults target 4173.
+`packages/server/src/index.ts` and `packages/server/src/net.ts`. The MCP uses
+`WOWSYNC_MCP_DB_PATH` and `WOWSYNC_MCP_RESEARCH_ROOT` in
+`packages/mcp/src/index.ts`. Root-managed
+`wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
+`wowsync-dev`, loads its restricted DEV tunnel key as a systemd credential,
+and launches the local stdio MCP child with explicit DEV DB and research paths.
+It is attached to `wowsync-dev.target`; there is no separate MCP daemon or HTTP
+MCP endpoint. ChatGPT accepted DEV tunnel
+`tunnel_6abd1086c3c08191a9bf6c1a64cc6787` on 2026-09-30. Windows remains the
+authoritative database host and capture source; its old MCP tunnel was retired
+after acceptance while capture watching, transfer, SSH forwarding, and
+scheduled startup remain. DEV import/watch commands and the Vite proxy also
+need an explicit DEV URL/port; their defaults target 4173.
 
 ## Network boundary
 

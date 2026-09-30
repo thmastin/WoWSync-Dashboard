@@ -1,10 +1,11 @@
 # Persistent WoWSync DEV on Windows and Omarchy — accepted
 
-**Infrastructure acceptance: passed and closed 2026-09-30.** Windows sign-in
-startup, hidden background operation, DEV receiver and Dashboard connectivity,
-credential-free status, acknowledged Squashpot Retail capture with an empty
-queue afterward, and normal ChatGPT access through the existing 11-tool
-read-only MCP contract were accepted. No infrastructure blocker remains.
+**Capture infrastructure acceptance: passed and closed 2026-09-30.** Windows
+sign-in startup, hidden background operation, DEV receiver and Dashboard
+connectivity, credential-free status, acknowledged Squashpot Retail capture
+with an empty queue afterward, and retirement of Windows MCP ownership were
+accepted. ChatGPT DEV access was separately accepted through Omarchy's 15-tool
+read-only MCP contract. No infrastructure blocker remains.
 Classic Beta's `Unknown` SavedVariables record whose export identifies
 Fizzwick remains quarantined as an identity-routing backlog item; it was not
 sent.
@@ -66,20 +67,19 @@ In PowerShell at the updated repository root, install the hidden logon task:
 ```
 
 The one-time installer obtains the DEV capture token directly over SSH from
-the restricted Omarchy config file, prompts for the least-privilege Secure MCP
-Tunnel runtime key (Tunnels Read + Use), and stores each credential separately
-with current-user Windows DPAPI under `%LOCALAPPDATA%\WoWSync`. Neither value
-is printed, passed in process arguments, or stored in the repository. The MCP
-profile at `%APPDATA%\tunnel-client\wowsync.yaml` and its read-only database
-path are reused unchanged. The installer registers a hidden Task Scheduler
+the restricted Omarchy config file and stores it with current-user Windows
+DPAPI under `%LOCALAPPDATA%\WoWSync`. The token is not printed, passed in
+process arguments, or stored in the repository. The installer registers a
+hidden Task Scheduler
 task for Windows user sign-in. The task runs a Windows Script Host launcher,
 which starts the PowerShell supervisor without opening a console window.
 `-Mode RepairStartup` refreshes the launcher and task definition without
 asking for credentials again.
 
-After setup, the background supervisor maintains three processes: the private
-SSH forward, the SavedVariables watcher, and the existing Secure MCP Tunnel
-client. It restarts disconnected children with backoff. The capture watcher
+After setup, the background supervisor maintains the private SSH forwarding
+and the SavedVariables watcher, restarting disconnected children with backoff.
+It does not start or monitor tunnel-client; the Windows MCP tunnel was retired
+after Omarchy DEV MCP acceptance. The capture watcher
 discovers `GearExport.lua` files under the selected WoW install for Retail,
 Classic BCC Anniversary, Classic Era, and other supported product folders, and
 continues discovering account/product files created later. Each file retains
@@ -112,11 +112,11 @@ $wowsync = Join-Path $env:LOCALAPPDATA 'WoWSync\WoWSync-Capture.ps1'
 & $wowsync -Mode Status
 ```
 
-Status reports the Task Scheduler/supervisor state, SSH and MCP tunnel process
-state, DEV target, browser URL, last SavedVariables observation, last
+Status reports the Task Scheduler/supervisor state, SSH forwarding state, DEV
+target, browser URL, last SavedVariables observation, last
 acknowledgement with character/product/version, pending outbox count, latest
 receiver connectivity check, backlog-draining state, and most recent useful
-error. It never displays either credential. The status JSON and logs are local
+error. It never displays the capture token. The status JSON and logs are local
 to the Windows user under `%LOCALAPPDATA%\WoWSync`; the status record contains
 no token or export text.
 
@@ -129,21 +129,19 @@ outbox drains using the existing receiver receipts. It still requires WoW to
 save SavedVariables (reload, logout, or exit); `/wowsync` alone does not write
 the file.
 
-The completed real-machine acceptance recorded:
+The Windows capture and transfer acceptance recorded:
 
 1. Windows sign-in starts the task hidden; no PowerShell window remains.
-2. The supervisor, watcher, SSH forwards and existing MCP tunnel run in the
-   background; status exposes no credentials and reports DEV as the target.
-3. The DEV Dashboard returns HTTP 200 and the capture receiver returns its
-   expected HTTP 401 authentication challenge; the browser path works.
+2. The supervisor, watcher, and SSH forwarding run in the background; status
+   exposes no credentials and reports DEV as the target.
+3. The DEV Dashboard returns HTTP 200, the capture receiver is reachable, and
+   capture reports connected.
 4. A Squashpot Retail capture was acknowledged by DEV and the durable Windows
-   queue drained.
-5. Normal ChatGPT retrieved WoWSync data through the existing 11-tool
-   read-only MCP contract. This external acceptance is distinct from local
-   protocol tests.
+   queue drained to zero pending items.
+5. After Windows tunnel retirement, no `tunnel-client.exe` process remained
+   and the old MCP tunnel did not respawn. The retained profile, old tunnel ID,
+   and existing credential material are rollback material only.
 
-The MCP runtime and its eleven-tool contract are unchanged. Its tunnel profile
-remains outbound and private; this setup does not add a public MCP or Dashboard
-listener. If the existing tunnel client/profile/runtime key is unavailable,
-keep the current MCP setup intact and resolve that credential/profile issue
-before claiming full infrastructure acceptance.
+Omarchy hosts the active DEV MCP runtime and its 15-tool read-only contract;
+see [`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for its external ChatGPT
+acceptance. This Windows setup does not add a public MCP or Dashboard listener.

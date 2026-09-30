@@ -5,6 +5,23 @@ were live-validated on 2026-09-28. No public Dashboard/MCP endpoint, MCP OAuth,
 or Dashboard UI integration exists or is intended for this path. The separate
 Ask My Account feature is unchanged.
 
+The current **DEV** tunnel runtime is on Omarchy. The root-managed
+`wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
+`wowsync-dev`, launches the local stdio MCP child from this checkout, and reads
+`/var/lib/wowsync-dev/db/wowsync.sqlite`. Its runtime key is supplied through a
+systemd credential sourced from `/etc/wowsync/dev/tunnel-api-key`; the secret
+is not stored in this repository or in the unit. The accepted Omarchy tunnel ID
+is `tunnel_6abd1086c3c08191ac4f9c1a64cc6787`. Do not use the old Windows tunnel
+ID for this runtime.
+
+The old Windows DEV MCP runtime was retired after Omarchy acceptance. The
+Windows capture supervisor no longer starts or monitors tunnel-client; it
+continues to own SavedVariables watching, DEV capture transfer, required SSH
+forwarding, and scheduled startup. Rollback material is intentionally retained
+at `%APPDATA%\tunnel-client\wowsync.yaml`, including the old tunnel ID
+`tunnel_6abac56510a08191a9bf6c8075a8de3f` and its existing credential
+material. The old MCP must not be described or treated as active.
+
 `@wowsync-dashboard/mcp` is a thin STDIO adapter over the provider-neutral
 core. Its process path is deliberately:
 
@@ -84,6 +101,10 @@ imports may update the database.
 | `list_research_documents` | List registered research metadata, not document bodies. |
 | `search_research` | Search registered research with a default 5 / hard 8 result limit. |
 | `get_research_section` | Retrieve one registered heading section, capped at 20,000 characters with explicit truncation. |
+| `search_items` | Search item metadata from the selected version's captured data. |
+| `get_character_storage` | Retrieve bounded character-owned storage for one character. |
+| `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
+| `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
 
 All tools are marked read-only and closed-world. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
@@ -134,73 +155,60 @@ that stream. The subsequent Node `EPIPE` was a consequence of the tunnel
 closing the failed child pipe, not the original fault. MCP stdout is protocol
 only; diagnostics go to stderr.
 
-### Start and stop
+### Windows rollback profile: start and stop
 
-1. Open PowerShell in the Dashboard repository root.
-2. Ensure `CONTROL_PLANE_API_KEY` is securely available to this process using
+These commands describe the preserved Windows fallback, not the active DEV
+runtime. Open PowerShell in the Windows Dashboard repository root.
+
+1. Ensure `CONTROL_PLANE_API_KEY` is securely available to this process using
    the local secret-handling method you chose. The variable's value must never
    be placed in this repository, command history, logs, chat, or documentation.
-   Use a least-privilege runtime key whose principal has the required Tunnels
-   **Read + Use** access; do not use an organization admin key. Tunnel runtime
-   authentication is separate from the ChatGPT MCP App's authentication
-   selection.
-3. After local configuration changes or when troubleshooting, run:
+   Use a least-privilege runtime key whose principal has Tunnels **Read + Use**;
+   do not use an organization admin key.
+2. After local configuration changes or when troubleshooting, run:
 
    ```powershell
    .\tools\tunnel-client\tunnel-client.exe doctor --profile wowsync --explain
    ```
 
-4. The persistent Windows setup starts and supervises this process at user
-   sign-in after storing the least-privilege key once with current-user DPAPI.
-   For one-off troubleshooting only, the foreground form is:
+3. For rollback troubleshooting only, start the preserved Windows profile in
+   the foreground:
 
    ```powershell
    .\tools\tunnel-client\tunnel-client.exe run --profile wowsync
    ```
 
-5. Use the WoWSync Windows supervisor's `-Mode Stop` / `-Mode Start` commands
-   to stop or resume its child processes. Do not leave a second manual
-   `tunnel-client run` instance competing with the scheduled task.
+4. Stop a manually launched rollback process with **Ctrl+C**. The current
+   Windows supervisor does not manage tunnel-client. Do not change its
+   capture/transfer components when handling the retained rollback material.
 
 `tunnel-client` also has local operator/health surfaces. Leave their default
 loopback binding in place; do not enable remote UI access for this integration.
 
-The original MCP acceptance used the installed v0.0.15 CLI as a manually
-started foreground poller. It also has
-`runtimes connect/status/stop` commands for native local runtime supervision;
-its own help describes `connect` as the long-lived runtime path managed by
-Codex. That mode was not configured or tested here. It is not documented by
-the CLI help as a native Windows service. The WoWSync infrastructure setup now
-supervises the existing `run --profile wowsync` process with Windows Task
-Scheduler at user sign-in; it keeps the same stdio MCP target/profile and
-restarts the client if it exits. The task stores its least-privilege runtime
-key separately with current-user DPAPI and supplies `CONTROL_PLANE_API_KEY`
-only to the tunnel client process tree. Task Scheduler behavior and the
-external ChatGPT path still require real Windows/ChatGPT acceptance. This
+The v0.0.15 CLI exposes `run` and native `runtimes connect/status/stop`
+commands. The Windows supervisor previously managed `run --profile wowsync`,
+but commit `42a17ba` retired that ownership after Omarchy acceptance. Preserve
+the profile, old tunnel ID, and credential material for rollback; they are not
+active. Windows scheduled startup continues for capture and forwarding. This
 does not install the optional Codex tunnel plugin or alter the MCP app.
 
-### ChatGPT connection
+### ChatGPT connections
 
-The validated personal app is named **WoWSync**. In ChatGPT's current
-Plugins/app connection flow, choose the tunnel connection and the `wowsync`
-tunnel. The MCP App uses **No authentication**: the local tunnel client's
-control-plane key authenticates the tunnel and is not an MCP OAuth credential.
-The tunnel must be running during app discovery and every tool call. Product
-labels can change; OpenAI's current [plugin connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt)
-describes developer-mode apps and the Tunnel connection option. The MCP server
-is available in a tested normal ChatGPT conversation. This acceptance record
-does not separately claim Project-specific invocation unless that is tested
-again in a Project chat.
+The original personal app is named **WoWSync** and uses the Windows tunnel for
+the historical Phase 6 acceptance below. The separate **WoWSync DEV** app
+connection uses the Omarchy tunnel ID above and **No authentication**. The
+tunnel runtime key authenticates tunnel-client to the control plane; it is not
+an MCP OAuth credential. Product labels can change; OpenAI's current
+[plugin connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+describes developer-mode apps and the Tunnel connection option.
 
 ### Troubleshooting
 
-- Run `tunnel-client doctor --profile wowsync --explain` and check that the
-  named profile can resolve its runtime credential, tunnel identity, Node
-  executable, and stdio MCP target. Never copy credential output into a ticket
-  or chat.
-- Confirm `tunnel-client run --profile wowsync` is still running and healthy;
-  calls stop when it exits.
-- Confirm the profile starts the direct Node MCP entrypoint above, not npm.
+- On Omarchy, check `systemctl status wowsync-dev-mcp-tunnel.service` and its
+  journal. Do not print credential contents or credential-bearing diagnostics.
+- Confirm the unit starts the direct Node MCP entrypoint, supplies the DEV DB
+  and research paths, and references the key through a systemd credential; it
+  must not invoke npm or npx.
 - If the child fails at startup, check the configured `WOWSYNC_MCP_DB_PATH`
   points to the intended existing database and `WOWSYNC_MCP_RESEARCH_ROOT`
   points to the registered research corpus. MCP fails closed when its database
@@ -257,3 +265,21 @@ the installed tool surface, real tool invocation, version isolation,
 and preservation of `OBSERVED`, `LAST_SEEN`, `DERIVED`, and `UNKNOWN`.
 Project-specific invocation is not asserted by this record; it was not part
 of the acceptance results summarized above.
+
+## Omarchy DEV external ChatGPT acceptance (2026-09-30)
+
+The separate **WoWSync DEV** connection was accepted from a normal ChatGPT
+conversation through the Omarchy Secure MCP Tunnel. All 15 tools were visible;
+`list_versions` and Retail Squashpot storage retrieval succeeded against the
+Omarchy DEV database. Squashpot's bags were `OBSERVED` with 94 item stacks,
+28 free of 126 slots, and no truncation. Deterministic item metadata was
+returned. The observed inventory included 58 Void-Tempered Leather,
+8 Void-Tempered Scales, and 1 Fine Void-Tempered Hide.
+
+The active Omarchy runtime is tunnel-client v0.0.15 under
+`wowsync-dev-mcp-tunnel.service`, running as `wowsync-dev` and owning its local
+stdio MCP child. It reads the Omarchy DEV SQLite database. The Windows MCP
+tunnel `tunnel_6abac56510a08191a9bf6c8075a8de3f` was retired after acceptance;
+its profile and credential material remain only for rollback. The four newer
+retrieval tools are `search_items`, `get_character_storage`,
+`get_shared_storage`, and `get_item_metadata`.
