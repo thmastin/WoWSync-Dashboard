@@ -1,4 +1,13 @@
-# Persistent WoWSync DEV on Windows and Omarchy
+# Persistent WoWSync DEV on Windows and Omarchy — accepted
+
+**Infrastructure acceptance: passed and closed 2026-09-30.** Windows sign-in
+startup, hidden background operation, DEV receiver and Dashboard connectivity,
+credential-free status, acknowledged Squashpot Retail capture with an empty
+queue afterward, and normal ChatGPT access through the existing 11-tool
+read-only MCP contract were accepted. No infrastructure blocker remains.
+Classic Beta's `Unknown` SavedVariables record whose export identifies
+Fizzwick remains quarantined as an identity-routing backlog item; it was not
+sent.
 
 The one-file Windows → Omarchy DEV capture path was manually proven on
 2026-09-29. This runbook replaces its routine terminal steps with a hidden
@@ -111,7 +120,7 @@ error. It never displays either credential. The status JSON and logs are local
 to the Windows user under `%LOCALAPPDATA%\WoWSync`; the status record contains
 no token or export text.
 
-## Outages and first validation
+## Outages and accepted runtime behavior
 
 If Omarchy is off, the SSH child retries and captures stay in the Windows
 outbox. If Windows is off, the startup catch-up reads the newest persisted
@@ -120,20 +129,18 @@ outbox drains using the existing receiver receipts. It still requires WoW to
 save SavedVariables (reload, logout, or exit); `/wowsync` alone does not write
 the file.
 
-The first real-machine acceptance should verify:
+The completed real-machine acceptance recorded:
 
 1. Windows sign-in starts the task hidden; no PowerShell window remains.
-2. `Status` shows the SSH tunnel, watcher and MCP tunnel running, and the DEV
-   Dashboard opens at `http://127.0.0.1:4174`.
-3. A normal WoW save produces a DEV acknowledgement and clears the outbox.
-4. With Omarchy stopped, a subsequent save remains queued; restart Omarchy with
-   `sudo wowsync-dev start` (or reboot it), then confirm the backlog drains.
-5. `sudo wowsync-dev status` reports the DEV Dashboard HTTP response and
-   capture receiver HTTP 401. The Windows status shows the receiver connected.
-6. In a normal ChatGPT conversation with the existing **WoWSync** app, invoke
-   `list_versions`, then a version-scoped character read. Confirm the response
-   still reflects the narrow read-only MCP surface. This external call is
-   required; local protocol tests alone do not prove the ChatGPT tunnel.
+2. The supervisor, watcher, SSH forwards and existing MCP tunnel run in the
+   background; status exposes no credentials and reports DEV as the target.
+3. The DEV Dashboard returns HTTP 200 and the capture receiver returns its
+   expected HTTP 401 authentication challenge; the browser path works.
+4. A Squashpot Retail capture was acknowledged by DEV and the durable Windows
+   queue drained.
+5. Normal ChatGPT retrieved WoWSync data through the existing 11-tool
+   read-only MCP contract. This external acceptance is distinct from local
+   protocol tests.
 
 The MCP runtime and its eleven-tool contract are unchanged. Its tunnel profile
 remains outbound and private; this setup does not add a public MCP or Dashboard

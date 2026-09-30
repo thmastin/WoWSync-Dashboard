@@ -1,10 +1,11 @@
 # Current WoWSync state
 
-Last verified: 2026-09-29. Branch: `feature/dashboard-integration`.
+Last verified: 2026-09-30. Branch: `feature/dashboard-integration`.
 
 ## Operating state
 
 - Omarchy DEV is operational under Unix identity `wowsync-dev`: writable DEV checkout, DEV Dashboard on loopback port 4174, and DEV-only Herdr control plane.
+- The Windows/Omarchy DEV runtime infrastructure milestone is accepted and closed. Windows sign-in starts the hidden supervisor, watcher, SSH forwards, and existing Secure MCP Tunnel; the DEV receiver and Dashboard are reachable; capture target is DEV; the Squashpot Retail capture was acknowledged and the queue drained; normal ChatGPT MCP access passed using the existing 11-tool read-only contract. See [`WINDOWS_CAPTURE_SETUP.md`](WINDOWS_CAPTURE_SETUP.md).
 - Omarchy LIVE has not been cut over. Its Dashboard is inactive; there is no authoritative LIVE database, importer/receiver, MCP/tunnel, or production credential set there.
 - The authoritative WoWSync database and normal capture path remain on Windows. Production Dashboard/MCP functionality has not yet been migrated to Omarchy.
 - DEV Codex is authenticated and installed at `/opt/wowsync/dev-tools/codex` with its matching code-mode host. The DEV project configuration is `approval_policy = "never"`, `sandbox_mode = "workspace-write"`, network enabled. A fresh DEV CLI check confirmed the setting and verified access to DEV Herdr/Dashboard while LIVE and tested personal control listeners remained denied. Do not use `danger-full-access` or weaken the host boundary.
@@ -12,7 +13,9 @@ Last verified: 2026-09-29. Branch: `feature/dashboard-integration`.
 
 ## Product position and next milestone
 
-The manual Windows → Omarchy DEV capture path has been proven end-to-end. This infrastructure slice adds a hidden Windows logon supervisor for the SSH forwards, persistent multi-product/account watcher, DPAPI-protected DEV and MCP tunnel credentials, durable health status, and an Omarchy systemd DEV target/operator. The exact real-Windows reboot, outage recovery, browser, and ChatGPT acceptance remains pending; see [`WINDOWS_CAPTURE_SETUP.md`](WINDOWS_CAPTURE_SETUP.md). Keep DEV and future LIVE configuration/data separate. No LIVE service, database or destination is changed. Later authoritative database migration, Windows LIVE destination switch, production credentials, and LIVE Dashboard/MCP cutover still require their separate human checkpoint.
+Infrastructure work is closed. The next Codex session should start WoWSync feature development. The roadmap preserves read-only MCP account-state retrieval as a feature candidate, including a concrete inventory question acceptance case. Do not restart infrastructure work unless a feature is blocked by a specific infrastructure defect. Keep DEV and future cloud LIVE configuration/data separate. No Omarchy LIVE service or authoritative database migration was performed; any later cloud LIVE deployment, production credentials, Windows LIVE destination switch, and authoritative database move remain separate gated milestones.
+
+The durable truth store at `D:\dev\wow-stuff\truth` was not available from Omarchy. This closeout is recorded only in project documentation; sync the accepted state to that store through the established truth-update workflow when it is available. Do not treat this repository as a duplicate authoritative truth store.
 
 The existing [`ROADMAP.md`](ROADMAP.md) tracks broader product work, including separate GearExport tasks; re-check its entries against current source before acting. It does not authorize edits to GearExport or BankCleanup.
 

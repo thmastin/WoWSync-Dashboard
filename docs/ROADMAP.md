@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-28 (Phase 6 WoWSync MCP + Secure MCP Tunnel live acceptance and documentation reconciliation).
+Last updated: 2026-09-30 (Windows/Omarchy DEV runtime infrastructure accepted and closed; feature-development roadmap reconciled).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
 `feature/dashboard-integration` had not yet merged to `main` (then at `797fc3d`)
 and included the closed shared-storage reconciliation milestone (C1-C6), item-metadata
@@ -105,6 +105,15 @@ Work happening now.
 
 Work intended next, in this order.
 
+- [ ] **Expand read-only MCP account-state retrieval.** Preserve the narrow typed
+  read-only contract; do not add arbitrary SQL access. First concrete acceptance
+  case: ChatGPT can answer *"How many Midnight skins does Squashpot have in
+  inventory?"* from WoWSync observations. Keep Retail/Midnight and other client
+  versions isolated, and preserve `OBSERVED`, `UNKNOWN`, `LAST_SEEN`, and
+  `DERIVED` semantics. Do not turn missing or inaccessible inventory into zero.
+  Treat this as feature development, not a reason to reopen the accepted runtime
+  infrastructure milestone.
+
 - [ ] **GearExport: keep `latestExport` fresh in memory while playing (remove manual `/wowsync`).**
   **Repo:** GearExport only (this Dashboard repo must not modify the addon). Pairs with Slice 1
   `watch:saved` so the player's biggest friction — remembering to run a report — goes away.
@@ -178,47 +187,27 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 
 ## Soon
 
-- [ ] **8. Desktop companion / automatic ingestion.** The watcher, authenticated DEV receiver, durable sender spool and receiver receipts are
-  implemented. The persistent Windows Task Scheduler supervisor, hidden SSH forwards, DPAPI credential storage, multi-file service discovery,
-  durable status file, and Omarchy systemd DEV operator are implemented in this infrastructure slice. The manual Windows → Omarchy DEV
-  capture path has already been proven; do not spend another validation cycle re-proving that basic transport.
-  - **Windows/Omarchy DEV runtime infrastructure acceptance complete (2026-09-30).** Sign-in startup, hidden background runtime,
-    credential-free status, Dashboard and capture receiver connectivity passed. The existing MCP contract was accepted separately in
-    a normal ChatGPT conversation; no MCP contract changes were made here. See [WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md).
-  - The existing read-only MCP contract remains 11 tools and its Windows Secure MCP Tunnel profile/database path are reused unchanged.
-    The real ChatGPT invocation was accepted separately; local protocol tests are not used as a substitute for that external check.
-  - Delivery remains tied to WoW saving SavedVariables (`/reload`, logout or exit); this watcher cannot force a save. Any GearExport in-memory
-    auto-refresh remains separate future addon work and requires explicit authorization in GearExport's repository.
-  - The original foreground CLI feasibility checkpoint is preserved in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
-  - Reuse, do not duplicate: `POST /api/import`, idempotent imports, observation-time
-    ordering, transactional persistence, `parseWowSyncExport`,
-    `SnapshotStore.importSnapshot`, `ImportResult` semantics. The companion must not
-    contain a second parser or database.
-  - Addon-side schema already anticipates a read-only SavedVariables companion with a
-    deterministic trigger engine, optional LLM layer, and notifications (GearExport
-    `WOWSYNC_SCHEMA.md`, "Read-only external companion").
-
-  - Remaining feasibility questions:
-    - `WoWSyncDB.characters[guid].latestExport` exists after `/wowsync`, but SavedVariables
-      normally reach disk only on logout/reload. A plain file watcher may **not** deliver
-      the immediate post-`/wowsync` handoff while the user stays logged in. Find the best
-      WoW-compliant handoff.
-    - SavedVariables must be parsed as restricted data, never executed as Lua; incomplete
-      writes must be rejected; the companion must never trigger a reload.
-    - File modification time is **not** observation time.
-    - The general Dashboard API has no auth/token and relies on loopback binding plus a
-      Host/Origin guard. The dedicated capture receiver has a separate token; DEV tunneling and cloud TLS still need deployment setup.
-    - SavedVariables keys characters by GUID; the text export carries none.
-    - Activity History is expected to use a separate transport artifact/channel.
-  - Existing note: [README.md](../README.md) → "Future automatic snapshot ingestion".
+- [ ] **Classic Beta capture identity routing: `Unknown` / Fizzwick.** The
+  SavedVariables record is named `Unknown`, while its embedded export identifies
+  Fizzwick. It was intentionally not sent because identity/version routing was
+  ambiguous. Define and validate a safe routing rule before retrying; quarantine
+  remains correct until then.
 
 ---
 
 ## Later
 
-- [ ] **WoWSync Windows System-Tray / Taskbar Status UI.** Add a small notification-area icon over the existing background runtime, with
-  healthy, receiver unavailable/queueing, backlog draining, and error states; concise status plus suitable start/restart/status actions; and
-  no credential exposure. This is UX polish after infrastructure acceptance and must not delay feature development on Omarchy.
+- [ ] **WoWSync Windows System-Tray / Taskbar control surface.** Show runtime
+  health, queue/recovery and error state; eventually provide an explicit DEV/LIVE
+  target switch. Keep DEV and LIVE credentials separate, pin each queued capture
+  to the target selected when it was created, and ensure changing capture target
+  never silently repoints normal ChatGPT MCP.
+
+- [ ] **Cloud LIVE deployment.** Later deployment milestone for the authoritative
+  runtime. Do not stand up Omarchy LIVE merely because the existing isolation and
+  runtime infrastructure supports it. Preserve separate approval gates for
+  production credentials, authoritative database migration and destination
+  changes.
 
 ### 9. Dashboard / UX follow-ups
 
@@ -269,8 +258,14 @@ dependencies change.
   re-measure while preserving correctness and export semantics. Pay particular
   attention to high-frequency events and defer, cache, or coalesce work when
   appropriate. If measured overhead is already negligible, document the result
-  and stop without speculative rewrites. Schedule after the current
-  infrastructure milestone.
+  and stop without speculative rewrites. Keep this deferred future maintenance;
+  the infrastructure closeout does not start it.
+
+- [ ] **Omarchy → Windows addon deployment workflow.** Package and stage explicit
+  addon revisions from Omarchy, deploy each revision to the correct WoW product,
+  and report the deployed revision. Tate retains control of `/reload` and all
+  live-game validation. GearExport and BankCleanup are separate repositories;
+  this roadmap item does not authorize modifying either repository.
 
 - [ ] TSM price enrichment
 - [ ] Mailbox / Auction House capture
@@ -361,6 +356,11 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **Windows/Omarchy DEV runtime infrastructure accepted and closed (2026-09-30).**
+  Hidden Windows sign-in startup, DEV capture and Dashboard access, durable queue
+  acknowledgement, credential-free status, and external ChatGPT access through
+  the existing 11-tool read-only MCP contract passed. No infrastructure blocker
+  remains. The setup/acceptance record is [WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md).
 - **Phase 6 external read integration: complete and live-validated (2026-09-28).** The provider-neutral read model, strict SQLite read-only store, registered research retrieval, and dedicated MCP server are implemented. The personal ChatGPT MCP App was connected through Secure MCP Tunnel and invoked successfully. See [MCP development, operations, and acceptance](MCP_DEVELOPMENT.md), [read/research retrieval architecture](READ_RETRIEVAL_ARCHITECTURE.md), and [architecture](ARCHITECTURE.md). This does not implement Renown capture, arbitrary account queries, MCP mutation, or public Dashboard access. No Phase 7 work is started or implied.
 - Retail Midnight profession planning: plumb `expansion`, rank expansions, Covered = Midnight holders only, Gaps add Missing Midnight (olderOnly); primary by expansion then skill; Overview Midnight gap counts; 2026-09-23 on `feature/dashboard-integration`
 - Top-level Professions tab (coverage table + gaps; Overview one-line summary navigates there); roster all-column sort; gold thousands commas via formatCopper; 2026-09-23 on `feature/dashboard-integration`
