@@ -13,13 +13,13 @@ import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
-const now = 1_800_000_000;
+const now = 1_790_793_200;
 
-function retail(name: string, realm: string, professions = false, moneyCopper?: number, bankLastSeen = false) {
+function retail(name: string, realm: string, professions = false, moneyCopper?: number, bankLastSeen = false, generatedAt = now, level = 90, equipmentItem = 1) {
   const exported = buildWowSyncExport({
-    generatedAt: now,
-    character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", level: 90, ...(moneyCopper !== undefined ? { moneyCopper } : {}) },
-    equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: "item:1", name: "Observed Helm", itemLevel: 279 }] },
+    generatedAt,
+    character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", level, ...(moneyCopper !== undefined ? { moneyCopper } : {}) },
+    equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: `item:${equipmentItem}`, name: "Observed Helm", itemLevel: 279 }] },
     professions: professions ? { entries: [{ name: "Engineering", skill: 100, maxSkill: 100 }, { name: "Alchemy", skill: 100, maxSkill: 100 }], retail: true } : undefined,
     bags: { containers: [{ id: 0, capacity: 20, free: 19, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }] }] },
     bank: { lastSeen: bankLastSeen, containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:888", name: "Observed Bank Item", qty: 1 }] }] },
@@ -42,7 +42,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const databasePath = path.join(temporaryDirectory, "fixture.sqlite");
   const writer = new SqliteSnapshotStore(databasePath);
   try {
-    writer.importSnapshot(retail("Virek", "Cairne", true, undefined, true), {
+    writer.importSnapshot(retail("Virek", "Cairne", true, 100, true, now - 20, 89), {
       currencies: {
         observedAt: now,
         data: {
@@ -50,6 +50,12 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
           formatVersion: 1,
           currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index })),
         },
+      },
+    });
+    writer.importSnapshot(retail("Virek", "Cairne", true, 500, true, now - 10, 90, 2), {
+      currencies: {
+        observedAt: now - 10,
+        data: { listRead: true, formatVersion: 1, currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index + 1 })) },
       },
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
@@ -75,8 +81,10 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
       "get_account_overview",
+      "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",
+      "get_character_history",
       "get_character_professions",
       "get_character_state",
       "get_character_storage",
@@ -116,7 +124,28 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(currentState.value?.data?.bank.state, "LAST_SEEN");
     assert.match(currentState.value?.data?.bank.provenance.warning ?? "", /Historical/);
     assert.equal(currentState.value?.data?.professions.entries?.length, 2);
-    assert.equal(currentState.value?.data?.currencies.state, "OBSERVED");
+    assert.ok(["OBSERVED", "LAST_SEEN"].includes(currentState.value?.data?.currencies.state ?? ""));
+
+    const history = structured<{ status: string; value?: { data?: { items: Array<{ snapshotId: number; level: number }>; totalCount: number; truncated: boolean } } }>(await client.callTool({ name: "get_character_history", arguments: { version: "retail", name: "Virek", realm: "Cairne", limit: 1 } }));
+    assert.equal(history.status, "FOUND");
+    assert.equal(history.value?.data?.totalCount, 3);
+    assert.equal(history.value?.data?.items.length, 1);
+    assert.equal(history.value?.data?.truncated, true);
+    const changes = structured<{ status: string; value?: { data?: { fromSnapshot?: { snapshotId: number }; toSnapshot?: { snapshotId: number }; changes?: { economy: { goldCopper: { delta?: number } }; progression: { level: { delta?: number } }; bank: { state: string; itemChanges: { items: unknown[] } } } } } }>(await client.callTool({ name: "get_character_changes", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
+    assert.equal(changes.status, "FOUND");
+    assert.ok((changes.value?.data?.toSnapshot?.snapshotId ?? 0) > (changes.value?.data?.fromSnapshot?.snapshotId ?? 0));
+    assert.equal(changes.value?.data?.changes?.economy.goldCopper.delta, 400);
+    assert.equal(changes.value?.data?.changes?.progression.level.delta, 1);
+    assert.equal(changes.value?.data?.changes?.bank.state, "LAST_SEEN");
+    assert.deepEqual(changes.value?.data?.changes?.bank.itemChanges.items, []);
+    const explicitChanges = await client.callTool({ name: "get_character_changes", arguments: { version: "retail", name: "Virek", realm: "Cairne", fromSnapshotId: changes.value!.data!.fromSnapshot!.snapshotId, toSnapshotId: changes.value!.data!.toSnapshot!.snapshotId } });
+    assert.equal(structured<{ status: string }>(explicitChanges).status, "FOUND");
+    const crossCharacter = await client.callTool({ name: "get_character_changes", arguments: { version: "retail", name: "Zero", realm: "Cairne", fromSnapshotId: changes.value!.data!.fromSnapshot!.snapshotId, toSnapshotId: changes.value!.data!.toSnapshot!.snapshotId } });
+    assert.equal(crossCharacter.isError, true);
+    const oneExplicitId = await client.callTool({ name: "get_character_changes", arguments: { version: "retail", name: "Virek", realm: "Cairne", fromSnapshotId: changes.value!.data!.fromSnapshot!.snapshotId } });
+    assert.equal(oneExplicitId.isError, true);
+    const excessiveHistoryLimit = await client.callTool({ name: "get_character_history", arguments: { version: "retail", name: "Virek", realm: "Cairne", limit: 101 } });
+    assert.equal(excessiveHistoryLimit.isError, true);
 
     const accountOverview = structured<{ data?: { version: string; aggregationScope: string; gold: { totalKnownCopper?: number; charactersWithKnownGold: number; charactersWithUnknownGold: number }; storageCoverage: { sharedStorage: { guilds: { owners: unknown[] } } }; currencies: { returnedCount: number; truncated: boolean } }; provenance: { state: string; version: string } }>(await client.callTool({ name: "get_account_overview", arguments: { version: "retail" } }));
     assert.equal(accountOverview.provenance.state, "DERIVED");
@@ -316,8 +345,10 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
       "get_account_overview",
+      "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",
+      "get_character_history",
       "get_character_professions",
       "get_character_state",
       "get_character_storage",

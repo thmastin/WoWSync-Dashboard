@@ -132,6 +132,18 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterState(query)));
+  server.registerTool("get_character_history", {
+    title: "Get recent character snapshot history",
+    description: "Returns a compact newest-first timeline for one explicit-version character. Defaults to 20 snapshots, caps at 100, and uses offset paging; raw snapshots are never returned.",
+    inputSchema: z.object({ ...characterQuery.shape, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterSnapshotHistory(query)));
+  server.registerTool("get_character_changes", {
+    title: "Compare character snapshots",
+    description: "Compares previous to latest for one explicit-version character, or compares two snapshot IDs belonging to that character. Returns bounded semantic changes and explicit UNKNOWN/LAST_SEEN/non-comparable section states.",
+    inputSchema: z.object({ ...characterQuery.shape, fromSnapshotId: z.number().int().positive().optional(), toSnapshotId: z.number().int().positive().optional() }).strict().refine((query) => (query.fromSnapshotId === undefined) === (query.toSnapshotId === undefined), "fromSnapshotId and toSnapshotId must be supplied together."),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterChanges(query)));
   server.registerTool("get_account_overview", {
     title: "Get version-scoped account overview and economy",
     description: "Returns bounded version-scoped account facts, known gold and playtime, progression, profession/currency summaries, and storage coverage. Unknown values remain unknown; Warband and guild storage are not counted as character wealth.",

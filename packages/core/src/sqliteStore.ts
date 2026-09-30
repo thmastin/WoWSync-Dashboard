@@ -833,6 +833,23 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return row ? this.resolveCurrencies(row) : undefined;
   }
 
+  getCharacterCurrenciesForSnapshot(identityKey: string, snapshotId: number): CharacterCurrencies | undefined {
+    const character = one<CharacterRow>(this.stmts.findCharacterByKey, identityKey);
+    if (!character) return undefined;
+    const snapshot = one<SnapshotRow>(this.stmts.snapshotById, snapshotId);
+    if (!snapshot || snapshot.character_id !== character.id) return undefined;
+    const section = one<CurrencySectionRow>(this.stmts.currencySectionForSnapshot, snapshotId);
+    const pick = section
+      ? pickCurrencySection(snapshotId, [{ ...section, generated_at: snapshot.generated_at, imported_at: snapshot.imported_at }].map(toCurrencySectionMeta))
+      : undefined;
+    const entries = pick ? many<CurrencyRow>(this.stmts.currenciesForSnapshot, snapshotId).map(toCurrencyValues) : [];
+    return characterCurrenciesView(
+      { identityKey: character.identity_key, name: character.name, realm: character.realm, version: character.version as VersionOrUnknown },
+      pick,
+      entries,
+    );
+  }
+
   listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies {
     const rows = many<CharacterRow>(this.stmts.charactersByVersion, version);
     return buildAccountCurrencies(version, rows.map((row) => this.resolveCurrencies(row)));
@@ -1295,6 +1312,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
 
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
     return this.store.getCharacterCurrencies(identityKey);
+  }
+  getCharacterCurrenciesForSnapshot(identityKey: string, snapshotId: number): CharacterCurrencies | undefined {
+    return this.store.getCharacterCurrenciesForSnapshot(identityKey, snapshotId);
   }
   listVersionCurrencies(version: VersionOrUnknown): AccountCurrencies {
     return this.store.listVersionCurrencies(version);

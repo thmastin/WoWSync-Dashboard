@@ -100,10 +100,10 @@ test("snapshot history is compact metadata and never leaks raw export text", () 
     assert.equal(result.status, "FOUND");
     if (result.status === "FOUND") {
       const history = result.value.data;
-      assert.equal(result.value.provenance.state, "OBSERVED");
-      assert.equal(history?.[0]?.moneyCopper, 123);
-      assert.equal("parsed" in (history?.[0] ?? {}), false);
-      assert.equal("raw" in (history?.[0] ?? {}), false);
+      assert.equal(result.value.provenance.state, "DERIVED");
+      assert.equal(history?.items[0]?.moneyCopper, 123);
+      assert.equal("parsed" in (history?.items[0] ?? {}), false);
+      assert.equal("raw" in (history?.items[0] ?? {}), false);
     }
   } finally { store.close(); }
 });

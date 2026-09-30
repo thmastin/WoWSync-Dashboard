@@ -94,6 +94,8 @@ imports may update the database.
 | `list_characters` | List compact character summaries for one required version. |
 | `get_character_summary` | Resolve one character and return its deterministic summary. |
 | `get_character_state` | Return bounded current character state with section-level provenance. |
+| `get_character_history` | Return a compact, newest-first paged snapshot timeline for one character. |
+| `get_character_changes` | Compare the previous/latest snapshots or two explicit snapshots for one character. |
 | `get_account_overview` | Return bounded version-scoped account/economy facts, currencies and storage coverage. |
 | `get_character_equipment` | Return latest-known slot equipment with provenance. |
 | `get_character_professions` | Return captured profession observations and their provenance. |
@@ -129,6 +131,30 @@ zero. Warband and guild observations are reported separately from character weal
 `LAST_SEEN` includes an explicit historical warning and is never represented as live.
 The account overview reports shared storage coverage and freshness without assigning
 market values to stored assets.
+
+`get_character_history` requires `version` and `name`, accepts optional `realm`,
+`offset`, and `limit`, defaults to 20 entries, and caps each page at 100. Entries
+are newest first and contain snapshot IDs, generated/observed/imported timestamps,
+freshness, compact character facts, and section states. They never include parsed
+snapshot data, inventories, or full equipment payloads.
+
+`get_character_changes` requires `version` and `name`, accepts optional `realm`,
+and accepts `fromSnapshotId` and `toSnapshotId` only as a pair. Without IDs it
+compares previous to latest. Explicit IDs must both belong to the resolved
+character in the requested version. Semantic change lists cap equipment at 20,
+bag and character-bank item deltas at 25 each, professions at 20, and currencies
+at 20. Each bounded list reports returned count, total count, and truncation.
+The comparison state is `COMPARED`, `PARTIAL`, `UNKNOWN`, `LAST_SEEN`, or
+`NOT_COMPARABLE`; a character with fewer than two snapshots reports
+`INSUFFICIENT_HISTORY`. Numeric zero remains distinct from a missing value.
+Additions/removals require complete observed evidence on both sides. UNKNOWN,
+partial observations, missing captured fields, and LAST_SEEN sections do not
+produce fabricated removals or deltas. A stale bank is explicitly historical;
+when either bank observation is LAST_SEEN, bank item changes are withheld.
+Currencies compare only matching IDs with known quantities and unchanged
+ownership scope in two observed lists; deltas label ACCOUNT, CHARACTER, or
+UNKNOWN scope. Unlisted currencies are not treated as zero or removed. Independent
+Warband and guild journal observations are outside character snapshot diffs.
 
 ## Validate locally
 

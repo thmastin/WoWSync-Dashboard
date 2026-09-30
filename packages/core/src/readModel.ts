@@ -11,6 +11,8 @@ import { itemIdFromItemRef, type ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedObservationView, SharedOwnerView } from "./sharedStorageApi.ts";
 import type { StorageLocation, InventoryAggregateEntry } from "./accountFacts.ts";
 import { classifyFreshness } from "./freshness.ts";
+import { snapshotObservedAt } from "./chronology.ts";
+import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -33,7 +35,7 @@ export type CharacterResolution<T> =
   | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> };
 
 export interface CharacterQuery { version: VersionOrUnknown; name: string; realm?: string }
-export interface HistoryQuery extends CharacterQuery { limit?: number }
+export interface HistoryQuery extends CharacterQuery { offset?: number; limit?: number }
 /**
  * Deliberately compact history record. Raw export text remains an import
  * concern and is not exposed through this consumer-facing read surface.
@@ -41,12 +43,42 @@ export interface HistoryQuery extends CharacterQuery { limit?: number }
 export interface CharacterSnapshotHistoryRecord {
   snapshotId: number;
   generatedAt?: number;
+  observedAt: number;
   importedAt: number;
+  freshness: "recent" | "stale" | "unknown";
   level?: number;
   moneyCopper?: number;
   playedSeconds?: number;
+  xp?: number;
+  xpMax?: number;
   zone?: string;
   subzone?: string;
+  equipmentState: SectionState;
+  bagsState: SectionState;
+  bankState: SectionState;
+  professionsState: SectionState;
+  currencyState: "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
+}
+export interface CharacterChangesQuery extends CharacterQuery { fromSnapshotId?: number; toSnapshotId?: number }
+export type ChangeComparisonState = "COMPARED" | "PARTIAL" | "UNKNOWN" | "LAST_SEEN" | "NOT_COMPARABLE";
+export interface ChangeList<T> { items: T[]; returnedCount: number; totalCount: number; truncated: boolean }
+export interface SectionChangeList<T> { state: ChangeComparisonState; fromState: SectionState; toState: SectionState; reason?: string; changes: ChangeList<T> }
+export interface NumericChange { state: ChangeComparisonState; fromState: SectionState; toState: SectionState; from?: number; to?: number; delta?: number; reason?: string }
+export interface CharacterChangesRead {
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
+  comparisonState: "COMPARED" | "INSUFFICIENT_HISTORY";
+  fromSnapshot?: { snapshotId: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  toSnapshot?: { snapshotId: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  reason?: string;
+  changes?: {
+    progression: { level: NumericChange; xp: NumericChange; xpMax: NumericChange; location: { state: ChangeComparisonState; fromState: SectionState; toState: SectionState; fromZone?: string; toZone?: string; fromSubzone?: string; toSubzone?: string; changed?: boolean; reason?: string } };
+    economy: { goldCopper: NumericChange; playedSeconds: NumericChange; levelPlayedSeconds: NumericChange };
+    equipment: SectionChangeList<EquipmentDelta>;
+    bags: { state: ChangeComparisonState; fromState: SectionState; toState: SectionState; freeSlots: NumericChange; totalSlots: NumericChange; itemChanges: ChangeList<ItemDelta>; reason?: string };
+    bank: { state: ChangeComparisonState; fromState: SectionState; toState: SectionState; freeSlots: NumericChange; totalSlots: NumericChange; itemChanges: ChangeList<ItemDelta>; reason?: string };
+    professions: SectionChangeList<ProfessionDelta>;
+    currencies: SectionChangeList<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; fromQuantity: number; toQuantity: number; delta: number }>;
+  };
 }
 
 export interface BoundedPage<T> { items: T[]; offset: number; limit: number; totalCount: number; truncated: boolean }
@@ -114,6 +146,34 @@ function pageBounds(offset = 0, limit = 50): { offset: number; limit: number } {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError("offset must be a non-negative integer");
   if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("limit must be a positive integer");
   return { offset, limit: Math.min(limit, 100) };
+}
+function changeList<T>(items: readonly T[], limit: number): ChangeList<T> {
+  const selected = items.slice(0, limit);
+  return { items: [...selected], returnedCount: selected.length, totalCount: items.length, truncated: selected.length < items.length };
+}
+function sectionComparison(from: SectionState, to: SectionState): { state: ChangeComparisonState; reason?: string } {
+  if (from === "LAST_SEEN" || to === "LAST_SEEN") return { state: "LAST_SEEN", reason: "At least one section is a historical LAST_SEEN observation; changes are not inferred." };
+  if (from === "UNKNOWN" || to === "UNKNOWN") return { state: "UNKNOWN", reason: "At least one compared section is UNKNOWN; absence is not treated as removal." };
+  return { state: "COMPARED" };
+}
+function numericChange(from: number | undefined, to: number | undefined, fromState: SectionState, toState: SectionState): NumericChange {
+  const comparable = sectionComparison(fromState, toState);
+  if (comparable.state !== "COMPARED") return { state: comparable.state, fromState, toState, ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}), reason: comparable.reason };
+  if (from === undefined || to === undefined) return { state: "UNKNOWN", fromState, toState, ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}), reason: "A value is missing from one snapshot; it is not treated as zero." };
+  return { state: "COMPARED", fromState, toState, from, to, delta: to - from };
+}
+function inventoryComparison<T extends InventorySection>(from: T, to: T): { state: ChangeComparisonState; reason?: string } {
+  const base = sectionComparison(from.status.state, to.status.state);
+  if (base.state !== "COMPARED") return base;
+  if (from.status.completeness?.toLowerCase() !== "complete" || to.status.completeness?.toLowerCase() !== "complete") return { state: "NOT_COMPARABLE", reason: "Both inventory observations must have complete coverage before additions or removals can be inferred." };
+  if (from.items.some((item) => item.qty === undefined) || to.items.some((item) => item.qty === undefined)) return { state: "NOT_COMPARABLE", reason: "At least one item quantity is unknown; no inventory quantity changes are inferred." };
+  return { state: "COMPARED" };
+}
+function fullSectionComparison(from: SectionState, to: SectionState, fromCompleteness?: string, toCompleteness?: string): { state: ChangeComparisonState; reason?: string } {
+  const base = sectionComparison(from, to);
+  if (base.state !== "COMPARED") return base;
+  if (fromCompleteness?.toLowerCase() !== "complete" || toCompleteness?.toLowerCase() !== "complete") return { state: "NOT_COMPARABLE", reason: "Both section observations must report complete coverage before additions or removals can be inferred." };
+  return { state: "COMPARED" };
 }
 function metadataByItemRef(store: SnapshotReadStore, version: VersionOrUnknown, refs: readonly (string | undefined)[]) {
   const ids = [...new Set(refs.map((ref) => itemIdFromItemRef(ref)).filter((id): id is number => id !== undefined))];
@@ -279,23 +339,119 @@ export class DashboardReadModel {
     });
   }
 
-  getCharacterSnapshotHistory(query: HistoryQuery): CharacterResolution<ReadValue<CharacterSnapshotHistoryRecord[]>> {
+  getCharacterSnapshotHistory(query: HistoryQuery): CharacterResolution<ReadValue<BoundedPage<CharacterSnapshotHistoryRecord>>> {
     return this.resolve(query, (character) => {
-      const limit = Math.min(Math.max(query.limit ?? 20, 1), 100);
-      const snapshots = this.store.listSnapshots(character.identityKey).slice(0, limit);
-      if (snapshots.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshots exist for this character." } };
-      const newest = snapshots[0];
+      const bounds = pageBounds(query.offset ?? 0, query.limit ?? 20);
+      const allSnapshots = this.store.listSnapshots(character.identityKey);
+      if (allSnapshots.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshots exist for this character." } };
+      const snapshots = allSnapshots.slice(bounds.offset, bounds.offset + bounds.limit);
+      const newest = allSnapshots[0];
       const history = snapshots.map((snapshot) => ({
         snapshotId: snapshot.id,
         generatedAt: snapshot.generatedAt,
+        observedAt: snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt),
         importedAt: snapshot.importedAt,
+        freshness: classifyFreshness(snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), this.now()),
         level: snapshot.parsed.character.level,
         moneyCopper: snapshot.parsed.character.moneyCopper,
         playedSeconds: snapshot.parsed.character.playedSeconds,
+        xp: snapshot.parsed.character.xp,
+        xpMax: snapshot.parsed.character.xpMax,
         zone: snapshot.parsed.location.zone,
         subzone: snapshot.parsed.location.subzone,
+        equipmentState: snapshot.parsed.equipment.status.state,
+        bagsState: snapshot.parsed.bags.status.state,
+        bankState: snapshot.parsed.bank.status.state,
+        professionsState: snapshot.parsed.professions.status.state,
+        currencyState: this.store.getCharacterCurrenciesForSnapshot(character.identityKey, snapshot.id)?.state ?? "UNKNOWN" as const,
       }));
-      return { data: history, provenance: { state: "OBSERVED", version: query.version, identityKey: character.identityKey, observedAt: newest.generatedAt ?? newest.importedAt, importedAt: newest.importedAt, snapshotId: newest.id, source: "WOWSYNC compact snapshot history" } };
+      return { data: { items: history, offset: bounds.offset, limit: bounds.limit, totalCount: allSnapshots.length, truncated: bounds.offset + history.length < allSnapshots.length }, provenance: { state: "DERIVED", version: query.version, identityKey: character.identityKey, observedAt: snapshotObservedAt(newest.generatedAt, newest.importedAt), importedAt: newest.importedAt, snapshotId: newest.id, freshness: classifyFreshness(snapshotObservedAt(newest.generatedAt, newest.importedAt), this.now()), source: "bounded compact character snapshot timeline" } };
+    });
+  }
+
+  /** Compare the latest/previous snapshots, or two explicitly selected snapshots belonging to this character. */
+  getCharacterChanges(query: CharacterChangesQuery): CharacterResolution<ReadValue<CharacterChangesRead>> {
+    if ((query.fromSnapshotId === undefined) !== (query.toSnapshotId === undefined)) throw new TypeError("fromSnapshotId and toSnapshotId must be supplied together.");
+    return this.resolve(query, (character) => {
+      const snapshots = this.store.listSnapshots(character.identityKey);
+      let from: StoredSnapshot | undefined;
+      let to: StoredSnapshot | undefined;
+      if (query.fromSnapshotId !== undefined && query.toSnapshotId !== undefined) {
+        from = snapshots.find((snapshot) => snapshot.id === query.fromSnapshotId);
+        to = snapshots.find((snapshot) => snapshot.id === query.toSnapshotId);
+        if (!from || !to) throw new TypeError("Both snapshot IDs must belong to the resolved character in the requested WoW version.");
+      } else {
+        to = snapshots[0];
+        from = snapshots[1];
+      }
+      const identity = { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm };
+      if (!from || !to) return { data: { identity, comparisonState: "INSUFFICIENT_HISTORY", reason: "At least two snapshots are required to compare character changes." }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, ...(to ? { observedAt: snapshotObservedAt(to.generatedAt, to.importedAt), importedAt: to.importedAt, snapshotId: to.id, freshness: classifyFreshness(snapshotObservedAt(to.generatedAt, to.importedAt), this.now()) } : {}), reason: "This character does not have two selectable snapshots." } };
+
+      const fromAt = snapshotObservedAt(from.generatedAt, from.importedAt);
+      const toAt = snapshotObservedAt(to.generatedAt, to.importedAt);
+      const diff = diffSnapshots(from.parsed, to.parsed);
+      const timestamp = (snapshot: StoredSnapshot) => {
+        const observedAt = snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+        return { snapshotId: snapshot.id, observedAt, importedAt: snapshot.importedAt, freshness: classifyFreshness(observedAt, this.now()) };
+      };
+      const itemChanges = (storage: "bags" | "bank") => {
+        const before = from!.parsed[storage];
+        const after = to!.parsed[storage];
+        const comparison = inventoryComparison(before, after);
+        const changes = comparison.state === "COMPARED" ? diff[storage === "bags" ? "bagsItems" : "bankItems"] : [];
+        return { state: comparison.state, fromState: before.status.state, toState: after.status.state, freeSlots: numericChange(before.freeSlots, after.freeSlots, before.status.state, after.status.state), totalSlots: numericChange(before.totalSlots, after.totalSlots, before.status.state, after.status.state), itemChanges: changeList(changes, 25), ...(comparison.reason ? { reason: comparison.reason } : {}) };
+      };
+      const equipmentComparison = fullSectionComparison(from.parsed.equipment.status.state, to.parsed.equipment.status.state, from.parsed.equipment.status.completeness, to.parsed.equipment.status.completeness);
+      const equipmentChanges = equipmentComparison.state === "COMPARED" ? diff.equipment : [];
+      const professionComparison = fullSectionComparison(from.parsed.professions.status.state, to.parsed.professions.status.state, from.parsed.professions.status.completeness, to.parsed.professions.status.completeness);
+      const professionChanges = professionComparison.state === "COMPARED" ? diff.professions : [];
+      const locationComparison = sectionComparison(from.parsed.location.status.state, to.parsed.location.status.state);
+      const currenciesFrom = this.store.getCharacterCurrenciesForSnapshot(character.identityKey, from.id);
+      const currenciesTo = this.store.getCharacterCurrenciesForSnapshot(character.identityKey, to.id);
+      const currencyFromState: SectionState = currenciesFrom?.state ?? "UNKNOWN";
+      const currencyToState: SectionState = currenciesTo?.state ?? "UNKNOWN";
+      const currencyBase = sectionComparison(currencyFromState, currencyToState);
+      let currencyState = currencyBase.state;
+      let currencyReason = currencyBase.reason;
+      const currencyChanges: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; fromQuantity: number; toQuantity: number; delta: number }> = [];
+      if (currencyState === "COMPARED" && currenciesFrom?.currencies && currenciesTo?.currencies) {
+        const fromMap = new Map(currenciesFrom.currencies.map((entry) => [entry.currencyID, entry]));
+        const toMap = new Map(currenciesTo.currencies.map((entry) => [entry.currencyID, entry]));
+        const commonIds = [...fromMap.keys()].filter((id) => toMap.has(id));
+        const unmatched = fromMap.size !== toMap.size || [...fromMap.keys()].some((id) => !toMap.has(id));
+      const ownershipChanged = commonIds.some((id) => fromMap.get(id)?.isAccountWide !== toMap.get(id)?.isAccountWide);
+      const missingQuantity = commonIds.some((id) => fromMap.get(id)?.quantity === null || toMap.get(id)?.quantity === null);
+        for (const id of commonIds) {
+          const before = fromMap.get(id)!;
+          const after = toMap.get(id)!;
+          if (before.quantity === null || after.quantity === null || before.quantity === after.quantity || before.isAccountWide !== after.isAccountWide) continue;
+          currencyChanges.push({ currencyID: id, name: after.name ?? before.name, scope: before.isAccountWide === true ? "ACCOUNT" : before.isAccountWide === false ? "CHARACTER" : "UNKNOWN", fromQuantity: before.quantity, toQuantity: after.quantity, delta: after.quantity - before.quantity });
+        }
+        currencyChanges.sort((a, b) => a.currencyID - b.currencyID);
+        if (unmatched || missingQuantity || ownershipChanged) {
+          currencyState = "PARTIAL";
+          currencyReason = "Only currency IDs present in both observed lists with known quantities and unchanged ownership scope are compared; missing/listed status is not treated as zero or removal.";
+        }
+      }
+      const changes: CharacterChangesRead["changes"] = {
+        progression: {
+          level: numericChange(from.parsed.character.level, to.parsed.character.level, from.parsed.character.status.state, to.parsed.character.status.state),
+          xp: numericChange(from.parsed.character.xp, to.parsed.character.xp, from.parsed.character.status.state, to.parsed.character.status.state),
+          xpMax: numericChange(from.parsed.character.xpMax, to.parsed.character.xpMax, from.parsed.character.status.state, to.parsed.character.status.state),
+          location: { state: locationComparison.state, fromState: from.parsed.location.status.state, toState: to.parsed.location.status.state, ...(locationComparison.state === "COMPARED" ? { fromZone: from.parsed.location.zone, toZone: to.parsed.location.zone, fromSubzone: from.parsed.location.subzone, toSubzone: to.parsed.location.subzone, changed: diff.location.changed } : {}), ...(locationComparison.reason ? { reason: locationComparison.reason } : {}) },
+        },
+        economy: {
+          goldCopper: numericChange(from.parsed.character.moneyCopper, to.parsed.character.moneyCopper, from.parsed.character.status.state, to.parsed.character.status.state),
+          playedSeconds: numericChange(from.parsed.character.playedSeconds, to.parsed.character.playedSeconds, from.parsed.character.status.state, to.parsed.character.status.state),
+          levelPlayedSeconds: numericChange(from.parsed.character.levelPlayedSeconds, to.parsed.character.levelPlayedSeconds, from.parsed.character.status.state, to.parsed.character.status.state),
+        },
+        equipment: { state: equipmentComparison.state, fromState: from.parsed.equipment.status.state, toState: to.parsed.equipment.status.state, changes: changeList(equipmentChanges, 20), ...(equipmentComparison.reason ? { reason: equipmentComparison.reason } : {}) },
+        bags: itemChanges("bags"),
+        bank: itemChanges("bank"),
+        professions: { state: professionComparison.state, fromState: from.parsed.professions.status.state, toState: to.parsed.professions.status.state, changes: changeList(professionChanges, 20), ...(professionComparison.reason ? { reason: professionComparison.reason } : {}) },
+        currencies: { state: currencyState, fromState: currencyFromState, toState: currencyToState, changes: changeList(currencyChanges, 20), ...(currencyReason ? { reason: currencyReason } : {}) },
+      };
+      return { data: { identity, comparisonState: "COMPARED", fromSnapshot: timestamp(from), toSnapshot: timestamp(to), changes }, provenance: { state: "DERIVED", version: query.version, identityKey: character.identityKey, observedAt: toAt, importedAt: to.importedAt, snapshotId: to.id, freshness: classifyFreshness(toAt, this.now()), source: "diffSnapshots semantic comparison of two character snapshots", derivedFrom: [String(from.id), String(to.id)], warning: "Only comparable captured observations produce deltas. Shared Warband and guild journal observations are independent and are not included." } };
     });
   }
 
