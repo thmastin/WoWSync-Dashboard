@@ -62,8 +62,11 @@ Tunnel runtime key (Tunnels Read + Use), and stores each credential separately
 with current-user Windows DPAPI under `%LOCALAPPDATA%\WoWSync`. Neither value
 is printed, passed in process arguments, or stored in the repository. The MCP
 profile at `%APPDATA%\tunnel-client\wowsync.yaml` and its read-only database
-path are reused unchanged. The installer registers a Task Scheduler task for
-Windows user sign-in and starts it hidden.
+path are reused unchanged. The installer registers a hidden Task Scheduler
+task for Windows user sign-in. The task runs a Windows Script Host launcher,
+which starts the PowerShell supervisor without opening a console window.
+`-Mode RepairStartup` refreshes the launcher and task definition without
+asking for credentials again.
 
 After setup, the background supervisor maintains three processes: the private
 SSH forward, the SavedVariables watcher, and the existing Secure MCP Tunnel

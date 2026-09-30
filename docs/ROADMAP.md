@@ -182,15 +182,14 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
   implemented. The persistent Windows Task Scheduler supervisor, hidden SSH forwards, DPAPI credential storage, multi-file service discovery,
   durable status file, and Omarchy systemd DEV operator are implemented in this infrastructure slice. The manual Windows → Omarchy DEV
   capture path has already been proven; do not spend another validation cycle re-proving that basic transport.
-  - **Status: awaiting real Windows setup/reboot/outage/browser validation and a normal ChatGPT MCP invocation after startup changes.** Use
-    [WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md) for the exact acceptance steps. Local automated coverage verifies restart catch-up,
-    new product/account discovery, durable outbox status, credential-free observability, and receiver probe behavior.
+  - **Windows/Omarchy DEV runtime infrastructure acceptance complete (2026-09-30).** Sign-in startup, hidden background runtime,
+    credential-free status, Dashboard and capture receiver connectivity passed. The existing MCP contract was accepted separately in
+    a normal ChatGPT conversation; no MCP contract changes were made here. See [WINDOWS_CAPTURE_SETUP.md](WINDOWS_CAPTURE_SETUP.md).
   - The existing read-only MCP contract remains 11 tools and its Windows Secure MCP Tunnel profile/database path are reused unchanged.
-    Local protocol tests are not evidence that normal ChatGPT can invoke the external tunnel; perform the documented real ChatGPT acceptance.
+    The real ChatGPT invocation was accepted separately; local protocol tests are not used as a substitute for that external check.
   - Delivery remains tied to WoW saving SavedVariables (`/reload`, logout or exit); this watcher cannot force a save. Any GearExport in-memory
     auto-refresh remains separate future addon work and requires explicit authorization in GearExport's repository.
   - The original foreground CLI feasibility checkpoint is preserved in [DESKTOP_COMPANION_FEASIBILITY.md](DESKTOP_COMPANION_FEASIBILITY.md).
-    A tray/Electron client is not part of this infrastructure slice.
   - Reuse, do not duplicate: `POST /api/import`, idempotent imports, observation-time
     ordering, transactional persistence, `parseWowSyncExport`,
     `SnapshotStore.importSnapshot`, `ImportResult` semantics. The companion must not
@@ -198,6 +197,7 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
   - Addon-side schema already anticipates a read-only SavedVariables companion with a
     deterministic trigger engine, optional LLM layer, and notifications (GearExport
     `WOWSYNC_SCHEMA.md`, "Read-only external companion").
+
   - Remaining feasibility questions:
     - `WoWSyncDB.characters[guid].latestExport` exists after `/wowsync`, but SavedVariables
       normally reach disk only on logout/reload. A plain file watcher may **not** deliver
@@ -215,6 +215,10 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 ---
 
 ## Later
+
+- [ ] **WoWSync Windows System-Tray / Taskbar Status UI.** Add a small notification-area icon over the existing background runtime, with
+  healthy, receiver unavailable/queueing, backlog draining, and error states; concise status plus suitable start/restart/status actions; and
+  no credential exposure. This is UX polish after infrastructure acceptance and must not delay feature development on Omarchy.
 
 ### 9. Dashboard / UX follow-ups
 

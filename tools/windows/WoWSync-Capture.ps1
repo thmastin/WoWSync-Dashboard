@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Install', 'Run', 'Start', 'Stop', 'Restart', 'Status')]
+    [ValidateSet('Install', 'RepairStartup', 'Run', 'Start', 'Stop', 'Restart', 'Status')]
     [string]$Mode = 'Status',
     [string]$WowRoot,
     [string]$SshTarget,
@@ -93,14 +93,17 @@ function Install-Capture {
     if (-not (Test-Path -LiteralPath $mcpProfile -PathType Leaf)) { throw 'The existing wowsync Secure MCP Tunnel profile is missing; setup will not replace or recreate it.' }
     if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'packages/mcp/src/index.ts') -PathType Leaf)) { throw 'The existing read-only WoWSync MCP runtime is missing from this checkout.' }
     $remoteCommand = 'sudo sh -c ''grep -qx WOWSYNC_CAPTURE_TARGET=DEV /etc/wowsync/dev/capture.env && sed -n s/^WOWSYNC_CAPTURE_TOKEN=//p /etc/wowsync/dev/capture.env'''
+    Write-Host 'Fetching the DEV capture token over SSH. If Omarchy requires sudo authentication, enter the Omarchy sudo password at the cursor; input is not echoed. Token output stays hidden.'
     $tokenOutput = & $ssh -tt -o LogLevel=ERROR $SshTarget $remoteCommand
     $sshExit = $LASTEXITCODE
-    $tokenValue = @($tokenOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^[0-9a-f]{64}$' } | Select-Object -Last 1)
-    if ($sshExit -ne 0 -or $tokenValue.Count -ne 1) { throw 'Could not retrieve the DEV capture credential over SSH. Check SSH access and the remote sudo prompt; the value was not displayed.' }
+    $tokenText = ($tokenOutput -join "`n")
+    $tokenValue = @([regex]::Matches($tokenText, '(?i)[0-9a-f]{64}') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    if ($sshExit -ne 0 -or $tokenValue.Count -ne 1) { throw "DEV token retrieval over SSH failed (ssh exit $sshExit; captured output lines: $(@($tokenOutput).Count); distinct 64-character hex candidates: $($tokenValue.Count)). No token or remote output was displayed." }
     $secureToken = ConvertTo-SecureString $tokenValue[0] -AsPlainText -Force
-    Remove-Variable tokenOutput, tokenValue
+    Remove-Variable tokenOutput, tokenText, tokenValue
     if ($secureToken.Length -lt 32) { throw 'The DEV capture token must be at least 32 characters.' }
-    $secureMcpKey = Read-Host 'Least-privilege Secure MCP Tunnel runtime key (Tunnels Read + Use); stored with current-user DPAPI' -AsSecureString
+    Write-Host 'Next prompt: enter the existing Secure MCP Tunnel runtime key with Tunnels Read + Use. Typed characters will be hidden; the key is stored with current-user DPAPI.'
+    $secureMcpKey = Read-Host 'Secure MCP Tunnel runtime key' -AsSecureString
     if ($secureMcpKey.Length -lt 32) { throw 'The Secure MCP Tunnel runtime key is too short.' }
 
     New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
@@ -122,19 +125,48 @@ function Install-Capture {
     }
     Write-JsonAtomic $ConfigPath $config
 
-    $installedScript = Join-Path $AppDir 'WoWSync-Capture.ps1'
-    Copy-Item -LiteralPath $PSCommandPath -Destination $installedScript -Force
-    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
-    $actionArgs = "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$installedScript`" -Mode Run"
-    $action = New-ScheduledTaskAction -Execute $powershell -Argument $actionArgs
-    $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Private DEV-only WoWSync capture, Dashboard and MCP tunnels.' -Force | Out-Null
+    Register-CaptureStartup
     Remove-Item -LiteralPath $StopPath -Force -ErrorAction SilentlyContinue
     Start-ScheduledTask -TaskName $TaskName
     Write-Output 'WoWSync DEV Runtime is installed and starting at Windows sign-in. Credentials are saved with current-user DPAPI; their values were not displayed.'
+}
+
+function Register-CaptureStartup {
+    $installedScript = Join-Path $AppDir 'WoWSync-Capture.ps1'
+    if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($installedScript)) {
+        Copy-Item -LiteralPath $PSCommandPath -Destination $installedScript -Force
+    }
+    $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    $launcher = Join-Path $AppDir 'WoWSync-StartHidden.vbs'
+    $command = '"{0}" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{1}" -Mode Run' -f $powershell, $installedScript
+    $escapedCommand = $command.Replace('"', '""')
+    $launcherContent = "Set shell = CreateObject(`"WScript.Shell`")`r`nshell.Run `"$escapedCommand`", 0, False`r`n"
+    Set-Content -LiteralPath $launcher -Value $launcherContent -Encoding ASCII
+    $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
+    $action = New-ScheduledTaskAction -Execute $wscript -Argument "//B //NoLogo `"$launcher`""
+    $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -Hidden
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Private DEV-only WoWSync capture, Dashboard and MCP tunnels.' -Force | Out-Null
+}
+
+function Repair-CaptureStartup {
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { throw 'WoWSync capture is not installed; no startup configuration was changed.' }
+    $current = Get-Supervisor
+    if ($current -and $current.state -eq 'running') {
+        New-Item -ItemType File -Path $StopPath -Force | Out-Null
+        $until = (Get-Date).AddSeconds(30)
+        do {
+            Start-Sleep -Milliseconds 500
+            $current = Get-Supervisor
+        } while ($current -and $current.state -eq 'running' -and (Get-Date) -lt $until)
+        if ($current -and $current.state -eq 'running') { throw 'The existing WoWSync supervisor did not stop; startup was not replaced.' }
+    }
+    Register-CaptureStartup
+    Remove-Item -LiteralPath $StopPath -Force -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskName $TaskName
+    Write-Output 'WoWSync DEV Runtime startup was updated to use a hidden Windows Script Host launcher and is starting.'
 }
 
 function Run-Supervisor {
@@ -223,12 +255,25 @@ function Stop-Capture {
 }
 
 function Show-CaptureStatus {
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $taskState = 'Not installed'
+    try {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if ($task) { $taskState = [string]$task.State }
+    } catch {
+        if ($_.Exception.Message -match 'access is denied|denied') { $taskState = 'State unavailable (access denied)' }
+    }
     $supervisor = Get-Supervisor
     $capture = Get-CaptureStatus
     $outbox = Join-Path $AppDir 'outbox'
     $pending = if (Test-Path -LiteralPath $outbox) { @(Get-ChildItem -LiteralPath $outbox -Filter '*.json' -File).Count } else { 0 }
-    $fresh = $capture -and ((Get-Date).ToUniversalTime() - [DateTime]$capture.heartbeatAt).TotalSeconds -lt 90
+    $supervisorFresh = $false
+    if ($supervisor -and $supervisor.heartbeatAt) {
+        try { $supervisorFresh = ((([DateTimeOffset]::UtcNow - [DateTimeOffset]$supervisor.heartbeatAt).TotalSeconds -ge 0) -and (([DateTimeOffset]::UtcNow - [DateTimeOffset]$supervisor.heartbeatAt).TotalSeconds -lt 90)) } catch { }
+    }
+    $captureFresh = $false
+    if ($capture -and $capture.heartbeatAt) {
+        try { $captureFresh = ((([DateTimeOffset]::UtcNow - [DateTimeOffset]$capture.heartbeatAt).TotalSeconds -ge 0) -and (([DateTimeOffset]::UtcNow - [DateTimeOffset]$capture.heartbeatAt).TotalSeconds -lt 90)) } catch { }
+    }
     $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
     $dashboardHttp = 'curl unavailable'
     $receiverHttp = 'curl unavailable'
@@ -243,20 +288,20 @@ function Show-CaptureStatus {
         } catch { $receiverHttp = 'unavailable' }
     }
     [pscustomobject]@{
-        Task = if ($task) { $task.State } else { 'Not installed' }
-        Supervisor = if ($supervisor -and $supervisor.state -eq 'running' -and $fresh) { 'Running' } else { 'Not healthy/stale' }
+        Task = $taskState
+        Supervisor = if ($supervisor -and $supervisor.state -eq 'running' -and $supervisorFresh) { 'Running' } else { 'Not healthy/stale' }
         Target = 'DEV'
-        SshTunnel = if ($supervisor) { [bool]$supervisor.tunnelRunning } else { $false }
-        Watcher = if ($supervisor) { [bool]$supervisor.watcherRunning -and [bool]$fresh } else { $false }
+        SshTunnel = if ($supervisor) { [bool]$supervisor.tunnelRunning -and [bool]$supervisorFresh } else { $false }
+        Watcher = if ($supervisor) { [bool]$supervisor.watcherRunning -and [bool]$supervisorFresh -and [bool]$captureFresh } else { $false }
         McpTunnel = if ($supervisor) { [bool]$supervisor.mcpTunnelRunning } else { $false }
         Dashboard = 'http://127.0.0.1:4174'
         DashboardHttp = $dashboardHttp
         CaptureReceiverHttp = $receiverHttp
-        LastSavedVariablesObservation = if ($capture) { $capture.lastSavedVariablesObservation }
-        LastAcknowledgement = if ($capture) { $capture.lastAcknowledgement }
+        LastSavedVariablesObservation = if ($capture) { $capture.lastSavedVariablesObservation } else { $null }
+        LastAcknowledgement = if ($capture) { $capture.lastAcknowledgement } else { $null }
         PendingSpoolCount = $pending
         Connectivity = if ($capture) { $capture.connectivity } else { 'unknown' }
-        LastError = if ($capture) { $capture.lastError }
+        LastError = if ($capture) { $capture.lastError } else { $null }
         DrainingBacklog = if ($capture) { [bool]$capture.drainingBacklog }
     } | Format-List
 }
@@ -264,6 +309,7 @@ function Show-CaptureStatus {
 New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
 switch ($Mode) {
     'Install' { Install-Capture }
+    'RepairStartup' { Repair-CaptureStartup }
     'Run' { Run-Supervisor }
     'Start' {
         Remove-Item -LiteralPath $StopPath -Force -ErrorAction SilentlyContinue
