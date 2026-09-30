@@ -160,6 +160,31 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     });
   });
 
+  server.registerTool("search_items", {
+    title: "Search observed character items",
+    description: "Searches latest-known observed character bags and banks in one explicit version. Shared storage is separate. Results are bounded and include known UNKNOWN storage caveats and item metadata state.",
+    inputSchema: z.object({ version: versionSchema, query: z.string().trim().min(1).max(100), storage: z.enum(["bags", "bank"]).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.searchItems(query)));
+  server.registerTool("get_character_storage", {
+    title: "Get character bags or bank contents",
+    description: "Returns one character-owned storage section for an explicit version. Preserves OBSERVED, LAST_SEEN, UNKNOWN, known-empty state, and item metadata state.",
+    inputSchema: z.object({ ...characterQuery.shape, storage: z.enum(["bags", "bank"]), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getCharacterStorage(query)));
+  server.registerTool("get_shared_storage", {
+    title: "Get Warband or guild storage observations",
+    description: "Returns bounded Retail Warband or guild storage observations from the shared-storage journal. Preserves owner, accessibility, coverage, OBSERVED/LAST_SEEN carrier provenance, and observation freshness.",
+    inputSchema: z.object({ version: versionSchema, kind: z.enum(["warband", "guild"]), guildClubId: z.string().trim().min(1).max(128).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), ownerOffset: z.number().int().min(0).optional(), ownerLimit: z.number().int().min(1).max(20).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getSharedStorageContents(query)));
+  server.registerTool("get_item_metadata", {
+    title: "Get deterministic item metadata",
+    description: "Returns game-client-reported metadata facets for up to 100 base item IDs in one explicit version. KNOWN, UNKNOWN, and conflicting evidence remain distinct.",
+    inputSchema: z.object({ version: versionSchema, itemIds: z.array(z.number().int().positive()).min(1).max(100) }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getItemMetadata(query)));
+
   server.registerTool("get_profession_coverage", {
     title: "Get version-scoped profession coverage",
     description: "Returns deterministic account-level profession coverage and gaps for one explicit version. Its provenance is DERIVED from captured character state.",

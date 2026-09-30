@@ -164,6 +164,8 @@ export interface DeleteCharacterResult {
 export interface SnapshotReadStore {
   /** The character's Retail currencies as OBSERVED / LAST_SEEN / UNKNOWN (never zero). */
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined;
+  /** Resolved game-client metadata for requested base item ids in one version. Missing ids remain absent/UNKNOWN. */
+  getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[];
   /** The current state of every shared-storage owner, derived at read time. */
   projectSharedStorage(): SharedStorageProjection;
   listVersions(): VersionSummary[];

@@ -873,6 +873,23 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return buildItemMetadataViews(version, this.loadItemEvidence(version));
   }
 
+  getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[] {
+    if (version === UNKNOWN_VERSION || baseItemIds.length === 0) return [];
+    const wanted = [...new Set(baseItemIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
+    if (wanted.length > 100) throw new RangeError("At most 100 item IDs may be resolved at once");
+    if (wanted.length === 0) return [];
+    const rows = many<ItemEvidenceRow>(this.db.prepare(
+      `SELECT * FROM item_metadata_evidence WHERE game_version = ? AND base_item_id IN (${wanted.map(() => "?").join(",")}) ORDER BY base_item_id, facet, source, value`,
+    ), version, ...wanted);
+    const evidence: ItemFacetEvidence[] = rows.map((row) => {
+      if (!ITEM_FACETS.includes(row.facet as ItemFacetName) || !ITEM_METADATA_SOURCES.includes(row.source as ItemMetadataSource)) {
+        throw new Error(`Corrupt item metadata row for item ${row.base_item_id}: unknown facet or source`);
+      }
+      return { gameVersion: version as WowVersion, baseItemId: row.base_item_id, facet: row.facet as ItemFacetName, source: row.source as ItemMetadataSource, value: row.value, firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at, clientBuilds: JSON.parse(row.client_builds) as string[] };
+    });
+    return buildItemMetadataViews(version, evidence);
+  }
+
   /** The raw stored evidence for one game version (provenance included), ordered deterministically. */
   loadItemEvidence(version: WowVersion): ItemFacetEvidence[] {
     return many<ItemEvidenceRow>(this.stmts.itemEvidenceForVersion, version).map((row) => {
@@ -1278,6 +1295,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
 
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
     return this.store.getCharacterCurrencies(identityKey);
+  }
+  getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[] {
+    return this.store.getItemMetadata(version, baseItemIds);
   }
   projectSharedStorage(): SharedStorageProjection {
     return this.store.projectSharedStorage();

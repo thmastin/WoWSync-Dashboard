@@ -16,12 +16,15 @@ const entrypoint = path.join(packageRoot, "src", "index.ts");
 const now = 1_800_000_000;
 
 function retail(name: string, realm: string, professions = false) {
-  return buildWowSyncExport({
+  const exported = buildWowSyncExport({
     generatedAt: now,
     character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", level: 90 },
     equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: "item:1", name: "Observed Helm", itemLevel: 279 }] },
     professions: professions ? { entries: [{ name: "Engineering", skill: 100, maxSkill: 100 }, { name: "Alchemy", skill: 100, maxSkill: 100 }], retail: true } : undefined,
+    bags: { containers: [{ id: 0, capacity: 20, free: 19, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }] }] },
+    bank: { containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:888", name: "Observed Bank Item", qty: 1 }] }] },
   });
+  return exported.replace(/\n\[END\]$/, "\n\n[ITEM METADATA]\nbaseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n777\t7\t5\t1\t11\tyes\n\n[END]");
 }
 
 function structured<T>(result: { isError?: boolean; structuredContent?: unknown }): T {
@@ -51,6 +54,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" } }));
+    writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
+    writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
   } finally {
     writer.close();
   }
@@ -71,25 +76,29 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_currencies",
       "get_character_equipment",
       "get_character_professions",
+      "get_character_storage",
       "get_character_summary",
+      "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
       "get_research_section",
+      "get_shared_storage",
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "search_items",
       "search_research",
     ]);
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
-    assert.equal(tools.some((tool) => /sql|file|shell|command|storage|account_facts/i.test(tool.name)), false);
+    assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
 
     const listed = structured<{ version: string; totalCount: number; truncated: boolean }>(await client.callTool({ name: "list_characters", arguments: { version: "retail" } }));
     assert.equal(listed.version, "retail");
-    assert.equal(listed.totalCount, 2);
+    assert.equal(listed.totalCount, 3);
     assert.equal(listed.truncated, false);
 
     const summary = structured<{ status: string; value?: { provenance: { state: string; version: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
@@ -110,6 +119,32 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
 
     const wrongVersion = structured<{ status: string }>(await client.callTool({ name: "get_character_summary", arguments: { version: "classic-era", name: "Virek", realm: "Cairne" } }));
     assert.equal(wrongVersion.status, "NOT_FOUND");
+
+    const bag = structured<{ status: string; value?: { data?: { items?: Array<{ name: string }>; metadata?: Array<{ state: string }> }; provenance: { state: string } } }>(await client.callTool({ name: "get_character_storage", arguments: { version: "retail", name: "Virek", realm: "Cairne", storage: "bags" } }));
+    assert.equal(bag.status, "FOUND");
+    assert.equal(bag.value?.data?.items?.[0]?.name, "Observed Bag Item");
+    assert.equal(bag.value?.data?.metadata?.[0]?.state, "KNOWN");
+    const bank = structured<{ status: string; value?: { data?: { items?: Array<{ name: string }> }; provenance: { state: string } } }>(await client.callTool({ name: "get_character_storage", arguments: { version: "retail", name: "Virek", realm: "Cairne", storage: "bank" } }));
+    assert.equal(bank.status, "FOUND");
+    assert.equal(bank.value?.data?.items?.[0]?.name, "Observed Bank Item");
+    const itemSearch = structured<{ data?: { items: Array<{ item: { name: string } }> }; provenance: { version: string } }>(await client.callTool({ name: "search_items", arguments: { version: "retail", query: "Observed Bag Item", limit: 1 } }));
+    assert.equal(itemSearch.data?.items[0]?.item.name, "Observed Bag Item");
+    assert.equal(itemSearch.provenance.version, "retail");
+    const crossVersionSearch = structured<{ data?: { totalCount: number } }>(await client.callTool({ name: "search_items", arguments: { version: "classic-era", query: "Observed Bag Item" } }));
+    assert.equal(crossVersionSearch.data?.totalCount, 0);
+    const itemMetadata = structured<{ data?: Array<{ baseItemId: number; state: string; metadata?: { expansionId: { state: string }; craftingReagent: { state: string } } }> }>(await client.callTool({ name: "get_item_metadata", arguments: { version: "retail", itemIds: [777, 99999] } }));
+    assert.deepEqual(itemMetadata.data?.map((item) => item.state), ["KNOWN", "UNKNOWN"]);
+    assert.equal(itemMetadata.data?.[0]?.metadata?.expansionId.state, "KNOWN");
+    assert.equal(itemMetadata.data?.[0]?.metadata?.craftingReagent.state, "KNOWN");
+    const warband = structured<{ data?: { owners: Array<{ owner: { kind: string }; current?: { liveAtExport: boolean; provenance: { sources: Array<{ carrierState: string }> } | { } | undefined; content: { items: unknown[] } } }> }; provenance: { state: string } }>(await client.callTool({ name: "get_shared_storage", arguments: { version: "retail", kind: "warband", limit: 1 } }));
+    assert.equal(warband.provenance.state, "DERIVED");
+    assert.equal(warband.data?.owners[0]?.owner.kind, "warband");
+    assert.equal(warband.data?.owners[0]?.current?.liveAtExport, false);
+    const guild = structured<{ data?: { owners: Array<{ owner: { kind: string; guildClubId?: string }; current?: { coverage: { inaccessibleTabs: number[] }; provenance: { sources: Array<{ carrierState: string }> } } }> } }>(await client.callTool({ name: "get_shared_storage", arguments: { version: "retail", kind: "guild", limit: 1 } }));
+    assert.equal(guild.data?.owners[0]?.owner.kind, "guild");
+    assert.equal(typeof guild.data?.owners[0]?.owner.guildClubId, "string");
+    assert.deepEqual(guild.data?.owners[0]?.current?.coverage.inaccessibleTabs, [3]);
+    assert.equal(guild.data?.owners[0]?.current?.provenance.sources[0]?.carrierState, "OBSERVED");
 
     const coverage = structured<{ provenance: { state: string; derivedFrom?: string[] } }>(await client.callTool({ name: "get_profession_coverage", arguments: { version: "retail" } }));
     assert.equal(coverage.provenance.state, "DERIVED");
@@ -244,13 +279,17 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_currencies",
       "get_character_equipment",
       "get_character_professions",
+      "get_character_storage",
       "get_character_summary",
+      "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
       "get_research_section",
+      "get_shared_storage",
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "search_items",
       "search_research",
     ]);
   } finally {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
@@ -41,7 +42,7 @@ test("same-name realm matches are ambiguity, never a silent choice", () => {
 test("unknown sections remain UNKNOWN rather than empty and profession coverage is DERIVED", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
-    store.importSnapshot(buildWowSyncExport({ character: { name: "Ghost", realm: "Era", clientVersion: "1.15.9" }, equipment: { unknown: true }, professions: { unknown: true } }));
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Ghost", realm: "Era", clientVersion: "1.15.9" }, equipment: { unknown: true }, bags: { unknown: true }, professions: { unknown: true } }));
     const read = new DashboardReadModel(store, () => NOW);
     const equipment = read.getCharacterEquipment({ version: "classic-era", name: "Ghost", realm: "Era" });
     assert.equal(equipment.status, "FOUND");
@@ -49,9 +50,30 @@ test("unknown sections remain UNKNOWN rather than empty and profession coverage 
       assert.equal(equipment.value.provenance.state, "UNKNOWN");
       assert.equal(equipment.value.data, undefined);
     }
+    const bags = read.getCharacterStorage({ version: "classic-era", name: "Ghost", realm: "Era", storage: "bags" });
+    assert.equal(bags.status, "FOUND");
+    if (bags.status === "FOUND") {
+      assert.equal(bags.value.data?.sectionState, "UNKNOWN");
+      assert.equal(bags.value.data?.itemsKnownEmpty, false);
+      assert.equal(bags.value.data?.items, undefined);
+    }
     const coverage = read.getProfessionCoverage({ version: "classic-era" });
     assert.equal(coverage.provenance.state, "DERIVED");
     assert.ok(coverage.data?.coverage.every((entry) => entry.coverageStatus === "unknown"));
+  } finally { store.close(); }
+});
+
+test("observed-empty character storage remains distinct from UNKNOWN", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Empty", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { containers: [] } }));
+    const result = new DashboardReadModel(store, () => NOW).getCharacterStorage({ version: "retail", name: "Empty", realm: "Cairne", storage: "bags" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.provenance.state, "OBSERVED");
+      assert.equal(result.value.data?.itemsKnownEmpty, true);
+      assert.deepEqual(result.value.data?.items, []);
+    }
   } finally { store.close(); }
 });
 
@@ -108,5 +130,61 @@ test("uncaptured Renown is explicitly UNKNOWN and separate from research", () =>
       assert.equal(result.value.provenance.state, "UNKNOWN");
       assert.match(result.value.provenance.reason ?? "", /does not currently capture Renown/);
     }
+  } finally { store.close(); }
+});
+
+test("bounded item and character-storage reads preserve version, section state, and metadata evidence", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const captured = buildWowSyncExport({
+      generatedAt: NOW - 10,
+      character: { name: "Squashpot", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" },
+      bags: { containers: [{ id: 0, capacity: 20, free: 18, items: [{ itemRef: "item:12345", name: "Midnight Thread", qty: 2 }] }] },
+      bank: { containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:23456", name: "Moonlit Hide", qty: 1 }] }] },
+    }) .replace(/\n\[END\]$/, "") + "\n\n[ITEM METADATA]\nbaseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n12345\t7\t5\t1\t11\tyes\n\n[END]";
+    store.importSnapshot(captured);
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Squashpot", realm: "Era", clientVersion: "1.15.9" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:12345", name: "Old Thread", qty: 7 }] }] } }));
+    const read = new DashboardReadModel(store, () => NOW);
+    const bags = read.getCharacterStorage({ version: "retail", name: "Squashpot", realm: "Cairne", storage: "bags" });
+    assert.equal(bags.status, "FOUND");
+    if (bags.status === "FOUND") {
+      assert.equal(bags.value.provenance.state, "OBSERVED");
+      assert.equal(bags.value.data?.items?.[0]?.name, "Midnight Thread");
+      assert.equal(bags.value.data?.metadata[0]?.state, "KNOWN");
+      assert.equal(bags.value.data?.metadata[0]?.value?.expansion.state, "KNOWN");
+    }
+    const bank = read.getCharacterStorage({ version: "retail", name: "Squashpot", realm: "Cairne", storage: "bank" });
+    assert.equal(bank.status, "FOUND");
+    if (bank.status === "FOUND") assert.equal(bank.value.data?.items?.[0]?.name, "Moonlit Hide");
+    const retailSearch = read.searchItems({ version: "retail", query: "thread", limit: 1 });
+    assert.equal(retailSearch.data?.items[0]?.item.name, "Midnight Thread");
+    assert.equal(retailSearch.provenance.version, "retail");
+    assert.equal(read.searchItems({ version: "classic-era", query: "thread" }).data?.items[0]?.item.name, "Old Thread");
+    assert.deepEqual(read.getItemMetadata({ version: "retail", itemIds: [12345, 99999] }).data?.map((item) => item.state), ["KNOWN", "UNKNOWN"]);
+    assert.throws(() => read.searchItems({ version: "retail", query: "thread", offset: -1 }), /offset/);
+  } finally { store.close(); }
+});
+
+test("shared storage read slices preserve owner and historical carrier semantics", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const fixture = new URL("./fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url);
+    store.importSnapshot(readFileSync(fixture, "utf8"));
+    const read = new DashboardReadModel(store, () => NOW);
+    const warband = read.getSharedStorageContents({ version: "retail", kind: "warband", limit: 2 });
+    assert.equal(warband.provenance.state, "DERIVED");
+    assert.equal(warband.data?.owners[0]?.owner.kind, "warband");
+    assert.ok(warband.data?.owners[0]?.current?.content.truncated);
+    assert.equal(warband.data?.owners[0]?.current?.liveAtExport, false);
+    const guildFixture = new URL("./fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url);
+    store.importSnapshot(readFileSync(guildFixture, "utf8"));
+    const guild = read.getSharedStorageContents({ version: "retail", kind: "guild", limit: 1 });
+    assert.equal(guild.data?.owners[0]?.owner.kind, "guild");
+    if (guild.data?.owners[0]?.owner.kind === "guild") {
+      assert.equal(typeof guild.data.owners[0].owner.guildClubId, "string");
+      assert.deepEqual(guild.data.owners[0].current?.coverage.inaccessibleTabs, [3]);
+      assert.equal(guild.data.owners[0].current?.provenance.sources[0]?.carrierState, "OBSERVED");
+    }
+    assert.equal(read.getSharedStorageContents({ version: "classic-era", kind: "warband" }).provenance.state, "UNKNOWN");
   } finally { store.close(); }
 });
