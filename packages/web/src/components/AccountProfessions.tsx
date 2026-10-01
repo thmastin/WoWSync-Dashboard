@@ -126,6 +126,18 @@ export default function AccountProfessions({
       completeness: character.specialization?.completeness ?? "unknown", nodes: Array.isArray(tree.nodes) ? tree.nodes : [], currencies: Array.isArray(tier.currencies) ? tier.currencies : [],
     }))));
   });
+  const recipeObservations = isRetail ? scoped.professions.byCharacter.flatMap((character) => {
+    const scopes = character.recipeKnowledge?.data?.professions;
+    if (!Array.isArray(scopes)) return [];
+    return scopes.map((scope: any) => {
+      const recipes = Array.isArray(scope.recipes) ? scope.recipes : [];
+      const associated = recipes.filter((recipe: any) => Array.isArray(recipe.skillLineIDs) && recipe.skillLineIDs.includes(scope.skillLineID)).length;
+      return { identityKey: character.identityKey, characterName: character.name, scope, state: character.recipeKnowledge?.status ?? "UNKNOWN", total: recipes.length, associated,
+        learned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_TRUE").length,
+        unlearned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_FALSE").length,
+        unknown: recipes.filter((recipe: any) => recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE").length };
+    });
+  }) : [];
 
   return (
     <div className="professions">
@@ -226,6 +238,27 @@ export default function AccountProfessions({
                 })}</tbody>
               </table>
             </div>
+          )}
+        </section>
+      )}
+
+      {isRetail && (recipeObservations.length > 0 || !filterActive) && (
+        <section className="panel">
+          <h3>Observed recipe knowledge</h3>
+          <p className="muted small">Returned recipes only; the client has not established a complete recipe catalogue. No account-wide missing-recipe count is available.</p>
+          {recipeObservations.length === 0 ? <p className="muted">No profession recipe state has been observed yet.</p> : (
+            <div className="table-scroll"><table className="history-table professions-table">
+              <thead><tr><th>Character</th><th>Profession context</th><th>Observation</th><th>Known in context</th><th>Unlearned in context</th><th>Unknown in context</th><th>Coverage</th></tr></thead>
+              <tbody>{recipeObservations.filter((row) => matchesFilter(row.scope.professionName ?? row.scope.baseProfessionName ?? "", filter)).map((row) => (
+                <tr key={`${row.identityKey}:${row.scope.baseSkillLineID}:${row.scope.skillLineID}`}>
+                  <td><button type="button" className="roster-name-link profession-char-chip" onClick={() => onOpenCharacter(row.identityKey)}>{row.characterName}</button></td>
+                  <td>{row.scope.professionName ?? row.scope.baseProfessionName} <span className="muted small">({row.scope.skillLineID})</span></td>
+                  <td>{row.state === "LAST_SEEN" || row.scope.evidence === "LAST_SEEN" ? "LAST_SEEN" : row.scope.evidence ?? "UNKNOWN"} · {row.scope.observedAt ? new Date(row.scope.observedAt * 1000).toLocaleString() : "time unknown"}</td>
+                  <td>{row.learned}</td><td>{row.unlearned}</td><td>{row.unknown}</td>
+                  <td>PARTIAL · {row.associated} associated · {row.total} returned in context</td>
+                </tr>
+              ))}</tbody>
+            </table></div>
           )}
         </section>
       )}

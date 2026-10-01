@@ -87,6 +87,17 @@ test("reads the saved exports of several characters, with the exact text WoW per
   assert.equal(records.find((r) => r.name === "Virek")!.generatedAt, 1_790_022_739);
 });
 
+test("reads structured Retail profession recipe observations from WoWSyncDB without flattening them into text", () => {
+  const rawRecipes = '{ ["observedAt"] = 1790880587, ["completeness"] = "partial", ["data"] = { ["formatVersion"] = 1, ["ownerScope"] = "CHARACTER", ["professions"] = { { ["baseSkillLineID"] = 202, ["skillLineID"] = 2910, ["evidence"] = "OBSERVED", ["recipes"] = { { ["recipeID"] = 1229853, ["learned"] = true, ["learnedState"] = "OBSERVED_TRUE" } } } } } }';
+  const saved = record("Virek", 1_790_022_739, { professionRecipes: rawRecipes });
+  const file = svFile(savedVariables([saved]));
+  const imported = readSavedExports(file)[0];
+  assert.equal(imported.text, saved.text, "text export remains exact");
+  const state = imported.characterState as any;
+  assert.equal(state.professionRecipes.data.professions[0].skillLineID, 2910);
+  assert.equal(state.professionRecipes.data.professions[0].recipes[0].learnedState, "OBSERVED_TRUE");
+});
+
 test("the legacy GearExportDB table is skipped, never interpreted", () => {
   const file = svFile(savedVariables([VIREK], { legacy: '["weird"] = { "kept", ["n"] = 1 },' }));
   assert.equal(readSavedExports(file).length, 1);

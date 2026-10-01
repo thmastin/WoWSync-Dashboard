@@ -14,6 +14,7 @@ export interface SavedRecord {
   generatedAt?: number;
   /** Raw Lua for `sections.currencies`, used only by bridge tests. */
   currencies?: string;
+  professionRecipes?: string;
 }
 
 export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: number | null; legacy?: string } = {}): string {
@@ -26,6 +27,7 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     if (r.realm !== undefined) lines.push(`["realm"] = ${q(r.realm)},`);
     lines.push("},", '["sections"] = {');
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
+    if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);
     lines.push("},", '["visits"] = {', "},");
     if (r.text !== undefined) lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`, `["text"] = ${q(r.text)},`, "},");
     lines.push("},");

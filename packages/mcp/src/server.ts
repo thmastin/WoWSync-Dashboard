@@ -183,7 +183,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async (query) => textResult(readModel.getCharacterEquipment(query)));
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
-    description: "Returns profession state for one explicit-version character and preserves UNKNOWN or LAST_SEEN instead of inventing empty data.",
+    description: "Returns profession and specialization state plus Retail recipe learned-state observations for one explicit-version character. Recipe candidates are partial, absence never means unlearned, and LAST_SEEN evidence is labeled.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterProfessions(query)));

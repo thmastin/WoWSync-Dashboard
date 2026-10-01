@@ -161,6 +161,8 @@ export interface ProfessionsSection {
   noneMessage?: string;
   /** Structured state remains a distinct sidecar domain; present only in read-model projections. */
   specialization?: CapturedCharacterDomain;
+  /** Per-profession recipe knowledge; observed IDs are not a complete catalogue. */
+  recipeKnowledge?: CapturedCharacterDomain;
 }
 
 export interface SpellEntry {
@@ -237,6 +239,8 @@ export interface CapturedCharacterState {
   clientFamily: "Retail";
   combatSpecialization?: CapturedCharacterDomain;
   professionSpecializations?: CapturedCharacterDomain;
+  /** Retail profession recipe learned-state observations. Candidate coverage is intentionally partial/unknown. */
+  professionRecipes?: CapturedCharacterDomain;
   reputation?: {
     /** Character-scoped records and UNKNOWN-scope raw evidence. */
     character?: CapturedCharacterDomain;

@@ -271,14 +271,16 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const currencyObservedAt = luaGet(currencies, "observedAt");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
+    const professionRecipes = luaGet(sections, "professionRecipes");
     const characterReputation = luaGet(sections, "reputation");
     const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
-    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
+    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || professionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
       ? {
           formatVersion: 1,
           clientFamily: "Retail",
           ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
           ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
+          ...(professionRecipes instanceof Map ? { professionRecipes: luaToPlain(professionRecipes) } : {}),
           ...((characterReputation instanceof Map || accountReputation instanceof Map) ? { reputation: {
             ...(characterReputation instanceof Map ? { character: luaToPlain(characterReputation) } : {}),
             ...(accountReputation instanceof Map ? { account: luaToPlain(accountReputation) } : {}),

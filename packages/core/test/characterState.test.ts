@@ -62,6 +62,7 @@ test("structured state imports into existing summary, profession, and Renown pro
     assert.equal(summary.status === "FOUND" && summary.value.data?.combatSpecialization?.data?.activeSpec && (summary.value.data.combatSpecialization.data.activeSpec as any).specID, 263);
     const professions = read.getCharacterProfessions({ version: "retail", name: "Groit", realm: "Stormrage" });
     assert.equal(professions.status === "FOUND" && professions.value.data?.specialization?.completeness, "complete");
+    assert.equal(professions.status === "FOUND" && professions.value.data?.recipeKnowledge?.status.state, "UNKNOWN", "legacy Retail snapshots without recipe data remain explicitly unknown");
     const renown = read.getRenown({ version: "retail", name: "Groit", realm: "Stormrage" });
     assert.equal(renown.status === "FOUND" && renown.value.data?.majorFactions[0].ownerScope, "ACCOUNT_WARBAND");
     assert.equal(renown.status === "FOUND" && renown.value.data?.majorFactions[0].majorFactionID, 2503);
@@ -133,5 +134,92 @@ test("duplicate imports may attach a structured observation, and later missing s
     const next = store.importSnapshot(later);
     assert.equal(next.snapshot.parsed.characterState?.combatSpecialization?.status.state, "LAST_SEEN");
     assert.equal((next.snapshot.parsed.characterState?.combatSpecialization?.data?.activeSpec as any).specID, 263);
+  } finally { store.close(); }
+});
+
+const recipeScope = (baseSkillLineID: number, skillLineID: number, ids: Array<[number, boolean | undefined, string, number[]?]>, evidence = "OBSERVED") => ({
+  baseSkillLineID, skillLineID, professionID: skillLineID, parentProfessionID: baseSkillLineID, professionName: skillLineID === 2910 ? "Midnight Engineering" : "Midnight Alchemy",
+  expansionName: "Midnight", evidence, observedAt: ts, client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 },
+  coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: ids.length },
+  recipes: ids.map(([recipeID, learned, learnedState, skillLineIDs = []]) => ({ recipeID, ...(learned === undefined ? {} : { learned }), learnedState, recipeInfoResult: learned === undefined ? "NIL_RESULT" : "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", evidence, skillLineIDs })),
+});
+const recipeDomain = (professions: ReturnType<typeof recipeScope>[]) => ({ formatVersion: 1, observedAt: ts, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: professions.reduce((count, profession) => count + profession.recipes.length, 0) }, professions } });
+
+test("Retail recipe sidecar preserves explicit learned values, unknowns, IDs, and client isolation", () => {
+  const scope = recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]], [1291687, false, "OBSERVED_FALSE", []], [7, undefined, "UNKNOWN"]]);
+  scope.recipes[2].recipeInfoResult = "API_ERROR";
+  scope.recipes[2].skillLineAssociationState = "UNKNOWN";
+  const sidecar = { formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    scope,
+  ]) };
+  const state = normalizeCharacterStateSidecar(sidecar, "retail");
+  const rows = (state?.professionRecipes?.data?.professions as any[])[0].recipes;
+  assert.deepEqual(rows.map((row: any) => [row.recipeID, row.learned, row.learnedState]), [[1229853, true, "OBSERVED_TRUE"], [1291687, false, "OBSERVED_FALSE"], [7, undefined, "UNKNOWN"]]);
+  assert.equal(state?.professionRecipes?.completeness, "partial");
+  assert.equal(normalizeCharacterStateSidecar(sidecar, "classic-era"), undefined);
+  assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Classic" }, "retail"), undefined);
+});
+
+test("profession-scoped recipe merges preserve Engineering through Alchemy and keep failed/empty evidence LAST_SEEN", () => {
+  const engineering = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]], [1291687, false, "OBSERVED_FALSE", []]]),
+  ]) }, "retail")!;
+  const alchemy = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    recipeScope(171, 2906, [[1233130, true, "OBSERVED_TRUE", [2906]], [1230869, false, "OBSERVED_FALSE", []]]),
+  ]) }, "retail")!;
+  const switched = mergeCharacterState(engineering, alchemy)!;
+  const scopes = switched.professionRecipes!.data!.professions as any[];
+  assert.equal(scopes.length, 2);
+  assert.equal(scopes.find((row) => row.skillLineID === 2910).evidence, "LAST_SEEN");
+  assert.equal(scopes.find((row) => row.skillLineID === 2906).recipes.find((r: any) => r.recipeID === 1233130).learned, true);
+  const empty = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([]) }, "retail");
+  const retained = mergeCharacterState(switched, empty)!.professionRecipes!.data!.professions as any[];
+  assert.equal(retained.length, 2);
+  assert.ok(retained.every((row) => row.evidence === "LAST_SEEN"));
+  assert.equal(retained.find((row) => row.skillLineID === 2910).recipes.find((r: any) => r.recipeID === 1291687).learnedState, "OBSERVED_FALSE");
+  const reverse = mergeCharacterState(alchemy, engineering)!.professionRecipes!.data!.professions as any[];
+  assert.equal(reverse.find((row) => row.skillLineID === 2906).evidence, "LAST_SEEN", "Engineering refresh retains Alchemy as LAST_SEEN");
+  assert.equal(reverse.find((row) => row.skillLineID === 2910).evidence, "OBSERVED");
+  assert.equal(normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([]) }, "retail"), undefined, "empty enumeration is not zero-coverage evidence");
+});
+
+test("an incoming stale recipe cache cannot replace newer learned evidence", () => {
+  const observed = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]]]),
+  ]) }, "retail")!;
+  const oldCache = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    recipeScope(202, 2910, [[1229853, false, "OBSERVED_FALSE", [2910]]], "LAST_SEEN"),
+  ]) }, "retail")!;
+  const merged = mergeCharacterState(observed, oldCache)!.professionRecipes!.data!.professions as any[];
+  const recipe = merged[0].recipes[0];
+  assert.equal(recipe.learned, true);
+  assert.equal(recipe.learnedState, "OBSERVED_TRUE");
+  assert.equal(recipe.evidence, "LAST_SEEN");
+  const refreshed = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+    recipeScope(202, 2910, [[1229853, false, "OBSERVED_FALSE", [2910]]]),
+  ]) }, "retail")!;
+  const next = mergeCharacterState(observed, refreshed)!.professionRecipes!.data!.professions as any[];
+  assert.equal(next[0].recipes[0].learned, false, "a later explicit fresh false is retained as an observation");
+  assert.equal(next[0].recipes[0].learnedState, "OBSERVED_FALSE");
+});
+
+test("known-by-account includes explicit learned=true only and the professions read model exposes partial recipe evidence", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const state = { formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
+      recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]], [1291687, false, "OBSERVED_FALSE", []], [6, undefined, "UNKNOWN", []]]),
+    ]) };
+    store.importSnapshot(buildWowSyncExport({ generatedAt: ts, character: { name: "Virek", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" } }), { characterState: state });
+    const facts = store.buildAccountFacts("retail", ts);
+    assert.deepEqual(facts.professions.knownRecipes.map((recipe) => recipe.recipeID), [1229853]);
+    assert.deepEqual(facts.professions.knownRecipes[0].skillLineIDs, [2910]);
+    assert.equal(facts.professions.knownRecipes[0].contextSkillLineID, 2910);
+    assert.equal(facts.professions.byCharacter[0].recipeKnowledge?.completeness, "partial");
+    const read = new DashboardReadModel(store, () => ts + 1).getCharacterProfessions({ version: "retail", name: "Virek", realm: "Cairne" });
+    assert.equal(read.status, "FOUND");
+    assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.status.state, "OBSERVED");
+    assert.equal(read.status === "FOUND" && (read.value.data?.recipeKnowledge?.data?.professions as any[])[0].recipes.length, 3);
+    assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.completeness, "partial");
+    assert.deepEqual(store.buildAccountFacts("classic-era", ts).professions.knownRecipes, []);
   } finally { store.close(); }
 });

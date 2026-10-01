@@ -14,6 +14,14 @@ import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
 const now = 1_790_793_200;
+const recipeState = { formatVersion: 1, clientFamily: "Retail", professionRecipes: { observedAt: now, completeness: "partial", data: {
+  formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+  professions: [{ baseSkillLineID: 202, parentProfessionID: 202, professionID: 2910, skillLineID: 2910, professionName: "Midnight Engineering", expansionName: "Midnight", evidence: "OBSERVED", observedAt: now,
+    client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 },
+    coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+    recipes: [{ recipeID: 1229853, learned: true, learnedState: "OBSERVED_TRUE", recipeInfoResult: "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", skillLineIDs: [2910], evidence: "OBSERVED", observedAt: now }],
+  }],
+} } };
 
 function retail(name: string, realm: string, professions = false, moneyCopper?: number, bankLastSeen = false, generatedAt = now, level = 90, equipmentItem = 1) {
   const exported = buildWowSyncExport({
@@ -53,6 +61,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
           currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index, isAccountWide: index === 0 })),
         },
       },
+      characterState: recipeState,
     });
     writer.importSnapshot(retail("Virek", "Cairne", true, 500, true, now - 10, 90, 2), {
       currencies: {
@@ -220,6 +229,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const professions = structured<{ status: string; value?: { provenance: { state: string } } }>(await client.callTool({ name: "get_character_professions", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
     assert.equal(professions.status, "FOUND");
     assert.equal(professions.value?.provenance.state, "OBSERVED");
+    const professionRecipeRead = professions.value as { data?: { recipeKnowledge?: { status: { state: string }; data: { professions: Array<{ recipes: Array<{ recipeID: number; learnedState: string }> }> } } } };
+    assert.equal(professionRecipeRead.data?.recipeKnowledge?.status.state, "LAST_SEEN", "the newer export lacked recipe data; previous proof remains historical");
+    assert.deepEqual(professionRecipeRead.data?.recipeKnowledge?.data.professions[0].recipes.map((recipe) => [recipe.recipeID, recipe.learnedState]), [[1229853, "OBSERVED_TRUE"]]);
 
     const ambiguity = structured<{ status: string; candidates?: Array<{ realm: string }> }>(await client.callTool({ name: "get_character_summary", arguments: { version: "retail", name: "Virek" } }));
     assert.equal(ambiguity.status, "AMBIGUOUS");

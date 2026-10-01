@@ -371,6 +371,7 @@ export interface CharacterProfessions {
   observationStatus: SectionStatus["state"];
   professions: CharacterProfessionEntry[];
   specialization?: { status: SectionStatus["state"]; completeness: string; observedAt?: number; data?: Record<string, unknown> };
+  recipeKnowledge?: { status: SectionStatus["state"]; completeness: string; observedAt?: number; data?: Record<string, unknown> };
 }
 
 export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
@@ -383,6 +384,7 @@ export interface ProfessionCoverageEntry {
 
 export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
+  knownRecipes: Array<{ recipeID: number; baseSkillLineID: number; contextSkillLineID: number; skillLineIDs: number[]; contextProfessionName?: string; contextExpansionName?: string; characters: Array<{ identityKey: string; name: string; realm: string; observedAt?: number; evidence: SectionStatus["state"] }> }>;
   coverage: ProfessionCoverageEntry[];
 }
 

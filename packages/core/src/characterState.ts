@@ -4,7 +4,7 @@ type Obj = Record<string, unknown>;
 const object = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const positiveID = (value: unknown): value is number => finite(value) && Number.isInteger(value) && value > 0;
-const LIST_FIELDS = new Set(["professions", "tiers", "trees", "nodes", "currencies", "factions", "majorFactions", "committedEntryIDs"]);
+const LIST_FIELDS = new Set(["professions", "recipes", "skillLineIDs", "tiers", "trees", "nodes", "currencies", "factions", "majorFactions", "committedEntryIDs"]);
 
 /** WoW writes empty Lua tables as `{}`; normalize only known list fields, and only when empty. */
 function normalizeEmptyLists(value: unknown): unknown {
@@ -56,6 +56,27 @@ function normalizeSection(raw: unknown, domain: "combat" | "professions" | "repu
   };
 }
 
+function normalizeRecipeSection(raw: unknown): CapturedCharacterDomain | undefined {
+  if (!object(raw) || raw.completeness !== "partial" || !object(raw.data) || !finite(raw.observedAt)) return undefined;
+  const data = normalizeEmptyLists(raw.data) as Obj;
+  if (data.formatVersion !== 1 || data.ownerScope !== "CHARACTER" || !Array.isArray(data.professions) || data.professions.length === 0 || !object(data.coverage) || data.coverage.state !== "PARTIAL" || data.coverage.candidateCompleteness !== "UNKNOWN") return undefined;
+  for (const profession of data.professions) {
+    if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== "Retail" || typeof profession.client.clientVersion !== "string" || !positiveID(profession.client.clientBuild) || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || profession.coverage.returnedRecipeCount !== profession.recipes.length) return undefined;
+    for (const recipe of profession.recipes) {
+      if (!object(recipe) || !positiveID(recipe.recipeID)) return undefined;
+      if (recipe.learned !== true && recipe.learned !== false && recipe.learned !== undefined) return undefined;
+      if (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE" && recipe.learnedState !== "UNKNOWN" && recipe.learnedState !== "NIL_RESULT") return undefined;
+      if (recipe.learnedState === "OBSERVED_TRUE" && recipe.learned !== true || recipe.learnedState === "OBSERVED_FALSE" && recipe.learned !== false || (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned !== undefined) return undefined;
+      if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN") return undefined;
+      if (recipe.skillLineAssociationState !== "OBSERVED" && recipe.skillLineAssociationState !== "UNKNOWN" || recipe.skillLineIDs !== undefined && !Array.isArray(recipe.skillLineIDs)) return undefined;
+      if (Array.isArray(recipe.skillLineIDs) && !recipe.skillLineIDs.every(positiveID)) return undefined;
+    }
+  }
+  const professionRows = data.professions as Obj[];
+  const state = professionRows.some((row) => row.evidence === "OBSERVED") ? "OBSERVED" : professionRows.length > 0 && professionRows.every((row) => row.evidence === "LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
+  return { status: { state, completeness: "partial", observedAt: raw.observedAt }, formatVersion: 1, observedAt: raw.observedAt, completeness: "partial", data: data as Record<string, unknown> };
+}
+
 /** Validate the Retail-only SavedVariables sidecar and keep each domain separate. Invalid/missing data stays UNKNOWN. */
 export function normalizeCharacterStateSidecar(input: unknown, version: VersionOrUnknown): CapturedCharacterState | undefined {
   if (version !== "retail" || !object(input) || input.formatVersion !== 1) return undefined;
@@ -65,10 +86,12 @@ export function normalizeCharacterStateSidecar(input: unknown, version: VersionO
   const state: CapturedCharacterState = { formatVersion: 1, clientFamily: "Retail" };
   const combat = normalizeSection(input.combatSpecialization, "combat");
   const professions = normalizeSection(input.professionSpecializations, "professions");
+  const professionRecipes = normalizeRecipeSection(input.professionRecipes);
   const characterRep = normalizeSection(reputationInput?.character, "reputation");
   const accountRep = normalizeSection(reputationInput?.account, "reputation");
   if (combat) state.combatSpecialization = combat;
   if (professions) state.professionSpecializations = professions;
+  if (professionRecipes) state.professionRecipes = professionRecipes;
   if (characterRep || accountRep) state.reputation = { ...(characterRep ? { character: characterRep } : {}), ...(accountRep ? { account: accountRep } : {}) };
   return Object.keys(state).length > 2 ? state : undefined;
 }
@@ -118,6 +141,7 @@ export function mergeCharacterState(previous: CapturedCharacterState | undefined
       if (domain) { domain.status = { ...domain.status, state: "LAST_SEEN", reason: "Not present in this later capture; earlier observation retained." }; }
     };
     mark(last.combatSpecialization); mark(last.professionSpecializations); mark(last.reputation?.character); mark(last.reputation?.account);
+    last.professionRecipes = mergeRecipeDomain(last.professionRecipes, undefined);
     return last;
   }
   const result = structuredClone(current);
@@ -128,11 +152,50 @@ export function mergeCharacterState(previous: CapturedCharacterState | undefined
   };
   result.combatSpecialization = mergeDomain(previous.combatSpecialization, current.combatSpecialization);
   result.professionSpecializations = mergeDomain(previous.professionSpecializations, current.professionSpecializations);
+  result.professionRecipes = mergeRecipeDomain(previous.professionRecipes, current.professionRecipes);
   result.reputation = {
     ...(mergeDomain(previous.reputation?.character, current.reputation?.character) ? { character: mergeDomain(previous.reputation?.character, current.reputation?.character) } : {}),
     ...(mergeDomain(previous.reputation?.account, current.reputation?.account) ? { account: mergeDomain(previous.reputation?.account, current.reputation?.account) } : {}),
   };
   return result;
+}
+
+function mergeRecipeDomain(previous: CapturedCharacterDomain | undefined, current: CapturedCharacterDomain | undefined): CapturedCharacterDomain | undefined {
+  if (!previous) return current;
+  if (!current?.data) {
+    const data = previous.data as Obj | undefined;
+    if (!data || !Array.isArray(data.professions)) return { ...previous, status: { ...previous.status, state: "LAST_SEEN" } };
+    const professions = data.professions.filter(object).map((profession) => ({
+      ...profession,
+      evidence: "LAST_SEEN",
+      recipes: Array.isArray(profession.recipes) ? profession.recipes.filter(object).map((recipe) => ({ ...recipe, evidence: "LAST_SEEN" })) : profession.recipes,
+    }));
+    return { ...previous, status: { ...previous.status, state: "LAST_SEEN" }, data: { ...data, professions } };
+  }
+  const oldData = previous.data as Obj; const newData = current.data as Obj;
+  const oldRows = Array.isArray(oldData.professions) ? oldData.professions.filter(object) : [];
+  const newRows = Array.isArray(newData.professions) ? newData.professions.filter(object) : [];
+  const scopeKey = (row: Obj) => `${row.baseSkillLineID}:${row.skillLineID}`;
+  const byID = new Map(newRows.map((row) => [scopeKey(row), row]));
+  const observedAt = current.observedAt;
+  const merged: Obj[] = oldRows.map((old) => {
+    const fresh = byID.get(scopeKey(old));
+    if (!fresh) return { ...old, evidence: "LAST_SEEN", lastSeenAt: observedAt };
+    byID.delete(scopeKey(old));
+    const freshRecipes = new Map((Array.isArray(fresh.recipes) ? fresh.recipes.filter(object) : []).map((r) => [r.recipeID as number, r]));
+    const recipes: Obj[] = (Array.isArray(old.recipes) ? old.recipes.filter(object) : []).map((prior) => {
+      const item = freshRecipes.get(prior.recipeID as number);
+      if (!item) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
+      freshRecipes.delete(prior.recipeID as number);
+      const explicitlyRefreshed = fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE");
+      if (!explicitlyRefreshed) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
+      return item;
+    });
+    for (const item of freshRecipes.values()) recipes.push(fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE") ? item : { ...item, evidence: "LAST_SEEN" });
+    return { ...fresh, recipes };
+  });
+  merged.push(...byID.values());
+  return { ...current, data: { ...newData, professions: merged } };
 }
 
 export interface LatestDomain<T> {

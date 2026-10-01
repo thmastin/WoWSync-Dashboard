@@ -51,6 +51,7 @@ const emptyProgression = {
 };
 const emptyProfessions = {
   byCharacter: [] as AccountFacts["professions"]["byCharacter"],
+  knownRecipes: [] as AccountFacts["professions"]["knownRecipes"],
   coverage: [] as AccountFacts["professions"]["coverage"],
 };
 const emptyReputation: ReputationFacts = { completeness: "unknown", account: { factions: [], majorFactions: [] }, byCharacter: [] };

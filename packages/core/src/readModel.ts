@@ -423,9 +423,11 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const value = snapshot.parsed.professions;
       const captured = snapshot.parsed.characterState?.professionSpecializations;
-      const state = value.status.state === "UNKNOWN" && captured ? statusToReadState(captured.status.state) : statusToReadState(value.status.state);
-      const data = { ...value, ...(captured ? { specialization: captured } : {}) } as ProfessionsSection;
-      return { ...(state === "UNKNOWN" ? {} : { data }), provenance: { state, version: query.version, identityKey: character.identityKey, observedAt: captured?.observedAt ?? value.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "WOWSYNC v1 professions plus structured specialization sidecar", ...(state === "UNKNOWN" ? { reason: value.status.reason ?? "This section was not captured." } : {}), ...(state === "LAST_SEEN" ? { warning: "This section is historical and not a current observation." } : {}) } };
+      const recipes = snapshot.parsed.characterState?.professionRecipes;
+      const recipeKnowledge = query.version === "retail" ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "No successful Retail profession recipe observation has been imported." }, completeness: "unknown" as const } : undefined;
+      const state = value.status.state === "UNKNOWN" && (captured || recipeKnowledge) ? statusToReadState(captured?.status.state ?? recipeKnowledge!.status.state) : statusToReadState(value.status.state);
+      const data = { ...value, ...(captured ? { specialization: captured } : {}), ...(recipeKnowledge ? { recipeKnowledge } : {}) } as ProfessionsSection;
+      return { ...(state === "UNKNOWN" ? {} : { data }), provenance: { state, version: query.version, identityKey: character.identityKey, observedAt: value.status.state !== "UNKNOWN" ? value.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt : recipes?.observedAt ?? captured?.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "WOWSYNC v1 professions plus structured specialization and recipe sidecars", ...(state === "UNKNOWN" ? { reason: value.status.reason ?? "This section was not captured." } : {}), ...(state === "LAST_SEEN" ? { warning: "This section is historical and not a current observation." } : {}) } };
     });
   }
 

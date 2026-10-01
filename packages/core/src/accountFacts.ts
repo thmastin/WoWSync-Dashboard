@@ -198,6 +198,8 @@ export interface CharacterProfessions {
   professions: CharacterProfessionEntry[];
   /** Structured Retail tree/node investment; separate from profession skill/ownership. */
   specialization?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
+  /** Retail recipe facts retained per character; never implies catalogue completeness. */
+  recipeKnowledge?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
 }
 
 /**
@@ -216,6 +218,8 @@ export interface ProfessionCoverageEntry {
 
 export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
+  /** Explicit learned=true observations only; absence is never an account-wide missing claim. */
+  knownRecipes: Array<{ recipeID: number; baseSkillLineID: number; contextSkillLineID: number; skillLineIDs: number[]; contextProfessionName?: string; contextExpansionName?: string; characters: Array<{ identityKey: string; name: string; realm: string; observedAt?: number; evidence: SectionState }> }>;
   /** The version's full profession catalog (see professionCatalog.ts), each marked covered/none/unknown. Sorted alphabetically. Empty catalog (unknown-version, forever) degrades to "only what's observed" — see buildProfessionCoverage. */
   coverage: ProfessionCoverageEntry[];
 }
@@ -627,6 +631,7 @@ function buildProgressionFacts(
 function buildProfessionsByCharacter(
   characters: StoredCharacterSummary[],
   latestParsed: Map<string, ParsedSnapshot>,
+  version: VersionOrUnknown,
 ): CharacterProfessions[] {
   return characters.map((c) => {
     const section = latestParsed.get(c.identityKey)?.professions;
@@ -647,6 +652,12 @@ function buildProfessionsByCharacter(
         observedAt: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.observedAt,
         data: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.data,
       } } : {}),
+      ...(latestParsed.get(c.identityKey)?.characterState?.professionRecipes ? { recipeKnowledge: {
+        status: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.status.state,
+        completeness: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.completeness,
+        observedAt: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.observedAt,
+        data: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.data,
+      } } : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } } : {}),
     };
   });
 }
@@ -717,9 +728,29 @@ function buildProfessionFacts(
   characters: StoredCharacterSummary[],
   latestParsed: Map<string, ParsedSnapshot>,
 ): ProfessionFacts {
-  const byCharacter = buildProfessionsByCharacter(characters, latestParsed);
+  const byCharacter = buildProfessionsByCharacter(characters, latestParsed, version);
   const coverage = buildProfessionCoverage(version, professionCatalogForVersion(version), byCharacter);
-  return { byCharacter, coverage };
+  const known = new Map<string, ProfessionFacts["knownRecipes"][number]>();
+  if (version === "retail") for (const character of characters) {
+    const state = latestParsed.get(character.identityKey)?.characterState?.professionRecipes;
+    const data = state?.data as Record<string, unknown> | undefined;
+    const professions = Array.isArray(data?.professions) ? data!.professions as Record<string, unknown>[] : [];
+    for (const profession of professions) for (const recipe of (Array.isArray(profession.recipes) ? profession.recipes : []) as Record<string, unknown>[]) {
+      if (recipe.learned !== true || recipe.learnedState !== "OBSERVED_TRUE" || recipe.evidence === "UNKNOWN" || typeof recipe.recipeID !== "number") continue;
+      const skillLineIDs = Array.isArray(recipe.skillLineIDs) && recipe.skillLineIDs.every((id) => typeof id === "number") ? [...recipe.skillLineIDs as number[]].sort((a, b) => a - b) : [];
+      if (typeof profession.baseSkillLineID !== "number" || typeof profession.skillLineID !== "number") continue;
+      const key = `${profession.baseSkillLineID}:${profession.skillLineID}:${recipe.recipeID}:${skillLineIDs.join(",")}`;
+      const entry = known.get(key) ?? { recipeID: recipe.recipeID, baseSkillLineID: profession.baseSkillLineID, contextSkillLineID: profession.skillLineID, skillLineIDs, ...(typeof profession.professionName === "string" ? { contextProfessionName: profession.professionName } : {}), ...(typeof profession.expansionName === "string" ? { contextExpansionName: profession.expansionName } : {}), characters: [] };
+      const scopeEvidence = recipe.evidence === "LAST_SEEN" || profession.evidence === "LAST_SEEN" || state?.status.state === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED";
+      const existing = entry.characters.find((candidate) => candidate.identityKey === character.identityKey);
+      if (!existing || existing.evidence === "LAST_SEEN" && scopeEvidence === "OBSERVED") {
+        if (existing) entry.characters.splice(entry.characters.indexOf(existing), 1);
+        entry.characters.push({ identityKey: character.identityKey, name: character.name, realm: character.realm, observedAt: typeof recipe.observedAt === "number" ? recipe.observedAt : typeof profession.observedAt === "number" ? profession.observedAt : state?.observedAt, evidence: scopeEvidence });
+      }
+      known.set(key, entry);
+    }
+  }
+  return { byCharacter, coverage, knownRecipes: [...known.values()].sort((a, b) => a.recipeID - b.recipeID || a.contextSkillLineID - b.contextSkillLineID) };
 }
 
 function buildReputationFacts(characters: StoredCharacterSummary[], latestParsed: Map<string, ParsedSnapshot>): ReputationFacts {
