@@ -29,9 +29,9 @@ import type { Freshness } from "./freshness.ts";
 import { professionEntryIsEvidence } from "./professionCatalog.ts";
 import type { SectionState, WowVersion } from "./types.ts";
 
-// "llm-2": goldSummary is now scope-shaped (per-realm for realm-partitioned
-// versions, with known/unknown/stale counts) instead of one version-wide sum.
-export const LLM_CONTEXT_SCHEMA_VERSION = "llm-2";
+// "llm-3": character-state specializations, compact profession investment,
+// separate character/account reputation, and compatible state transitions.
+export const LLM_CONTEXT_SCHEMA_VERSION = "llm-3";
 
 /**
  * Whether a character has two or more observed snapshots to compare.
@@ -75,6 +75,8 @@ export interface LlmLatestTransition {
   equipmentChanged: boolean;
   locationChanged: boolean;
   trainerUnlocked: boolean;
+  /** Compatible observed state changes; direction is known but cause/time are not. */
+  characterStateChanges?: import("./diff.ts").CharacterStateChange[];
   /** Present only when inventory actually changed - never {gained:[],lost:[]} for "nothing changed". */
   inventory?: LlmInventoryChange;
 }
@@ -118,6 +120,12 @@ export interface LlmCharacter {
    */
   professionsObservationStatus: SectionState;
   professions: LlmProfession[];
+  /** Current formally observed combat specialization, when captured. */
+  combatSpecialization?: Record<string, unknown>;
+  /** Captured tree/node investments remain structured facts, without recommendation. */
+  professionSpecializations?: Record<string, unknown>;
+  /** Substantive character-owned reputation only; account-wide records live once on the version. */
+  reputation?: { status: SectionState; completeness: string; factions: Record<string, unknown>[]; majorFactions: Record<string, unknown>[] };
   snapshotCount: number;
   comparisonStatus: ComparisonStatus;
   /** Present iff comparisonStatus is "AVAILABLE". Never a synthesized zero/empty object when INSUFFICIENT_HISTORY. */
@@ -170,6 +178,8 @@ export interface LlmVersionSummary {
   version: WowVersion;
   aggregationScope: "realm" | "account-wide";
   goldSummary: LlmGoldSummary;
+  /** Explicitly account-owned reputation records, kept separate from character state. */
+  reputation: { completeness: string; factions: Record<string, unknown>[]; majorFactions: Record<string, unknown>[] };
   characters: LlmCharacter[];
 }
 
@@ -280,6 +290,27 @@ function buildGoldSummary(versionContext: AccountContext["versions"][WowVersion]
   return { scope: "account-wide", ...buildGoldTotals(facts.gold) };
 }
 
+/** Compact full profession-node snapshots to observed investment and explicit tree state for Ask My Account. */
+function compactProfessionSpecializations(data: Record<string, unknown>, completeness: string): Record<string, unknown> {
+  const professions = Array.isArray(data.professions) ? data.professions as Record<string, any>[] : [];
+  return { formatVersion: data.formatVersion, observedAt: data.observedAt, completeness,
+    professions: professions.map((profession) => ({ baseSkillLineID: profession.baseSkillLineID, name: profession.name, specializationState: profession.specializationState,
+      tiers: (Array.isArray(profession.tiers) ? profession.tiers : []).map((tier: Record<string, any>) => ({ skillLineID: tier.skillLineID, parentProfessionID: tier.parentProfessionID,
+        expansionName: tier.expansionName, configID: tier.configID, currencies: tier.currencies,
+        trees: (Array.isArray(tier.trees) ? tier.trees : []).map((tree: Record<string, any>) => {
+          const nodes = Array.isArray(tree.nodes) ? tree.nodes as Record<string, any>[] : [];
+          const observed = nodes.filter((node) => node.evidence === "OBSERVED" && typeof (node.ranksPurchased ?? node.currentRank) === "number");
+          const invested = observed.filter((node) => (node.ranksPurchased ?? node.currentRank) > 0).map((node) => {
+            const rank = node.ranksPurchased ?? node.currentRank;
+            return { nodeID: node.nodeID, rank, ...(typeof node.maxRanks === "number" ? { maxRanks: node.maxRanks, maxed: rank === node.maxRanks } : {}) };
+          });
+          return { treeID: tree.treeID, tabState: tree.tabState, tabStateEvidence: tree.tabStateEvidence,
+            observedNodeCount: observed.length, observedZeroRankNodeCount: observed.filter((node) => (node.ranksPurchased ?? node.currentRank) === 0).length,
+            investedNodeCount: invested.length, investedNodes: invested };
+        }) })),
+    })) };
+}
+
 function buildLatestTransitionIndex(allCharacters: LlmCharacter[]): LlmLatestTransitionIndex {
   const index: LlmLatestTransitionIndex = {
     comparable: [],
@@ -315,6 +346,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
   for (const [version, versionContext] of Object.entries(context.versions) as [WowVersion, AccountContext["versions"][WowVersion]][]) {
     const historyByKey = new Map(versionContext.characters.map((c) => [c.identityKey, c]));
     const professionsByKey = new Map(versionContext.facts.professions.byCharacter.map((p) => [p.identityKey, p]));
+    const reputationByKey = new Map(versionContext.facts.reputation.byCharacter.map((p) => [p.identityKey, p]));
 
     const characters: LlmCharacter[] = versionContext.facts.characters.map((cf) => {
       const history = historyByKey.get(cf.identityKey);
@@ -347,11 +379,13 @@ export function buildLlmContext(context: AccountContext): LlmContext {
           equipmentChanged: latest.equipmentChanged,
           locationChanged: latest.locationChanged,
           trainerUnlocked: latest.trainerUnlocked,
+          ...(latest.characterStateChanges ? { characterStateChanges: latest.characterStateChanges } : {}),
           inventory: buildInventoryChange(latest.inventoryItemChanges),
         };
       }
 
       const characterProfessions = professionsByKey.get(cf.identityKey);
+      const characterReputation = reputationByKey.get(cf.identityKey);
       const professions: LlmProfession[] = (characterProfessions?.professions ?? []).map((p) => ({
         name: p.name,
         skill: p.skill,
@@ -375,6 +409,10 @@ export function buildLlmContext(context: AccountContext): LlmContext {
         bankStatus: cf.bankStatus,
         professionsObservationStatus: characterProfessions?.observationStatus ?? "UNKNOWN",
         professions,
+        ...(cf.combatSpecialization?.data ? { combatSpecialization: cf.combatSpecialization.data } : {}),
+        ...(characterProfessions?.specialization?.data ? { professionSpecializations: compactProfessionSpecializations(characterProfessions.specialization.data, characterProfessions.specialization.completeness) } : {}),
+        ...(characterReputation ? { reputation: { status: characterReputation.status, completeness: characterReputation.completeness,
+          factions: characterReputation.factions, majorFactions: characterReputation.majorFactions } } : {}),
         snapshotCount: cf.snapshotCount,
         comparisonStatus,
         latestTransition,
@@ -385,6 +423,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
       version,
       aggregationScope: versionContext.aggregationScope,
       goldSummary: buildGoldSummary(versionContext),
+      reputation: { completeness: versionContext.facts.reputation.completeness, ...versionContext.facts.reputation.account },
       characters,
     };
     allCharacters.push(...characters);

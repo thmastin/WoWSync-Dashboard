@@ -112,12 +112,15 @@ export interface ImportResult {
    * was sent. Unlike everything else, a duplicate export may still ATTACH a section its snapshot did not have.
    */
   currencies?: CurrencyImportOutcome;
+  characterState?: "recorded" | "invalid-or-unsupported";
 }
 
 /** Optional structured data that travels with an export's text (never parsed from it). */
 export interface ImportExtras {
   /** WoWSyncDB.characters[guid].sections.currencies as plain JSON (Lua tables converted), for the character the text is for. */
   currencies?: unknown;
+  /** Retail structured character-state sidecar; normalized and version-gated by the store. */
+  characterState?: unknown;
 }
 
 /** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */

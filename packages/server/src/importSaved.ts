@@ -207,6 +207,8 @@ export interface SavedExport {
   currencies?: unknown;
   /** When this character's structured Currency-tab list was read, if it has one. */
   currencyObservedAt?: number;
+  /** Independently persisted structured character domains; reputation carries separate character/account sections. */
+  characterState?: unknown;
 }
 
 /**
@@ -264,8 +266,25 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const generatedAt = luaGet(latest, "generatedAt");
     const name = luaGet(identity, "name");
     const realm = luaGet(identity, "realm");
-    const currencies = luaGet(luaGet(record, "sections"), "currencies");
+    const sections = luaGet(record, "sections");
+    const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
+    const combat = luaGet(sections, "combatSpecialization");
+    const professionSpecializations = luaGet(sections, "professionSpecializations");
+    const characterReputation = luaGet(sections, "reputation");
+    const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
+    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
+      ? {
+          formatVersion: 1,
+          clientFamily: "Retail",
+          ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
+          ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
+          ...((characterReputation instanceof Map || accountReputation instanceof Map) ? { reputation: {
+            ...(characterReputation instanceof Map ? { character: luaToPlain(characterReputation) } : {}),
+            ...(accountReputation instanceof Map ? { account: luaToPlain(accountReputation) } : {}),
+          } } : {}),
+        }
+      : undefined;
     out.push({
       name: typeof name === "string" ? name : undefined,
       realm: typeof realm === "string" ? realm : undefined,
@@ -273,6 +292,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       text: typeof text === "string" && text.length > 0 ? text : undefined,
       ...(isLuaTable(currencies) ? { currencies: luaToPlain(currencies) } : {}),
       ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
+      ...(characterState ? { characterState } : {}),
     });
   }
   return out.sort(
@@ -569,14 +589,14 @@ export const importEndpoint = (origin: string): string => `${origin}/api/import`
  * send, shared by `import:saved` and `watch:saved`: neither has any import logic of its own. Throws {@link ImportPostError}
  * (a BridgeError) with the reason; nothing has been imported when it does.
  */
-export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown): Promise<any> {
+export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown): Promise<any> {
   let response: Response;
   try {
     response = await deps.fetch(importEndpoint(origin), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // `currencies` (the record's structured section) rides along only when the record has one; the text is untouched.
-      body: JSON.stringify(currencies === undefined ? { text } : { text, currencies }),
+      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }) }),
       signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
     });
   } catch (err) {
@@ -681,7 +701,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) stderr.push(`warning: ${target.warning}`);
     out(`Sending to ${importEndpoint(target.origin)} ...`);
-    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies), summary.sha256));
+    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState), summary.sha256));
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
     if (err instanceof BridgeError) {

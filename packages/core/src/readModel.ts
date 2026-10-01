@@ -4,7 +4,8 @@
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
-import type { EquipmentSection, InventorySection, ProfessionsSection, SectionState, VersionOrUnknown, SpellEntry, TrainerService, TrainerCategorySnapshot } from "./types.ts";
+import type { CapturedCharacterState, EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
+import type { InventorySection, SpellEntry, TrainerService, TrainerCategorySnapshot } from "./types.ts";
 import type { SnapshotReadStore, StoredCharacterSummary, StoredSnapshot, VersionSummary } from "./store.ts";
 import { WOW_VERSIONS } from "./version.ts";
 import { itemIdFromItemRef, type ItemMetadataView } from "./itemMetadata.ts";
@@ -418,7 +419,14 @@ export class DashboardReadModel {
     return this.resolveSection(query, "equipment");
   }
   getCharacterProfessions(query: CharacterQuery): CharacterResolution<ReadValue<ProfessionsSection>> {
-    return this.resolveSection(query, "professions");
+    return this.resolve(query, (character, snapshot) => {
+      if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
+      const value = snapshot.parsed.professions;
+      const captured = snapshot.parsed.characterState?.professionSpecializations;
+      const state = value.status.state === "UNKNOWN" && captured ? statusToReadState(captured.status.state) : statusToReadState(value.status.state);
+      const data = { ...value, ...(captured ? { specialization: captured } : {}) } as ProfessionsSection;
+      return { ...(state === "UNKNOWN" ? {} : { data }), provenance: { state, version: query.version, identityKey: character.identityKey, observedAt: captured?.observedAt ?? value.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "WOWSYNC v1 professions plus structured specialization sidecar", ...(state === "UNKNOWN" ? { reason: value.status.reason ?? "This section was not captured." } : {}), ...(state === "LAST_SEEN" ? { warning: "This section is historical and not a current observation." } : {}) } };
+    });
   }
 
   getCharacterCurrencies(query: CharacterQuery): CharacterResolution<ReadValue<CharacterCurrencies>> {
@@ -715,9 +723,41 @@ export class DashboardReadModel {
     return { data: [...new Set(query.itemIds)].map((baseItemId) => { const metadata = found.get(baseItemId); return { baseItemId, state: metadata ? "KNOWN" as const : "UNKNOWN" as const, ...(metadata ? { metadata } : {}) }; }), provenance: { state: "DERIVED", version: query.version, source: "game-client item metadata evidence" } };
   }
 
-  /** Intentional unsupported-state response until the addon captures Renown. */
-  getRenown(query: CharacterQuery): CharacterResolution<ReadValue<never>> {
-    return this.resolve(query, (character) => ({ provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "WoWSync does not currently capture Renown." } }));
+  /** Existing get_renown projection over the distinct captured Major Faction records. */
+  getRenown(query: CharacterQuery): CharacterResolution<ReadValue<{ majorFactions: Record<string, unknown>[]; completeness: string }>> {
+    return this.resolve(query, (character, snapshot) => {
+      if (query.version !== "retail" || !snapshot?.parsed.characterState?.reputation) {
+        return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "WoWSync does not currently capture Renown for this character." } };
+      }
+      const state = snapshot.parsed.characterState as CapturedCharacterState;
+      const characterDomain = state.reputation?.character;
+      const accountDomain = state.reputation?.account;
+      const rows: Record<string, unknown>[] = [];
+      for (const [ownerScope, domain] of [["CHARACTER", characterDomain], ["ACCOUNT_WARBAND", accountDomain]] as const) {
+        const data = domain?.data as Record<string, unknown> | undefined;
+        for (const row of (Array.isArray(data?.majorFactions) ? data.majorFactions : []) as Record<string, unknown>[]) {
+          if (row.renownEvidence !== "OBSERVED_VALUE" || !row.renown || typeof row.renown !== "object") continue;
+          const renown = row.renown as Record<string, unknown>;
+          const hasPositiveProgress = [renown.level, renown.earned].some((value) => typeof value === "number" && value > 0);
+          // Keep locked/all-zero API records in raw snapshot evidence, but do not project them
+          // as a character's earned/unlocked Renown state without a positive API signal.
+          if (row.isUnlocked === false && !hasPositiveProgress) continue;
+          // Character sidecars may also carry explicitly account-wide records; those belong only
+          // to the separate account section and must not be double-counted as character state.
+          if (ownerScope === "CHARACTER" && row.ownerScope === "ACCOUNT_WARBAND") continue;
+          const explicitScope = ownerScope === "ACCOUNT_WARBAND" ? "ACCOUNT_WARBAND" : row.ownerScope === "CHARACTER" ? "CHARACTER" : "UNKNOWN";
+          rows.push({ ...row, ownerScope: explicitScope, ownerScopeEvidence: ownerScope === "ACCOUNT_WARBAND" || explicitScope === "CHARACTER" ? "OBSERVED" : "UNKNOWN", conventionalFactionID: row.conventionalFactionID });
+        }
+      }
+      if (rows.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "Major Faction enumeration was observed, but no usable Renown records were captured." } };
+      const partial = [characterDomain, accountDomain].some((domain) => domain && domain.completeness !== "complete");
+      return { data: { majorFactions: rows, completeness: partial ? "partial" : "complete" }, provenance: {
+        state: "OBSERVED", version: query.version, identityKey: character.identityKey,
+        ...([characterDomain?.observedAt, accountDomain?.observedAt].some((n) => typeof n === "number") ? { observedAt: Math.max(...[characterDomain?.observedAt, accountDomain?.observedAt].filter((n): n is number => typeof n === "number")) } : {}),
+        snapshotId: snapshot.id, source: "captured C_MajorFactions Renown records",
+        ...(partial ? { warning: "Renown observations are useful, but overall reputation coverage is partial." } : {}),
+      } };
+    });
   }
 
   private resolve<T>(query: CharacterQuery, build: (character: StoredCharacterSummary, latest: StoredSnapshot | undefined) => T): CharacterResolution<T> {

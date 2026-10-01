@@ -159,6 +159,8 @@ export interface ProfessionsSection {
   coverage?: string;
   entries: ProfessionEntry[];
   noneMessage?: string;
+  /** Structured state remains a distinct sidecar domain; present only in read-model projections. */
+  specialization?: CapturedCharacterDomain;
 }
 
 export interface SpellEntry {
@@ -220,6 +222,29 @@ export interface ItemMetadataSection {
   rows: ItemMetadataRow[];
 }
 
+/** One separately typed structured WoWSync SavedVariables observation. `partial`
+ * describes coverage; it does not turn omitted identities into zero/false. */
+export interface CapturedCharacterDomain<T = Record<string, unknown>> {
+  status: SectionStatus;
+  formatVersion?: number;
+  observedAt?: number;
+  completeness: "complete" | "partial" | "unknown";
+  data?: T;
+}
+
+export interface CapturedCharacterState {
+  formatVersion: 1;
+  clientFamily: "Retail";
+  combatSpecialization?: CapturedCharacterDomain;
+  professionSpecializations?: CapturedCharacterDomain;
+  reputation?: {
+    /** Character-scoped records and UNKNOWN-scope raw evidence. */
+    character?: CapturedCharacterDomain;
+    /** Explicit ACCOUNT_WARBAND records, retained separately. */
+    account?: CapturedCharacterDomain;
+  };
+}
+
 export interface ParsedSnapshot {
   /** The exact text that was parsed, preserved verbatim for audit/history. */
   raw: string;
@@ -237,6 +262,8 @@ export interface ParsedSnapshot {
   professions: ProfessionsSection;
   spells: SpellsSection;
   trainer: TrainerSection;
+  /** Separate structured sidecar; never parsed from or flattened into WOWSYNC v1 text. */
+  characterState?: CapturedCharacterState;
   /** Optional additive section; absent from every export made before item metadata existed. Never affects any observation section. */
   itemMetadata?: ItemMetadataSection;
 }

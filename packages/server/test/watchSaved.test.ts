@@ -221,7 +221,7 @@ test("identical content re-flushed is NOT posted again (every WoW save rewrites 
   assert.equal(JSON.parse(h.calls[1].body!).text, later.text);
 });
 
-test("a changed Currency-tab sidecar is attached even when WoW's saved text export is unchanged", async () => {
+test("a changed structured sidecar is attached even when WoW's saved text export is unchanged", async () => {
   const currencies = (quantity: number) => `{
 ["observedAt"] = ${1_790_030_001 + quantity},
 ["data"] = { ["formatVersion"] = 1, ["listRead"] = true, ["currencies"] = {
@@ -239,9 +239,9 @@ test("a changed Currency-tab sidecar is attached even when WoW's saved text expo
   const changed = { ...current, currencies: currencies(10) };
   h.fs.set(FILE, savedVariables([changed]));
   await h.settle();
-  assert.equal(h.calls.length, 2, "currency-only updates must not be swallowed by text deduplication");
+  assert.equal(h.calls.length, 2, "structured-only updates must not be swallowed by text deduplication");
   assert.equal(JSON.parse(h.calls[1].body!).currencies.data.currencies[0].quantity, 10);
-  assert.match(all(h.out), /Same text with changed structured currencies/);
+  assert.match(all(h.out), /Same text with changed structured SavedVariables state/);
 });
 
 test("a currency read without that character's text export is reported instead of silently lost", async () => {
@@ -251,7 +251,7 @@ test("a currency read without that character's text export is reported instead o
   h.fs.set(FILE, savedVariables([VIREK, { guid: "Player-1-OTHER", name: "Other", realm: "Cairne", currencies }]));
   await h.settle();
   assert.equal(h.calls.length, 1);
-  assert.match(all(h.out), /Currency read for Other · Cairne has no saved text export to attach/);
+  assert.match(all(h.out), /Structured read for Other · Cairne has no saved text export to attach/);
 });
 
 test("only the newest export in the file is sent, and an older one never displaces a newer one", async () => {

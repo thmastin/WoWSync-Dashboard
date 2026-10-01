@@ -6,6 +6,7 @@ import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } f
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
+import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
 import {
   ITEM_FACETS,
   ITEM_METADATA_SOURCES,
@@ -482,6 +483,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         `SELECT * FROM snapshots WHERE character_id = ? ORDER BY ${SNAPSHOTS_NEWEST_FIRST_SQL}`,
       ),
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
+      updateParsedSnapshot: this.db.prepare("UPDATE snapshots SET parsed_json = ? WHERE id = ?"),
       deleteSnapshotsForCharacter: this.db.prepare("DELETE FROM snapshots WHERE character_id = ?"),
       deleteCharacterById: this.db.prepare("DELETE FROM characters WHERE id = ?"),
       getMeta: this.db.prepare("SELECT value FROM store_meta WHERE key = ?"),
@@ -611,6 +613,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
     // Parse first: a malformed export throws before anything is written.
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
+    const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version);
+    if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
     const identity = characterIdentity(version, parsed.character);
     const now = Math.floor(Date.now() / 1000);
 
@@ -634,9 +638,21 @@ export class SqliteSnapshotStore implements SnapshotStore {
           // have yet (the same export sent before the bridge carried currencies): additive and idempotent.
           const currencies =
             extras.currencies === undefined ? undefined : this.recordCurrencies(characterRow.id, existing.id, version, extras.currencies, now, true);
+          let characterStateOutcome: ImportResult["characterState"];
+          if (extras.characterState !== undefined) {
+            const existingParsed = toStoredSnapshot(existing).parsed;
+            const merged = mergeCharacterState(existingParsed.characterState, normalizedCharacterState);
+            if (merged) {
+              existingParsed.characterState = merged;
+              existing.parsed_json = JSON.stringify(existingParsed);
+              this.stmts.updateParsedSnapshot.run(existing.parsed_json, existing.id);
+            }
+            characterStateOutcome = normalizedCharacterState ? "recorded" : "invalid-or-unsupported";
+          }
+          const duplicateSnapshot = toStoredSnapshot(existing);
           return {
             character: this.summarize(characterRow.id)!,
-            snapshot: toStoredSnapshot(existing),
+            snapshot: duplicateSnapshot,
             previousSnapshot: undefined,
             diff: undefined,
             isFirstSnapshot: false,
@@ -644,6 +660,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             isLatest: newest?.id === existing.id,
             sharedStorage: [],
             ...(currencies ? { currencies } : {}),
+            ...(characterStateOutcome ? { characterState: characterStateOutcome } : {}),
           };
         }
       } else {
@@ -678,6 +695,15 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const index = rows.findIndex((row) => row.id === newId);
       const isLatest = index === 0;
       const predecessorRow = rows[index + 1];
+      if (isLatest && predecessorRow) {
+        const predecessor = toStoredSnapshot(predecessorRow).parsed.characterState;
+        const merged = mergeCharacterState(predecessor, parsed.characterState);
+        if (merged) {
+          parsed.characterState = merged;
+          this.stmts.updateParsedSnapshot.run(JSON.stringify(parsed), newId);
+          rows[index].parsed_json = JSON.stringify(parsed);
+        }
+      }
       const snapshot = toStoredSnapshot(rows[index]);
       const previousSnapshot = predecessorRow ? toStoredSnapshot(predecessorRow) : undefined;
       const diff = previousSnapshot ? diffSnapshots(previousSnapshot.parsed, parsed) : undefined;
@@ -732,6 +758,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isLatest,
         sharedStorage,
         ...(currencies ? { currencies } : {}),
+        ...(extras.characterState !== undefined ? { characterState: normalizedCharacterState ? "recorded" : "invalid-or-unsupported" } : {}),
       };
     });
   }
@@ -1259,6 +1286,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         diff.equipment.length > 0 ||
         diff.location.changed ||
         diff.trainerUnlocks.length > 0
+        || diff.characterStateChanges.length > 0
       );
     });
     // Newest OBSERVATION first (an old export imported late must not rank as "just now").

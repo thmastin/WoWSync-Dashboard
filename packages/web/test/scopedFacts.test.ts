@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AccountChangeSummary, AccountFacts, CharacterFacts, RealmGroup } from "../src/types.ts";
+import type { AccountChangeSummary, AccountFacts, CharacterFacts, RealmGroup, ReputationFacts } from "../src/types.ts";
 import { RECENT_CHANGES_DISPLAY_CAP, capRecentChangesAfterScope, scopeFacts } from "../src/scopedFacts.ts";
 
 const NOW = 1_700_000_000;
@@ -53,6 +53,7 @@ const emptyProfessions = {
   byCharacter: [] as AccountFacts["professions"]["byCharacter"],
   coverage: [] as AccountFacts["professions"]["coverage"],
 };
+const emptyReputation: ReputationFacts = { completeness: "unknown", account: { factions: [], majorFactions: [] }, byCharacter: [] };
 const emptyInventory = {
   items: [] as AccountFacts["inventory"]["items"],
   unknownBank: [] as AccountFacts["inventory"]["unknownBank"],
@@ -82,6 +83,7 @@ function facts(over: Partial<AccountFacts> & Pick<AccountFacts, "aggregationScop
     playtime: emptyPlaytime,
     progression: emptyProgression,
     professions: emptyProfessions,
+    reputation: emptyReputation,
     inventory: emptyInventory,
     freshness: {
       recentCharacters: over.characters.length,

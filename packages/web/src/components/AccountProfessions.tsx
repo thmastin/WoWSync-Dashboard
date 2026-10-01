@@ -116,6 +116,16 @@ export default function AccountProfessions({
       unknown.gathering.length >
     0;
   const hasCovered = covered.crafting.length + covered.gathering.length > 0;
+  const investments = scoped.professions.byCharacter.flatMap((character) => {
+    const professions = character.specialization?.data?.professions;
+    if (!Array.isArray(professions)) return [];
+    return professions.flatMap((profession: any) => (profession.tiers ?? []).flatMap((tier: any) => (tier.trees ?? []).map((tree: any) => ({
+      identityKey: character.identityKey, characterName: character.name, professionName: profession.name ?? `Skill line ${profession.baseSkillLineID}`,
+      baseSkillLineID: profession.baseSkillLineID, skillLineID: tier.skillLineID, treeID: tree.treeID,
+      state: typeof tree.tabState === "number" ? (tree.tabState === 1 ? "Unlocked" : tree.tabState === 0 ? "Locked" : `State ${tree.tabState}`) : tree.tabStateEvidence ?? "UNKNOWN",
+      completeness: character.specialization?.completeness ?? "unknown", nodes: Array.isArray(tree.nodes) ? tree.nodes : [], currencies: Array.isArray(tier.currencies) ? tier.currencies : [],
+    }))));
+  });
 
   return (
     <div className="professions">
@@ -192,6 +202,31 @@ export default function AccountProfessions({
             showEmpty={!filterActive}
             showExpansion={isRetail}
           />
+        </section>
+      )}
+
+      {isRetail && (investments.length > 0 || !filterActive) && (
+        <section className="panel">
+          <h3>Specialization investment</h3>
+          {investments.length === 0 ? <p className="muted">No profession specialization observations captured yet. Missing data is unknown, not zero.</p> : (
+            <div className="table-scroll">
+              <table className="history-table professions-table">
+                <thead><tr><th>Character</th><th>Profession</th><th>Tree ID</th><th>State</th><th>Knowledge</th><th>Invested nodes</th></tr></thead>
+                <tbody>{investments.filter((row) => matchesFilter(row.professionName, filter)).map((row) => {
+                  const observedNodes = row.nodes.filter((node: any) => node.evidence === "OBSERVED" && typeof (node.ranksPurchased ?? node.currentRank) === "number");
+                  const invested = observedNodes.filter((node: any) => (node.ranksPurchased ?? node.currentRank) > 0);
+                  const currency = row.currencies.find((entry: any) => typeof entry.spent === "number" || typeof entry.quantity === "number");
+                  return <tr key={`${row.identityKey}:${row.skillLineID}:${row.treeID}`}>
+                    <td><button type="button" className="roster-name-link profession-char-chip" onClick={() => onOpenCharacter(row.identityKey)}>{row.characterName}</button></td>
+                    <td>{row.professionName} <span className="muted small">({row.skillLineID ?? row.baseSkillLineID})</span></td>
+                    <td>{row.treeID}</td><td>{row.state} <span className="muted small">{row.completeness}</span></td>
+                    <td>{currency ? `spent ${currency.spent ?? "?"}; available ${currency.quantity ?? "?"}` : "UNKNOWN"}</td>
+                    <td>{observedNodes.length > 0 ? `${invested.length} invested of ${observedNodes.length} observed nodes` : "UNKNOWN node state"}{invested.length > 0 ? `: ${invested.map((node: any) => `${node.nodeID} ${node.ranksPurchased ?? node.currentRank}${typeof node.maxRanks === "number" ? `/${node.maxRanks}` : ""}`).join(", ")}` : ""}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>

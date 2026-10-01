@@ -285,6 +285,7 @@ export interface CharacterFacts {
   lastImportedAt?: number;
   snapshotCount: number;
   freshness: Freshness;
+  combatSpecialization?: { status: SectionStatus["state"]; completeness: string; observedAt?: number; data?: Record<string, unknown> };
   bankStatus: SectionStatus["state"];
   bankObservedAt?: number;
   professionsObservationStatus: SectionStatus["state"];
@@ -369,6 +370,7 @@ export interface CharacterProfessions {
   /** Was this character's professions section ever observed — not to be confused with ProfessionCoverageEntry.coverageStatus below (different vocabulary, different question). */
   observationStatus: SectionStatus["state"];
   professions: CharacterProfessionEntry[];
+  specialization?: { status: SectionStatus["state"]; completeness: string; observedAt?: number; data?: Record<string, unknown> };
 }
 
 export type ProfessionCoverageStatus = "covered" | "none" | "unknown";
@@ -382,6 +384,16 @@ export interface ProfessionCoverageEntry {
 export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
   coverage: ProfessionCoverageEntry[];
+}
+
+export interface ReputationFacts {
+  completeness: "complete" | "partial" | "unknown";
+  source?: string;
+  rangeMin?: number;
+  rangeMax?: number;
+  globalCatalogueVerified?: boolean;
+  account: { factions: Record<string, unknown>[]; majorFactions: Record<string, unknown>[] };
+  byCharacter: { identityKey: string; name: string; status: SectionStatus["state"]; completeness: string; observedAt?: number; factions: Record<string, unknown>[]; majorFactions: Record<string, unknown>[] }[];
 }
 
 export type StorageLocation = "bags" | "bank";
@@ -462,6 +474,7 @@ export interface AccountFacts {
   playtime: PlaytimeFacts;
   progression: ProgressionFacts;
   professions: ProfessionFacts;
+  reputation: ReputationFacts;
   inventory: InventoryFacts;
   recentChanges: AccountChangeSummary[];
   freshness: FreshnessSummary;

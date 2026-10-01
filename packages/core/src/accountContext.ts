@@ -43,7 +43,7 @@ import { WOW_VERSIONS } from "./version.ts";
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "3";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "4";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document

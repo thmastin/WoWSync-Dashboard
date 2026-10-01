@@ -46,6 +46,15 @@ export interface TrainerUnlock {
   rank?: string;
 }
 
+export interface CharacterStateChange {
+  domain: "combat-specialization" | "profession-node-rank" | "reputation-standing" | "major-faction-renown";
+  identity: Record<string, number | string>;
+  from?: number | string;
+  to?: number | string;
+  delta?: number;
+  evidence: "DERIVED";
+}
+
 export interface SnapshotDiff {
   fromGeneratedAt?: number;
   toGeneratedAt?: number;
@@ -62,6 +71,8 @@ export interface SnapshotDiff {
   equipment: EquipmentDelta[];
   /** Abilities that moved to statusAtVisit "available" since the previous snapshot, per trainer category. Not an elaborate history feature — just the one fact worth surfacing. */
   trainerUnlocks: TrainerUnlock[];
+  /** Only compatible, observed values on both snapshots; omissions are never interpreted as removal. */
+  characterStateChanges: CharacterStateChange[];
 }
 
 function numericDelta(from: number | undefined, to: number | undefined): NumericDelta {
@@ -192,6 +203,67 @@ function diffTrainerUnlocks(from: TrainerSection, to: TrainerSection): TrainerUn
   return unlocks;
 }
 
+function isRecord(value: unknown): value is Record<string, any> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function flattenProfessionNodes(state: ParsedSnapshot["characterState"]): Map<string, { identity: Record<string, number | string>; rank: number }> {
+  const out = new Map<string, { identity: Record<string, number | string>; rank: number }>();
+  const data = state?.professionSpecializations?.data;
+  const professions = isRecord(data) && Array.isArray(data.professions) ? data.professions : [];
+  for (const profession of professions) for (const tier of (profession.tiers ?? [])) for (const tree of (tier.trees ?? [])) for (const node of (tree.nodes ?? [])) {
+    if (node.evidence !== "OBSERVED") continue;
+    const rank = typeof node.ranksPurchased === "number" ? node.ranksPurchased : typeof node.currentRank === "number" ? node.currentRank : undefined;
+    if (rank === undefined || typeof tier.skillLineID !== "number" || typeof tree.treeID !== "number" || typeof node.nodeID !== "number") continue;
+    const identity = { skillLineID: tier.skillLineID, treeID: tree.treeID, nodeID: node.nodeID };
+    out.set(`${identity.skillLineID}:${identity.treeID}:${identity.nodeID}`, { identity, rank });
+  }
+  return out;
+}
+
+function diffCharacterState(from: ParsedSnapshot["characterState"], to: ParsedSnapshot["characterState"]): CharacterStateChange[] {
+  if (!from || !to || from.clientFamily !== "Retail" || to.clientFamily !== "Retail") return [];
+  const changes: CharacterStateChange[] = [];
+  const combatObserved = from.combatSpecialization?.status.state === "OBSERVED" && to.combatSpecialization?.status.state === "OBSERVED";
+  const a = combatObserved ? from.combatSpecialization?.data?.activeSpec : undefined;
+  const b = combatObserved ? to.combatSpecialization?.data?.activeSpec : undefined;
+  if (isRecord(a) && isRecord(b) && a.evidence === "OBSERVED" && b.evidence === "OBSERVED" && typeof a.specID === "number" && typeof b.specID === "number" && a.specID !== b.specID) {
+    changes.push({ domain: "combat-specialization", identity: { field: "specID" }, from: a.specID, to: b.specID, evidence: "DERIVED" });
+  }
+  const configsA = from.combatSpecialization?.data?.talentConfig;
+  const configsB = to.combatSpecialization?.data?.talentConfig;
+  if (isRecord(configsA) && isRecord(configsB) && configsA.evidence === "OBSERVED" && configsB.evidence === "OBSERVED" && typeof configsA.configID === "number" && typeof configsB.configID === "number" && configsA.configID !== configsB.configID) changes.push({ domain: "combat-specialization", identity: { field: "configID" }, from: configsA.configID, to: configsB.configID, evidence: "DERIVED" });
+  const heroA = from.combatSpecialization?.data?.heroTalent;
+  const heroB = to.combatSpecialization?.data?.heroTalent;
+  if (isRecord(heroA) && isRecord(heroB) && heroA.evidence === "OBSERVED" && heroB.evidence === "OBSERVED" && typeof heroA.subtreeID === "number" && typeof heroB.subtreeID === "number" && heroA.subtreeID !== heroB.subtreeID) changes.push({ domain: "combat-specialization", identity: { field: "heroSubtreeID" }, from: heroA.subtreeID, to: heroB.subtreeID, evidence: "DERIVED" });
+  const professionsObserved = from.professionSpecializations?.status.state === "OBSERVED" && to.professionSpecializations?.status.state === "OBSERVED";
+  const oldNodes = professionsObserved ? flattenProfessionNodes(from) : new Map(); const newNodes = professionsObserved ? flattenProfessionNodes(to) : new Map();
+  for (const [key, before] of oldNodes) {
+    const after = newNodes.get(key);
+    if (after && before.rank !== after.rank) changes.push({ domain: "profession-node-rank", identity: before.identity, from: before.rank, to: after.rank, delta: after.rank - before.rank, evidence: "DERIVED" });
+  }
+  const reputationRows = (state: ParsedSnapshot["characterState"], part: "character" | "account", key: "factions" | "majorFactions") => {
+    const data = state?.reputation?.[part]?.data;
+    return isRecord(data) && Array.isArray(data[key]) ? data[key] : [];
+  };
+  for (const part of ["character", "account"] as const) {
+    const oldDomain = from.reputation?.[part]; const newDomain = to.reputation?.[part];
+    if (oldDomain?.status.state !== "OBSERVED" || newDomain?.status.state !== "OBSERVED") continue;
+    const oldFactions = new Map(reputationRows(from, part, "factions").filter((x: any) => x.evidence === "OBSERVED" && typeof x.factionID === "number" && typeof x.currentStanding === "number").map((x: any) => [`${x.factionID}:${x.ownerScope ?? "UNKNOWN"}`, x]));
+    for (const row of reputationRows(to, part, "factions")) {
+      if (row.evidence !== "OBSERVED") continue;
+      if (typeof row.factionID !== "number" || typeof row.currentStanding !== "number") continue;
+      const previous: any = oldFactions.get(`${row.factionID}:${row.ownerScope ?? "UNKNOWN"}`);
+      if (previous && previous.currentStanding !== row.currentStanding) changes.push({ domain: "reputation-standing", identity: { factionID: row.factionID, ownerScope: row.ownerScope ?? "UNKNOWN" }, from: previous.currentStanding, to: row.currentStanding, delta: row.currentStanding - previous.currentStanding, evidence: "DERIVED" });
+    }
+    const oldMajors = new Map(reputationRows(from, part, "majorFactions").filter((x: any) => x.evidence === "OBSERVED" && typeof x.majorFactionID === "number" && x.renownEvidence === "OBSERVED_VALUE" && isRecord(x.renown)).map((x: any) => [x.majorFactionID, x]));
+    for (const row of reputationRows(to, part, "majorFactions")) {
+      if (row.evidence !== "OBSERVED") continue;
+      if (typeof row.majorFactionID !== "number" || row.renownEvidence !== "OBSERVED_VALUE" || !isRecord(row.renown)) continue;
+      const previous: any = oldMajors.get(row.majorFactionID); if (!previous || !isRecord(previous.renown)) continue;
+      for (const field of ["level", "earned"] as const) if (typeof previous.renown[field] === "number" && typeof row.renown[field] === "number" && previous.renown[field] !== row.renown[field]) changes.push({ domain: "major-faction-renown", identity: { majorFactionID: row.majorFactionID, ...(typeof row.conventionalFactionID === "number" ? { conventionalFactionID: row.conventionalFactionID } : {}), ownerScope: part === "account" ? "ACCOUNT_WARBAND" : row.ownerScope ?? "UNKNOWN", field }, from: previous.renown[field], to: row.renown[field], delta: row.renown[field] - previous.renown[field], evidence: "DERIVED" });
+    }
+  }
+  return changes;
+}
+
 export function diffSnapshots(from: ParsedSnapshot, to: ParsedSnapshot): SnapshotDiff {
   return {
     fromGeneratedAt: from.generatedAt,
@@ -208,5 +280,6 @@ export function diffSnapshots(from: ParsedSnapshot, to: ParsedSnapshot): Snapsho
     bankItems: diffInventory(from.bank, to.bank),
     equipment: diffEquipment(from.equipment, to.equipment),
     trainerUnlocks: diffTrainerUnlocks(from.trainer, to.trainer),
+    characterStateChanges: diffCharacterState(from.characterState, to.characterState),
   };
 }

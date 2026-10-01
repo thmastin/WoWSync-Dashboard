@@ -30,7 +30,7 @@
 // Classic/TBC/Forever account.
 
 import { snapshotObservedAt } from "./chronology.ts";
-import { baseItemId, type ItemDelta, type SnapshotDiff } from "./diff.ts";
+import { baseItemId, type CharacterStateChange, type ItemDelta, type SnapshotDiff } from "./diff.ts";
 import { classifyFreshness, type Freshness } from "./freshness.ts";
 import { professionCatalogForVersion, professionEntryIsEvidence } from "./professionCatalog.ts";
 import type { ParsedSnapshot, SectionState, VersionOrUnknown } from "./types.ts";
@@ -62,6 +62,8 @@ export interface CharacterFacts {
   bankObservedAt?: number;
   /** Professions section state — UNKNOWN means never observed on this character. */
   professionsObservationStatus: SectionState;
+  /** Latest Retail formal specialization evidence, absent when unsupported/unobserved. */
+  combatSpecialization?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
   bagsStatus: SectionState;
   bagsFreeSlots?: number;
   bagsTotalSlots?: number;
@@ -194,6 +196,8 @@ export interface CharacterProfessions {
    */
   observationStatus: SectionState;
   professions: CharacterProfessionEntry[];
+  /** Structured Retail tree/node investment; separate from profession skill/ownership. */
+  specialization?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
 }
 
 /**
@@ -214,6 +218,27 @@ export interface ProfessionFacts {
   byCharacter: CharacterProfessions[];
   /** The version's full profession catalog (see professionCatalog.ts), each marked covered/none/unknown. Sorted alphabetically. Empty catalog (unknown-version, forever) degrades to "only what's observed" — see buildProfessionCoverage. */
   coverage: ProfessionCoverageEntry[];
+}
+
+export interface CharacterReputationFacts {
+  identityKey: string;
+  name: string;
+  status: SectionState;
+  completeness: string;
+  observedAt?: number;
+  factions: Record<string, unknown>[];
+  majorFactions: Record<string, unknown>[];
+}
+
+/** Reputation observations retain separate owners; account-wide records occur once here. */
+export interface ReputationFacts {
+  completeness: "complete" | "partial" | "unknown";
+  source?: string;
+  rangeMin?: number;
+  rangeMax?: number;
+  globalCatalogueVerified?: boolean;
+  account: { factions: Record<string, unknown>[]; majorFactions: Record<string, unknown>[] };
+  byCharacter: CharacterReputationFacts[];
 }
 
 // ---------------------------------------------------------------------
@@ -299,6 +324,8 @@ export interface AccountChangeSummary {
   inventoryItemChanges?: InventoryItemChange[];
   locationChanged: boolean;
   trainerUnlocked: boolean;
+  /** Stable-ID progression differences observed across two compatible snapshots; no cause/time is inferred. */
+  characterStateChanges?: CharacterStateChange[];
 }
 
 function toInventoryItemChange(storage: StorageLocation, delta: ItemDelta): InventoryItemChange {
@@ -341,6 +368,7 @@ export function diffToChangeSummary(
     inventoryItemChanges: inventoryItemChanges.length > 0 ? inventoryItemChanges : undefined,
     locationChanged: diff.location.changed,
     trainerUnlocked: diff.trainerUnlocks.length > 0,
+    ...(diff.characterStateChanges.length > 0 ? { characterStateChanges: diff.characterStateChanges } : {}),
   };
 }
 
@@ -402,6 +430,7 @@ export interface AccountFacts {
   playtime: PlaytimeFacts;
   progression: ProgressionFacts;
   professions: ProfessionFacts;
+  reputation: ReputationFacts;
   inventory: InventoryFacts;
   recentChanges: AccountChangeSummary[];
   freshness: FreshnessSummary;
@@ -475,6 +504,12 @@ function buildCharacterFacts(
       bankStatus: parsed?.bank.status.state ?? "UNKNOWN",
       bankObservedAt: parsed?.bank.status.observedAt ?? parsed?.bank.status.lastVisit,
       professionsObservationStatus: parsed?.professions.status.state ?? "UNKNOWN",
+      ...(parsed?.characterState?.combatSpecialization ? { combatSpecialization: {
+        status: parsed.characterState.combatSpecialization.status.state,
+        completeness: parsed.characterState.combatSpecialization.completeness,
+        observedAt: parsed.characterState.combatSpecialization.observedAt,
+        data: parsed.characterState.combatSpecialization.data,
+      } } : {}),
       bagsStatus: parsed?.bags.status.state ?? "UNKNOWN",
       bagsFreeSlots: parsed?.bags.freeSlots,
       bagsTotalSlots: parsed?.bags.totalSlots,
@@ -606,6 +641,12 @@ function buildProfessionsByCharacter(
         if (e.category !== undefined) entry.category = e.category;
         return entry;
       }),
+      ...(latestParsed.get(c.identityKey)?.characterState?.professionSpecializations ? { specialization: {
+        status: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.status.state,
+        completeness: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.completeness,
+        observedAt: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.observedAt,
+        data: latestParsed.get(c.identityKey)!.characterState!.professionSpecializations!.data,
+      } } : {}),
     };
   });
 }
@@ -681,6 +722,60 @@ function buildProfessionFacts(
   return { byCharacter, coverage };
 }
 
+function buildReputationFacts(characters: StoredCharacterSummary[], latestParsed: Map<string, ParsedSnapshot>): ReputationFacts {
+  const byCharacter: CharacterReputationFacts[] = [];
+  const accountFactions = new Map<number, { observedAt: number; row: Record<string, unknown> }>();
+  const accountMajors = new Map<number, { observedAt: number; row: Record<string, unknown> }>();
+  let sawSidecar = false;
+  let allDomainsComplete = true;
+  let source: string | undefined; let rangeMin: number | undefined; let rangeMax: number | undefined; let globalCatalogueVerified: boolean | undefined;
+  const substantive = (row: Record<string, unknown>) =>
+    typeof row.currentStanding === "number" && row.currentStanding > 0 ||
+    row.friendshipState === "OBSERVED" || row.paragonState === "OBSERVED_TRUE";
+  for (const character of characters) {
+    const domain = latestParsed.get(character.identityKey)?.characterState?.reputation;
+    if (!domain) { byCharacter.push({ identityKey: character.identityKey, name: character.name, status: "UNKNOWN", completeness: "unknown", factions: [], majorFactions: [] }); continue; }
+    sawSidecar = true;
+    if (!domain.character || !domain.account || domain.character.completeness !== "complete" || domain.account.completeness !== "complete") allDomainsComplete = false;
+    const cdata = domain.character?.data as Record<string, unknown> | undefined;
+    const adata = domain.account?.data as Record<string, unknown> | undefined;
+    const coverage = (cdata?.coverage ?? adata?.coverage) as Record<string, unknown> | undefined;
+    if (typeof coverage?.source === "string") source = coverage.source;
+    if (typeof coverage?.rangeMin === "number") rangeMin = coverage.rangeMin;
+    if (typeof coverage?.rangeMax === "number") rangeMax = coverage.rangeMax;
+    if (typeof coverage?.globalCatalogueVerified === "boolean") globalCatalogueVerified = globalCatalogueVerified === undefined ? coverage.globalCatalogueVerified : globalCatalogueVerified && coverage.globalCatalogueVerified;
+    const factions = (Array.isArray(cdata?.factions) ? cdata.factions : []).filter((row): row is Record<string, unknown> =>
+      row !== null && typeof row === "object" && !Array.isArray(row) && substantive(row as Record<string, unknown>));
+    const majors = (Array.isArray(cdata?.majorFactions) ? cdata.majorFactions : []).filter((row): row is Record<string, unknown> => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+      const r = row as Record<string, unknown>; const renown = r.renown as Record<string, unknown> | undefined;
+      return r.ownerScope !== "ACCOUNT_WARBAND" && (r.isUnlocked === true || (typeof renown?.level === "number" && renown.level > 0) || (typeof renown?.earned === "number" && renown.earned > 0));
+    });
+    byCharacter.push({ identityKey: character.identityKey, name: character.name, status: domain.character?.status.state ?? "UNKNOWN",
+      completeness: domain.character?.completeness ?? "unknown", observedAt: domain.character?.observedAt, factions, majorFactions: majors });
+    for (const row of (Array.isArray(adata?.factions) ? adata.factions : [])) {
+      if (!row || typeof row !== "object" || Array.isArray(row) || !substantive(row as Record<string, unknown>)) continue;
+      const r = row as Record<string, unknown>; if (typeof r.factionID !== "number") continue;
+      const at = domain.account?.observedAt ?? 0; const old = accountFactions.get(r.factionID);
+      if (!old || at >= old.observedAt) accountFactions.set(r.factionID, { observedAt: at, row: { ...r, ownerScope: "ACCOUNT_WARBAND" } });
+    }
+    for (const row of (Array.isArray(adata?.majorFactions) ? adata.majorFactions : [])) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      const r = row as Record<string, unknown>; const renown = r.renown as Record<string, unknown> | undefined;
+      if (r.isUnlocked !== true && !(typeof renown?.level === "number" && renown.level > 0) && !(typeof renown?.earned === "number" && renown.earned > 0)) continue;
+      if (typeof r.majorFactionID !== "number") continue;
+      const at = domain.account?.observedAt ?? 0; const old = accountMajors.get(r.majorFactionID);
+      if (!old || at >= old.observedAt) accountMajors.set(r.majorFactionID, { observedAt: at, row: { ...r, ownerScope: "ACCOUNT_WARBAND" } });
+    }
+  }
+  byCharacter.sort((a, b) => a.name.localeCompare(b.name) || a.identityKey.localeCompare(b.identityKey));
+  const completeness = !sawSidecar ? "unknown" : allDomainsComplete && globalCatalogueVerified === true ? "complete" : "partial";
+  return { completeness, ...(source ? { source } : {}), ...(rangeMin === undefined ? {} : { rangeMin }),
+    ...(rangeMax === undefined ? {} : { rangeMax }), ...(globalCatalogueVerified === undefined ? {} : { globalCatalogueVerified }),
+    account: { factions: [...accountFactions.values()].map((x) => x.row).sort((a, b) => Number(a.factionID) - Number(b.factionID)),
+      majorFactions: [...accountMajors.values()].map((x) => x.row).sort((a, b) => Number(a.majorFactionID) - Number(b.majorFactionID)) }, byCharacter };
+}
+
 function buildInventoryFacts(
   characters: StoredCharacterSummary[],
   latestParsed: Map<string, ParsedSnapshot>,
@@ -739,6 +834,7 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
   const playtime = buildPlaytimeFacts(characters, latestParsed, diffs, characterFacts);
   const progression = buildProgressionFacts(characters, latestParsed, diffs);
   const professions = buildProfessionFacts(version, characters, latestParsed);
+  const reputation = buildReputationFacts(characters, latestParsed);
   const inventory = buildInventoryFacts(characters, latestParsed);
 
   const recentChanges: AccountChangeSummary[] = meaningfulChanges.map((c) => diffToChangeSummary(c.diff, c));
@@ -783,6 +879,7 @@ export function buildAccountFacts(input: AccountFactsInput, now: number): Accoun
     playtime,
     progression,
     professions,
+    reputation,
     inventory,
     recentChanges,
     freshness,

@@ -289,8 +289,9 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     // Optional structured data that travels with the text (the bridge's `currencies`, from WoWSyncDB ... sections.currencies).
     // It never changes how the text is parsed; the store validates it and reports what it did in result.currencies.
     const currencies: unknown = req.body?.currencies;
+    const characterState: unknown = req.body?.characterState;
     try {
-      const result = store.importSnapshot(text, currencies === undefined || currencies === null ? {} : { currencies });
+      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }) });
       res.json({
         result: {
           ...result,
