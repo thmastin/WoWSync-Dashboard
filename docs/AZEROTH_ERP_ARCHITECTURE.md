@@ -43,6 +43,37 @@ not zero-valued fields, *absent* fields (see `packages/core/src/allocation.ts`,
 `AllocationResult`/`NoActiveDemandResult`). A caller cannot mistake "nobody asked" for "fully satisfied,
 rest is surplus."
 
+**Clarification: `NO_ACTIVE_DEMAND` means "surplus cannot yet be determined," not "there is nothing
+interesting to report."** These are different claims. Slice 1 is correct to refuse a surplus
+determination when no modeled demand exists — but the inventory itself does not stop being real or
+stop being worth asking about. An account holding 500 of an item with no active demand is:
+
+- **not** `confirmedSurplus = 500` (no demand-driven conclusion is available at all — §3, §4 above), but
+- **confirmed observed inventory that no modeled demand currently explains or reserves.**
+
+That second framing is a distinct category from a known surplus, worth naming so a future layer has
+clean footing to build on without Slice 1 having to guess at its shape:
+
+- **KNOWN SURPLUS** — inventory remaining *after* explicit modeled demand/allocation accounted for some
+  of it (§13, §14). This requires an active demand to exist; it is what `confirmedSurplus` on a
+  `RESOLVED` result means today.
+- **UNALLOCATED / UNEXPLAINED INVENTORY** — inventory for which *no* modeled demand currently exists at
+  all. This is not a Slice 1 output (no field in `AllocationResult` computes or names it), but a
+  `NO_ACTIVE_DEMAND` result already carries everything a future reader needs to recognize it: the
+  commodity identity and the full `evidence`/`guildContext` arrays are present on every resolution branch
+  of `AllocationResult`, `NO_ACTIVE_DEMAND` included (see `AllocationResultBase` in `allocation.ts`) — so
+  "500 confirmed account-owned units, no modeled demand" remains visible to a caller that reads the
+  result, even though Slice 1 itself draws no conclusion from it.
+
+A future insight/exception layer may ask *"why are we holding this?"* about unallocated/unexplained
+inventory — and, once economic evidence exists in a later slice, may eventually phrase that as something
+like *"500 units are currently unallocated by known account demand and represent approximately X gold of
+potentially tied-up capital."* That remains an **insight**, not a disposition: it does not answer *"we
+should sell it"*, it is not `SEND_HELLOMAGS` or any other `Disposition` value, and producing it is
+explicitly out of scope for this milestone (§20) — no thresholds, no market valuation, no automatic
+reclassification into surplus. The distinction exists in this document now so that the future layer has
+somewhere correct to stand, without Slice 1 building it prematurely.
+
 ## 5. Existing evidence sources (reused, not duplicated)
 
 Slice 1 introduces no inventory ledger. It reads:
@@ -225,7 +256,9 @@ These are documented as **future** constraints this architecture must accommodat
   added only when approval history, execution correlation, or economic learning actually need it (§10,
   §12).
 - **Scheduled exception detection**: a consumer of the same deterministic `AllocationResult` shape (§18),
-  not a new calculation path.
+  not a new calculation path. For `NO_ACTIVE_DEMAND` results in particular, this is also where
+  unallocated/unexplained-inventory insights (§4) would eventually be produced — reading the evidence
+  already present on the result, never reclassifying it into surplus itself.
 - **Execution / BankX**: a strictly later, explicitly separate concern from recommendation (§16).
 
 ## 22. Cross-cutting invariants future ERP work must preserve
