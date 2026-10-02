@@ -67,7 +67,7 @@ WoWSync export -> normal writable SqliteSnapshotStore -> Dashboard UI/import
                          +-> SQLite opened by SqliteSnapshotReadStore
                                -> DashboardReadModel
                                -> fixed ResearchRegistry
-                               -> packages/mcp (11 read-only tools, stdio)
+                               -> packages/mcp (bounded read-only tool surface, stdio)
                                -> tunnel-client (outbound Secure MCP Tunnel)
                                -> personal ChatGPT MCP App (normal-chat invocation validated)
 ```
