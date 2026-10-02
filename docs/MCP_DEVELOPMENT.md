@@ -114,8 +114,9 @@ imports may update the database.
 | `get_character_storage` | Retrieve bounded character-owned storage for one character. |
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
+| `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. See `docs/AZEROTH_ERP_ARCHITECTURE.md`. |
 
-All tools are marked read-only and closed-world. Every account-state query
+This brings the implementation to 25 registered tools. All tools are marked read-only and closed-world. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
 lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently

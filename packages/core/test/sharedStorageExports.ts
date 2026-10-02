@@ -40,6 +40,11 @@ export function renderBags(section: InventorySection): string {
   return ["[BAGS]", ...statusLines(section.status), ...inventoryLines(section)].join("\n");
 }
 
+/** A character bank section, same body shape as `renderBags` under the `[BANK]` label. */
+export function renderBank(section: InventorySection): string {
+  return ["[BANK]", ...statusLines(section.status), ...inventoryLines(section)].join("\n");
+}
+
 /** One row of the addon's `[ITEM METADATA]` block; an omitted facet is `?` (UNKNOWN), and a boolean renders yes / no. */
 export interface MetadataRowSpec {
   id: number | string;
@@ -100,6 +105,8 @@ export interface ExportSpec {
   level?: number;
   /** The character's own bags. Omitted = `State: UNKNOWN`. */
   bags?: InventorySection;
+  /** The character's own bank. Omitted = `State: UNKNOWN` (unchanged default for every existing caller). */
+  bank?: InventorySection;
   /** An `[ITEM METADATA]` block: rows to render, or the exact block text (for malformed-input tests). Omitted = no such section (a legacy export). */
   itemMetadata?: MetadataRowSpec[] | string;
   /** Client build line; defaults to the current Retail build used by the Virek fixtures. */
@@ -128,7 +135,7 @@ export function renderExport(spec: ExportSpec): string {
     unknown("LOCATION"),
     unknown("EQUIPMENT"),
     spec.bags ? renderBags(spec.bags) : unknown("BAGS"),
-    unknown("BANK"),
+    spec.bank ? renderBank(spec.bank) : unknown("BANK"),
     spec.warband ? renderWarband(spec.warband) : UNKNOWN_WARBAND,
     spec.guild ? renderGuild(spec.guild) : UNKNOWN_GUILD,
     unknown("PROFESSIONS"),

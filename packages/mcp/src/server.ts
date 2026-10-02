@@ -227,6 +227,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: versionSchema, kind: z.enum(["warband", "guild"]), guildClubId: z.string().trim().min(1).max(128).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(), ownerOffset: z.number().int().min(0).optional(), ownerLimit: z.number().int().min(1).max(20).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getSharedStorageContents(query)));
+  server.registerTool("get_item_allocation", {
+    title: "Get deterministic item allocation decision",
+    description: "Returns the deterministic Azeroth ERP allocation decision for one explicit-version base item against its currently active STOCK_TARGET demand, if any. Distinguishes confirmed (OBSERVED) from potential (LAST_SEEN) availability, surfaces unresolved (UNKNOWN) account-owned storage explicitly, never routes guild-owned evidence into account surplus, and never treats a missing demand as zero demand. A confirmed floor surplus may still be reported precisely under unresolved evidence, but disposition never recommends the Hellomags sale pipeline while that uncertainty exists.",
+    inputSchema: z.object({ version: versionSchema, baseItemId: z.number().int().positive() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getItemAllocation(query)));
   server.registerTool("get_item_metadata", {
     title: "Get deterministic item metadata",
     description: "Returns game-client-reported metadata facets for up to 100 base item IDs in one explicit version. KNOWN, UNKNOWN, and conflicting evidence remain distinct.",

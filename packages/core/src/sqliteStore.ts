@@ -1,5 +1,17 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  DemandConflictError,
+  storedDemandToExplicitDemand,
+  validateCreateDemandInput,
+  validateUpdateDemandInput,
+  type CreateDemandInput,
+  type DemandType,
+  type ExplicitDemand,
+  type StoredDemand,
+  type UpdateDemandInput,
+} from "./demand.ts";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
 import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
 import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } from "./chronology.ts";
@@ -217,6 +229,28 @@ CREATE TABLE IF NOT EXISTS snapshot_currencies (
   PRIMARY KEY (snapshot_id, currency_id)
 );
 CREATE INDEX IF NOT EXISTS idx_snapshot_currencies_character ON snapshot_currencies(character_id, currency_id);
+
+-- Explicit Demand (see demand.ts): the one new durable domain concept for Azeroth ERP Vertical Slice 1.
+-- Demand is USER INTENT, not a WoW observation: persistence represents CURRENT intent (mutable status/
+-- quantity/purpose), never an audit/event history, and there is deliberately no reference to characters
+-- or snapshots (same reasoning as shared_observations / item_metadata_evidence). The partial unique
+-- index enforces "one effective active demand per (version, demand type, commodity)" at the DB layer,
+-- while still letting INACTIVE history rows coexist.
+CREATE TABLE IF NOT EXISTS demands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stable_id TEXT NOT NULL UNIQUE,
+  game_version TEXT NOT NULL CHECK (game_version = 'retail'),
+  demand_type TEXT NOT NULL CHECK (demand_type IN ('STOCK_TARGET')),
+  base_item_id INTEGER NOT NULL CHECK (base_item_id > 0),
+  required_quantity INTEGER NOT NULL CHECK (required_quantity >= 0),
+  purpose TEXT,
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'INACTIVE')) DEFAULT 'ACTIVE',
+  supersedes_stable_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_demands_active_key
+  ON demands(game_version, demand_type, base_item_id) WHERE status = 'ACTIVE';
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -256,6 +290,38 @@ interface ItemEvidenceRow {
   first_seen_at: number;
   last_seen_at: number;
   client_builds: string;
+}
+
+interface DemandRow {
+  id: number;
+  stable_id: string;
+  game_version: string;
+  demand_type: string;
+  base_item_id: number;
+  required_quantity: number;
+  purpose: string | null;
+  status: string;
+  supersedes_stable_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+function toStoredDemand(row: DemandRow): StoredDemand {
+  if (row.game_version !== "retail") throw new Error(`Corrupt demand row ${row.stable_id}: unsupported game_version "${row.game_version}"`);
+  if (row.demand_type !== "STOCK_TARGET") throw new Error(`Corrupt demand row ${row.stable_id}: unsupported demand_type "${row.demand_type}"`);
+  if (row.status !== "ACTIVE" && row.status !== "INACTIVE") throw new Error(`Corrupt demand row ${row.stable_id}: unsupported status "${row.status}"`);
+  return {
+    stableId: row.stable_id,
+    gameVersion: "retail",
+    demandType: row.demand_type,
+    baseItemId: row.base_item_id,
+    requiredQuantity: row.required_quantity,
+    ...(row.purpose !== null ? { purpose: row.purpose } : {}),
+    status: row.status,
+    ...(row.supersedes_stable_id !== null ? { supersedesStableId: row.supersedes_stable_id } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
 interface SharedObservationRow {
@@ -435,6 +501,7 @@ const READ_ONLY_REQUIRED_TABLES = [
   "snapshot_currency_sections",
   "snapshot_currencies",
   "item_metadata_evidence",
+  "demands",
 ] as const;
 
 export class SqliteSnapshotStore implements SnapshotStore {
@@ -561,6 +628,15 @@ export class SqliteSnapshotStore implements SnapshotStore {
       currenciesForSnapshot: this.db.prepare("SELECT * FROM snapshot_currencies WHERE snapshot_id = ? ORDER BY list_order, currency_id"),
       deleteCurrenciesForCharacter: this.db.prepare("DELETE FROM snapshot_currencies WHERE character_id = ?"),
       deleteCurrencySectionsForCharacter: this.db.prepare("DELETE FROM snapshot_currency_sections WHERE character_id = ?"),
+      insertDemand: this.db.prepare(
+        `INSERT INTO demands (stable_id, game_version, demand_type, base_item_id, required_quantity, purpose, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
+      ),
+      demandByStableId: this.db.prepare("SELECT * FROM demands WHERE stable_id = ?"),
+      activeDemandByKey: this.db.prepare("SELECT * FROM demands WHERE game_version = ? AND demand_type = ? AND base_item_id = ? AND status = 'ACTIVE'"),
+      demandsForVersion: this.db.prepare("SELECT * FROM demands WHERE game_version = ? ORDER BY updated_at DESC, id DESC"),
+      updateDemandFields: this.db.prepare("UPDATE demands SET required_quantity = ?, purpose = ?, updated_at = ? WHERE stable_id = ?"),
+      deactivateDemandRow: this.db.prepare("UPDATE demands SET status = 'INACTIVE', updated_at = ? WHERE stable_id = ?"),
     };
       if (this.readOnly) {
         this.assertReadOnlySchema();
@@ -1321,6 +1397,51 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return buildAccountContextPure({ now, versionFacts, characterSnapshots });
   }
 
+  // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------
+  //
+  // Persistence only; every rule (validation, conflict key, enrichment-vs-observation distinctions) is
+  // in demand.ts. Demand represents CURRENT user intent: rows are mutated in place, never superseded by
+  // an immutable chain. There is deliberately no reference to characters or snapshots.
+
+  listDemands(version: VersionOrUnknown): ExplicitDemand[] {
+    if (version !== "retail") return [];
+    return many<DemandRow>(this.stmts.demandsForVersion, version).map((row) => storedDemandToExplicitDemand(toStoredDemand(row)));
+  }
+
+  getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
+    if (version !== "retail") return undefined;
+    const row = one<DemandRow>(this.stmts.activeDemandByKey, version, demandType, baseItemId);
+    return row ? storedDemandToExplicitDemand(toStoredDemand(row)) : undefined;
+  }
+
+  createDemand(input: CreateDemandInput): ExplicitDemand {
+    const validated = validateCreateDemandInput(input);
+    const existing = one<DemandRow>(this.stmts.activeDemandByKey, "retail", validated.demandType, validated.baseItemId);
+    if (existing) throw new DemandConflictError(existing.stable_id);
+    const now = Math.floor(Date.now() / 1000);
+    const stableId = `demand_${randomUUID()}`;
+    this.stmts.insertDemand.run(stableId, "retail", validated.demandType, validated.baseItemId, validated.requiredQuantity, validated.purpose ?? null, now, now);
+    return storedDemandToExplicitDemand(toStoredDemand(one<DemandRow>(this.stmts.demandByStableId, stableId)!));
+  }
+
+  updateDemand(stableId: string, input: UpdateDemandInput): ExplicitDemand | undefined {
+    const validated = validateUpdateDemandInput(input);
+    const existing = one<DemandRow>(this.stmts.demandByStableId, stableId);
+    if (!existing) return undefined;
+    const requiredQuantity = validated.requiredQuantity ?? existing.required_quantity;
+    const purpose = validated.purpose !== undefined ? validated.purpose : existing.purpose;
+    const now = Math.floor(Date.now() / 1000);
+    this.stmts.updateDemandFields.run(requiredQuantity, purpose, now, stableId);
+    return storedDemandToExplicitDemand(toStoredDemand(one<DemandRow>(this.stmts.demandByStableId, stableId)!));
+  }
+
+  deactivateDemand(stableId: string): ExplicitDemand | undefined {
+    const existing = one<DemandRow>(this.stmts.demandByStableId, stableId);
+    if (!existing) return undefined;
+    this.stmts.deactivateDemandRow.run(Math.floor(Date.now() / 1000), stableId);
+    return storedDemandToExplicitDemand(toStoredDemand(one<DemandRow>(this.stmts.demandByStableId, stableId)!));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -1364,6 +1485,12 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   }
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts {
     return this.store.buildAccountFacts(version, now);
+  }
+  listDemands(version: VersionOrUnknown): ExplicitDemand[] {
+    return this.store.listDemands(version);
+  }
+  getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
+    return this.store.getActiveDemand(version, demandType, baseItemId);
   }
   close(): void {
     this.store.close();

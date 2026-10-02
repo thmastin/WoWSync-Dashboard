@@ -22,3 +22,5 @@ export * from "./savedVariables.ts";
 export * from "./wowCurrencies.ts";
 export * from "./readModel.ts";
 export * from "./researchRegistry.ts";
+export * from "./demand.ts";
+export * from "./allocation.ts";

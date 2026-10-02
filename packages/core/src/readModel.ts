@@ -2,6 +2,8 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
+import { buildAllocationResult, projectAccountOwnedEvidence, type AllocationResult } from "./allocation.ts";
+import { commodityIdentity } from "./demand.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
 import type { CapturedCharacterState, EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
@@ -723,6 +725,34 @@ export class DashboardReadModel {
     if (query.itemIds.length > 100 || query.itemIds.some((id) => !Number.isSafeInteger(id) || id < 1)) throw new TypeError("itemIds must contain at most 100 positive integers");
     const found = new Map(this.store.getItemMetadata(query.version, query.itemIds).map((item) => [item.baseItemId, item]));
     return { data: [...new Set(query.itemIds)].map((baseItemId) => { const metadata = found.get(baseItemId); return { baseItemId, state: metadata ? "KNOWN" as const : "UNKNOWN" as const, ...(metadata ? { metadata } : {}) }; }), provenance: { state: "DERIVED", version: query.version, source: "game-client item metadata evidence" } };
+  }
+
+  /**
+   * Azeroth ERP Vertical Slice 1: the deterministic allocation decision for one explicit-version
+   * commodity (base item id) against its currently active STOCK_TARGET demand, if any. Always DERIVED —
+   * recomputed on every read from the current demand plus current character-storage and shared-storage
+   * evidence; nothing about the decision itself is persisted. Allocation/demand are Retail-only in this
+   * slice, matching getSharedStorage.
+   */
+  getItemAllocation(query: { version: VersionOrUnknown; baseItemId: number }): ReadValue<AllocationResult> {
+    requireVersion(query.version);
+    if (!Number.isSafeInteger(query.baseItemId) || query.baseItemId <= 0) throw new TypeError("baseItemId must be a positive integer");
+    if (query.version !== "retail") {
+      return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
+    }
+    const commodity = commodityIdentity(query.baseItemId);
+    const active = this.store.getActiveDemand(query.version, "STOCK_TARGET", query.baseItemId);
+    const { evidence, guildContext } = projectAccountOwnedEvidence(this.store, query.version, query.baseItemId);
+    const data = buildAllocationResult(commodity, active ? [active] : [], evidence, guildContext);
+    return {
+      data,
+      provenance: {
+        state: "DERIVED",
+        version: query.version,
+        source: "explicit demand plus character-storage and shared-storage evidence",
+        warning: "Allocation is recomputed on every read from current observations and current demand; the decision itself is never stored.",
+      },
+    };
   }
 
   /** Existing get_renown projection over the distinct captured Major Faction records. */

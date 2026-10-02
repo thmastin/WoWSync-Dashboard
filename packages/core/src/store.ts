@@ -9,6 +9,7 @@ import type { AccountContext } from "./accountContext.ts";
 import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } from "./wowCurrencies.ts";
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
+import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -180,6 +181,16 @@ export interface SnapshotReadStore {
   listSnapshots(identityKey: string): StoredSnapshot[];
   /** Deterministic account-level facts for one explicit version space. */
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
+  /**
+   * Every demand (any status) for one explicit version, newest-updated first. Demand persistence
+   * represents CURRENT USER INTENT, not an audit/event history (see demand.ts).
+   */
+  listDemands(version: VersionOrUnknown): ExplicitDemand[];
+  /**
+   * The one ACTIVE demand for this exact (version, demand type, commodity) key, if any. Persistence and
+   * the API both enforce at most one; this read method simply reflects that invariant.
+   */
+  getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined;
   close(): void;
 }
 
@@ -256,4 +267,14 @@ export interface SnapshotStore extends SnapshotReadStore {
   recentChanges(version: VersionOrUnknown, limit?: number): RecentChange[];
   /** The full, all-versions deterministic export used by the "Export Dashboard Context" developer tool. `now` defaults to the wall clock but can be pinned for deterministic tests. */
   buildAccountContext(now?: number): AccountContext;
+  /**
+   * Creates a new ACTIVE Retail demand. Throws `DemandConflictError` if an ACTIVE demand already exists
+   * for the same (version, demand type, commodity) key — enforced at the DB layer by a partial unique
+   * index, never resolved by picking a winner. Throws `DemandValidationError` for invalid input.
+   */
+  createDemand(input: CreateDemandInput): ExplicitDemand;
+  /** Updates requiredQuantity/purpose on an existing demand (any status). Returns undefined if stableId does not exist. */
+  updateDemand(stableId: string, input: UpdateDemandInput): ExplicitDemand | undefined;
+  /** Sets a demand's status to INACTIVE. Not a delete: the row (and its history) remains. Returns undefined if stableId does not exist. */
+  deactivateDemand(stableId: string): ExplicitDemand | undefined;
 }

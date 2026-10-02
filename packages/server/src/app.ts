@@ -22,6 +22,7 @@ import {
 import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.ts";
 import { hostGuard } from "./net.ts";
 import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
+import { registerDemandRoutes } from "./demandRoutes.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -313,6 +314,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   });
 
   registerSharedStorageRoutes(app, store);
+  registerDemandRoutes(app, store);
 
   // Unknown API paths are JSON 404s like every other API error - never
   // Express's default HTML page (which the web client cannot tell from a

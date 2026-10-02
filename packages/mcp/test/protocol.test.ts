@@ -74,6 +74,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
+    // Azeroth ERP Vertical Slice 1: one ACTIVE demand so get_item_allocation has something to resolve.
+    writer.createDemand({ baseItemId: 777, requiredQuantity: 1 });
   } finally {
     writer.close();
   }
@@ -104,6 +106,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
@@ -256,6 +259,23 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(itemMetadata.data?.map((item) => item.state), ["KNOWN", "UNKNOWN"]);
     assert.equal(itemMetadata.data?.[0]?.metadata?.expansionId.state, "KNOWN");
     assert.equal(itemMetadata.data?.[0]?.metadata?.craftingReagent.state, "KNOWN");
+
+    // Azeroth ERP Vertical Slice 1: get_item_allocation resolves the ACTIVE demand created above against
+    // real character-storage evidence, delegates entirely to DashboardReadModel (no arithmetic in the
+    // tool body), and a missing demand is structurally distinct from a resolved one.
+    const allocation = structured<{ data?: { resolution: string; disposition: string; confirmedAvailable?: number; reasons: Array<{ code: string }> }; provenance: { state: string } }>(
+      await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 777 } }),
+    );
+    assert.equal(allocation.provenance.state, "DERIVED");
+    assert.equal(allocation.data?.resolution, "RESOLVED");
+    assert.ok((allocation.data?.confirmedAvailable ?? 0) >= 2, "at least one character's OBSERVED bags item 777 counts toward confirmed availability");
+    assert.ok(allocation.data?.reasons.some((r) => r.code === "EXPLICIT_DEMAND_EXISTS"));
+    const noActiveDemand = structured<{ data?: { resolution: string } }>(
+      await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 999999999 } }),
+    );
+    assert.equal(noActiveDemand.data?.resolution, "NO_ACTIVE_DEMAND", "no demand was created for this item; it must never read as resolved zero-surplus");
+    assert.ok(noActiveDemand.data && !("confirmedSurplus" in noActiveDemand.data));
+
     const warband = structured<{ data?: { owners: Array<{ owner: { kind: string }; current?: { liveAtExport: boolean; provenance: { sources: Array<{ carrierState: string }> } | { } | undefined; content: { items: unknown[] } } }> }; provenance: { state: string } }>(await client.callTool({ name: "get_shared_storage", arguments: { version: "retail", kind: "warband", limit: 1 } }));
     assert.equal(warband.provenance.state, "DERIVED");
     assert.equal(warband.data?.owners[0]?.owner.kind, "warband");
@@ -424,6 +444,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
       "get_renown",
