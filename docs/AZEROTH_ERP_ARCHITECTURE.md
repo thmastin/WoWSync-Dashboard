@@ -436,8 +436,8 @@ Result semantics (`buildAllocationResult`, precedence `NO_ACTIVE_DEMAND` → `CO
   Unallocated entries gain the four facets (still no allocation/surplus/disposition/recommendation fields),
   and `unallocatedItemStringIdentityCounts` (`confirmed`/`potential`, per class) covers the whole
   unallocated list, not the page. Unallocated entries are never filtered or reordered by class.
-- A pure caller of `buildAllocationResult` that supplies no row facets (hand-built Slice 1 inputs) gets the
-  Slice 1/2 semantics unchanged and no facets; every read-model path supplies them.
+- `buildAllocationResult` requires `guildContext` and the `HeldItemFacets`; there is no call shape that
+  omits them, and every result variant carries all four facets.
 - **Practical consequence**: an item captured only as a bare `item:<id>` can no longer be allocated until a
   full item string is captured for every confirmed row.
 - **Validation**: automated (`heldItemIdentity.test.ts`, `allocation.test.ts`,

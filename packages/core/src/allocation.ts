@@ -112,12 +112,8 @@ export type Disposition = "HOLD_ALLOCATED" | "SEND_HELLOMAGS" | "NO_ACTION" | "R
 
 export type AllocationResolution = "RESOLVED" | "NO_ACTIVE_DEMAND" | "CONFLICTING_DEMAND" | "BASE_ITEM_AGGREGATION_UNPROVEN";
 
-/**
- * Every read-model result carries the four held-row facets (see heldItemIdentity.ts). They are optional on the
- * pre-Slice-3 variants only because a hand-built pure call may supply no row facts, in which case the Slice 1/2
- * semantics apply unchanged (mirroring how evidence with no recorded unresolved cause keeps its original meaning).
- */
-interface AllocationResultBase extends Partial<HeldItemFacets> {
+/** Every result variant carries the four held-row facets (see heldItemIdentity.ts); they are never optional. */
+interface AllocationResultBase extends HeldItemFacets {
   readonly commodity: CommodityIdentity;
   readonly guildContext: GuildContextEntry[];
   readonly reasons: AllocationReason[];
@@ -167,7 +163,7 @@ export interface ResolvedAllocationResult extends AllocationResultBase {
  * NO_ACTIVE_DEMAND, it STRUCTURALLY carries no `allocated`, `confirmedDeficit`, or `confirmedSurplus`: the
  * arithmetic cannot honestly be performed, so no zero or approximate value is substituted.
  */
-export interface BaseItemAggregationUnprovenResult extends Omit<AllocationResultBase, keyof HeldItemFacets>, HeldItemFacets {
+export interface BaseItemAggregationUnprovenResult extends AllocationResultBase {
   readonly resolution: "BASE_ITEM_AGGREGATION_UNPROVEN";
   readonly demand: Pick<ExplicitDemand, "stableId" | "requiredQuantity" | "purpose">;
   /** Sum of reported CONFIRMED (OBSERVED) quantities across rows that may not be one aggregable item. A floor when `hasUnresolvedEvidence`. */
@@ -199,8 +195,8 @@ export function buildAllocationResult(
   commodity: CommodityIdentity,
   activeDemands: readonly ExplicitDemand[],
   evidence: readonly EvidenceContribution[],
-  guildContext: readonly GuildContextEntry[] = [],
-  held?: HeldItemFacets,
+  guildContext: readonly GuildContextEntry[],
+  held: HeldItemFacets,
 ): AllocationResult {
   const confirmedAvailable = sum(evidence, "CONFIRMED");
   const potentialAdditionalAvailable = sum(evidence, "POTENTIAL");
@@ -216,9 +212,7 @@ export function buildAllocationResult(
   const guildReasons: AllocationReason[] = guildContext.some((g) => (g.quantity ?? 0) > 0)
     ? [{ code: "GUILD_EVIDENCE_EXCLUDED", detail: "Guild-owned evidence is reported for context only; it never satisfies or inflates account demand." }]
     : [];
-  const facets: Partial<HeldItemFacets> = held
-    ? { confirmedItemStringIdentity: held.confirmedItemStringIdentity, potentialItemStringIdentity: held.potentialItemStringIdentity, confirmedBinding: held.confirmedBinding, potentialBinding: held.potentialBinding }
-    : {};
+  const facets: HeldItemFacets = { confirmedItemStringIdentity: held.confirmedItemStringIdentity, potentialItemStringIdentity: held.potentialItemStringIdentity, confirmedBinding: held.confirmedBinding, potentialBinding: held.potentialBinding };
 
   if (activeDemands.length > 1) {
     return {
@@ -251,19 +245,17 @@ export function buildAllocationResult(
   // Slice 3 factual reasons, CONFIRMED tier only (LAST_SEEN facts are reported by the potential facets).
   const identityReasons: AllocationReason[] = [];
   const bindingReasons: AllocationReason[] = [];
-  if (held) {
-    const identity = held.confirmedItemStringIdentity;
-    if (identity.class === "ITEM_STRING_VARIANTS") {
-      identityReasons.push({ code: "ITEM_STRING_VARIANTS_PRESENT", detail: `Confirmed rows of this base item carry ${identity.distinctItemStringCount} distinct normalized item strings (viewer linkLevel/specID ignored); they may not be one aggregable item.` });
-    } else if (identity.class === "ITEM_STRING_INCOMPLETE") {
-      identityReasons.push({ code: "ITEM_STRING_INCOMPLETE", detail: "At least one confirmed row was captured only as a bare item:<id>; its remaining item-string fields are unknown, not empty." });
-    }
-    if (held.confirmedBinding.boundRowCount > 0) {
-      bindingReasons.push({ code: "BOUND_INVENTORY_PRESENT", detail: `${held.confirmedBinding.boundRowCount} confirmed row(s) are reported bound by the client (soulbound and account/Warbound are not distinguished); those units may be restricted.` });
-    }
-    if (held.confirmedBinding.unknownRowCount > 0) {
-      bindingReasons.push({ code: "BINDING_UNKNOWN_PRESENT", detail: `${held.confirmedBinding.unknownRowCount} confirmed row(s) have unknown binding state.` });
-    }
+  const identity = held.confirmedItemStringIdentity;
+  if (identity.class === "ITEM_STRING_VARIANTS") {
+    identityReasons.push({ code: "ITEM_STRING_VARIANTS_PRESENT", detail: `Confirmed rows of this base item carry ${identity.distinctItemStringCount} distinct normalized item strings (viewer linkLevel/specID ignored); they may not be one aggregable item.` });
+  } else if (identity.class === "ITEM_STRING_INCOMPLETE") {
+    identityReasons.push({ code: "ITEM_STRING_INCOMPLETE", detail: "At least one confirmed row was captured only as a bare item:<id>; its remaining item-string fields are unknown, not empty." });
+  }
+  if (held.confirmedBinding.boundRowCount > 0) {
+    bindingReasons.push({ code: "BOUND_INVENTORY_PRESENT", detail: `${held.confirmedBinding.boundRowCount} confirmed row(s) are reported bound by the client (soulbound and account/Warbound are not distinguished); those units may be restricted.` });
+  }
+  if (held.confirmedBinding.unknownRowCount > 0) {
+    bindingReasons.push({ code: "BINDING_UNKNOWN_PRESENT", detail: `${held.confirmedBinding.unknownRowCount} confirmed row(s) have unknown binding state.` });
   }
 
   // Shared factual reasons (identical wording on RESOLVED and BASE_ITEM_AGGREGATION_UNPROVEN).
@@ -285,7 +277,7 @@ export function buildAllocationResult(
     evidenceReasons.push({ code: "ITEM_QUANTITY_UNKNOWN_PRESENT", detail: `Observed account-owned storage holds item row(s) with unreported quantity in: ${scopeList(quantityUnknown).join(", ")}. The storage was observed; only those rows' quantities are unknown, so confirmed quantities are a floor.` });
   }
 
-  if (held && !allowsBaseItemAggregation(held.confirmedItemStringIdentity)) {
+  if (!allowsBaseItemAggregation(held.confirmedItemStringIdentity)) {
     return {
       resolution: "BASE_ITEM_AGGREGATION_UNPROVEN",
       commodity,
@@ -294,10 +286,7 @@ export function buildAllocationResult(
       potentialQuantity: potentialAdditionalAvailable,
       hasUnresolvedEvidence,
       unresolvedScopes,
-      confirmedItemStringIdentity: held.confirmedItemStringIdentity,
-      potentialItemStringIdentity: held.potentialItemStringIdentity,
-      confirmedBinding: held.confirmedBinding,
-      potentialBinding: held.potentialBinding,
+      ...facets,
       guildContext: [...guildContext],
       disposition: "REQUIRES_REVIEW",
       reasons: [
@@ -321,7 +310,7 @@ export function buildAllocationResult(
   reasons.push(...evidenceReasons, ...bindingReasons);
   // Binding is not unresolved evidence: it never sets hasUnresolvedEvidence. It only withholds the sale
   // recommendation from a confirmed surplus. bound=no rows never gate, but certify nothing either.
-  const bindingGates = held !== undefined && (held.confirmedBinding.boundRowCount > 0 || held.confirmedBinding.unknownRowCount > 0);
+  const bindingGates = held.confirmedBinding.boundRowCount > 0 || held.confirmedBinding.unknownRowCount > 0;
 
   let disposition: Disposition;
   if (confirmedDeficit > 0) {

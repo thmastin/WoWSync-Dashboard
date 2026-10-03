@@ -36,8 +36,25 @@ function unresolved(scope: EvidenceContribution["scope"]): EvidenceContribution 
   return { scope, admissibility: "UNRESOLVED" };
 }
 
+/**
+ * Held-row facets for the Slice 1 scenarios, which model a stackable commodity: the confirmed holding is one
+ * full-item-string row reported bound=no (uniform, never gating), and nothing is held at LAST_SEEN.
+ */
+const CONFIRMED_COMMODITY_ROW: HeldItemFacets = {
+  confirmedItemStringIdentity: { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 },
+  potentialItemStringIdentity: { class: "NONE_HELD", distinctItemStringCount: 0 },
+  confirmedBinding: { boundRowCount: 0, unboundRowCount: 1, unknownRowCount: 0 },
+  potentialBinding: { boundRowCount: 0, unboundRowCount: 0, unknownRowCount: 0 },
+};
+/** As above, plus one LAST_SEEN row of the same item string (Scenario 3's historical Warband holding). */
+const CONFIRMED_AND_LAST_SEEN_COMMODITY_ROWS: HeldItemFacets = {
+  ...CONFIRMED_COMMODITY_ROW,
+  potentialItemStringIdentity: { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 },
+  potentialBinding: { boundRowCount: 0, unboundRowCount: 1, unknownRowCount: 0 },
+};
+
 test("Scenario 1 — confirmed deficit: demand 40, OBSERVED 27", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(40)], [confirmed(27)]);
+  const result = buildAllocationResult(COMMODITY, [demand(40)], [confirmed(27)], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   assert.equal(result.confirmedAvailable, 27);
@@ -49,7 +66,7 @@ test("Scenario 1 — confirmed deficit: demand 40, OBSERVED 27", () => {
 });
 
 test("Scenario 2 — confirmed surplus: demand 20, OBSERVED 35, fully resolved evidence", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35)]);
+  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35)], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   assert.equal(result.allocated, 20);
@@ -61,7 +78,7 @@ test("Scenario 2 — confirmed surplus: demand 20, OBSERVED 35, fully resolved e
 });
 
 test("Scenario 3 — historical ambiguity: demand 40, OBSERVED 27, LAST_SEEN Warband 25 never satisfies or creates surplus", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(40)], [confirmed(27), potential(25, "warband")]);
+  const result = buildAllocationResult(COMMODITY, [demand(40)], [confirmed(27), potential(25, "warband")], [], CONFIRMED_AND_LAST_SEEN_COMMODITY_ROWS);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   assert.equal(result.confirmedAvailable, 27);
@@ -75,7 +92,7 @@ test("Scenario 3 — historical ambiguity: demand 40, OBSERVED 27, LAST_SEEN War
 });
 
 test("Scenario 4 — UNKNOWN is not zero / conservative gate: demand 20, OBSERVED 35, one relevant scope UNKNOWN", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35), unresolved("character-bank")]);
+  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35), unresolved("character-bank")], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   // Arithmetic stays precise: the 35 OBSERVED is a real floor, unaffected by what the UNKNOWN scope might hold.
@@ -94,7 +111,7 @@ test("Scenario 4 — UNKNOWN is not zero / conservative gate: demand 20, OBSERVE
 
 test("Scenario 5 — guild isolation: demand 20, account OBSERVED 10, Guild OBSERVED 100 never satisfies or inflates account surplus", () => {
   const guildContext: GuildContextEntry[] = [{ ownerKey: "retail::guild::111", admissibility: "CONFIRMED", quantity: 100 }];
-  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(10)], guildContext);
+  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(10)], guildContext, CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   assert.equal(result.confirmedAvailable, 10);
@@ -106,7 +123,7 @@ test("Scenario 5 — guild isolation: demand 20, account OBSERVED 10, Guild OBSE
 });
 
 test("Scenario 6 — no demand: OBSERVED 500 never becomes '500 surplus'; NO_ACTIVE_DEMAND carries no allocation numbers at all", () => {
-  const result = buildAllocationResult(COMMODITY, [], [confirmed(500)]);
+  const result = buildAllocationResult(COMMODITY, [], [confirmed(500)], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "NO_ACTIVE_DEMAND");
   assert.equal(result.disposition, "NO_ACTION");
   // Type-level guarantee: these fields do not exist on this branch of the discriminated union at all.
@@ -117,7 +134,7 @@ test("Scenario 6 — no demand: OBSERVED 500 never becomes '500 surplus'; NO_ACT
 });
 
 test("defensive allocator behavior: two contradictory active demands for one commodity produce an explicit CONFLICTING_DEMAND result, never a silently chosen winner", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(20, { stableId: "demand_a" }), demand(40, { stableId: "demand_b" })], [confirmed(30)]);
+  const result = buildAllocationResult(COMMODITY, [demand(20, { stableId: "demand_a" }), demand(40, { stableId: "demand_b" })], [confirmed(30)], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "CONFLICTING_DEMAND");
   assert.equal(result.disposition, "REQUIRES_REVIEW");
   if (result.resolution !== "CONFLICTING_DEMAND") throw new Error("unreachable");
@@ -126,8 +143,8 @@ test("defensive allocator behavior: two contradictory active demands for one com
 });
 
 test("a NO_ACTIVE_DEMAND and a resolved zero-requirement demand are structurally distinct results", () => {
-  const noDemand = buildAllocationResult(COMMODITY, [], [confirmed(5)]);
-  const zeroRequirement = buildAllocationResult(COMMODITY, [demand(0)], [confirmed(5)]);
+  const noDemand = buildAllocationResult(COMMODITY, [], [confirmed(5)], [], CONFIRMED_COMMODITY_ROW);
+  const zeroRequirement = buildAllocationResult(COMMODITY, [demand(0)], [confirmed(5)], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(noDemand.resolution, "NO_ACTIVE_DEMAND");
   assert.equal(zeroRequirement.resolution, "RESOLVED");
   if (zeroRequirement.resolution !== "RESOLVED") throw new Error("unreachable");
@@ -137,7 +154,7 @@ test("a NO_ACTIVE_DEMAND and a resolved zero-requirement demand are structurally
 
 test("confirmed surplus and disposition remain distinct even when one scope is UNKNOWN but the required quantity is zero-deficit with no surplus", () => {
   // demand exactly met (20 == 20), unresolved elsewhere: no surplus to gate, so NO_ACTION, not REQUIRES_REVIEW.
-  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(20), unresolved("warband")]);
+  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(20), unresolved("warband")], [], CONFIRMED_COMMODITY_ROW);
   assert.equal(result.resolution, "RESOLVED");
   if (result.resolution !== "RESOLVED") throw new Error("unreachable");
   assert.equal(result.confirmedDeficit, 0);
@@ -158,11 +175,19 @@ function facets(overrides: Partial<HeldItemFacets> = {}): HeldItemFacets {
 }
 const codes = (result: { reasons: { code: string }[] }) => result.reasons.map((r) => r.code);
 
-test("Slice 3 — omitting row facets keeps Slice 1/2 semantics exactly (no facets, no new gates)", () => {
-  const result = buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35)]);
-  assert.equal(result.disposition, "SEND_HELLOMAGS");
-  assert.ok(!("confirmedItemStringIdentity" in result));
-  assert.ok(!("confirmedBinding" in result));
+test("Slice 3 — held-item facets are structurally required: no call shape omits them", () => {
+  // Compile-time proof (the typecheck covers this file); never executed.
+  const omitsFacets = () =>
+    // @ts-expect-error -- buildAllocationResult requires guildContext and HeldItemFacets.
+    buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35)]);
+  const omitsOnlyFacets = () =>
+    // @ts-expect-error -- HeldItemFacets is required even when guildContext is supplied.
+    buildAllocationResult(COMMODITY, [demand(20)], [confirmed(35)], []);
+  assert.equal(typeof omitsFacets, "function");
+  assert.equal(typeof omitsOnlyFacets, "function");
+  for (const result of [buildAllocationResult(COMMODITY, [], [confirmed(5)], [], facets()), buildAllocationResult(COMMODITY, [demand(1, { stableId: "a" }), demand(1, { stableId: "b" })], [confirmed(5)], [], facets())]) {
+    for (const facet of ["confirmedItemStringIdentity", "potentialItemStringIdentity", "confirmedBinding", "potentialBinding"]) assert.ok(facet in result, `${result.resolution} carries ${facet}`);
+  }
 });
 
 test("Slice 3 — ordinary commodity: uniform, bound=no, clean evidence keeps arithmetic and SEND_HELLOMAGS, and reports the facets", () => {

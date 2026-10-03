@@ -31,7 +31,8 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
     professions: professions ? { entries: [{ name: "Engineering", skill: 100, maxSkill: 100 }, { name: "Alchemy", skill: 100, maxSkill: 100 }], retail: true } : undefined,
     spells: { coverage: "Protocol fixture player spellbook", entries: [{ spellID: 1234, name: "Protocol Spell", rank: "" }] },
     trainer: { categories: [{ category: "CLASS", name: "Protocol Trainer", services: [{ spellID: 1234, ability: "Protocol Spell", status: "known" }, { spellID: 1235, ability: "Available Spell", status: "available", requiredLevel: 90 }, { spellID: 1236, ability: "Later Spell", status: "unavailable", requiredLevel: 91 }] }] },
-    bags: { containers: [{ id: 0, capacity: 20, free: 19, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }] }] },
+    // 777 is captured bare (no hyperlink); 4242 carries a full item string and bound=no (Slice 3 RESOLVED coverage).
+    bags: { containers: [{ id: 0, capacity: 20, free: 18, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }, { itemRef: "item:4242::::::::90:253:::::::::", name: "Observed Full-String Item", qty: 3, bound: false }] }] },
     bank: { lastSeen: bankLastSeen, containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:888", name: "Observed Bank Item", qty: 1 }] }] },
   });
   return exported.replace(/\n\[END\]$/, "\n\n[ITEM METADATA]\nbaseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n777\t7\t5\t1\t11\tyes\n\n[END]");
@@ -76,6 +77,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
     // Azeroth ERP Vertical Slice 1: one ACTIVE demand so get_item_allocation has something to resolve.
     writer.createDemand({ baseItemId: 777, requiredQuantity: 1 });
+    // Slice 3: a second ACTIVE demand on a full-item-string item so the protocol also carries a RESOLVED result.
+    writer.createDemand({ baseItemId: 4242, requiredQuantity: 5 });
   } finally {
     writer.close();
   }
@@ -276,22 +279,38 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok((allocation.data?.confirmedQuantity ?? 0) >= 2, "at least one character's OBSERVED bags item 777 is still reported as confirmed quantity");
     for (const field of ["allocated", "confirmedDeficit", "confirmedSurplus"]) assert.ok(allocation.data && !(field in allocation.data), `${field} is structurally absent`);
     assert.ok(allocation.data?.reasons.some((r) => r.code === "EXPLICIT_DEMAND_EXISTS"));
+    // Slice 3: the full-item-string, bound=no item 4242 (3 in OBSERVED bags on each of three Retail
+    // characters, demand 5) passes through the same tool as an ordinary RESOLVED result.
+    const resolved = structured<{ data?: Record<string, unknown> & { resolution: string; disposition: string; confirmedAvailable?: number; allocated?: number; confirmedDeficit?: number; confirmedSurplus?: number; hasUnresolvedEvidence?: boolean; confirmedItemStringIdentity?: { class: string }; potentialItemStringIdentity?: { class: string }; confirmedBinding?: Record<string, number>; potentialBinding?: Record<string, number>; reasons: Array<{ code: string }> } }>(
+      await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 4242 } }),
+    );
+    assert.equal(resolved.data?.resolution, "RESOLVED");
+    assert.deepEqual([resolved.data?.confirmedAvailable, resolved.data?.allocated, resolved.data?.confirmedDeficit, resolved.data?.confirmedSurplus], [9, 5, 0, 4]);
+    assert.equal(resolved.data?.hasUnresolvedEvidence, false);
+    assert.equal(resolved.data?.disposition, "SEND_HELLOMAGS");
+    assert.ok(resolved.data?.reasons.some((r) => r.code === "SALE_PIPELINE_APPROVED"));
+    assert.equal(resolved.data?.confirmedItemStringIdentity?.class, "UNIFORM_ITEM_STRING");
+    assert.equal(resolved.data?.potentialItemStringIdentity?.class, "NONE_HELD");
+    assert.deepEqual(resolved.data?.confirmedBinding, { boundRowCount: 0, unboundRowCount: 3, unknownRowCount: 0 });
+    assert.deepEqual(resolved.data?.potentialBinding, { boundRowCount: 0, unboundRowCount: 0, unknownRowCount: 0 });
     const noActiveDemand = structured<{ data?: { resolution: string } }>(
       await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 999999999 } }),
     );
     assert.equal(noActiveDemand.data?.resolution, "NO_ACTIVE_DEMAND", "no demand was created for this item; it must never read as resolved zero-surplus");
     assert.ok(noActiveDemand.data && !("confirmedSurplus" in noActiveDemand.data));
 
-    // Azeroth ERP Vertical Slice 2: get_allocation_review partitions the account into the demanded item
-    // (777, identical to its get_item_allocation result) and unallocated holdings that carry no surplus or
+    // Azeroth ERP Vertical Slice 2: get_allocation_review partitions the account into the demanded items
+    // (777 and 4242, each identical to its get_item_allocation result) and unallocated holdings that carry no surplus or
     // disposition at all. Delegates entirely to DashboardReadModel; the database digest check below proves
     // the call wrote nothing.
     const allocationReview = structured<{ data?: { demanded: { items: Array<{ commodity: { baseItemId: number } }>; totalCount: number }; unallocated: { items: Array<Record<string, unknown> & { baseItemId: number }>; totalCount: number; limit: number }; dispositionCounts: Record<string, number> }; provenance: { state: string } }>(
       await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", unallocatedLimit: 100 } }),
     );
     assert.equal(allocationReview.provenance.state, "DERIVED");
-    assert.deepEqual(allocationReview.data?.demanded.items.map((r) => r.commodity.baseItemId), [777]);
+    // REQUIRES_REVIEW (777, aggregation unproven) sorts before SEND_HELLOMAGS (4242); both pass through unchanged.
+    assert.deepEqual(allocationReview.data?.demanded.items.map((r) => r.commodity.baseItemId), [777, 4242]);
     assert.deepEqual(allocationReview.data?.demanded.items[0], allocation.data);
+    assert.deepEqual(allocationReview.data?.demanded.items[1], resolved.data);
     const unallocatedIds = allocationReview.data?.unallocated.items.map((entry) => entry.baseItemId) ?? [];
     assert.ok(!unallocatedIds.includes(777), "a demanded item is never also unallocated");
     assert.ok(unallocatedIds.includes(888), "held bank inventory with no demand is listed as unallocated");
