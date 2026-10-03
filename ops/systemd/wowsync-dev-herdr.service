@@ -1,0 +1,25 @@
+[Unit]
+Description=WoWSync DEV Herdr control plane
+After=network.target
+
+[Service]
+Type=simple
+User=wowsync-dev
+Group=wowsync-dev
+Environment=HOME=/home/wowsync-dev
+Environment=XDG_CONFIG_HOME=/home/wowsync-dev/.config
+Environment=PATH=/opt/wowsync/dev-tools:/usr/local/bin:/usr/bin
+WorkingDirectory=/home/wowsync-dev/src/WoWSync-Dashboard
+ExecStart=/usr/bin/herdr server
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+SocketBindDeny=4173
+InaccessiblePaths=/home/thmastin /run/user/1000 /run/ssh-unix-local /run/dbus/system_bus_socket /run/cups/cups.sock /var/lib/wowsync-live /etc/wowsync/live /var/backups/wowsync-live /opt/wowsync/releases
+ProtectProc=invisible
+CapabilityBoundingSet=
+ProtectSystem=full
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

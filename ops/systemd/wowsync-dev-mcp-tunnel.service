@@ -1,0 +1,37 @@
+[Unit]
+Description=WoWSync DEV Secure MCP Tunnel
+Documentation=file:/home/wowsync-dev/src/WoWSync-Dashboard/docs/MCP_DEVELOPMENT.md
+Wants=network-online.target
+After=network-online.target
+PartOf=wowsync-dev.target
+
+[Service]
+Type=simple
+User=wowsync-dev
+Group=wowsync-dev
+WorkingDirectory=/home/wowsync-dev/src/WoWSync-Dashboard
+LoadCredential=tunnel-api-key:/etc/wowsync/dev/tunnel-api-key
+# CONTROL_PLANE_TUNNEL_ID is supplied at runtime via this optional EnvironmentFile
+# (note the leading "-": the unit still starts without it, though tunnel-client
+# will then fail its own startup validation until the file is provisioned).
+# tunnel-client natively reads CONTROL_PLANE_TUNNEL_ID (see `tunnel-client run --help`),
+# so the tunnel ID is intentionally NOT passed as a --control-plane.tunnel-id command
+# line argument here. See ops/systemd/wowsync-dev-mcp-tunnel.env.example.
+EnvironmentFile=-/etc/wowsync/dev/mcp-tunnel.env
+Environment=WOWSYNC_MCP_DB_PATH=/var/lib/wowsync-dev/db/wowsync.sqlite
+Environment=WOWSYNC_MCP_RESEARCH_ROOT=/home/wowsync-dev/src/WoWSync-Dashboard/docs
+ExecStart=/opt/wowsync/dev-tools/tunnel-client/v0.0.15/tunnel-client run --control-plane.api-key=file:%d/tunnel-api-key "--mcp.command=/usr/bin/node /home/wowsync-dev/src/WoWSync-Dashboard/packages/mcp/src/index.ts"
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectProc=invisible
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/wowsync-dev/db
+InaccessiblePaths=/home/thmastin /var/lib/wowsync-live /etc/wowsync/live /var/backups/wowsync-live /opt/wowsync/releases /run/user/1000 /run/ssh-unix-local /run/dbus/system_bus_socket /run/cups/cups.sock
+
+[Install]
+WantedBy=wowsync-dev.target

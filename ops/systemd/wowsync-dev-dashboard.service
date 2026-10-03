@@ -1,0 +1,28 @@
+[Unit]
+Description=WoWSync DEV Dashboard (non-authoritative)
+After=network.target
+
+[Service]
+Type=simple
+User=wowsync-dev
+Group=wowsync-dev
+WorkingDirectory=/home/wowsync-dev/src/WoWSync-Dashboard
+Environment=WOWSYNC_DATA_DIR=/var/lib/wowsync-dev/db
+Environment=WOWSYNC_DB_PATH=/var/lib/wowsync-dev/db/wowsync.sqlite
+Environment=WOWSYNC_HOST=127.0.0.1
+Environment=PORT=4174
+Environment=WOWSYNC_URL=http://127.0.0.1:4174
+ExecStart=/usr/bin/node packages/server/src/index.ts
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+SocketBindDeny=4173
+InaccessiblePaths=/home/thmastin /run/user/1000 /run/ssh-unix-local /run/dbus/system_bus_socket /run/cups/cups.sock /var/lib/wowsync-live /etc/wowsync/live /var/backups/wowsync-live /opt/wowsync/releases
+ProtectProc=invisible
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wowsync-dev
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

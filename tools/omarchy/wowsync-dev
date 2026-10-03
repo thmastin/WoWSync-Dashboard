@@ -7,7 +7,11 @@ case "$command" in
   stop) sudo systemctl stop wowsync-dev.target ;;
   restart) sudo systemctl restart wowsync-dev.target ;;
   status)
-    systemctl --no-pager --full status wowsync-dev.target wowsync-dev-dashboard.service
+    systemctl --no-pager --full status \
+      wowsync-dev.target \
+      wowsync-dev-dashboard.service \
+      wowsync-dev-mcp-tunnel.service \
+      wowsync-dev-herdr.service
     printf '\nDashboard: '
     curl --silent --show-error --max-time 3 --output /dev/null --write-out 'HTTP %{http_code}\n' http://127.0.0.1:4174/
     printf 'Capture receiver: '
