@@ -123,8 +123,8 @@ for the full semantics; this section lists only the cross-cutting invariants.
    all — not zero-valued, *absent*. A caller cannot mistake "nobody asked" for "fully satisfied."
 3. **Known surplus vs. unallocated/unexplained inventory.** `NO_ACTIVE_DEMAND` means "surplus
    cannot yet be determined," not "there is nothing interesting here." Confirmed observed
-   inventory with no active demand is real and worth asking about — it is just not a Slice 1
-   output; no field computes or names it yet.
+   inventory with no active demand is real and worth asking about. Slice 2's Account Allocation
+   Review lists it as `unallocated` (see 13 below) — as evidence, never as surplus.
 4. The only new durable table Slice 1 adds is `demands` — current mutable **intent**, not an
    event/audit history. A row is mutated in place; `status` is `ACTIVE` or `INACTIVE`;
    deactivation is a status transition, never a hard delete.
@@ -137,7 +137,10 @@ for the full semantics; this section lists only the cross-cutting invariants.
    type, and it is Retail-only in Slice 1.
 7. Evidence tiers: character bags/bank `OBSERVED` -> `CONFIRMED`; `LAST_SEEN` -> `POTENTIAL`;
    `UNKNOWN` -> `UNRESOLVED` (no quantity field). Warband evidence follows the same tiers. Guild
-   evidence is structurally excluded from arithmetic — contextual only (see OWNERSHIP above).
+   evidence is structurally excluded from arithmetic — contextual only (see OWNERSHIP above). A
+   present item row with no reported quantity is never summed as 0: the scope's reported rows are a
+   floor flagged by `unknownQuantityRowCount`, and in a `CONFIRMED` scope it also yields an
+   `UNRESOLVED` (`ITEM_QUANTITY_UNKNOWN`) contribution that engages the disposition gate.
 8. `confirmedAvailable`/`allocated`/`confirmedDeficit`/`confirmedSurplus` are computed from
    `CONFIRMED` evidence only. `POTENTIAL` (historical/`LAST_SEEN`) evidence is tracked separately
    in `potentialAdditionalAvailable` and never added into the confirmed numbers.
@@ -147,12 +150,24 @@ for the full semantics; this section lists only the cross-cutting invariants.
 10. **`SEND_HELLOMAGS` is a label/recommendation only.** No mail, vendor, auction, or other
     execute code exists anywhere in this repository. Approval and execution are explicitly
     separate, later concerns.
-11. `get_item_allocation` (the MCP tool) is structurally read-only, like every other MCP tool.
+11. `get_item_allocation` and `get_allocation_review` (the MCP tools) are structurally read-only,
+    like every other MCP tool.
     Demand CRUD HTTP routes exist (`packages/server/src/demandRoutes.ts`) but have no caller
     anywhere in this codebase today — no UI, no MCP mutation tool. The only way to manage a
     demand today is a direct HTTP call.
-12. Market evidence cannot create demand. No pricing input exists anywhere in `allocation.ts` or
-    `demand.ts`.
+12. Market evidence cannot create demand. No pricing input exists anywhere in `allocation.ts`,
+    `allocationReview.ts`, or `demand.ts`.
+13. **Unallocated inventory is not surplus.** The Slice 2 review's `unallocated` entries
+    (`UnallocatedInventoryEntry`) structurally carry no `surplus`/`confirmedSurplus`/`allocated`/
+    `confirmedDeficit`/`disposition` field; they report evidence (confirmed and potential quantities
+    kept separate, holdings, unresolved scopes) only. An item held only by a guild is never listed.
+    Item metadata enriches entries after paging and never selects or filters them.
+14. **One evidence projection, one allocator.** `getItemAllocation` and `getAllocationReview` both
+    derive evidence from `projectAccountOwnedEvidenceMap` (each character's latest snapshot and the
+    shared-storage projection read once per call) via `evidenceForItem`, and both evaluate demand
+    with `buildAllocationResult`. A demanded review entry is identical to `getItemAllocation` for the
+    same item (tested). `AccountFacts.InventoryFacts` is not an ERP evidence source: its
+    `totalKnownQty` merges OBSERVED with LAST_SEEN and omits the Warband.
 
 ## PLAYER INTENT
 

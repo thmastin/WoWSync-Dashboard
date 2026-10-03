@@ -96,6 +96,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
+      "get_allocation_review",
       "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",
@@ -276,6 +277,28 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(noActiveDemand.data?.resolution, "NO_ACTIVE_DEMAND", "no demand was created for this item; it must never read as resolved zero-surplus");
     assert.ok(noActiveDemand.data && !("confirmedSurplus" in noActiveDemand.data));
 
+    // Azeroth ERP Vertical Slice 2: get_allocation_review partitions the account into the demanded item
+    // (777, identical to its get_item_allocation result) and unallocated holdings that carry no surplus or
+    // disposition at all. Delegates entirely to DashboardReadModel; the database digest check below proves
+    // the call wrote nothing.
+    const allocationReview = structured<{ data?: { demanded: { items: Array<{ commodity: { baseItemId: number } }>; totalCount: number }; unallocated: { items: Array<Record<string, unknown> & { baseItemId: number }>; totalCount: number; limit: number }; dispositionCounts: Record<string, number> }; provenance: { state: string } }>(
+      await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", unallocatedLimit: 100 } }),
+    );
+    assert.equal(allocationReview.provenance.state, "DERIVED");
+    assert.deepEqual(allocationReview.data?.demanded.items.map((r) => r.commodity.baseItemId), [777]);
+    assert.deepEqual(allocationReview.data?.demanded.items[0], allocation.data);
+    const unallocatedIds = allocationReview.data?.unallocated.items.map((entry) => entry.baseItemId) ?? [];
+    assert.ok(!unallocatedIds.includes(777), "a demanded item is never also unallocated");
+    assert.ok(unallocatedIds.includes(888), "held bank inventory with no demand is listed as unallocated");
+    assert.ok(allocationReview.data?.unallocated.items.every((entry) => entry.allocationState === "UNALLOCATED" && !("disposition" in entry) && !("confirmedSurplus" in entry) && !("surplus" in entry)));
+    const eraReview = structured<{ data?: unknown; provenance: { state: string } }>(await client.callTool({ name: "get_allocation_review", arguments: { version: "classic-era" } }));
+    assert.equal(eraReview.provenance.state, "UNKNOWN");
+    assert.equal(eraReview.data, undefined);
+    const overLimitReview = await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", unallocatedLimit: 101 } });
+    assert.equal(overLimitReview.isError, true);
+    const versionlessReview = await client.callTool({ name: "get_allocation_review", arguments: {} });
+    assert.equal(versionlessReview.isError, true);
+
     const warband = structured<{ data?: { owners: Array<{ owner: { kind: string }; current?: { liveAtExport: boolean; provenance: { sources: Array<{ carrierState: string }> } | { } | undefined; content: { items: unknown[] } } }> }; provenance: { state: string } }>(await client.callTool({ name: "get_shared_storage", arguments: { version: "retail", kind: "warband", limit: 1 } }));
     assert.equal(warband.provenance.state, "DERIVED");
     assert.equal(warband.data?.owners[0]?.owner.kind, "warband");
@@ -434,6 +457,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
+      "get_allocation_review",
       "get_character_changes",
       "get_character_currencies",
       "get_character_equipment",

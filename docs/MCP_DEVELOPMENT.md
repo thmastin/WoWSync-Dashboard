@@ -117,6 +117,7 @@ imports may update the database.
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. See `docs/AZEROTH_ERP_ARCHITECTURE.md`. |
+| `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23. |
 
 This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
 as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total
@@ -240,7 +241,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 
 This pass added five tools, bringing the implementation to 24 registered tools
 **at that time (2026-09-30)** — since superseded by the later Azeroth ERP
-Slice 1 addition of `get_item_allocation` (see
+Slice 1 addition of `get_item_allocation` and Slice 2 addition of `get_allocation_review` (see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current total; do not read "24"
 here as contradicting it — this paragraph describes a historical snapshot).
 That five-tool addition was pending external ChatGPT acceptance after the DEV MCP

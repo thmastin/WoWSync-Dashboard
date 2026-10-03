@@ -233,6 +233,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: versionSchema, baseItemId: z.number().int().positive() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getItemAllocation(query)));
+  server.registerTool("get_allocation_review", {
+    title: "Get account-wide allocation review",
+    description: "Returns the deterministic Azeroth ERP account allocation review for one explicit version. 'demanded' lists every active STOCK_TARGET demand with the same allocation result get_item_allocation returns for that item (ordered HOLD_ALLOCATED, REQUIRES_REVIEW, SEND_HELLOMAGS, NO_ACTION, then base item ID). 'unallocated' lists account-owned base items (character bags, character bank, Warband) with no active demand, ascending base item ID, with confirmed (OBSERVED) and potential (LAST_SEEN) quantities kept separate. Unallocated inventory is NOT surplus: it has no surplus, disposition, or sale recommendation because none can be determined without a demand. Guild-owned evidence is context only and an item held only by a guild is never listed. Unknown storage and unreported item quantities are surfaced as unresolved, never zero. Both lists are paged independently.",
+    inputSchema: z.object({ version: versionSchema, demandedOffset: z.number().int().min(0).optional(), demandedLimit: z.number().int().min(1).max(100).optional(), unallocatedOffset: z.number().int().min(0).optional(), unallocatedLimit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getAllocationReview(query)));
   server.registerTool("get_item_metadata", {
     title: "Get deterministic item metadata",
     description: "Returns game-client-reported metadata facets for up to 100 base item IDs in one explicit version. KNOWN, UNKNOWN, and conflicting evidence remain distinct.",

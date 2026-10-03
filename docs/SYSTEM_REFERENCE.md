@@ -187,11 +187,19 @@ to manage a demand today is a direct HTTP call.
 
 ## Allocation implementation
 
-`packages/core/src/allocation.ts`: `projectAccountOwnedEvidence` turns the §5-style evidence
-sources (character storage, shared-storage journal, item metadata for display only) into
-`CONFIRMED`/`POTENTIAL`/`UNRESOLVED` evidence; `buildAllocationResult` combines that with an
+`packages/core/src/allocation.ts`: `projectAccountOwnedEvidenceMap` projects the account-owned
+evidence sources (each character's latest bags/bank, the shared-storage Warband projection) once per
+call, tallied by base item id, with guild owners kept in a separate list; `evidenceForItem` is the
+per-item lookup that yields `CONFIRMED`/`POTENTIAL`/`UNRESOLVED` evidence (`projectAccountOwnedEvidence`
+is the Slice 1 entry point composing the two). `buildAllocationResult` combines that with an
 `ExplicitDemand` into the discriminated `AllocationResult` union
-(`NO_ACTIVE_DEMAND`/`CONFLICTING_DEMAND`/`RESOLVED`) and applies the disposition gate. See
+(`NO_ACTIVE_DEMAND`/`CONFLICTING_DEMAND`/`RESOLVED`) and applies the disposition gate.
+
+`packages/core/src/allocationReview.ts` (Slice 2): `buildAllocationReview` partitions one projection
+into `demanded` (each ACTIVE demand through `buildAllocationResult`) and `unallocated` (account-owned
+holdings with no active demand — evidence only, no surplus or disposition).
+`DashboardReadModel.getItemAllocation` and `DashboardReadModel.getAllocationReview` are the two read-model
+entry points; both are Retail-only and explicit-version. See
 [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) for the full semantics and
 [`ARCHITECTURE_INVARIANTS.md`](ARCHITECTURE_INVARIANTS.md) (ERP section) for the invariant list.
 
@@ -211,10 +219,11 @@ SqliteSnapshotReadStore (SQLite readOnly: true)
 ```
 
 It never creates `SqliteSnapshotStore`, so it structurally cannot initialize, import into, or
-mutate the database (see `ARCHITECTURE_INVARIANTS.md`, MUTATION/SECURITY). The newest tool,
-`get_item_allocation`, is the Azeroth ERP Slice 1 read: it resolves one commodity's active
-`STOCK_TARGET` demand against account-owned evidence into the same deterministic
-`AllocationResult` every other consumer sees.
+mutate the database (see `ARCHITECTURE_INVARIANTS.md`, MUTATION/SECURITY). The Azeroth ERP reads
+are `get_item_allocation` (Slice 1: one base item's active `STOCK_TARGET` demand resolved against
+account-owned evidence into the deterministic `AllocationResult`) and the newest tool,
+`get_allocation_review` (Slice 2: the account-wide review of every active demand's `AllocationResult`
+plus unallocated account-owned holdings, independently paged).
 
 ## Ask My Account / `LlmContext`, briefly
 

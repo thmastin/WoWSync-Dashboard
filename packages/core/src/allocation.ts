@@ -28,13 +28,28 @@ export type AllocationAdmissibility = "CONFIRMED" | "POTENTIAL" | "UNRESOLVED";
 export type AllocationEvidenceScope = "character-bags" | "character-bank" | "warband";
 
 /**
- * One contribution toward (or unresolved gap in) account-owned evidence for one commodity.
- * `quantity` is absent exactly when `admissibility` is "UNRESOLVED" — never 0.
+ * Why an UNRESOLVED contribution is unresolved:
+ *   STORAGE_UNKNOWN       - the whole storage scope is UNKNOWN (a character's bags/bank section never
+ *                           observed, or a Warband never observed at all). Applies to every item.
+ *   ITEM_QUANTITY_UNKNOWN - the scope is OBSERVED and holds row(s) of this item, but the export did not
+ *                           report those rows' quantity. The scope's known-quantity rows still count as a
+ *                           confirmed floor; the unknown rows are never counted as 0.
+ */
+export type UnresolvedEvidenceCause = "STORAGE_UNKNOWN" | "ITEM_QUANTITY_UNKNOWN";
+
+/**
+ * One contribution toward (or unresolved gap in) account-owned evidence for one base item.
+ * `quantity` is absent exactly when `admissibility` is "UNRESOLVED" — never 0. On a CONFIRMED/POTENTIAL
+ * contribution, `quantity` sums only rows whose quantity was reported; `unknownQuantityRowCount` (present
+ * only when > 0) counts rows of this item whose quantity was not reported, so the sum is a floor.
  */
 export interface EvidenceContribution {
   readonly scope: AllocationEvidenceScope;
   readonly admissibility: AllocationAdmissibility;
   readonly quantity?: number;
+  readonly unknownQuantityRowCount?: number;
+  /** UNRESOLVED contributions only. */
+  readonly unresolvedCause?: UnresolvedEvidenceCause;
   /** Character scopes only. */
   readonly identityKey?: string;
   readonly observedAt?: number;
@@ -45,6 +60,7 @@ export interface GuildContextEntry {
   readonly ownerKey: string;
   readonly admissibility: AllocationAdmissibility;
   readonly quantity?: number;
+  readonly unknownQuantityRowCount?: number;
   readonly observedAt?: number;
 }
 
@@ -218,30 +234,82 @@ export function buildAllocationResult(
   };
 }
 
-function quantityOf(items: readonly { itemRef?: string; qty?: number }[], baseItemId: number): number {
-  let total = 0;
+/** What one storage scope holds of one base item: reported quantities summed, unreported-quantity rows counted (never summed as 0). */
+export interface ItemTally {
+  readonly knownQuantity: number;
+  readonly unknownQuantityRowCount: number;
+  /** The first item name observed for this base item in this scope, for presentation only. */
+  readonly name?: string;
+}
+
+/**
+ * One account-owned storage scope, projected once for every item it holds. `items` is absent exactly when
+ * the scope is UNRESOLVED (its contents are unknown, never empty).
+ */
+export interface AccountScopeEvidence {
+  readonly scope: AllocationEvidenceScope;
+  readonly admissibility: AllocationAdmissibility;
+  readonly identityKey?: string;
+  readonly observedAt?: number;
+  readonly items?: ReadonlyMap<number, ItemTally>;
+}
+
+/** One guild owner's current observation, projected once. Context only: no allocation arithmetic reads it. */
+export interface GuildScopeEvidence {
+  readonly ownerKey: string;
+  readonly admissibility: AllocationAdmissibility;
+  readonly observedAt?: number;
+  readonly items: ReadonlyMap<number, ItemTally>;
+}
+
+/**
+ * The account-wide evidence projection: every account-owned scope (and, separately, every guild owner),
+ * each tallied by base item id in ONE pass over the stored evidence. The per-item allocation path
+ * (`evidenceForItem`) and the account-wide review are both lookups into this one structure, so they cannot
+ * disagree about what any scope holds.
+ */
+export interface AccountOwnedEvidenceMap {
+  readonly scopes: readonly AccountScopeEvidence[];
+  readonly guilds: readonly GuildScopeEvidence[];
+  /** Item rows in CONFIRMED/POTENTIAL account-owned scopes whose itemRef carries no base item id; they can never be attributed to an item. */
+  readonly unidentifiedItemRowCount: number;
+}
+
+function tallyItems(items: readonly { itemRef?: string; name?: string; qty?: number }[]): { tallies: Map<number, ItemTally>; unidentified: number } {
+  const tallies = new Map<number, { knownQuantity: number; unknownQuantityRowCount: number; name?: string }>();
+  let unidentified = 0;
   for (const item of items) {
-    if (itemIdFromItemRef(item.itemRef) === baseItemId) total += item.qty ?? 0;
+    const baseItemId = itemIdFromItemRef(item.itemRef);
+    if (baseItemId === undefined) {
+      unidentified++;
+      continue;
+    }
+    let tally = tallies.get(baseItemId);
+    if (!tally) {
+      tally = { knownQuantity: 0, unknownQuantityRowCount: 0, ...(item.name !== undefined ? { name: item.name } : {}) };
+      tallies.set(baseItemId, tally);
+    }
+    if (tally.name === undefined && item.name !== undefined) tally.name = item.name;
+    // A present row with no reported quantity is uncertainty, never an observed 0.
+    if (item.qty === undefined) tally.unknownQuantityRowCount++;
+    else tally.knownQuantity += item.qty;
   }
-  return total;
+  return { tallies, unidentified };
 }
 
 /**
  * The small adapter the investigation anticipated might be needed: no unified "account-owned inventory
  * projection" existed before Slice 1. Projects existing character-storage and shared-storage evidence
- * into the EvidenceContribution shape the allocator needs, for one commodity. Reads only; stores nothing.
+ * once, for every item, reading each character's latest snapshot and the shared-storage projection exactly
+ * once. Reads only; stores nothing.
  *
- * Every account-owned scope that could hold the item is represented: an UNKNOWN character bags/bank
- * section, or a Warband never observed, becomes an UNRESOLVED contribution (never silently omitted,
- * never zero). Guild-owned evidence is returned separately in `guildContext` and is structurally never
- * mixed into `evidence` — the allocator has no way to count it toward account availability.
+ * Every account-owned scope is represented: an UNKNOWN character bags/bank section, or a Warband never
+ * observed, is an UNRESOLVED scope with no item tallies (never silently omitted, never empty). Guild-owned
+ * evidence is kept in a separate `guilds` list and is structurally never mixed into `scopes`.
  */
-export function projectAccountOwnedEvidence(
-  store: SnapshotReadStore,
-  version: VersionOrUnknown,
-  baseItemId: number,
-): { evidence: EvidenceContribution[]; guildContext: GuildContextEntry[] } {
-  const evidence: EvidenceContribution[] = [];
+export function projectAccountOwnedEvidenceMap(store: SnapshotReadStore, version: VersionOrUnknown): AccountOwnedEvidenceMap {
+  const scopes: AccountScopeEvidence[] = [];
+  let unidentifiedItemRowCount = 0;
 
   for (const character of store.listCharacters(version)) {
     const snapshot = store.listSnapshots(character.identityKey)[0];
@@ -250,37 +318,89 @@ export function projectAccountOwnedEvidence(
       const section = snapshot.parsed[storage];
       const scope: AllocationEvidenceScope = storage === "bags" ? "character-bags" : "character-bank";
       const observedAt = section.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
-      if (section.status.state === "OBSERVED") {
-        evidence.push({ scope, admissibility: "CONFIRMED", quantity: quantityOf(section.items, baseItemId), identityKey: character.identityKey, observedAt });
-      } else if (section.status.state === "LAST_SEEN") {
-        evidence.push({ scope, admissibility: "POTENTIAL", quantity: quantityOf(section.items, baseItemId), identityKey: character.identityKey, observedAt });
+      if (section.status.state === "OBSERVED" || section.status.state === "LAST_SEEN") {
+        const { tallies, unidentified } = tallyItems(section.items);
+        unidentifiedItemRowCount += unidentified;
+        scopes.push({ scope, admissibility: section.status.state === "OBSERVED" ? "CONFIRMED" : "POTENTIAL", identityKey: character.identityKey, observedAt, items: tallies });
       } else {
-        evidence.push({ scope, admissibility: "UNRESOLVED", identityKey: character.identityKey });
+        scopes.push({ scope, admissibility: "UNRESOLVED", identityKey: character.identityKey });
       }
     }
   }
 
   const projection = version === "retail" ? store.projectSharedStorage() : { warband: undefined, guilds: [] };
   if (!projection.warband?.current) {
-    evidence.push({ scope: "warband", admissibility: "UNRESOLVED" });
+    scopes.push({ scope: "warband", admissibility: "UNRESOLVED" });
   } else {
     const current = projection.warband.current;
-    evidence.push({
-      scope: "warband",
-      admissibility: current.liveAtExport ? "CONFIRMED" : "POTENTIAL",
-      quantity: quantityOf(current.content.items, baseItemId),
-      observedAt: current.effectiveObservedAt,
-    });
+    const { tallies, unidentified } = tallyItems(current.content.items);
+    unidentifiedItemRowCount += unidentified;
+    scopes.push({ scope: "warband", admissibility: current.liveAtExport ? "CONFIRMED" : "POTENTIAL", observedAt: current.effectiveObservedAt, items: tallies });
   }
 
-  const guildContext: GuildContextEntry[] = projection.guilds
+  const guilds: GuildScopeEvidence[] = projection.guilds
     .filter((guild): guild is typeof guild & { current: NonNullable<(typeof guild)["current"]> } => guild.current !== undefined)
     .map((guild) => ({
       ownerKey: guild.ownerKey,
       admissibility: guild.current.liveAtExport ? "CONFIRMED" : "POTENTIAL",
-      quantity: quantityOf(guild.current.content.items, baseItemId),
       observedAt: guild.current.effectiveObservedAt,
+      items: tallyItems(guild.current.content.items).tallies,
     }));
 
+  return { scopes, guilds, unidentifiedItemRowCount };
+}
+
+/**
+ * The per-item view of the account-wide projection: exactly the EvidenceContribution list and guild
+ * context `buildAllocationResult` consumes. Pure lookup; no store access.
+ *
+ * A CONFIRMED scope holding rows of this item with unreported quantity contributes its reported quantity
+ * as a confirmed floor PLUS a companion UNRESOLVED (`ITEM_QUANTITY_UNKNOWN`) contribution, so the existing
+ * conservative gate applies to it exactly as to an UNKNOWN storage scope. A POTENTIAL scope's unreported
+ * rows are flagged by `unknownQuantityRowCount` only: historical evidence can never reach confirmed numbers,
+ * so it cannot gate them either.
+ */
+export function evidenceForItem(map: AccountOwnedEvidenceMap, baseItemId: number): { evidence: EvidenceContribution[]; guildContext: GuildContextEntry[] } {
+  const evidence: EvidenceContribution[] = [];
+  for (const source of map.scopes) {
+    const identity = source.identityKey !== undefined ? { identityKey: source.identityKey } : {};
+    if (!source.items) {
+      evidence.push({ scope: source.scope, admissibility: "UNRESOLVED", unresolvedCause: "STORAGE_UNKNOWN", ...identity });
+      continue;
+    }
+    const tally = source.items.get(baseItemId);
+    const unknownRows = tally?.unknownQuantityRowCount ?? 0;
+    evidence.push({
+      scope: source.scope,
+      admissibility: source.admissibility,
+      quantity: tally?.knownQuantity ?? 0,
+      ...(unknownRows > 0 ? { unknownQuantityRowCount: unknownRows } : {}),
+      ...identity,
+      ...(source.observedAt !== undefined ? { observedAt: source.observedAt } : {}),
+    });
+    if (unknownRows > 0 && source.admissibility === "CONFIRMED") {
+      evidence.push({ scope: source.scope, admissibility: "UNRESOLVED", unresolvedCause: "ITEM_QUANTITY_UNKNOWN", ...identity, ...(source.observedAt !== undefined ? { observedAt: source.observedAt } : {}) });
+    }
+  }
+  const guildContext: GuildContextEntry[] = map.guilds.map((guild) => {
+    const tally = guild.items.get(baseItemId);
+    const unknownRows = tally?.unknownQuantityRowCount ?? 0;
+    return {
+      ownerKey: guild.ownerKey,
+      admissibility: guild.admissibility,
+      quantity: tally?.knownQuantity ?? 0,
+      ...(unknownRows > 0 ? { unknownQuantityRowCount: unknownRows } : {}),
+      ...(guild.observedAt !== undefined ? { observedAt: guild.observedAt } : {}),
+    };
+  });
   return { evidence, guildContext };
+}
+
+/** Slice 1's per-item entry point, unchanged in signature and result: a lookup into the account-wide projection. */
+export function projectAccountOwnedEvidence(
+  store: SnapshotReadStore,
+  version: VersionOrUnknown,
+  baseItemId: number,
+): { evidence: EvidenceContribution[]; guildContext: GuildContextEntry[] } {
+  return evidenceForItem(projectAccountOwnedEvidenceMap(store, version), baseItemId);
 }

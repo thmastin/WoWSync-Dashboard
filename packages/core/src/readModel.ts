@@ -2,7 +2,8 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
-import { buildAllocationResult, projectAccountOwnedEvidence, type AllocationResult } from "./allocation.ts";
+import { buildAllocationResult, evidenceForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
+import { buildAllocationReview, type DispositionCounts, type UnallocatedInventoryEntry, type UnresolvedStorageScope } from "./allocationReview.ts";
 import { commodityIdentity } from "./demand.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
@@ -184,6 +185,21 @@ export interface SharedStorageReadOwner {
   broaderCoverageEarlier: PagedSharedObservation | null;
 }
 export interface SharedStorageReadPage { asOf: number; owners: SharedStorageReadOwner[]; ownerOffset: number; ownerLimit: number; totalOwners: number; ownersTruncated: boolean }
+
+export interface AllocationReviewQuery { version: VersionOrUnknown; demandedOffset?: number; demandedLimit?: number; unallocatedOffset?: number; unallocatedLimit?: number }
+export type UnallocatedInventoryRead = UnallocatedInventoryEntry & { metadataState: "KNOWN" | "UNKNOWN"; metadata?: ItemMetadataView };
+/** Azeroth ERP Slice 2 account-wide review. `demanded` and `unallocated` are independently paged; `dispositionCounts` covers every demanded item, not only the page. */
+export interface AccountAllocationReview {
+  version: "retail";
+  /** Whole account-owned storage scopes whose contents are UNKNOWN; they leave every item's quantities a floor. */
+  unresolvedStorage: UnresolvedStorageScope[];
+  hasUnresolvedStorage: boolean;
+  /** Account-owned item rows with no parseable base item id; reported, never silently dropped, but not attributable to an item. */
+  unidentifiedItemRowCount: number;
+  dispositionCounts: DispositionCounts;
+  demanded: BoundedPage<AllocationResult>;
+  unallocated: BoundedPage<UnallocatedInventoryRead>;
+}
 
 function pageBounds(offset = 0, limit = 50): { offset: number; limit: number } {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError("offset must be a non-negative integer");
@@ -742,7 +758,7 @@ export class DashboardReadModel {
     }
     const commodity = commodityIdentity(query.baseItemId);
     const active = this.store.getActiveDemand(query.version, "STOCK_TARGET", query.baseItemId);
-    const { evidence, guildContext } = projectAccountOwnedEvidence(this.store, query.version, query.baseItemId);
+    const { evidence, guildContext } = evidenceForItem(projectAccountOwnedEvidenceMap(this.store, query.version), query.baseItemId);
     const data = buildAllocationResult(commodity, active ? [active] : [], evidence, guildContext);
     return {
       data,
@@ -751,6 +767,54 @@ export class DashboardReadModel {
         version: query.version,
         source: "explicit demand plus character-storage and shared-storage evidence",
         warning: "Allocation is recomputed on every read from current observations and current demand; the decision itself is never stored.",
+      },
+    };
+  }
+
+  /**
+   * Azeroth ERP Vertical Slice 2: the account-wide allocation review for one explicit version. Partitions
+   * the account's base items into `demanded` (every ACTIVE STOCK_TARGET demand, each evaluated exactly as
+   * getItemAllocation evaluates it — same projection, same buildAllocationResult) and `unallocated`
+   * (account-owned holdings with no active demand; never surplus, never given a disposition). Both lists
+   * are paged independently over a deterministic order; the evidence is projected once per read, never once
+   * per item. Retail-only, matching getItemAllocation. Item metadata enriches unallocated entries after
+   * paging and never selects or filters them.
+   */
+  getAllocationReview(query: AllocationReviewQuery): ReadValue<AccountAllocationReview> {
+    requireVersion(query.version);
+    const demandedPage = pageBounds(query.demandedOffset ?? 0, query.demandedLimit ?? 50);
+    const unallocatedPage = pageBounds(query.unallocatedOffset ?? 0, query.unallocatedLimit ?? 50);
+    if (query.version !== "retail") {
+      return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
+    }
+    const review = buildAllocationReview(projectAccountOwnedEvidenceMap(this.store, query.version), this.store.listDemands(query.version));
+    const demanded = review.demanded.slice(demandedPage.offset, demandedPage.offset + demandedPage.limit);
+    const unallocated = review.unallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
+    const metadata = new Map(this.store.getItemMetadata(query.version, unallocated.map((entry) => entry.baseItemId)).map((item) => [item.baseItemId, item]));
+    return {
+      data: {
+        version: query.version,
+        unresolvedStorage: review.unresolvedStorage,
+        hasUnresolvedStorage: review.unresolvedStorage.length > 0,
+        unidentifiedItemRowCount: review.unidentifiedItemRowCount,
+        dispositionCounts: review.dispositionCounts,
+        demanded: { items: demanded, offset: demandedPage.offset, limit: demandedPage.limit, totalCount: review.demanded.length, truncated: demandedPage.offset + demanded.length < review.demanded.length },
+        unallocated: {
+          items: unallocated.map((entry) => {
+            const item = metadata.get(entry.baseItemId);
+            return { ...entry, metadataState: item ? "KNOWN" as const : "UNKNOWN" as const, ...(item ? { metadata: item } : {}) };
+          }),
+          offset: unallocatedPage.offset,
+          limit: unallocatedPage.limit,
+          totalCount: review.unallocated.length,
+          truncated: unallocatedPage.offset + unallocated.length < review.unallocated.length,
+        },
+      },
+      provenance: {
+        state: "DERIVED",
+        version: query.version,
+        source: "explicit demand plus character-storage and shared-storage evidence",
+        warning: "Recomputed on every read; nothing is stored. Unallocated inventory has no active demand and is never surplus: no surplus, disposition, or sale recommendation can be determined for it.",
       },
     };
   }

@@ -10,6 +10,12 @@ possibly stale and re-verify against source (use `git ls-remote origin main` rat
 possibly-stale local `origin/main` tracking ref if you need to re-check what's actually on the
 remote).
 
+**Azeroth ERP Slice 2 addendum.** Application behavior *did* change after that stamp: the commit that
+introduced this paragraph (branch `feature/erp-slice2-allocation-review`, based on `main` @
+`7531c01f79f3325d069fdb418c53215f317a0f44`) adds the Account Allocation Review described below. Until
+that branch is merged, `main` does not contain Slice 2; check with `git ls-remote origin main` and
+`git merge-base --is-ancestor`.
+
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
 ## What's shipped
@@ -26,10 +32,19 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   and the `get_item_allocation` MCP tool. Retail-only, one commodity per demand, account-scoped.
   See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) for the full semantics
   contract and the live-validation record.
+- **Azeroth ERP Vertical Slice 2 — Account Allocation Review**: `DashboardReadModel.getAllocationReview`
+  (`packages/core/src/allocationReview.ts`) and the read-only `get_allocation_review` MCP tool. One
+  account-wide, independently paged view of every active demand's allocation result (identical to
+  `get_item_allocation`) and of account-owned holdings with no active demand (`unallocated` — evidence
+  only, never surplus, no disposition). Retail-only, explicit version, no new durable state. The shared
+  evidence projection (`projectAccountOwnedEvidenceMap` / `evidenceForItem`) now serves both slices,
+  and a present item row with an unreported quantity is no longer summed as 0 (it is unresolved
+  evidence). See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23. Validated by
+  automated tests only; no live DEV/ChatGPT validation of Slice 2 has been recorded yet.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a
-  number here — it changes as tools are added. As of this baseline it was **25**, including
-  `get_item_allocation` as the newest addition. See
+  number here — it changes as tools are added. With Slice 2 it is **26**, including
+  `get_allocation_review` as the newest addition (25 at the Slice 1 baseline). See
   [`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for the registered-tool table.
 - **Live ChatGPT MCP validation**: the Azeroth ERP Slice 1 live validation (Void-Tempered Leather,
   base item ID 238511) succeeded end-to-end through the real Omarchy DEV Secure MCP Tunnel path.
@@ -63,11 +78,12 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 - **No demand-management UI.** Demand CRUD HTTP routes exist (`packages/server/src/demandRoutes.ts`)
   but have no caller anywhere in this codebase — no UI, no MCP mutation tool. The only way to
   manage a demand today is a direct HTTP call.
-- **No MCP mutation capability, anywhere.** Every MCP tool, including `get_item_allocation`, is
-  structurally read-only (SQLite opened `readOnly: true`; the `SnapshotReadStore` interface has no
+- **No MCP mutation capability, anywhere.** Every MCP tool, including `get_item_allocation` and
+  `get_allocation_review`, is structurally read-only (SQLite opened `readOnly: true`; the `SnapshotReadStore` interface has no
   write methods). MCP never authors demand.
 - Azeroth ERP Slice 1 is Retail-only, one commodity per demand, account-scoped (no character
-  scope), and covers `STOCK_TARGET` only. See
+  scope), and covers `STOCK_TARGET` only. Slice 2's review is Retail-only, has no Dashboard UI, does
+  not value or rank unallocated inventory, and treats Hellomags as an ordinary character. See
   [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) for everything
   explicitly deferred beyond it.
 - Warband account scope is `installation-local`, not a true Battle.net account ID — two Battle.net

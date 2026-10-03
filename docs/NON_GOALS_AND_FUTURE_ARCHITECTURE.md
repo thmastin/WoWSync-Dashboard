@@ -65,11 +65,11 @@ which is the only ERP work implemented today (see
   vs. `FARM` vs. `FARM_OTHER_AND_SELL` vs. `USE_STOCK` as player-selectable strategies rather than
   a single "optimal" recommendation. None of this exists in Slice 1.
 - **Gold as an account resource.** Not modeled as an allocation input today.
-- **Idle-inventory opportunity cost.** The "unallocated/unexplained inventory" category Slice 1
-  already names (see `AZEROTH_ERP_ARCHITECTURE.md` §4) is the right place for a future insight
-  layer to eventually phrase something like "500 units are unallocated and represent approximately
-  X gold of potentially tied-up capital" — explicitly as an *insight*, never silently reclassified
-  into surplus, and never implemented today.
+- **Idle-inventory opportunity cost.** Slice 2 now *lists* unallocated inventory as evidence (see
+  `AZEROTH_ERP_ARCHITECTURE.md` §4, §23), with no valuation. A future insight layer could eventually
+  phrase something like "500 units are unallocated and represent approximately X gold of potentially
+  tied-up capital" — explicitly as an *insight*, never silently reclassified into surplus. The
+  valuation/opportunity-cost part is not implemented.
 - **Player time as a resource.** Not modeled today.
 - **Exact/equipment identity**, for when commodity identity `(version, baseItemId)` is not
   sufficient (bonus IDs, gems, per-instance properties). Slice 1's `CommodityIdentity` carries a
@@ -83,5 +83,5 @@ This is not a design document for any of the above. It exists to give a future r
 implementer) a correct place to stand — and to make clear, when someone asks "why doesn't WoWSync
 do X yet," that the answer is usually "it's a recognized future direction with a named boundary,
 not an oversight." If you are about to start implementing any item above, that is Azeroth ERP
-Slice 2+ work: stop, and get it explicitly scoped and approved first, consistent with
+Slice 3+ work: stop, and get it explicitly scoped and approved first, consistent with
 [`ROADMAP.md`](ROADMAP.md)'s deferred/exploratory framing.

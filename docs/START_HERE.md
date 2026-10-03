@@ -103,3 +103,7 @@ Azeroth ERP Vertical Slice 1 (durable `STOCK_TARGET` demands, deterministic allo
 the `get_item_allocation` MCP tool) is implemented and live-validated. The Omarchy DEV systemd
 topology (`ops/systemd/`, `tools/omarchy/`) is now tracked in this repository. See
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full current baseline.
+
+Azeroth ERP Vertical Slice 2 (the account-wide Account Allocation Review, `get_allocation_review`) is
+implemented with automated tests on `feature/erp-slice2-allocation-review`; it has not yet been
+live-validated. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.

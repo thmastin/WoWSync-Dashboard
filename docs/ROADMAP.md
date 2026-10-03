@@ -114,12 +114,20 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Azeroth ERP Slice 2+ (not scoped here; do not design in detail in this document).**
-  Slice 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`) is
-  shipped — see [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
-  [`CURRENT_STATE.md`](CURRENT_STATE.md). The next concrete step is a demand-management UI or an
-  MCP mutation tool for demand CRUD (both currently absent — see `CURRENT_STATE.md`, "Current
-  limitations"), but the fuller set of future ERP directions (player-intent/strategy modeling,
+- [ ] **Azeroth ERP Slice 2: live validation and merge.** The Account Allocation Review
+  (`get_allocation_review`) is implemented with automated tests on
+  `feature/erp-slice2-allocation-review` (see
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23). Remaining: Tate's merge
+  decision, then a live DEV/ChatGPT validation recorded the same way as Slice 1's.
+
+- [ ] **Azeroth ERP Slice 3+ (not scoped here; do not design in detail in this document).**
+  Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`) and 2
+  (account-wide review, `get_allocation_review`) exist — see
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
+  [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is still a direct HTTP call: a
+  demand-management UI or an MCP mutation tool for demand CRUD are both absent (see
+  `CURRENT_STATE.md`, "Current limitations"; MCP mutation would overturn an enforced invariant), and
+  a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
   BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
   is deliberately left exploratory — see
   [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) rather than
@@ -400,6 +408,13 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **Azeroth ERP Vertical Slice 2 — Account Allocation Review: implemented (2026-10-03), automated
+  tests only, pending merge and live validation.** `DashboardReadModel.getAllocationReview` and the
+  read-only `get_allocation_review` MCP tool: every active demand's allocation result (identical to
+  `get_item_allocation`) plus account-owned `unallocated` holdings, which are never surplus and carry no
+  disposition. One shared evidence projection for both slices; unreported item quantities are
+  unresolved, no longer summed as 0. No new durable state. See
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
 - **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
   `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing
   demand != demand zero, confirmed/potential/unresolved evidence tiers, guild isolation, the

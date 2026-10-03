@@ -11,7 +11,8 @@ Azeroth ERP answers one question deterministically: given what the account actua
 player has explicitly said they want, what is satisfied, what is short, what is uncertain, and what
 (non-executing) action follows? It is not a general project-management system, not a pricing engine, and
 it does not act on the player's behalf. **Vertical Slice 1** (this milestone) proves the smallest useful
-version of that question for one Retail stackable commodity against one explicit demand.
+version of that question for one Retail stackable commodity against one explicit demand. **Vertical
+Slice 2** (§23) adds the account-wide Account Allocation Review over the same projection and allocator.
 
 ## 2. Central flow
 
@@ -58,21 +59,19 @@ clean footing to build on without Slice 1 having to guess at its shape:
   of it (§13, §14). This requires an active demand to exist; it is what `confirmedSurplus` on a
   `RESOLVED` result means today.
 - **UNALLOCATED / UNEXPLAINED INVENTORY** — inventory for which *no* modeled demand currently exists at
-  all. This is not a Slice 1 output (no field in `AllocationResult` computes or names it), but a
-  `NO_ACTIVE_DEMAND` result already carries everything a future reader needs to recognize it: the
-  commodity identity and the full `evidence`/`guildContext` arrays are present on every resolution branch
-  of `AllocationResult`, `NO_ACTIVE_DEMAND` included (see `AllocationResultBase` in `allocation.ts`) — so
-  "500 confirmed account-owned units, no modeled demand" remains visible to a caller that reads the
-  result, even though Slice 1 itself draws no conclusion from it.
+  all. Slice 1 did not name it (no field in `AllocationResult` computes it; a `NO_ACTIVE_DEMAND` result
+  only carries the raw `evidence`/`guildContext`). **Slice 2 (§23) names and lists it** as the
+  `unallocated` half of the Account Allocation Review: evidence only — confirmed and potential quantities
+  and where they are held — with no surplus, no allocation numbers, and no disposition.
 
 A future insight/exception layer may ask *"why are we holding this?"* about unallocated/unexplained
 inventory — and, once economic evidence exists in a later slice, may eventually phrase that as something
 like *"500 units are currently unallocated by known account demand and represent approximately X gold of
 potentially tied-up capital."* That remains an **insight**, not a disposition: it does not answer *"we
 should sell it"*, it is not `SEND_HELLOMAGS` or any other `Disposition` value, and producing it is
-explicitly out of scope for this milestone (§20) — no thresholds, no market valuation, no automatic
-reclassification into surplus. The distinction exists in this document now so that the future layer has
-somewhere correct to stand, without Slice 1 building it prematurely.
+explicitly out of scope (§20, §23) — no thresholds, no market valuation, no automatic reclassification
+into surplus. Slice 2 lists unallocated inventory as evidence; it does not value it, rank it by value, or
+draw any conclusion about what to do with it.
 
 ## 5. Existing evidence sources (reused, not duplicated)
 
@@ -87,8 +86,10 @@ Slice 1 introduces no inventory ledger. It reads:
 
 ## 6. Why there is no duplicate inventory ledger
 
-Every quantity the allocator uses is projected, on read, from the sources in §5 by a small adapter
-(`projectAccountOwnedEvidence` in `packages/core/src/allocation.ts`). This mirrors the shared-storage
+Every quantity the allocator uses is projected, on read, from the sources in §5 by a small adapter in
+`packages/core/src/allocation.ts`: `projectAccountOwnedEvidenceMap` reads every account-owned scope once and
+tallies it by base item id, and `evidenceForItem` is the per-item lookup into that map
+(`projectAccountOwnedEvidence`, the Slice 1 entry point, is now exactly that composition — see §23). This mirrors the shared-storage
 module's own principle: current state is *derived*, never stored, so it can never drift from the
 evidence it was computed from and can never be resurrected or invalidated independently of that
 evidence. The only new durable table this milestone adds is `demands` (§10) — intent, not inventory.
@@ -115,7 +116,14 @@ These three states remain distinct all the way through the allocation result:
   (`potentialAdditionalAvailable`) that can never satisfy demand or create confirmed surplus.
 - **UNKNOWN** (a character's bags/bank never observed, or a Warband never observed at all) ->
   `UNRESOLVED` evidence. Carries **no quantity at all** (never `0`) and is surfaced explicitly
-  (`hasUnresolvedEvidence`, `unresolvedScopes`).
+  (`hasUnresolvedEvidence`, `unresolvedScopes`). `unresolvedCause: "STORAGE_UNKNOWN"`.
+- **A present item row with no reported quantity** (the export's quantity cell is `?`) is also never `0`.
+  The scope's reported rows still form its tier quantity, now a floor, and the contribution carries
+  `unknownQuantityRowCount`. In a `CONFIRMED` scope it additionally produces a companion `UNRESOLVED`
+  contribution (`unresolvedCause: "ITEM_QUANTITY_UNKNOWN"`, no quantity), so the conservative gate (§14)
+  withholds `SEND_HELLOMAGS` exactly as it does for unknown storage. In a `POTENTIAL` scope it is flagged by
+  the count only: historical evidence never reaches confirmed numbers, so it cannot gate them. (Before
+  Slice 2 such a row was summed as `0`; that was an UNKNOWN-as-zero defect, corrected in §23.)
 
 ## 9. Observation age vs. allocation admissibility
 
@@ -256,9 +264,9 @@ These are documented as **future** constraints this architecture must accommodat
   added only when approval history, execution correlation, or economic learning actually need it (§10,
   §12).
 - **Scheduled exception detection**: a consumer of the same deterministic `AllocationResult` shape (§18),
-  not a new calculation path. For `NO_ACTIVE_DEMAND` results in particular, this is also where
-  unallocated/unexplained-inventory insights (§4) would eventually be produced — reading the evidence
-  already present on the result, never reclassifying it into surplus itself.
+  not a new calculation path. Slice 2's on-demand Account Allocation Review (§23) is the read such a
+  scheduler would consume; scheduling, alerting, and any valuation of unallocated inventory remain future
+  work and must never reclassify unallocated inventory into surplus.
 - **Execution / BankX**: a strictly later, explicitly separate concern from recommendation (§16).
 
 ## 22. Cross-cutting invariants future ERP work must preserve
@@ -282,6 +290,68 @@ These are documented as **future** constraints this architecture must accommodat
     backfills, or mutates SQLite, and it never authors demand — enforced by `SqliteSnapshotReadStore`
     never implementing any write method, not merely by convention (§10, §14, §20).
 15. MCP account-state requests require an explicit version; nothing defaults to Retail.
+16. Unallocated inventory is not surplus: an item with no active demand never carries surplus, allocation
+    numbers, a disposition, or a sale recommendation (§4, §23).
+17. One evidence projection: every ERP read (per-item or account-wide) derives its quantities from the
+    same `projectAccountOwnedEvidenceMap`/`evidenceForItem` path and every demanded result from the same
+    `buildAllocationResult` — never a parallel allocator or a second inventory aggregation (§6, §23).
+
+## 23. Vertical Slice 2: Account Allocation Review
+
+**Implemented.** One account-wide, read-only ERP view answering: *which explicit active demands have
+allocation results needing attention, and which account-owned inventory has no modeled active demand?*
+
+- **Read model**: `DashboardReadModel.getAllocationReview({ version, demandedOffset?, demandedLimit?,
+  unallocatedOffset?, unallocatedLimit? })`. Retail-only and explicit-version, exactly like
+  `getItemAllocation` (a recognized non-Retail version returns `UNKNOWN` provenance and no data; a missing or
+  unrecognized version is rejected). Pure assembly lives in `packages/core/src/allocationReview.ts`
+  (`buildAllocationReview`).
+- **MCP**: one new read-only tool, `get_allocation_review` (see `docs/MCP_DEVELOPMENT.md`). No mutation.
+- **Result**:
+  - `unresolvedStorage` / `hasUnresolvedStorage` — whole account-owned scopes whose contents are UNKNOWN
+    (a character's bags/bank, or a Warband never observed). Reported once; they apply to every item.
+  - `unidentifiedItemRowCount` — account-owned item rows with no parseable base item id. Counted, never
+    silently dropped, but not attributable to any item.
+  - `demanded` — every ACTIVE `STOCK_TARGET` demand's `AllocationResult`, **identical** to what
+    `getItemAllocation` returns for that item (same projection, same `buildAllocationResult`; two active
+    demands for one item still produce `CONFLICTING_DEMAND`). Ordered `HOLD_ALLOCATED`, `REQUIRES_REVIEW`,
+    `SEND_HELLOMAGS`, `NO_ACTION`, then base item id — a fixed attention order, not a score.
+    `dispositionCounts` covers every demanded item, not only the returned page.
+  - `unallocated` — every base item held in a `CONFIRMED`/`POTENTIAL` account-owned scope (character bags,
+    character bank, Warband) with no ACTIVE demand, ascending base item id. Each entry
+    (`UnallocatedInventoryEntry`, `allocationState: "UNALLOCATED"`) exposes `baseItemId`, an observed
+    `name`, `confirmedQuantity`, `potentialQuantity` (never summed together), `hasUnresolvedEvidence`,
+    `unresolvedScopes`, `holdings` (the contributions that actually hold the item), and `guildContext`.
+    It **structurally has no** `surplus`/`confirmedSurplus`/`allocated`/`confirmedDeficit`/`disposition`
+    field. Item metadata (`metadataState`, `metadata`) is attached after paging, for presentation only; it
+    never selects, filters, or orders entries, so unknown metadata never hides held inventory.
+- **Ownership**: guild-owned evidence never enters any account quantity; an item held only by a guild never
+  becomes an unallocated account item (it appears only as `guildContext` on entries the account also holds
+  or demands).
+- **Identity**: entries are keyed by base item id, the same identity Slice 1 uses. That is not a claim that
+  every held item is a stackable or auction-house commodity; exact-item identity is still future (§11).
+  `CommodityIdentity` is unchanged on `AllocationResult` for Slice 1 compatibility.
+- **One projection, no drift**: `projectAccountOwnedEvidenceMap` reads each character's latest snapshot once
+  and the shared-storage projection once, tallying every scope by base item id; `evidenceForItem` is the
+  per-item lookup both `getItemAllocation` and the review use. The review never re-reads storage per item.
+  It does not use `AccountFacts.InventoryFacts`, whose `totalKnownQty` merges OBSERVED with LAST_SEEN and
+  omits the Warband.
+- **Paging**: `demanded` and `unallocated` are independent `BoundedPage`s (default limit 50, maximum 100,
+  the read model's standard `pageBounds`) over a total, deterministic order; `totalCount`/`truncated`
+  report what lies beyond the page. Nothing is dropped to fit a bound.
+- **Unknown item quantity**: corrected as described in §8. This also applies to `getItemAllocation`: a
+  confirmed floor surplus whose item has an unreported-quantity row is now `REQUIRES_REVIEW`, never
+  `SEND_HELLOMAGS`.
+- **New durable state**: none. The review is derived on every read and never persisted.
+- **Hellomags**: unchanged — an ordinary account-owned Retail character for allocation purposes. No special
+  sale-inventory designation exists; that needs explicit design before it is built.
+- **Not in Slice 2**: valuation, prices, vendor-value ranking, TSM/CraftSim/Journalator, thresholds or any
+  rule turning unallocated inventory into surplus, dispositions or sale recommendations for unallocated
+  inventory, new demand types, demand-authoring UI, MCP demand mutation, character-scoped demand,
+  exact-equipment allocation, transfer plans, `/bankx` or any execution, scheduling/alerts, persisted review
+  results, non-Retail allocation, a Dashboard UI for the review, and any special Hellomags policy.
+- **Validation**: automated only (`packages/core/test/readModelAllocationReview.test.ts`, plus the MCP
+  protocol test). No live DEV validation with real demands has been recorded for Slice 2 yet.
 
 ## Live validation record: Azeroth ERP Slice 1
 

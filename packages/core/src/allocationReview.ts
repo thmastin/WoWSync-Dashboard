@@ -1,0 +1,142 @@
+// Azeroth ERP Vertical Slice 2 — Account Allocation Review (pure assembly).
+//
+// One account-wide, read-only partition of the account's base items into:
+//   - demanded:    every base item with an ACTIVE STOCK_TARGET demand, evaluated by the SAME
+//                  `buildAllocationResult` Slice 1's per-item `getItemAllocation` uses, over the SAME
+//                  evidence projection (`evidenceForItem` on one `AccountOwnedEvidenceMap`). There is no
+//                  second allocator.
+//   - unallocated: every base item held in account-owned storage with NO active modeled demand.
+//
+// UNALLOCATED INVENTORY IS NOT SURPLUS. Surplus is only ever "what remains after an explicit demand was
+// allocated" (Slice 1's `confirmedSurplus` on a RESOLVED result). An unallocated entry therefore has no
+// surplus, no allocation numbers, no disposition, and no sale recommendation — structurally absent fields,
+// not zero/NO_ACTION values. It reports evidence only: what is held, at which evidence tier, where.
+//
+// Everything here is DERIVED on every read and never persisted. Guild-owned evidence never contributes to
+// account quantities and an item held only by a guild never becomes an unallocated account item. No price,
+// valuation, threshold, or item metadata is an input to anything in this module.
+import { buildAllocationResult, evidenceForItem, type AccountOwnedEvidenceMap, type AllocationEvidenceScope, type AllocationResult, type Disposition, type EvidenceContribution, type GuildContextEntry } from "./allocation.ts";
+import { commodityIdentity, type ExplicitDemand } from "./demand.ts";
+
+/** A whole account-owned storage scope whose contents are UNKNOWN. It applies to every item. */
+export interface UnresolvedStorageScope {
+  readonly scope: AllocationEvidenceScope;
+  /** Character scopes only. */
+  readonly identityKey?: string;
+}
+
+/**
+ * Account-owned base-item inventory that no ACTIVE demand currently explains or reserves. Deliberately
+ * carries no surplus, allocation, disposition, or recommendation field: none of those can be determined
+ * without an explicit demand.
+ */
+export interface UnallocatedInventoryEntry {
+  readonly allocationState: "UNALLOCATED";
+  readonly baseItemId: number;
+  /** An item name as observed in the evidence, for presentation only. */
+  readonly name?: string;
+  /** Sum of reported quantities in CONFIRMED (OBSERVED) account-owned scopes. A floor when `hasUnresolvedEvidence`. */
+  readonly confirmedQuantity: number;
+  /** Sum of reported quantities in POTENTIAL (LAST_SEEN) account-owned scopes. Historical; never added into `confirmedQuantity`. */
+  readonly potentialQuantity: number;
+  /** True when any account-owned evidence relevant to this item is unresolved: a storage scope is UNKNOWN, or rows of this item have unreported quantity. */
+  readonly hasUnresolvedEvidence: boolean;
+  readonly unresolvedScopes: AllocationEvidenceScope[];
+  /**
+   * The account-owned contributions that actually hold this item (reported quantity > 0, or rows with
+   * unreported quantity), plus any `ITEM_QUANTITY_UNKNOWN` unresolved contribution for it. Whole-scope
+   * UNKNOWN storage is reported once at the review level (`unresolvedStorage`), not repeated per item.
+   */
+  readonly holdings: EvidenceContribution[];
+  /** Guild-owned evidence for the same item, context only. Never part of any quantity above. */
+  readonly guildContext: GuildContextEntry[];
+}
+
+export type DispositionCounts = Record<Disposition, number>;
+
+export interface AllocationReviewParts {
+  readonly unresolvedStorage: UnresolvedStorageScope[];
+  readonly unidentifiedItemRowCount: number;
+  /** Every demanded item, in review order (see DISPOSITION_REVIEW_ORDER), unpaged. */
+  readonly demanded: AllocationResult[];
+  readonly dispositionCounts: DispositionCounts;
+  /** Every unallocated item, ascending base item id, unpaged. */
+  readonly unallocated: UnallocatedInventoryEntry[];
+}
+
+/** Attention order for demanded results: shortfalls first, then review-gated, then sale-eligible, then nothing to do. A fixed order, not a score. */
+export const DISPOSITION_REVIEW_ORDER: readonly Disposition[] = ["HOLD_ALLOCATED", "REQUIRES_REVIEW", "SEND_HELLOMAGS", "NO_ACTION"];
+
+function sumTier(evidence: readonly EvidenceContribution[], admissibility: "CONFIRMED" | "POTENTIAL"): number {
+  return evidence.filter((e) => e.admissibility === admissibility).reduce((total, e) => total + (e.quantity ?? 0), 0);
+}
+
+function holdsItem(contribution: EvidenceContribution): boolean {
+  if (contribution.admissibility === "UNRESOLVED") return contribution.unresolvedCause === "ITEM_QUANTITY_UNKNOWN";
+  return (contribution.quantity ?? 0) > 0 || (contribution.unknownQuantityRowCount ?? 0) > 0;
+}
+
+/** Every base item held (reported quantity > 0, or present with unreported quantity) in any CONFIRMED/POTENTIAL account-owned scope. Guild scopes are never consulted. */
+function heldAccountItems(map: AccountOwnedEvidenceMap): Map<number, string | undefined> {
+  const held = new Map<number, string | undefined>();
+  for (const source of map.scopes) {
+    if (!source.items) continue;
+    for (const [baseItemId, tally] of source.items) {
+      if (tally.knownQuantity <= 0 && tally.unknownQuantityRowCount === 0) continue;
+      if (!held.has(baseItemId) || held.get(baseItemId) === undefined) held.set(baseItemId, tally.name);
+    }
+  }
+  return held;
+}
+
+/**
+ * Builds the full (unpaged) account allocation review from one evidence projection and the version's
+ * demands. Pure: no I/O, no clock reads. `demands` may contain any status/type; only ACTIVE STOCK_TARGET
+ * demands allocate. More than one ACTIVE demand for one item is handed to `buildAllocationResult`, which
+ * returns its explicit CONFLICTING_DEMAND result rather than a chosen winner.
+ */
+export function buildAllocationReview(map: AccountOwnedEvidenceMap, demands: readonly ExplicitDemand[]): AllocationReviewParts {
+  const activeByItem = new Map<number, ExplicitDemand[]>();
+  for (const demand of demands) {
+    if (demand.status !== "ACTIVE" || demand.demandType !== "STOCK_TARGET") continue;
+    const list = activeByItem.get(demand.commodity.baseItemId) ?? [];
+    list.push(demand);
+    activeByItem.set(demand.commodity.baseItemId, list);
+  }
+
+  const order = new Map(DISPOSITION_REVIEW_ORDER.map((disposition, index) => [disposition, index]));
+  const demanded = [...activeByItem.entries()]
+    .map(([baseItemId, active]) => {
+      const { evidence, guildContext } = evidenceForItem(map, baseItemId);
+      return buildAllocationResult(commodityIdentity(baseItemId), active, evidence, guildContext);
+    })
+    .sort((a, b) => order.get(a.disposition)! - order.get(b.disposition)! || a.commodity.baseItemId - b.commodity.baseItemId);
+
+  const dispositionCounts: DispositionCounts = { HOLD_ALLOCATED: 0, REQUIRES_REVIEW: 0, SEND_HELLOMAGS: 0, NO_ACTION: 0 };
+  for (const result of demanded) dispositionCounts[result.disposition]++;
+
+  const unallocated: UnallocatedInventoryEntry[] = [...heldAccountItems(map).entries()]
+    .filter(([baseItemId]) => !activeByItem.has(baseItemId))
+    .sort(([a], [b]) => a - b)
+    .map(([baseItemId, name]) => {
+      const { evidence, guildContext } = evidenceForItem(map, baseItemId);
+      const unresolved = evidence.filter((e) => e.admissibility === "UNRESOLVED");
+      return {
+        allocationState: "UNALLOCATED" as const,
+        baseItemId,
+        ...(name !== undefined ? { name } : {}),
+        confirmedQuantity: sumTier(evidence, "CONFIRMED"),
+        potentialQuantity: sumTier(evidence, "POTENTIAL"),
+        hasUnresolvedEvidence: unresolved.length > 0,
+        unresolvedScopes: [...new Set(unresolved.map((e) => e.scope))],
+        holdings: evidence.filter(holdsItem),
+        guildContext,
+      };
+    });
+
+  const unresolvedStorage: UnresolvedStorageScope[] = map.scopes
+    .filter((source) => !source.items)
+    .map((source) => ({ scope: source.scope, ...(source.identityKey !== undefined ? { identityKey: source.identityKey } : {}) }));
+
+  return { unresolvedStorage, unidentifiedItemRowCount: map.unidentifiedItemRowCount, demanded, dispositionCounts, unallocated };
+}
