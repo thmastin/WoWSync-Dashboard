@@ -25,3 +25,4 @@ export * from "./researchRegistry.ts";
 export * from "./demand.ts";
 export * from "./allocation.ts";
 export * from "./allocationReview.ts";
+export * from "./heldItemIdentity.ts";

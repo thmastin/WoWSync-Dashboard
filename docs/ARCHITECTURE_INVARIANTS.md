@@ -148,8 +148,9 @@ for the full semantics; this section lists only the cross-cutting invariants.
    `CONFIRMED` evidence only. `POTENTIAL` (historical/`LAST_SEEN`) evidence is tracked separately
    in `potentialAdditionalAvailable` and never added into the confirmed numbers.
 9. Disposition gate (computed *after* arithmetic, never changing it): deficit -> `HOLD_ALLOCATED`;
-   zero surplus -> `NO_ACTION`; surplus with any unresolved evidence -> `REQUIRES_REVIEW`; clean
-   surplus -> `SEND_HELLOMAGS`.
+   zero surplus -> `NO_ACTION`; surplus with any unresolved evidence -> `REQUIRES_REVIEW`; surplus with
+   any confirmed bound or binding-unknown row -> `REQUIRES_REVIEW` (Slice 3, see 15); clean surplus ->
+   `SEND_HELLOMAGS`.
 10. **`SEND_HELLOMAGS` is a label/recommendation only.** No mail, vendor, auction, or other
     execute code exists anywhere in this repository. Approval and execution are explicitly
     separate, later concerns.
@@ -171,6 +172,25 @@ for the full semantics; this section lists only the cross-cutting invariants.
     with `buildAllocationResult`. A demanded review entry is identical to `getItemAllocation` for the
     same item (tested). `AccountFacts.InventoryFacts` is not an ERP evidence source: its
     `totalKnownQty` merges OBSERVED with LAST_SEEN and omits the Warband.
+    Slice 3: both paths go through the single `allocationForItem`, and held-item facets are read
+    from the same projection (`ItemTally.heldRows` via `heldItemFacetsForItem`).
+
+**SLICE 3 — IMPLEMENTED ON A FEATURE BRANCH, NOT MERGED OR LIVE-VALIDATED**
+
+15. **Base-item aggregation must be proven, never assumed.** Confirmed rows of one base item are
+    aggregated only when their captured item strings, normalized by blanking linkLevel and specID
+    (viewer fields) and stripping trailing empty fields, are all full and identical
+    (`UNIFORM_ITEM_STRING`) or there are none (`NONE_HELD`). Variants or a bare `item:<id>` (identity
+    UNKNOWN, never "no modifiers") produce `BASE_ITEM_AGGREGATION_UNPROVEN`, which structurally carries
+    no `allocated`/`confirmedDeficit`/`confirmedSurplus`. No modifier, bonus ID, or item context is
+    safe-listed. This is not exact/instance identity.
+16. **Binding can only withhold, never certify.** `bound=yes` (any binding form, soulbound and
+    Warbound indistinguishable) and unknown binding withhold `SEND_HELLOMAGS` from a confirmed surplus;
+    `bound=no` gates nothing and certifies no transferability. Binding is never unresolved evidence and
+    never sets `hasUnresolvedEvidence`. Binding facets are row counts, not quantities.
+17. LAST_SEEN identity and binding facts are reported (`potentialItemStringIdentity`,
+    `potentialBinding`) and never gate confirmed arithmetic or disposition. Guild rows never contribute
+    to any identity or binding facet.
 
 ## PLAYER INTENT
 

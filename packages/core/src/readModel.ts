@@ -2,9 +2,8 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
-import { buildAllocationResult, evidenceForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
-import { buildAllocationReview, type DispositionCounts, type UnallocatedInventoryEntry, type UnresolvedStorageScope } from "./allocationReview.ts";
-import { commodityIdentity } from "./demand.ts";
+import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
+import { buildAllocationReview, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
 import type { CapturedCharacterState, EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
@@ -197,6 +196,8 @@ export interface AccountAllocationReview {
   /** Account-owned item rows with no parseable base item id; reported, never silently dropped, but not attributable to an item. */
   unidentifiedItemRowCount: number;
   dispositionCounts: DispositionCounts;
+  /** Slice 3: identity-class counts over EVERY unallocated entry, not only the page. */
+  unallocatedItemStringIdentityCounts: UnallocatedItemStringIdentityCounts;
   demanded: BoundedPage<AllocationResult>;
   unallocated: BoundedPage<UnallocatedInventoryRead>;
 }
@@ -756,10 +757,8 @@ export class DashboardReadModel {
     if (query.version !== "retail") {
       return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
     }
-    const commodity = commodityIdentity(query.baseItemId);
     const active = this.store.getActiveDemand(query.version, "STOCK_TARGET", query.baseItemId);
-    const { evidence, guildContext } = evidenceForItem(projectAccountOwnedEvidenceMap(this.store, query.version), query.baseItemId);
-    const data = buildAllocationResult(commodity, active ? [active] : [], evidence, guildContext);
+    const data = allocationForItem(projectAccountOwnedEvidenceMap(this.store, query.version), query.baseItemId, active ? [active] : []);
     return {
       data,
       provenance: {
@@ -798,6 +797,7 @@ export class DashboardReadModel {
         hasUnresolvedStorage: review.unresolvedStorage.length > 0,
         unidentifiedItemRowCount: review.unidentifiedItemRowCount,
         dispositionCounts: review.dispositionCounts,
+        unallocatedItemStringIdentityCounts: review.unallocatedItemStringIdentityCounts,
         demanded: { items: demanded, offset: demandedPage.offset, limit: demandedPage.limit, totalCount: review.demanded.length, truncated: demandedPage.offset + demanded.length < review.demanded.length },
         unallocated: {
           items: unallocated.map((entry) => {

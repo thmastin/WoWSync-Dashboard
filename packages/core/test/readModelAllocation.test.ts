@@ -206,3 +206,225 @@ test("getItemAllocation is Retail-only in this slice: a recognized non-Retail ve
     assert.equal(read.data, undefined);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Azeroth ERP Vertical Slice 3 — held-item identity and binding, end to end through real imports.
+// Every scenario's demanded result is also checked against getAllocationReview (deep-equal parity).
+// ---------------------------------------------------------------------------------------------
+
+/** A row with an explicit item string and binding; `bound: undefined` renders as `?` (unknown). */
+const heldRow = (ref: string, qty: number, bound: string | undefined, name = "Slice 3 fixture"): InventoryItemRecord => ({ itemRef: ref, name, qty, bound, vendorEachCopper: 100 });
+const codesOf = (result: { reasons: { code: string }[] }) => result.reasons.map((r) => r.code);
+
+function allocationWithParity(readModel: DashboardReadModel, baseItemId: number) {
+  const result = readModel.getItemAllocation({ version: "retail", baseItemId }).data!;
+  const reviewed = readModel.getAllocationReview({ version: "retail", demandedLimit: 100, unallocatedLimit: 100 }).data!.demanded.items.find((r) => r.commodity.baseItemId === baseItemId);
+  assert.deepEqual(reviewed, result, `review demanded entry for ${baseItemId} deep-equals getItemAllocation`);
+  return result;
+}
+
+test("Slice 3 scenario 1 — ordinary commodity: uniform full strings, bound=no, clean evidence is unchanged (RESOLVED, SEND_HELLOMAGS)", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830001;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 30, "no"), heldRow(`item:${ITEM}::::::::80:::::::::`, 5, "no")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 20 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.deepEqual([result.confirmedAvailable, result.allocated, result.confirmedDeficit, result.confirmedSurplus], [35, 20, 0, 15]);
+    assert.equal(result.disposition, "SEND_HELLOMAGS");
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+    assert.deepEqual(result.confirmedBinding, { boundRowCount: 0, unboundRowCount: 2, unknownRowCount: 0 });
+    assert.deepEqual(result.potentialItemStringIdentity, { class: "NONE_HELD", distinctItemStringCount: 0 });
+  });
+});
+
+test("Slice 3 scenario 2 — rows differing only in viewer linkLevel/specID (78:1467 vs 85:253) are one item string with the same arithmetic", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830002;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::78:1467:::::::::`, 30, "no")]), bank: observedSection([heldRow(`item:${ITEM}::::::::85:253:::::::::`, 5, "no")]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 20 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.deepEqual([result.confirmedAvailable, result.allocated, result.confirmedDeficit, result.confirmedSurplus], [35, 20, 0, 15]);
+    assert.equal(result.disposition, "SEND_HELLOMAGS");
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+  });
+});
+
+test("Slice 3 scenario 3 — a bound Hearthstone under STOCK_TARGET 0: surplus 1 is reported, SEND_HELLOMAGS is withheld, nothing is unresolved", () => {
+  withFixture((store, readModel, imp) => {
+    const HEARTHSTONE = 6948;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${HEARTHSTONE}::::::::80:::::::::`, 1, "yes", "Hearthstone")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: HEARTHSTONE, requiredQuantity: 0 });
+    const result = allocationWithParity(readModel, HEARTHSTONE);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.equal(result.confirmedSurplus, 1);
+    assert.equal(result.hasUnresolvedEvidence, false);
+    assert.equal(result.disposition, "REQUIRES_REVIEW");
+    assert.ok(codesOf(result).includes("BOUND_INVENTORY_PRESENT"));
+    assert.ok(codesOf(result).includes("SALE_DISPOSITION_GATED_BY_BINDING"));
+    assert.ok(!codesOf(result).includes("SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE"));
+    assert.ok(!codesOf(result).includes("SALE_PIPELINE_APPROVED"));
+  });
+});
+
+test("Slice 3 scenario 4 — confirmed binding unknown gates a positive surplus without claiming bound inventory", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830004;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 10, undefined), heldRow(`item:${ITEM}::::::::80:::::::::`, 10, "no")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 5 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.equal(result.confirmedSurplus, 15);
+    assert.equal(result.hasUnresolvedEvidence, false);
+    assert.equal(result.disposition, "REQUIRES_REVIEW");
+    assert.deepEqual(result.confirmedBinding, { boundRowCount: 0, unboundRowCount: 1, unknownRowCount: 1 });
+    assert.ok(codesOf(result).includes("BINDING_UNKNOWN_PRESENT"));
+    assert.ok(codesOf(result).includes("SALE_DISPOSITION_GATED_BY_BINDING"));
+    assert.ok(!codesOf(result).includes("BOUND_INVENTORY_PRESENT"));
+  });
+});
+
+test("Slice 3 scenario 5 — binding facts without positive surplus keep the existing HOLD_ALLOCATED / NO_ACTION disposition", () => {
+  withFixture((store, readModel, imp) => {
+    const SHORT = 830005;
+    const EXACT = 830006;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${SHORT}::::::::80:::::::::`, 2, "yes"), heldRow(`item:${EXACT}::::::::80:::::::::`, 3, undefined)]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: SHORT, requiredQuantity: 10 });
+    store.createDemand({ baseItemId: EXACT, requiredQuantity: 3 });
+    const short = allocationWithParity(readModel, SHORT);
+    assert.equal(short.disposition, "HOLD_ALLOCATED");
+    assert.ok(codesOf(short).includes("BOUND_INVENTORY_PRESENT"));
+    assert.ok(!codesOf(short).includes("SALE_DISPOSITION_GATED_BY_BINDING"));
+    const exact = allocationWithParity(readModel, EXACT);
+    assert.equal(exact.disposition, "NO_ACTION");
+    assert.ok(codesOf(exact).includes("BINDING_UNKNOWN_PRESENT"));
+    assert.ok(!codesOf(exact).includes("SALE_DISPOSITION_GATED_BY_BINDING"));
+  });
+});
+
+const NO_ARITHMETIC = ["allocated", "confirmedDeficit", "confirmedSurplus"];
+
+test("Slice 3 scenario 6 — two distinct normalized full strings of one base item: BASE_ITEM_AGGREGATION_UNPROVEN with no arithmetic fields", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830007;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::1:10390`, 1, "no"), heldRow(`item:${ITEM}::::::::80:::::1:10391`, 1, "no")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 1 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "BASE_ITEM_AGGREGATION_UNPROVEN");
+    if (result.resolution !== "BASE_ITEM_AGGREGATION_UNPROVEN") return;
+    assert.equal(result.confirmedQuantity, 2);
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "ITEM_STRING_VARIANTS", distinctItemStringCount: 2 });
+    for (const field of NO_ARITHMETIC) assert.ok(!(field in result), `${field} is structurally absent`);
+    assert.equal(result.disposition, "REQUIRES_REVIEW");
+    assert.deepEqual(codesOf(result), ["EXPLICIT_DEMAND_EXISTS", "ITEM_STRING_VARIANTS_PRESENT", "BASE_ITEM_AGGREGATION_UNPROVEN"]);
+  });
+});
+
+test("Slice 3 scenario 7 — a bare item:<id> row with no full-string variants: ITEM_STRING_INCOMPLETE, BASE_ITEM_AGGREGATION_UNPROVEN, no arithmetic fields", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830008;
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 4, "no"), heldRow(`item:${ITEM}`, 4, "no")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 1 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "BASE_ITEM_AGGREGATION_UNPROVEN");
+    if (result.resolution !== "BASE_ITEM_AGGREGATION_UNPROVEN") return;
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "ITEM_STRING_INCOMPLETE", distinctItemStringCount: 1 });
+    assert.equal(result.confirmedQuantity, 8);
+    for (const field of NO_ARITHMETIC) assert.ok(!(field in result), `${field} is structurally absent`);
+    assert.ok(codesOf(result).includes("ITEM_STRING_INCOMPLETE"));
+  });
+});
+
+test("Slice 3 scenario 8 — LAST_SEEN variants and bound LAST_SEEN rows are reported but never gate a uniform confirmed result", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830009;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 10, "no")]),
+      bank: observedSection([]),
+      warband: warbandSection("LAST_SEEN", [heldRow(`item:${ITEM}::::::::80:::::1:500`, 3, "yes"), heldRow(`item:${ITEM}::::::::80:::::1:501`, 3, "yes")]),
+    });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 4 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.deepEqual([result.allocated, result.confirmedSurplus], [4, 6]);
+    assert.equal(result.disposition, "SEND_HELLOMAGS");
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+    assert.deepEqual(result.potentialItemStringIdentity, { class: "ITEM_STRING_VARIANTS", distinctItemStringCount: 2 });
+    assert.deepEqual(result.potentialBinding, { boundRowCount: 2, unboundRowCount: 0, unknownRowCount: 0 });
+    for (const code of ["ITEM_STRING_VARIANTS_PRESENT", "BOUND_INVENTORY_PRESENT", "SALE_DISPOSITION_GATED_BY_BINDING"]) assert.ok(!codesOf(result).includes(code), code);
+  });
+});
+
+test("Slice 3 scenario 9 — unknown storage plus confirmed binding: both gates' reasons appear and stay distinct", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830010;
+    // Bank omitted -> UNKNOWN storage.
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 9, "yes")]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 2 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.equal(result.confirmedSurplus, 7);
+    assert.equal(result.hasUnresolvedEvidence, true);
+    assert.deepEqual(result.unresolvedScopes, ["character-bank"]);
+    assert.equal(result.disposition, "REQUIRES_REVIEW");
+    for (const code of ["UNRESOLVED_STORAGE_PRESENT", "BOUND_INVENTORY_PRESENT", "SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE", "SALE_DISPOSITION_GATED_BY_BINDING"]) assert.ok(codesOf(result).includes(code), code);
+    assert.ok(!codesOf(result).includes("BINDING_UNKNOWN_PRESENT"));
+    const storage = result.reasons.find((r) => r.code === "UNRESOLVED_STORAGE_PRESENT")!;
+    assert.doesNotMatch(storage.detail ?? "", /bind/i, "binding is never described as unknown storage");
+  });
+});
+
+test("Slice 3 scenario 10 — guild-only variants and bound rows never touch account facets, arithmetic, or disposition", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 830011;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([heldRow(`item:${ITEM}::::::::80:::::::::`, 10, "no")]),
+      bank: observedSection([]),
+      warband: warbandSection("OBSERVED", []),
+      guild: guildSection("gclub-s3", [heldRow(`item:${ITEM}::::::::80:::::1:1`, 50, "yes"), heldRow(`item:${ITEM}`, 50, undefined)]),
+    });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 4 });
+    const result = allocationWithParity(readModel, ITEM);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") return;
+    assert.deepEqual([result.confirmedAvailable, result.confirmedSurplus], [10, 6]);
+    assert.equal(result.disposition, "SEND_HELLOMAGS");
+    assert.deepEqual(result.confirmedItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+    assert.deepEqual(result.confirmedBinding, { boundRowCount: 0, unboundRowCount: 1, unknownRowCount: 0 });
+    assert.deepEqual(result.potentialBinding, { boundRowCount: 0, unboundRowCount: 0, unknownRowCount: 0 });
+    assert.equal(result.guildContext[0]?.quantity, 100, "guild evidence stays contextual");
+    assert.ok(codesOf(result).includes("GUILD_EVIDENCE_EXCLUDED"));
+  });
+});
+
+test("Slice 3 scenario 11 — no safe-list: differing modifier 28 or modifier 38 values are ITEM_STRING_VARIANTS", () => {
+  withFixture((store, readModel, imp) => {
+    const MOD28 = 830012;
+    const MOD38 = 830013;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([heldRow(`item:${MOD28}::::::::80::::::1:28:2000`, 1, "no"), heldRow(`item:${MOD28}::::::::80::::::1:28:2001`, 1, "no"), heldRow(`item:${MOD38}::::::::80::::::1:38:5`, 1, "no")]),
+      bank: observedSection([heldRow(`item:${MOD38}::::::::80::::::1:38:6`, 1, "no")]),
+      warband: warbandSection("OBSERVED", []),
+    });
+    store.createDemand({ baseItemId: MOD28, requiredQuantity: 1 });
+    store.createDemand({ baseItemId: MOD38, requiredQuantity: 1 });
+    for (const id of [MOD28, MOD38]) {
+      const result = allocationWithParity(readModel, id);
+      assert.equal(result.resolution, "BASE_ITEM_AGGREGATION_UNPROVEN", `${id}`);
+      assert.equal(result.confirmedItemStringIdentity?.class, "ITEM_STRING_VARIANTS");
+    }
+  });
+});

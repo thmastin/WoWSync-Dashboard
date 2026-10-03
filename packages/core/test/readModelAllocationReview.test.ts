@@ -9,6 +9,7 @@ import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildAllocationReview } from "../src/allocationReview.ts";
 import { commodityIdentity, type ExplicitDemand } from "../src/demand.ts";
 import type { AccountOwnedEvidenceMap } from "../src/allocation.ts";
+import { emptyHeldRowFacts, parseItemString, recordHeldRow, type HeldRowFacts } from "../src/heldItemIdentity.ts";
 import type { AccountBankSection, GuildBankSection, InventoryItemRecord, InventorySection } from "../src/types.ts";
 import { renderExport, type ExportSpec } from "./sharedStorageExports.ts";
 
@@ -512,11 +513,18 @@ test("Slice 2 — item metadata enriches but never filters: unknown metadata kee
   });
 });
 
+/** Slice 3 row facts for a hand-built tally: one full-item-string row reported bound=no. */
+function oneUnboundRow(baseItemId: number): HeldRowFacts {
+  const facts = emptyHeldRowFacts();
+  recordHeldRow(facts, parseItemString(`item:${baseItemId}::::::::`)!, "no");
+  return facts;
+}
+
 test("Slice 2 pure assembly — contradictory active demands for one item surface as CONFLICTING_DEMAND, inactive demands are ignored, guild-only items never become unallocated", () => {
   const demand = (stableId: string, baseItemId: number, status: "ACTIVE" | "INACTIVE" = "ACTIVE"): ExplicitDemand => ({ stableId, gameVersion: "retail", demandType: "STOCK_TARGET", commodity: commodityIdentity(baseItemId), requiredQuantity: 1, status, createdAt: T, updatedAt: T });
   const map: AccountOwnedEvidenceMap = {
-    scopes: [{ scope: "character-bags", admissibility: "CONFIRMED", identityKey: "retail::r::a", observedAt: T, items: new Map([[1, { knownQuantity: 3, unknownQuantityRowCount: 0 }], [2, { knownQuantity: 4, unknownQuantityRowCount: 0 }]]) }],
-    guilds: [{ ownerKey: "guild:9", admissibility: "CONFIRMED", observedAt: T, items: new Map([[3, { knownQuantity: 50, unknownQuantityRowCount: 0 }]]) }],
+    scopes: [{ scope: "character-bags", admissibility: "CONFIRMED", identityKey: "retail::r::a", observedAt: T, items: new Map([[1, { knownQuantity: 3, unknownQuantityRowCount: 0, heldRows: oneUnboundRow(1) }], [2, { knownQuantity: 4, unknownQuantityRowCount: 0, heldRows: oneUnboundRow(2) }]]) }],
+    guilds: [{ ownerKey: "guild:9", admissibility: "CONFIRMED", observedAt: T, items: new Map([[3, { knownQuantity: 50, unknownQuantityRowCount: 0, heldRows: oneUnboundRow(3) }]]) }],
     unidentifiedItemRowCount: 0,
   };
   const parts = buildAllocationReview(map, [demand("d-b", 1), demand("d-a", 1), demand("d-c", 2, "INACTIVE")]);
@@ -526,4 +534,94 @@ test("Slice 2 pure assembly — contradictory active demands for one item surfac
   if (conflict.resolution === "CONFLICTING_DEMAND") assert.deepEqual(conflict.conflictingDemandIds, ["d-a", "d-b"]);
   assert.equal(parts.dispositionCounts.REQUIRES_REVIEW, 1);
   assert.deepEqual(parts.unallocated.map((e) => e.baseItemId), [2]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Azeroth ERP Vertical Slice 3 — held-item identity and binding in the account review.
+// ---------------------------------------------------------------------------------------------
+
+const heldRow = (ref: string, qty: number, bound: string | undefined): InventoryItemRecord => ({ itemRef: ref, name: "Slice 3 review fixture", qty, bound, vendorEachCopper: 100 });
+
+test("Slice 3 review — BASE_ITEM_AGGREGATION_UNPROVEN sits in the REQUIRES_REVIEW group and deep-equals getItemAllocation", () => {
+  withFixture((store, readModel, imp) => {
+    const SHORT = 900601;
+    const VARIANT = 900602;
+    const SALE = 900603;
+    const BOUND = 900604;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([
+        heldRow(`item:${SHORT}::::::::80`, 1, "no"),
+        heldRow(`item:${VARIANT}::::::::80:::::1:1`, 5, "no"),
+        heldRow(`item:${VARIANT}::::::::80:::::1:2`, 5, "no"),
+        heldRow(`item:${SALE}::::::::80`, 9, "no"),
+        heldRow(`item:${BOUND}::::::::80`, 9, "yes"),
+      ]),
+      bank: observedSection([]),
+      warband: warbandSection("OBSERVED", []),
+    });
+    for (const id of [SHORT, VARIANT, SALE, BOUND]) store.createDemand({ baseItemId: id, requiredQuantity: 2 });
+    const data = review(readModel);
+    assert.deepEqual(data.demanded.items.map((r) => [r.commodity.baseItemId, r.resolution, r.disposition]), [
+      [SHORT, "RESOLVED", "HOLD_ALLOCATED"],
+      [VARIANT, "BASE_ITEM_AGGREGATION_UNPROVEN", "REQUIRES_REVIEW"],
+      [BOUND, "RESOLVED", "REQUIRES_REVIEW"],
+      [SALE, "RESOLVED", "SEND_HELLOMAGS"],
+    ]);
+    assert.deepEqual(data.dispositionCounts, { HOLD_ALLOCATED: 1, REQUIRES_REVIEW: 2, SEND_HELLOMAGS: 1, NO_ACTION: 0 });
+    for (const result of data.demanded.items) {
+      assert.deepEqual(result, readModel.getItemAllocation({ version: "retail", baseItemId: result.commodity.baseItemId }).data);
+    }
+  });
+});
+
+test("Slice 3 review — unallocated entries carry the four facets, stay evidence-only, and are never filtered or reordered by identity class", () => {
+  withFixture((_store, readModel, imp) => {
+    const UNIFORM = 900611;
+    const VARIANTS = 900612;
+    const BARE = 900613;
+    const HISTORICAL = 900614;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([heldRow(`item:${VARIANTS}::::::::80:::::1:1`, 1, "yes"), heldRow(`item:${VARIANTS}::::::::80:::::1:2`, 1, undefined), heldRow(`item:${UNIFORM}::::::::78:1467`, 3, "no"), heldRow(`item:${BARE}`, 2, "no")]),
+      bank: observedSection([heldRow(`item:${UNIFORM}::::::::85:253`, 3, "no")]),
+      warband: warbandSection("LAST_SEEN", [heldRow(`item:${HISTORICAL}::::::::80`, 7, "yes")]),
+      guild: guildSection("gclub-s3r", [heldRow(`item:${UNIFORM}::::::::80:::::1:9`, 1, "yes")]),
+    });
+    const data = review(readModel);
+    assert.deepEqual(unallocatedIds(data), [UNIFORM, VARIANTS, BARE, HISTORICAL], "ascending base item id regardless of class");
+    for (const entry of data.unallocated.items) {
+      for (const field of FORBIDDEN_UNALLOCATED_FIELDS) assert.ok(!(field in entry), `unallocated ${entry.baseItemId} never carries ${field}`);
+      for (const facet of ["confirmedItemStringIdentity", "potentialItemStringIdentity", "confirmedBinding", "potentialBinding"]) assert.ok(facet in entry, `${facet} present`);
+    }
+    const uniform = entryFor(data, UNIFORM);
+    assert.deepEqual(uniform.confirmedItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+    assert.deepEqual(uniform.confirmedBinding, { boundRowCount: 0, unboundRowCount: 2, unknownRowCount: 0 }, "the guild's bound variant never reaches account facets");
+    assert.deepEqual(entryFor(data, VARIANTS).confirmedItemStringIdentity, { class: "ITEM_STRING_VARIANTS", distinctItemStringCount: 2 });
+    assert.deepEqual(entryFor(data, VARIANTS).confirmedBinding, { boundRowCount: 1, unboundRowCount: 0, unknownRowCount: 1 });
+    assert.equal(entryFor(data, VARIANTS).hasUnresolvedEvidence, false, "binding never sets hasUnresolvedEvidence");
+    assert.deepEqual(entryFor(data, BARE).confirmedItemStringIdentity, { class: "ITEM_STRING_INCOMPLETE", distinctItemStringCount: 0 });
+    const historical = entryFor(data, HISTORICAL);
+    assert.deepEqual(historical.confirmedItemStringIdentity, { class: "NONE_HELD", distinctItemStringCount: 0 });
+    assert.deepEqual(historical.potentialItemStringIdentity, { class: "UNIFORM_ITEM_STRING", distinctItemStringCount: 1 });
+    assert.deepEqual(historical.potentialBinding, { boundRowCount: 1, unboundRowCount: 0, unknownRowCount: 0 });
+    assert.deepEqual(data.unallocatedItemStringIdentityCounts, {
+      confirmed: { UNIFORM_ITEM_STRING: 1, ITEM_STRING_VARIANTS: 1, ITEM_STRING_INCOMPLETE: 1, NONE_HELD: 1 },
+      potential: { UNIFORM_ITEM_STRING: 1, ITEM_STRING_VARIANTS: 0, ITEM_STRING_INCOMPLETE: 0, NONE_HELD: 3 },
+    });
+  });
+});
+
+test("Slice 3 review — identity-class counts describe the whole unallocated list, not the current page", () => {
+  withFixture((_store, readModel, imp) => {
+    const ids = [900621, 900622, 900623];
+    imp({ name: "Anchor", generated: T, bags: observedSection([heldRow(`item:${ids[0]}::::::::80`, 1, "no"), heldRow(`item:${ids[1]}`, 1, "no"), heldRow(`item:${ids[2]}::::::::80:::::1:1`, 1, "no"), heldRow(`item:${ids[2]}::::::::80:::::1:2`, 1, "no")]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    const full = review(readModel);
+    const page = review(readModel, { unallocatedLimit: 1 });
+    assert.equal(page.unallocated.items.length, 1);
+    assert.deepEqual(page.unallocatedItemStringIdentityCounts, full.unallocatedItemStringIdentityCounts);
+    assert.deepEqual(full.unallocatedItemStringIdentityCounts.confirmed, { UNIFORM_ITEM_STRING: 1, ITEM_STRING_VARIANTS: 1, ITEM_STRING_INCOMPLETE: 1, NONE_HELD: 0 });
+  });
 });

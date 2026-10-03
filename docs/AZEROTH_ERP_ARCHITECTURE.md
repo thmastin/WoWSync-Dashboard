@@ -13,6 +13,9 @@ player has explicitly said they want, what is satisfied, what is short, what is 
 it does not act on the player's behalf. **Vertical Slice 1** (this milestone) proves the smallest useful
 version of that question for one Retail stackable commodity against one explicit demand. **Vertical
 Slice 2** (§23) adds the account-wide Account Allocation Review over the same projection and allocator.
+**Vertical Slice 3** (§24, implemented on a feature branch; not yet merged or live-validated) adds held-item
+identity and binding gates so base-item arithmetic and the sale recommendation are withheld when the
+evidence cannot support them.
 
 ## 2. Central flow
 
@@ -173,6 +176,8 @@ instances of the same base item) — a materially different question from "how m
 exist." `CommodityIdentity` in `demand.ts` carries a `kind: "commodity"` discriminator precisely so a
 future `kind: "exact-item"` variant can be added to the identity union without this slice having built
 it, and without commodity reasoning silently becoming the wrong tool for equipment reasoning later.
+Slice 3 (§24) does not build that identity either: it only detects, from captured item strings, when
+base-item aggregation is **not proven** valid, and then withholds the arithmetic.
 
 ## 12. Derived allocation model
 
@@ -204,6 +209,10 @@ This is the central policy decision of Slice 1, and it deliberately treats two q
 
 There is no global "stale after N hours" rule (§9) and no silent collapsing of these two questions into
 one boolean or status field — see `buildAllocationResult` in `allocation.ts`.
+
+Slice 3 adds a second, independent disposition gate (§24): confirmed bound or binding-unknown rows also
+withhold `SEND_HELLOMAGS` from a confirmed surplus (`SALE_DISPOSITION_GATED_BY_BINDING`). Binding is not
+unresolved evidence and never sets `hasUnresolvedEvidence`; both gates' reasons may coexist.
 
 ## 15. Allocation before disposition
 
@@ -304,6 +313,12 @@ These are documented as **future** constraints this architecture must accommodat
 17. One evidence projection: every ERP read (per-item or account-wide) derives its quantities from the
     same `projectAccountOwnedEvidenceMap`/`evidenceForItem` path and every demanded result from the same
     `buildAllocationResult` — never a parallel allocator or a second inventory aggregation (§6, §23).
+18. Base-item arithmetic is performed only when the confirmed rows' item strings prove aggregation valid;
+    otherwise the result structurally omits allocation numbers (`BASE_ITEM_AGGREGATION_UNPROVEN`, §24).
+    A bare `item:<id>` is unknown identity, never "no modifiers"; no modifier/bonus/context value is
+    safe-listed.
+19. `bound=no` never certifies transferability; bound or unknown binding can only withhold a sale
+    recommendation, never invent one. LAST_SEEN identity/binding facts never gate confirmed results (§24).
 
 ## 23. Vertical Slice 2: Account Allocation Review
 
@@ -367,6 +382,67 @@ allocation results needing attention, and which account-owned inventory has no m
 - **Validation**: automated (`packages/core/test/readModelAllocationReview.test.ts`, plus the MCP
   protocol test) and live-validated end to end on 2026-10-03 — see
   [Live validation record: Azeroth ERP Slice 2](#live-validation-record-azeroth-erp-slice-2).
+
+## 24. Vertical Slice 3: Held-item identity and binding
+
+**Implemented on `feature/erp-slice3-held-item-identity`; not merged, not live-validated.** Slices 1–2
+aggregated every held row by base item id. Two demonstrated cases made that unsafe: a confirmed **bound**
+Hearthstone under `STOCK_TARGET 0` produced surplus 1 and `SEND_HELLOMAGS`, and two equipment rows of one
+base item with materially different item strings collapsed into one quantity with a surplus. Slice 3 adds
+two independent questions, answered from evidence already captured (no new persistence, no schema change):
+
+- **Can confirmed held evidence be aggregated by base item id?** Each row's captured `itemRef` is parsed by
+  `packages/core/src/heldItemIdentity.ts`. A full item string is normalized by blanking **only** linkLevel
+  and specID (they describe the viewing character, not the item) and stripping trailing empty fields; every
+  other represented field is preserved exactly (`""` and `"0"` stay distinct, bonus IDs are not reordered,
+  no modifier/bonus/context value is treated as harmless). A bare `item:<id>` (GearExport's fallback when no
+  hyperlink exists) is **incomplete**: its other fields are UNKNOWN, not empty. Per tier, CONFIRMED and
+  POTENTIAL independently, the class is `UNIFORM_ITEM_STRING` (every row full, all normalize identically),
+  `ITEM_STRING_VARIANTS` (two or more distinct normalized full strings; takes precedence),
+  `ITEM_STRING_INCOMPLETE` (a bare row and no variants), or `NONE_HELD`; `distinctItemStringCount` counts
+  distinct normalized full strings only. This is not "exact" or "instance" identity: it only establishes
+  whether base-item aggregation is **not proven**.
+- **Does binding evidence require withholding the sale recommendation?** `bound` is the renderer's mapping of
+  `C_Container.GetContainerItemInfo(...).isBound` for character bags, character bank, and Warband:
+  `yes` (currently bound, any form including account/Warbound — soulbound and Warbound are not
+  distinguished, so the unit **may be restricted**), `no` (not currently bound — certifies nothing about
+  mailability, auctionability, or Hellomags eligibility), and `?`/missing/anything else (UNKNOWN). Facets
+  `confirmedBinding`/`potentialBinding` count **rows**, not quantities: `boundRowCount`, `unboundRowCount`,
+  `unknownRowCount`.
+
+Result semantics (`buildAllocationResult`, precedence `NO_ACTIVE_DEMAND` → `CONFLICTING_DEMAND` →
+`BASE_ITEM_AGGREGATION_UNPROVEN` → `RESOLVED`; the first two are unchanged):
+
+- **`BASE_ITEM_AGGREGATION_UNPROVEN`** — an active, otherwise-allocatable demand whose
+  `confirmedItemStringIdentity` is `ITEM_STRING_VARIANTS` or `ITEM_STRING_INCOMPLETE`. Carries `demand`,
+  `confirmedQuantity`, `potentialQuantity`, `hasUnresolvedEvidence`, `unresolvedScopes`, `evidence`,
+  `guildContext`, `reasons`, the four facets, and `disposition: "REQUIRES_REVIEW"`. It **structurally
+  omits** `allocated`, `confirmedDeficit`, and `confirmedSurplus` (no zero or approximate stand-ins).
+- **Binding gate** — on a `RESOLVED` result with `confirmedSurplus > 0`, any confirmed bound or
+  binding-unknown row turns `SEND_HELLOMAGS` into `REQUIRES_REVIEW` (`SALE_DISPOSITION_GATED_BY_BINDING`).
+  Arithmetic is unchanged. Without positive surplus, binding is reported but changes no disposition.
+- Every read-model result (all four variants) carries `confirmedItemStringIdentity`,
+  `potentialItemStringIdentity`, `confirmedBinding`, and `potentialBinding`. POTENTIAL (LAST_SEEN) facets
+  are reported and never gate anything. Guild rows never contribute to any facet.
+- New reasons — facts (CONFIRMED tier only): `ITEM_STRING_VARIANTS_PRESENT`, `ITEM_STRING_INCOMPLETE`,
+  `BOUND_INVENTORY_PRESENT`, `BINDING_UNKNOWN_PRESENT`; effects: `BASE_ITEM_AGGREGATION_UNPROVEN`,
+  `SALE_DISPOSITION_GATED_BY_BINDING`. They are separate from unknown storage, unknown quantity, LAST_SEEN,
+  and `SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE`, and may coexist with them.
+- **One projection**: `ItemTally.heldRows` accumulates normalized strings, bare-row count, and binding
+  counts per scope inside `projectAccountOwnedEvidenceMap`; `heldItemFacetsForItem` reads them, and
+  `allocationForItem` is the single per-item path used by both `getItemAllocation` and the review, so a
+  demanded review entry is the same result by construction.
+- **Review**: `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the `REQUIRES_REVIEW` group and counts there.
+  Unallocated entries gain the four facets (still no allocation/surplus/disposition/recommendation fields),
+  and `unallocatedItemStringIdentityCounts` (`confirmed`/`potential`, per class) covers the whole
+  unallocated list, not the page. Unallocated entries are never filtered or reordered by class.
+- A pure caller of `buildAllocationResult` that supplies no row facets (hand-built Slice 1 inputs) gets the
+  Slice 1/2 semantics unchanged and no facets; every read-model path supplies them.
+- **Practical consequence**: an item captured only as a bare `item:<id>` can no longer be allocated until a
+  full item string is captured for every confirmed row.
+- **Validation**: automated (`heldItemIdentity.test.ts`, `allocation.test.ts`,
+  `readModelAllocation.test.ts`, `readModelAllocationReview.test.ts`, MCP protocol test). Independent review
+  and live validation are pending.
 
 ## Live validation record: Azeroth ERP Slice 1
 

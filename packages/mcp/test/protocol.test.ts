@@ -261,15 +261,20 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(itemMetadata.data?.[0]?.metadata?.expansionId.state, "KNOWN");
     assert.equal(itemMetadata.data?.[0]?.metadata?.craftingReagent.state, "KNOWN");
 
-    // Azeroth ERP Vertical Slice 1: get_item_allocation resolves the ACTIVE demand created above against
+    // Azeroth ERP Vertical Slice 1: get_item_allocation evaluates the ACTIVE demand created above against
     // real character-storage evidence, delegates entirely to DashboardReadModel (no arithmetic in the
     // tool body), and a missing demand is structurally distinct from a resolved one.
-    const allocation = structured<{ data?: { resolution: string; disposition: string; confirmedAvailable?: number; reasons: Array<{ code: string }> }; provenance: { state: string } }>(
+    // Slice 3: this fixture captures item 777 only as a bare `item:777` (no hyperlink), so base-item
+    // aggregation is not proven: BASE_ITEM_AGGREGATION_UNPROVEN, with no allocation numbers at all.
+    const allocation = structured<{ data?: Record<string, unknown> & { resolution: string; disposition: string; confirmedQuantity?: number; confirmedItemStringIdentity?: { class: string }; reasons: Array<{ code: string }> }; provenance: { state: string } }>(
       await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 777 } }),
     );
     assert.equal(allocation.provenance.state, "DERIVED");
-    assert.equal(allocation.data?.resolution, "RESOLVED");
-    assert.ok((allocation.data?.confirmedAvailable ?? 0) >= 2, "at least one character's OBSERVED bags item 777 counts toward confirmed availability");
+    assert.equal(allocation.data?.resolution, "BASE_ITEM_AGGREGATION_UNPROVEN");
+    assert.equal(allocation.data?.disposition, "REQUIRES_REVIEW");
+    assert.equal(allocation.data?.confirmedItemStringIdentity?.class, "ITEM_STRING_INCOMPLETE");
+    assert.ok((allocation.data?.confirmedQuantity ?? 0) >= 2, "at least one character's OBSERVED bags item 777 is still reported as confirmed quantity");
+    for (const field of ["allocated", "confirmedDeficit", "confirmedSurplus"]) assert.ok(allocation.data && !(field in allocation.data), `${field} is structurally absent`);
     assert.ok(allocation.data?.reasons.some((r) => r.code === "EXPLICIT_DEMAND_EXISTS"));
     const noActiveDemand = structured<{ data?: { resolution: string } }>(
       await client.callTool({ name: "get_item_allocation", arguments: { version: "retail", baseItemId: 999999999 } }),
@@ -291,6 +296,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok(!unallocatedIds.includes(777), "a demanded item is never also unallocated");
     assert.ok(unallocatedIds.includes(888), "held bank inventory with no demand is listed as unallocated");
     assert.ok(allocationReview.data?.unallocated.items.every((entry) => entry.allocationState === "UNALLOCATED" && !("disposition" in entry) && !("confirmedSurplus" in entry) && !("surplus" in entry)));
+    assert.ok(allocationReview.data?.unallocated.items.every((entry) => ["confirmedItemStringIdentity", "potentialItemStringIdentity", "confirmedBinding", "potentialBinding"].every((facet) => facet in entry)), "Slice 3 facets are reported on every unallocated entry");
+    assert.ok(allocationReview.data && "unallocatedItemStringIdentityCounts" in allocationReview.data);
     const eraReview = structured<{ data?: unknown; provenance: { state: string } }>(await client.callTool({ name: "get_allocation_review", arguments: { version: "classic-era" } }));
     assert.equal(eraReview.provenance.state, "UNKNOWN");
     assert.equal(eraReview.data, undefined);

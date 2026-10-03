@@ -46,6 +46,13 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-2)).
   Its temporary validation demand was deactivated afterward; no ACTIVE validation demand remains, and
   the record does not describe current demand state.
+- **Azeroth ERP Vertical Slice 3 — Held-item identity and binding** (**implemented on
+  `feature/erp-slice3-held-item-identity` only; not merged to `main`, not independently reviewed, not
+  live-validated**): base-item allocation arithmetic is performed only when the confirmed rows' normalized
+  item strings prove aggregation valid (otherwise the new `BASE_ITEM_AGGREGATION_UNPROVEN` result, with no
+  allocation numbers), and confirmed bound or binding-unknown rows withhold `SEND_HELLOMAGS` from a
+  confirmed surplus. No new MCP tool and no persistence change. See
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §24.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a
   number here — it changes as tools are added. With Slice 2 it is **26**, including

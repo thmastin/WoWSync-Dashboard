@@ -116,8 +116,8 @@ imports may update the database.
 | `get_character_storage` | Retrieve bounded character-owned storage for one character. |
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
-| `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. See `docs/AZEROTH_ERP_ARCHITECTURE.md`. |
-| `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23. |
+| `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. Slice 3 (feature branch, not merged): every result carries `confirmedItemStringIdentity`/`potentialItemStringIdentity` and `confirmedBinding`/`potentialBinding`; a `BASE_ITEM_AGGREGATION_UNPROVEN` result (confirmed item-string variants or a bare `item:<id>`) has no `allocated`/`confirmedDeficit`/`confirmedSurplus`; confirmed bound/binding-unknown rows withhold `SEND_HELLOMAGS`. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §24. |
+| `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. Slice 3 (feature branch, not merged): `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the REQUIRES_REVIEW group; unallocated entries add the four identity/binding facets (still evidence only), and `unallocatedItemStringIdentityCounts` covers the whole unallocated list. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23–§24. |
 
 This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
 as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total
@@ -185,8 +185,8 @@ are returned as captured (known, available, unavailable, or unclassified),
 alongside category observation time, state, and freshness. “Available” means
 the trainer observation said available at that visit; it does not establish
 that the character later trained it. LAST_SEEN trainer categories remain
-historical. No trainer recipe catalogue or known profession-recipe list is
-captured by the current schema.
+historical. Trainer evidence is not a recipe catalogue; Retail recipe
+learned-state observations are reported separately by `get_character_professions`.
 
 `get_account_currencies` accepts `{version, realm?, currencyID?, query?,
 offset?, limit?, characterOffset?, characterLimit?}`. Retail reads are
@@ -225,7 +225,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Item search | MCP PARITY | Bounded search over typed version-scoped read projections. |
 | Professions | MCP PARITY | Current bounded character profession state. |
 | Profession coverage | MCP PARITY | Derived by `AccountFacts` / provider-neutral coverage. |
-| Known profession recipes | NOT CAPTURED | No recipe catalogue/known-recipe capture in current schema. |
+| Known profession recipes | PARTIAL MCP PARITY | Retail recipe learned-state observations (ingested since `ed730ba`; captured by GearExport as of `2e67d88`) via `get_character_professions` `recipeKnowledge`; candidate coverage is partial, absence never means unlearned. Recipe definitions (outputs/reagents) are not provided by this evidence. |
 | Trainer observations | MCP PARITY | `spells`/`trainer` snapshot sections; exact visit statuses and freshness retained. |
 | Known spells / spellbook | MCP PARITY | Captured spellbook section; capture coverage may be limited by client/spec. |
 | Character currencies | MCP PARITY | Structured currency list, per-character state and quantities. |
@@ -246,7 +246,8 @@ Slice 1 addition of `get_item_allocation` and Slice 2 addition of `get_allocatio
 here as contradicting it — this paragraph describes a historical snapshot).
 That five-tool addition was pending external ChatGPT acceptance after the DEV MCP
 reload. No addon/capture changes were made. Remaining capture-dependent gaps
-are known recipes and Renown; spellbook coverage completeness is also bounded
+are recipe definitions (outputs/reagents) and complete recipe candidate
+coverage (learned-state observations exist but are partial), and Renown; spellbook coverage completeness is also bounded
 by what the client captured.
 
 ## Validate locally

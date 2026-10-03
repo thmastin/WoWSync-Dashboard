@@ -2,9 +2,8 @@
 //
 // One account-wide, read-only partition of the account's base items into:
 //   - demanded:    every base item with an ACTIVE STOCK_TARGET demand, evaluated by the SAME
-//                  `buildAllocationResult` Slice 1's per-item `getItemAllocation` uses, over the SAME
-//                  evidence projection (`evidenceForItem` on one `AccountOwnedEvidenceMap`). There is no
-//                  second allocator.
+//                  `allocationForItem` Slice 1's per-item `getItemAllocation` uses, over the SAME
+//                  evidence projection (one `AccountOwnedEvidenceMap`). There is no second allocator.
 //   - unallocated: every base item held in account-owned storage with NO active modeled demand.
 //
 // UNALLOCATED INVENTORY IS NOT SURPLUS. Surplus is only ever "what remains after an explicit demand was
@@ -15,8 +14,9 @@
 // Everything here is DERIVED on every read and never persisted. Guild-owned evidence never contributes to
 // account quantities and an item held only by a guild never becomes an unallocated account item. No price,
 // valuation, threshold, or item metadata is an input to anything in this module.
-import { buildAllocationResult, evidenceForItem, type AccountOwnedEvidenceMap, type AllocationEvidenceScope, type AllocationResult, type Disposition, type EvidenceContribution, type GuildContextEntry } from "./allocation.ts";
-import { commodityIdentity, type ExplicitDemand } from "./demand.ts";
+import { allocationForItem, evidenceForItem, heldItemFacetsForItem, type AccountOwnedEvidenceMap, type AllocationEvidenceScope, type AllocationResult, type Disposition, type EvidenceContribution, type GuildContextEntry } from "./allocation.ts";
+import type { ExplicitDemand } from "./demand.ts";
+import { ITEM_STRING_IDENTITY_CLASSES, type HeldItemFacets, type ItemStringIdentityClass } from "./heldItemIdentity.ts";
 
 /** A whole account-owned storage scope whose contents are UNKNOWN. It applies to every item. */
 export interface UnresolvedStorageScope {
@@ -30,7 +30,7 @@ export interface UnresolvedStorageScope {
  * carries no surplus, allocation, disposition, or recommendation field: none of those can be determined
  * without an explicit demand.
  */
-export interface UnallocatedInventoryEntry {
+export interface UnallocatedInventoryEntry extends HeldItemFacets {
   readonly allocationState: "UNALLOCATED";
   readonly baseItemId: number;
   /** An item name as observed in the evidence, for presentation only. */
@@ -68,6 +68,15 @@ export interface UnallocatedInventoryEntry {
 
 export type DispositionCounts = Record<Disposition, number>;
 
+/**
+ * Slice 3: how many unallocated entries fall into each item-string identity class, per evidence tier, over
+ * the WHOLE unallocated list (not a page). Reporting only: unallocated entries are never filtered or reordered by class.
+ */
+export interface UnallocatedItemStringIdentityCounts {
+  readonly confirmed: Record<ItemStringIdentityClass, number>;
+  readonly potential: Record<ItemStringIdentityClass, number>;
+}
+
 export interface AllocationReviewParts {
   readonly unresolvedStorage: UnresolvedStorageScope[];
   readonly unidentifiedItemRowCount: number;
@@ -76,6 +85,7 @@ export interface AllocationReviewParts {
   readonly dispositionCounts: DispositionCounts;
   /** Every unallocated item, ascending base item id, unpaged. */
   readonly unallocated: UnallocatedInventoryEntry[];
+  readonly unallocatedItemStringIdentityCounts: UnallocatedItemStringIdentityCounts;
 }
 
 /** Attention order for demanded results: shortfalls first, then review-gated, then sale-eligible, then nothing to do. A fixed order, not a score. */
@@ -120,10 +130,7 @@ export function buildAllocationReview(map: AccountOwnedEvidenceMap, demands: rea
 
   const order = new Map(DISPOSITION_REVIEW_ORDER.map((disposition, index) => [disposition, index]));
   const demanded = [...activeByItem.entries()]
-    .map(([baseItemId, active]) => {
-      const { evidence, guildContext } = evidenceForItem(map, baseItemId);
-      return buildAllocationResult(commodityIdentity(baseItemId), active, evidence, guildContext);
-    })
+    .map(([baseItemId, active]) => allocationForItem(map, baseItemId, active))
     .sort((a, b) => order.get(a.disposition)! - order.get(b.disposition)! || a.commodity.baseItemId - b.commodity.baseItemId);
 
   const dispositionCounts: DispositionCounts = { HOLD_ALLOCATED: 0, REQUIRES_REVIEW: 0, SEND_HELLOMAGS: 0, NO_ACTION: 0 };
@@ -146,12 +153,20 @@ export function buildAllocationReview(map: AccountOwnedEvidenceMap, demands: rea
         unresolvedScopes: [...new Set(unresolved.map((e) => e.scope))],
         holdings: evidence.filter(holdsItem),
         guildContext,
+        ...heldItemFacetsForItem(map, baseItemId),
       };
     });
+
+  const zeroCounts = (): Record<ItemStringIdentityClass, number> => Object.fromEntries(ITEM_STRING_IDENTITY_CLASSES.map((c) => [c, 0])) as Record<ItemStringIdentityClass, number>;
+  const unallocatedItemStringIdentityCounts = { confirmed: zeroCounts(), potential: zeroCounts() };
+  for (const entry of unallocated) {
+    unallocatedItemStringIdentityCounts.confirmed[entry.confirmedItemStringIdentity.class]++;
+    unallocatedItemStringIdentityCounts.potential[entry.potentialItemStringIdentity.class]++;
+  }
 
   const unresolvedStorage: UnresolvedStorageScope[] = map.scopes
     .filter((source) => !source.items)
     .map((source) => ({ scope: source.scope, ...(source.identityKey !== undefined ? { identityKey: source.identityKey } : {}) }));
 
-  return { unresolvedStorage, unidentifiedItemRowCount: map.unidentifiedItemRowCount, demanded, dispositionCounts, unallocated };
+  return { unresolvedStorage, unidentifiedItemRowCount: map.unidentifiedItemRowCount, demanded, dispositionCounts, unallocated, unallocatedItemStringIdentityCounts };
 }
