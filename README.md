@@ -80,7 +80,7 @@ boundary.
 - [System reference](docs/SYSTEM_REFERENCE.md) — current implementation reference, including the
   two separate read-projection pipelines (Dashboard UI/Ask My Account vs. MCP).
 - [Azeroth ERP architecture](docs/AZEROTH_ERP_ARCHITECTURE.md) — demand/allocation semantics and
-  the Slice 1 live-validation record.
+  the Slice 1 and Slice 2 live-validation records.
 - [Architecture](docs/ARCHITECTURE.md) — the long-form historical/narrative packages, storage,
   provenance, and read-boundary doc.
 - [Read/research retrieval design](docs/READ_RETRIEVAL_ARCHITECTURE.md) —

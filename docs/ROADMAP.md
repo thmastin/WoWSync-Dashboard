@@ -1,7 +1,7 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-02 (Azeroth ERP Vertical Slice 1 shipped and reconciled into this roadmap;
-Omarchy DEV systemd topology tracked; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
+Last updated: 2026-10-03 (Azeroth ERP Vertical Slice 2 shipped, merged and live-validated; Slice 1
+shipped 2026-10-02; Omarchy DEV systemd topology tracked; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
 `feature/dashboard-integration` had not yet merged to `main` (then at `797fc3d`)
@@ -114,12 +114,6 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Azeroth ERP Slice 2: live validation and merge.** The Account Allocation Review
-  (`get_allocation_review`) is implemented with automated tests on
-  `feature/erp-slice2-allocation-review` (see
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23). Remaining: Tate's merge
-  decision, then a live DEV/ChatGPT validation recorded the same way as Slice 1's.
-
 - [ ] **Azeroth ERP Slice 3+ (not scoped here; do not design in detail in this document).**
   Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`) and 2
   (account-wide review, `get_allocation_review`) exist — see
@@ -205,6 +199,13 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 ---
 
 ## Soon
+
+- [ ] **Reconcile the DEV MCP tunnel unit with its documentation (operational drift, found
+  2026-10-03).** The live `wowsync-dev-mcp-tunnel.service` passes the tunnel ID directly on its
+  `ExecStart` command line, while the tracked unit and
+  [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) describe it as sourced from
+  `/etc/wowsync/dev/mcp-tunnel.env`. Undecided: change the live unit or the documentation. Do not
+  record the tunnel ID value anywhere in this repository while resolving it.
 
 - [ ] **Classic Beta capture identity routing: `Unknown` / Fizzwick.** The
   SavedVariables record is named `Unknown`, while its embedded export identifies
@@ -408,14 +409,17 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
-- **Azeroth ERP Vertical Slice 2 — Account Allocation Review: implemented (2026-10-03), automated
-  tests only, pending merge and live validation.** `DashboardReadModel.getAllocationReview` and the
+- **Azeroth ERP Vertical Slice 2 — Account Allocation Review: shipped, merged to `main`
+  (`77f9c95`), and live-validated (2026-10-03).** `DashboardReadModel.getAllocationReview` and the
   read-only `get_allocation_review` MCP tool: every active demand's allocation result (identical to
   `get_item_allocation`) plus account-owned `unallocated` holdings, which are never surplus and carry no
   disposition. One shared evidence projection for both slices; unreported item quantities are no
   longer summed as 0 (unresolved item-quantity evidence in observed storage; a counted floor marker in
-  LAST_SEEN storage). No new durable state. See
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
+  LAST_SEEN storage). No new durable state. Live-proven through real WoW evidence -> DEV SQLite ->
+  explicit demand -> `DashboardReadModel` -> read-only MCP -> Secure MCP Tunnel -> ChatGPT; the
+  temporary validation demand was deactivated afterward. See
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23 and its Slice 2 live-validation
+  record.
 - **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
   `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing
   demand != demand zero, confirmed/potential/unresolved evidence tiers, guild isolation, the

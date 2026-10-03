@@ -364,8 +364,9 @@ allocation results needing attention, and which account-owned inventory has no m
   inventory, new demand types, demand-authoring UI, MCP demand mutation, character-scoped demand,
   exact-equipment allocation, transfer plans, `/bankx` or any execution, scheduling/alerts, persisted review
   results, non-Retail allocation, a Dashboard UI for the review, and any special Hellomags policy.
-- **Validation**: automated only (`packages/core/test/readModelAllocationReview.test.ts`, plus the MCP
-  protocol test). No live DEV validation with real demands has been recorded for Slice 2 yet.
+- **Validation**: automated (`packages/core/test/readModelAllocationReview.test.ts`, plus the MCP
+  protocol test) and live-validated end to end on 2026-10-03 — see
+  [Live validation record: Azeroth ERP Slice 2](#live-validation-record-azeroth-erp-slice-2).
 
 ## Live validation record: Azeroth ERP Slice 1
 
@@ -423,3 +424,56 @@ WoW evidence -> SQLite -> explicit demand (API) -> ERP allocation -> DashboardRe
 See [`TESTING_AND_VALIDATION.md`](TESTING_AND_VALIDATION.md) for how to record the next such event
 using this one as a template, and [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current
 (non-historical) summary this record is cross-linked from.
+
+## Live validation record: Azeroth ERP Slice 2
+
+**This section is a historical acceptance record, not a description of current demand state.** It
+documents one real-data event, on 2026-10-03, that proved the Slice 2 chain end to end. The demand it
+describes was deactivated afterward; do not read it as a current active demand.
+
+**Source under test:** `77f9c95bdeb5d804bc8bdce68f3e25ad1e9083ee`, deployed only to the isolated
+Omarchy DEV runtime (Dashboard and MCP tunnel restarted onto it), then fast-forwarded to `main`.
+
+**Item:** Retail "Void-Tempered Leather", base item ID `238511`. Observed account-owned inventory at the
+time (all `CONFIRMED`, character bags): Squashpot 435, Virek 27, Janne 5 — **467** confirmed. No
+Warband or guild quantity for the item; guild evidence appeared only as context (quantity 0).
+
+**Demand used:** one temporary `STOCK_TARGET` demand, required quantity **450**, created through the
+normal demand API (`demand_5a6b833d-49b8-44a9-aded-cce080447f18`).
+
+**Result, via a fresh ChatGPT conversation over the real Secure MCP Tunnel** (blind: the prompt
+carried no expected values):
+
+| `get_allocation_review` / `get_item_allocation` (238511) | Value |
+|---|---|
+| Resolution | `RESOLVED` |
+| Confirmed available | 467 |
+| Potential additional available | 0 |
+| Unresolved evidence / scopes | true / `character-bank` |
+| Allocated | 450 |
+| Confirmed deficit | 0 |
+| Confirmed surplus | 17 |
+| Disposition | `REQUIRES_REVIEW` |
+| Reasons | `EXPLICIT_DEMAND_EXISTS`, `CONFIRMED_INVENTORY_MEETS_DEMAND`, `UNRESOLVED_STORAGE_PRESENT`, `SURPLUS_CONFIRMED`, `SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE` |
+
+- The demanded review entry matched `get_item_allocation` **field for field**.
+- Review level: `demanded` totalCount 1 (not truncated); `dispositionCounts` HOLD_ALLOCATED 0,
+  REQUIRES_REVIEW 1, SEND_HELLOMAGS 0, NO_ACTION 0; `unresolvedStorage` = the character banks of
+  `retail::stormrage::groit` and `retail::tichondrius::hallo` (the cause of the conservative gate, §14).
+- `unallocated`: totalCount 686 (687 before the demand; 238511 left the list). The first page at limit 3
+  was 117 Tough Jerky (confirmed 4), 769 Chunk of Boar Meat (3), 858 Lesser Healing Potion (1), each with
+  `potentialQuantity` 0, `potentialUnknownQuantityRowCount` 0, `hasUnresolvedEvidence` true, and
+  **structurally no** `surplus`/`confirmedSurplus`/`allocated`/`confirmedDeficit`/`disposition`/
+  `recommendation` field. Unallocated inventory stayed evidence only.
+- The real data contained no unknown-quantity rows, so the §8 unknown-quantity handling was proven by
+  automated tests only, not by this event.
+
+**Cleanup:** the temporary demand was deactivated afterward through the normal API (status `INACTIVE`,
+never deleted; no direct SQLite write). No ACTIVE validation demand remained.
+
+**What this proved:**
+
+```
+WoW evidence -> DEV SQLite -> explicit demand (API) -> DashboardReadModel.getAllocationReview
+             -> read-only MCP get_allocation_review -> Secure MCP Tunnel -> ChatGPT
+```

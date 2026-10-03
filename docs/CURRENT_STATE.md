@@ -10,11 +10,11 @@ possibly stale and re-verify against source (use `git ls-remote origin main` rat
 possibly-stale local `origin/main` tracking ref if you need to re-check what's actually on the
 remote).
 
-**Azeroth ERP Slice 2 addendum.** Application behavior *did* change after that stamp: the commit that
-introduced this paragraph (branch `feature/erp-slice2-allocation-review`, based on `main` @
-`7531c01f79f3325d069fdb418c53215f317a0f44`) adds the Account Allocation Review described below. Until
-that branch is merged, `main` does not contain Slice 2; check with `git ls-remote origin main` and
-`git merge-base --is-ancestor`.
+**Azeroth ERP Slice 2 addendum.** Application behavior *did* change after that stamp: `main` was
+fast-forwarded on 2026-10-03 to `77f9c95bdeb5d804bc8bdce68f3e25ad1e9083ee`
+(`fix: distinguish ERP unknown-quantity causes and LAST_SEEN floors`), which adds the Account
+Allocation Review described below. Application behavior on `main` has not changed since that commit;
+documentation-only commits may follow it.
 
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
@@ -41,8 +41,11 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   and a present item row with an unreported quantity is no longer summed as 0: in observed storage it
   is unresolved item-quantity evidence (reason `ITEM_QUANTITY_UNKNOWN_PRESENT`, distinct from unknown
   storage) that gates sale disposition; in LAST_SEEN storage it changes no number or disposition and is
-  reported by `potentialUnknownQuantityRowCount` and the LAST_SEEN reasons. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23. Validated by
-  automated tests only; no live DEV/ChatGPT validation of Slice 2 has been recorded yet.
+  reported by `potentialUnknownQuantityRowCount` and the LAST_SEEN reasons. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
+  **Shipped and live-validated 2026-10-03** through the full chain to ChatGPT (record:
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-2)).
+  Its temporary validation demand was deactivated afterward; no ACTIVE validation demand remains, and
+  the record does not describe current demand state.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a
   number here — it changes as tools are added. With Slice 2 it is **26**, including
