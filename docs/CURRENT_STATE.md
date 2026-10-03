@@ -1,12 +1,14 @@
 # Current WoWSync state
 
-**Describes commit `5b3b0558447872c51974106e7f18144ab82b6263` on `feature/dashboard-integration`
+**Describes commit `5b3b0558447872c51974106e7f18144ab82b6263` on `main`
 (ops: track full wowsync-dev systemd topology).** Application behavior has not changed since that
 commit as of this documentation milestone (documentation-only commits may follow it on
 `docs/phase2-durable-documentation` without invalidating this stamp — check `git log
 docs/phase2-durable-documentation` if you need the exact set of commits that produced this file).
 If this SHA is not an ancestor of the branch you're reading this on, treat this document as
-possibly stale and re-verify against source.
+possibly stale and re-verify against source (use `git ls-remote origin main` rather than a
+possibly-stale local `origin/main` tracking ref if you need to re-check what's actually on the
+remote).
 
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
@@ -36,12 +38,15 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   (not duplicated here). The temporary validation demand used for that record has since been
   deactivated through the normal API (status flipped to `INACTIVE`, never deleted) and does not
   describe current demand state.
-- **Omarchy DEV systemd topology**: now reconstructable from the repository
-  (`ops/systemd/wowsync-dev.target`, `wowsync-dev-dashboard.service` + drop-in,
-  `wowsync-dev-mcp-tunnel.service`, `wowsync-dev-herdr.service`, plus
-  `tools/omarchy/install-wowsync-dev.sh` and the `wowsync-dev` operator CLI). See
-  [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) for the full topology, what's tracked vs.
-  host-only, and safe validation commands.
+- **Omarchy DEV systemd topology**: the **service definitions** are now tracked and
+  reconstructable from the repository (`ops/systemd/wowsync-dev.target`,
+  `wowsync-dev-dashboard.service` + drop-in, `wowsync-dev-mcp-tunnel.service`,
+  `wowsync-dev-herdr.service`, plus `tools/omarchy/install-wowsync-dev.sh` and the `wowsync-dev`
+  operator CLI). The install script reconstructs those definitions and brings up the dashboard
+  path; it deliberately does not enable/start the mcp-tunnel or herdr services — that remains a
+  separate manual operator step. See [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) for the
+  full topology, exactly what's installed vs. enabled vs. started vs. still manual/host-only, and
+  safe validation commands.
 - Omarchy DEV is operational under Unix identity `wowsync-dev`: writable DEV checkout, DEV
   Dashboard on loopback port 4174, DEV-only Herdr control plane, and the accepted read-only MCP
   connection. The current tunnel ID is **not** written here or anywhere else in this repository —

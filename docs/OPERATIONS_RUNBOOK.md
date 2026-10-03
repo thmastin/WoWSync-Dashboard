@@ -34,20 +34,36 @@ by inspecting the live host:
 
 | Unit | Role | Tracked? |
 |---|---|---|
-| `wowsync-dev.target` | Umbrella target. `Requires=`/`After=` only `wowsync-dev-dashboard.service` — intentionally **not** `mcp-tunnel` or `herdr`; that is the live target's actual scope, not an oversight. | Yes (`ops/systemd/wowsync-dev.target`) |
+| `wowsync-dev.target` | Umbrella target. On **start**, `Requires=`/`After=` only pull in `wowsync-dev-dashboard.service` — intentionally **not** `mcp-tunnel` or `herdr`; starting the target does not by itself start either of those two. | Yes (`ops/systemd/wowsync-dev.target`) |
 | `wowsync-dev-dashboard.service` | DEV dashboard web server, loopback port 4174, plus the authenticated capture receiver on loopback port 4175. | Yes (`ops/systemd/wowsync-dev-dashboard.service`) |
 | `wowsync-dev-dashboard.service.d/90-wowsync-dev-target.conf` | Drop-in supplying `PartOf=wowsync-dev.target`, so stopping the target stops the DEV dashboard too. | Yes |
-| `wowsync-dev-mcp-tunnel.service` | Runs `tunnel-client` (MCP control-plane tunnel), which spawns the MCP server as its stdio child. | Yes (`ops/systemd/wowsync-dev-mcp-tunnel.service`) |
-| `wowsync-dev-herdr.service` | Runs `herdr server` (DEV agent control plane). Intentionally no `PartOf=`/target relationship, matching live. | Yes (`ops/systemd/wowsync-dev-herdr.service`) |
+| `wowsync-dev-mcp-tunnel.service` | Runs `tunnel-client` (MCP control-plane tunnel), which spawns the MCP server as its stdio child. Declares `PartOf=wowsync-dev.target` **on itself** — see "Stop/restart lifecycle" below. | Yes (`ops/systemd/wowsync-dev-mcp-tunnel.service`) |
+| `wowsync-dev-herdr.service` | Runs `herdr server` (DEV agent control plane). No `PartOf=`/target relationship in either direction, matching live. | Yes (`ops/systemd/wowsync-dev-herdr.service`) |
 
 A separate, **untracked** `capture.conf` drop-in exists live on the dashboard service
 (`EnvironmentFile=/etc/wowsync/dev/capture.env`) and is intentionally out of scope for this
 repository — it is host-provisioned, like the other host-only prerequisites below.
 
+### Stop/restart lifecycle: start-dependency vs. `PartOf=` are not the same relationship
+
+These are two different systemd mechanisms and the target's unit file only tells you about one of
+them. `wowsync-dev.target`'s own `Requires=`/`After=` (above) governs what starting the target
+pulls in — dashboard only. But `wowsync-dev-mcp-tunnel.service` separately declares
+`PartOf=wowsync-dev.target` **in its own unit file**
+(`ops/systemd/wowsync-dev-mcp-tunnel.service`), which governs the *stop/restart* direction
+independently of the start direction: **`systemctl stop`/`restart wowsync-dev.target` also
+stops/restarts `wowsync-dev-mcp-tunnel.service`**, exactly like the dashboard drop-in's `PartOf=`
+does for the dashboard. `wowsync-dev-herdr.service` has no `PartOf=` declaration anywhere, so it is
+unaffected by the target's stop/restart in either direction — stopping the target does **not**
+stop herdr. Verify this yourself with `systemctl cat wowsync-dev-mcp-tunnel.service` (read-only;
+does not start/stop anything) rather than trusting this paragraph if it matters for an operation
+you're about to perform.
+
 ## Tracked vs. host-only-provisioned
 
-Tracked by this repository (reconstructable by running the install script against a fresh host
-that already has the host-only prerequisites below):
+Tracked by this repository (the **service definitions** are reconstructable by running the
+install script against a fresh host that already has the host-only prerequisites below — see
+"Install / reconstruction process" for exactly what the script does and does not start/enable):
 
 - All four unit/target files and the dashboard drop-in, under `ops/systemd/`.
 - `ops/systemd/wowsync-dev-mcp-tunnel.env.example` — a placeholder `EnvironmentFile` shape, never
@@ -111,11 +127,33 @@ Once the host-only prerequisites above exist:
 ./tools/omarchy/install-wowsync-dev.sh
 ```
 
-This installs the four unit files (root-owned, mode 0644), the dashboard drop-in, and the
-`wowsync-dev` CLI (mode 0755) to `/usr/local/bin/wowsync-dev`; reloads systemd; enables
-`wowsync-dev.target`; and starts it. It deliberately does **not** create or populate
-`/etc/wowsync/dev/mcp-tunnel.env` — that must be provisioned manually with the real tunnel ID
-before `wowsync-dev-mcp-tunnel.service` can actually connect.
+**What this script actually does, precisely** (verified against `tools/omarchy/install-wowsync-dev.sh`
+itself — re-check it yourself if this ever needs to be authoritative for an operation):
+
+- **Installs** (copies to `/etc/systemd/system/`, root-owned, mode 0644) all four unit files and
+  the dashboard drop-in, and installs the `wowsync-dev` CLI (mode 0755) to
+  `/usr/local/bin/wowsync-dev`.
+- Runs `systemctl daemon-reload`.
+- **Enables and starts** `wowsync-dev.target` only. Because the target's `Requires=` pulls in
+  `wowsync-dev-dashboard.service` (see "DEV systemd topology" above), this transitively starts the
+  dashboard too, and the script additionally runs `systemctl disable wowsync-dev-dashboard.service`
+  directly (it's meant to be started only via the target, not independently enabled).
+- **Does NOT enable or start `wowsync-dev-mcp-tunnel.service` or `wowsync-dev-herdr.service`.**
+  Running this script on a fresh host reproduces the *service definitions* for all four
+  units/target, but produces a *running* topology that covers the dashboard only — the MCP tunnel
+  and herdr remain stopped (and not enabled for boot) until an operator explicitly runs, for
+  example, `sudo systemctl enable --now wowsync-dev-mcp-tunnel.service wowsync-dev-herdr.service`
+  as a separate, deliberate step.
+- Does **not** create or populate `/etc/wowsync/dev/mcp-tunnel.env` — that must be provisioned
+  manually with the real tunnel ID before `wowsync-dev-mcp-tunnel.service` can actually connect,
+  even once it's enabled/started.
+
+In short: this script reconstructs the **tracked service definitions** reliably from a clean
+checkout. It does **not**, by itself, reconstruct a running ChatGPT-facing DEV MCP runtime — that
+requires the host-only prerequisites (binaries, credential files) to already exist *and* the
+explicit enable/start step above for the two services it deliberately leaves untouched. Whether
+mcp-tunnel/herdr should auto-start alongside the target is a separate decision this runbook does
+not make.
 
 ## Safe, read-only validation commands
 

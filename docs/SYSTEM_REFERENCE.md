@@ -111,9 +111,17 @@ Pipeline B (MCP / ChatGPT):
 - **Despite its name, `DashboardReadModel` does not power the Dashboard UI.** The name is a
   historical artifact; treat it as "the MCP read model," not as a Dashboard-UI dependency.
 - Both pipelines read the same underlying SQLite data and are expected to agree on overlapping
-  questions (e.g. "what spells does this character know"). A dedicated parity test suite,
-  `packages/core/test/readModelParity.test.ts`, exists specifically to guard the two pipelines
-  against semantic drift — run it whenever either pipeline's projection logic changes.
+  questions (e.g. "what spells does this character know"). **`packages/core/test/readModelParity.test.ts`
+  is not a cross-pipeline test, despite its name.** It imports and exercises only
+  `DashboardReadModel` and `SqliteSnapshotStore` directly — it never imports `AccountFacts`,
+  `AccountContext`, or `LlmContext` — so it cannot be comparing Pipeline A's output against
+  Pipeline B's. What it actually proves: that `DashboardReadModel`'s own query methods
+  (`getCharacterSpells`, `getCharacterTrainer`, `getAccountCurrencies`, `getAccountChanges`)
+  correctly bound/page their results, stay scoped to the right version/snapshot, and preserve
+  `OBSERVED`/`LAST_SEEN`/`UNKNOWN`/`DERIVED` provenance — an internal correctness test of Pipeline
+  B alone. **No automated test currently compares Pipeline A's and Pipeline B's outputs against
+  each other.** Treat that absence as a current gap, not a covered risk, when changing either
+  pipeline's projection logic.
 
 ## Shared-storage journal: `sharedStorage.ts` + `sharedStorageApi.ts`
 

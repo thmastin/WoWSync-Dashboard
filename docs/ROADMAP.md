@@ -403,8 +403,9 @@ Guard against re-adding. This is not a changelog.
 - **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
   `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing
   demand != demand zero, confirmed/potential/unresolved evidence tiers, guild isolation, the
-  conservative UNKNOWN disposition gate), and the `get_item_allocation` MCP tool (25th registered
-  tool). All six required acceptance scenarios proven twice each (unit +
+  conservative UNKNOWN disposition gate), and the `get_item_allocation` MCP tool (the newest
+  registered tool as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current
+  total). All six required acceptance scenarios proven twice each (unit +
   read-model/end-to-end). Real-data live validation through the full chain — WoW evidence ->
   SQLite -> explicit demand -> ERP allocation -> `DashboardReadModel` -> read-only MCP -> Secure
   MCP Tunnel -> ChatGPT — succeeded; the temporary validation demand was deactivated afterward.
@@ -412,8 +413,10 @@ Guard against re-adding. This is not a changelog.
   live-validation record. Also shipped: the Omarchy DEV systemd topology
   (`wowsync-dev.target`, `wowsync-dev-dashboard.service`, `wowsync-dev-mcp-tunnel.service`,
   `wowsync-dev-herdr.service`) is now tracked in the repository under `ops/systemd/`, with
-  `tools/omarchy/install-wowsync-dev.sh` able to reconstruct it on a fresh host (given the
-  documented host-only prerequisites). See
+  `tools/omarchy/install-wowsync-dev.sh` able to reconstruct those definitions and the dashboard's
+  running path on a fresh host (given the documented host-only prerequisites); enabling/starting
+  the mcp-tunnel and herdr services remains a separate manual operator step the script
+  deliberately does not perform. See
   [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md). Not yet built: a demand-management UI and any
   MCP mutation tool — `demandRoutes.ts` has no caller today.
 - **Windows/Omarchy DEV runtime infrastructure accepted and closed (2026-09-30).**

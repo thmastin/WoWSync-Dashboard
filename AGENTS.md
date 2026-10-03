@@ -4,7 +4,7 @@
 
 This repository is the WoWSync Dashboard consumer, separate from the GearExport addon repository. Do not modify GearExport or BankCleanup unless Tate explicitly authorizes work there. Omarchy `wowsync-dev` is the development environment; Omarchy LIVE is inactive and has no authoritative database. The authoritative database remains on Windows. Do not migrate/cut over LIVE, change production credentials or destinations, or perform destructive LIVE work without Tate.
 
-Keep Retail/Midnight, Classic BCC Anniversary, Classic Era, Forever, and Hardcore/SSF identities distinct. Quarantine ambiguous Hardcore/SSF rather than guessing. Preserve `OBSERVED`, `UNKNOWN`, `LAST_SEEN`, and `DERIVED`: UNKNOWN is never zero, inaccessible is never empty, and LAST_SEEN is never described as current. Preserve character, account/Warband, and guild ownership domains.
+Keep Retail/Midnight, Classic BCC Anniversary, Classic Era, and Forever identities distinct (the four implemented version buckets); quarantine any unrecognized/ambiguous version input rather than guessing. Hardcore/SSF is **not** one of the implemented buckets today — it is planned-but-unimplemented future work (see `docs/ROADMAP.md`, deferred section); the same quarantine-rather-than-guess principle is the design intent for it, not current behavior. Preserve `OBSERVED`, `UNKNOWN`, `LAST_SEEN`, and `DERIVED`: UNKNOWN is never zero, inaccessible is never empty, and LAST_SEEN is never described as current. Preserve character, account/Warband, and guild ownership domains.
 
 ## Normal work
 
@@ -20,4 +20,10 @@ Tate approval is required for authoritative database migration, production crede
 
 ## Current state and next milestone
 
-Read [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) for the concise accepted state and next product milestone. Do not begin that milestone until requested; it is Windows capture/receiver routing and migration preparation, not part of autonomy setup.
+Read [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) for the concise accepted current state and
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for what's next — do not treat any specific milestone named
+here as current, since this file is operating rules, not the state tracker, and a hard-coded
+milestone description here would go stale exactly as Windows capture/receiver routing (the
+previous "next milestone" named in this section) already has: that work has since shipped and is
+no longer next. `docs/CURRENT_STATE.md`/`docs/ROADMAP.md` are authoritative for what's shipped and
+what's next; do not begin unrequested work from either without being asked.

@@ -23,13 +23,21 @@ test suite itself — it does not apply to a normal developer machine.
 
 ## Read-model parity testing
 
-`packages/core/test/readModelParity.test.ts` exists specifically to guard Pipeline A
-(`AccountFacts`/`AccountContext`/`LlmContext`, serving the Dashboard UI and Ask My Account) and
-Pipeline B (`DashboardReadModel`, serving MCP) against semantic drift — see
-[`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md), "The two read-projection pipelines." Run it whenever
-either pipeline's projection logic changes, even if the change looks confined to one pipeline:
-the two are expected to agree on overlapping questions (e.g. "what spells does this character
-know"), and this suite is the thing that would catch a silent divergence.
+**`packages/core/test/readModelParity.test.ts` does not test cross-pipeline parity, despite its
+name.** It imports only `DashboardReadModel` and `SqliteSnapshotStore` — never `AccountFacts`,
+`AccountContext`, or `LlmContext` — so it cannot be comparing Pipeline A (see
+[`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md), "The two read-projection pipelines") against
+Pipeline B. What it actually proves is an internal correctness property of Pipeline B alone:
+`DashboardReadModel`'s own methods (`getCharacterSpells`, `getCharacterTrainer`,
+`getAccountCurrencies`, `getAccountChanges`) correctly bound/page their results, stay scoped to the
+right version/snapshot, and preserve `OBSERVED`/`LAST_SEEN`/`UNKNOWN`/`DERIVED` provenance when run
+directly against a test store.
+
+Run it when changing `DashboardReadModel`'s query logic. **It is not a safety net for Pipeline A
+vs. Pipeline B drift** — no automated test currently compares the two pipelines' outputs against
+each other. Treat that as a current limitation: a change that keeps `DashboardReadModel` internally
+consistent could still silently diverge from what `AccountFacts`/`AccountContext`/`LlmContext`
+reports for the same underlying data, and nothing in this test suite would catch it.
 
 ## MCP smoke validation
 

@@ -118,7 +118,10 @@ imports may update the database.
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. See `docs/AZEROTH_ERP_ARCHITECTURE.md`. |
 
-This brings the implementation to 25 registered tools. All tools are marked read-only and closed-world. Every account-state query
+This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
+as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total
+(it changes as tools are added, so it is stated there once rather than repeated here). All tools
+are marked read-only and closed-world. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
 lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently
@@ -236,11 +239,11 @@ explicit truncation. Existing exact section retrieval remains capped at
 | External game data, auction prices, arbitrary paths/SQL, raw snapshots, mutations | INTENTIONALLY OUT OF MCP SCOPE | Not a provider-neutral captured read capability; no such MCP surface is exposed. |
 
 This pass added five tools, bringing the implementation to 24 registered tools
-**at that time (2026-09-30)** — since superseded by the Azeroth ERP Slice 1
-addition of `get_item_allocation`, bringing the current total to 25 (see the
-registered-tools table above; do not read "24" here as contradicting that
-current count — this paragraph describes a historical snapshot). That
-five-tool addition was pending external ChatGPT acceptance after the DEV MCP
+**at that time (2026-09-30)** — since superseded by the later Azeroth ERP
+Slice 1 addition of `get_item_allocation` (see
+[`CURRENT_STATE.md`](CURRENT_STATE.md) for the current total; do not read "24"
+here as contradicting it — this paragraph describes a historical snapshot).
+That five-tool addition was pending external ChatGPT acceptance after the DEV MCP
 reload. No addon/capture changes were made. Remaining capture-dependent gaps
 are known recipes and Renown; spellbook coverage completeness is also bounded
 by what the client captured.
