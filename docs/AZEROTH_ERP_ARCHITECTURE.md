@@ -116,14 +116,23 @@ These three states remain distinct all the way through the allocation result:
   (`potentialAdditionalAvailable`) that can never satisfy demand or create confirmed surplus.
 - **UNKNOWN** (a character's bags/bank never observed, or a Warband never observed at all) ->
   `UNRESOLVED` evidence. Carries **no quantity at all** (never `0`) and is surfaced explicitly
-  (`hasUnresolvedEvidence`, `unresolvedScopes`). `unresolvedCause: "STORAGE_UNKNOWN"`.
+  (`hasUnresolvedEvidence`, `unresolvedScopes`). `unresolvedCause: "STORAGE_UNKNOWN"`; explained by the
+  `UNRESOLVED_STORAGE_PRESENT` reason.
 - **A present item row with no reported quantity** (the export's quantity cell is `?`) is also never `0`.
   The scope's reported rows still form its tier quantity, now a floor, and the contribution carries
-  `unknownQuantityRowCount`. In a `CONFIRMED` scope it additionally produces a companion `UNRESOLVED`
-  contribution (`unresolvedCause: "ITEM_QUANTITY_UNKNOWN"`, no quantity), so the conservative gate (§14)
-  withholds `SEND_HELLOMAGS` exactly as it does for unknown storage. In a `POTENTIAL` scope it is flagged by
-  the count only: historical evidence never reaches confirmed numbers, so it cannot gate them. (Before
-  Slice 2 such a row was summed as `0`; that was an UNKNOWN-as-zero defect, corrected in §23.)
+  `unknownQuantityRowCount`. The two tiers are handled differently, and neither invents a quantity:
+  - In a `CONFIRMED` scope the **storage was observed; only the item quantity is unknown**. It produces a
+    companion `UNRESOLVED` contribution (`unresolvedCause: "ITEM_QUANTITY_UNKNOWN"`, no quantity), so the
+    conservative gate (§14) withholds `SEND_HELLOMAGS` exactly as it does for unknown storage. Its reason is
+    `ITEM_QUANTITY_UNKNOWN_PRESENT`, **never** `UNRESOLVED_STORAGE_PRESENT`: observed storage is never
+    reported as unknown storage, and when both causes occur both reasons appear separately.
+  - In a `POTENTIAL` (LAST_SEEN) scope it produces no `UNRESOLVED` contribution and gates nothing:
+    historical evidence never reaches confirmed numbers, never satisfies demand, and never adds to
+    `potentialAdditionalAvailable`, which counts known quantities only. It is still reported: the
+    `LAST_SEEN_INVENTORY_PRESENT`/`LAST_SEEN_NOT_ADMISSIBLE` reasons appear even when the known LAST_SEEN
+    quantity is 0, with a detail stating that `potentialAdditionalAvailable` is a floor; the Slice 2 review
+    entry carries `potentialUnknownQuantityRowCount` (§23).
+  (Before Slice 2 such a row was summed as `0`; that was an UNKNOWN-as-zero defect, corrected in §23.)
 
 ## 9. Observation age vs. allocation admissibility
 
@@ -320,8 +329,12 @@ allocation results needing attention, and which account-owned inventory has no m
   - `unallocated` — every base item held in a `CONFIRMED`/`POTENTIAL` account-owned scope (character bags,
     character bank, Warband) with no ACTIVE demand, ascending base item id. Each entry
     (`UnallocatedInventoryEntry`, `allocationState: "UNALLOCATED"`) exposes `baseItemId`, an observed
-    `name`, `confirmedQuantity`, `potentialQuantity` (never summed together), `hasUnresolvedEvidence`,
-    `unresolvedScopes`, `holdings` (the contributions that actually hold the item), and `guildContext`.
+    `name`, `confirmedQuantity`, `potentialQuantity` (never summed together; both count known quantities
+    only), `potentialUnknownQuantityRowCount` (LAST_SEEN rows of unknown quantity — when > 0,
+    `potentialQuantity` is a known floor, not a known historical total, and never a historical zero),
+    `hasUnresolvedEvidence` and `unresolvedScopes` (evidence that could change the confirmed quantity:
+    unknown storage, or unknown item quantity in observed storage — not LAST_SEEN uncertainty), `holdings`
+    (the contributions that actually hold the item), and `guildContext`.
     It **structurally has no** `surplus`/`confirmedSurplus`/`allocated`/`confirmedDeficit`/`disposition`
     field. Item metadata (`metadataState`, `metadata`) is attached after paging, for presentation only; it
     never selects, filters, or orders entries, so unknown metadata never hides held inventory.
@@ -340,8 +353,9 @@ allocation results needing attention, and which account-owned inventory has no m
   the read model's standard `pageBounds`) over a total, deterministic order; `totalCount`/`truncated`
   report what lies beyond the page. Nothing is dropped to fit a bound.
 - **Unknown item quantity**: corrected as described in §8. This also applies to `getItemAllocation`: a
-  confirmed floor surplus whose item has an unreported-quantity row is now `REQUIRES_REVIEW`, never
-  `SEND_HELLOMAGS`.
+  confirmed floor surplus whose item has an unreported-quantity row in observed storage is now
+  `REQUIRES_REVIEW` (reason `ITEM_QUANTITY_UNKNOWN_PRESENT`), never `SEND_HELLOMAGS`; an unreported quantity
+  in LAST_SEEN storage changes no number and no disposition, and is reported through the LAST_SEEN reasons.
 - **New durable state**: none. The review is derived on every read and never persisted.
 - **Hellomags**: unchanged — an ordinary account-owned Retail character for allocation purposes. No special
   sale-inventory designation exists; that needs explicit design before it is built.

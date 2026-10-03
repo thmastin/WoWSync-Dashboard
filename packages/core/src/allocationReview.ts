@@ -37,9 +37,23 @@ export interface UnallocatedInventoryEntry {
   readonly name?: string;
   /** Sum of reported quantities in CONFIRMED (OBSERVED) account-owned scopes. A floor when `hasUnresolvedEvidence`. */
   readonly confirmedQuantity: number;
-  /** Sum of reported quantities in POTENTIAL (LAST_SEEN) account-owned scopes. Historical; never added into `confirmedQuantity`. */
+  /**
+   * Sum of KNOWN quantities in POTENTIAL (LAST_SEEN) account-owned scopes. Historical; never added into
+   * `confirmedQuantity`. A floor, not a complete historical quantity, when `potentialUnknownQuantityRowCount > 0`.
+   */
   readonly potentialQuantity: number;
-  /** True when any account-owned evidence relevant to this item is unresolved: a storage scope is UNKNOWN, or rows of this item have unreported quantity. */
+  /**
+   * Number of POTENTIAL (LAST_SEEN) item rows contributing to this entry whose quantity is unknown. When > 0,
+   * `potentialQuantity` is only a known floor — the unknown rows are never 0 and no quantity is invented for
+   * them. Historical-only uncertainty: it never affects confirmed numbers, so it never sets `hasUnresolvedEvidence`.
+   */
+  readonly potentialUnknownQuantityRowCount: number;
+  /**
+   * True when account-owned evidence that could change this item's CONFIRMED quantity is unresolved: a whole
+   * storage scope is UNKNOWN (see the review's `unresolvedStorage`), or OBSERVED storage holds rows of this
+   * item with unreported quantity (an `ITEM_QUANTITY_UNKNOWN` holding — the storage itself was observed).
+   * Unreported LAST_SEEN quantities are reported by `potentialUnknownQuantityRowCount` instead.
+   */
   readonly hasUnresolvedEvidence: boolean;
   readonly unresolvedScopes: AllocationEvidenceScope[];
   /**
@@ -127,6 +141,7 @@ export function buildAllocationReview(map: AccountOwnedEvidenceMap, demands: rea
         ...(name !== undefined ? { name } : {}),
         confirmedQuantity: sumTier(evidence, "CONFIRMED"),
         potentialQuantity: sumTier(evidence, "POTENTIAL"),
+        potentialUnknownQuantityRowCount: evidence.filter((e) => e.admissibility === "POTENTIAL").reduce((total, e) => total + (e.unknownQuantityRowCount ?? 0), 0),
         hasUnresolvedEvidence: unresolved.length > 0,
         unresolvedScopes: [...new Set(unresolved.map((e) => e.scope))],
         holdings: evidence.filter(holdsItem),

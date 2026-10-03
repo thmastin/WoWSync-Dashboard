@@ -412,8 +412,9 @@ Guard against re-adding. This is not a changelog.
   tests only, pending merge and live validation.** `DashboardReadModel.getAllocationReview` and the
   read-only `get_allocation_review` MCP tool: every active demand's allocation result (identical to
   `get_item_allocation`) plus account-owned `unallocated` holdings, which are never surplus and carry no
-  disposition. One shared evidence projection for both slices; unreported item quantities are
-  unresolved, no longer summed as 0. No new durable state. See
+  disposition. One shared evidence projection for both slices; unreported item quantities are no
+  longer summed as 0 (unresolved item-quantity evidence in observed storage; a counted floor marker in
+  LAST_SEEN storage). No new durable state. See
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
 - **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
   `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing

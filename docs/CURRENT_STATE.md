@@ -38,8 +38,10 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   `get_item_allocation`) and of account-owned holdings with no active demand (`unallocated` — evidence
   only, never surplus, no disposition). Retail-only, explicit version, no new durable state. The shared
   evidence projection (`projectAccountOwnedEvidenceMap` / `evidenceForItem`) now serves both slices,
-  and a present item row with an unreported quantity is no longer summed as 0 (it is unresolved
-  evidence). See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23. Validated by
+  and a present item row with an unreported quantity is no longer summed as 0: in observed storage it
+  is unresolved item-quantity evidence (reason `ITEM_QUANTITY_UNKNOWN_PRESENT`, distinct from unknown
+  storage) that gates sale disposition; in LAST_SEEN storage it changes no number or disposition and is
+  reported by `potentialUnknownQuantityRowCount` and the LAST_SEEN reasons. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23. Validated by
   automated tests only; no live DEV/ChatGPT validation of Slice 2 has been recorded yet.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a

@@ -31,9 +31,13 @@ export type AllocationEvidenceScope = "character-bags" | "character-bank" | "war
  * Why an UNRESOLVED contribution is unresolved:
  *   STORAGE_UNKNOWN       - the whole storage scope is UNKNOWN (a character's bags/bank section never
  *                           observed, or a Warband never observed at all). Applies to every item.
- *   ITEM_QUANTITY_UNKNOWN - the scope is OBSERVED and holds row(s) of this item, but the export did not
- *                           report those rows' quantity. The scope's known-quantity rows still count as a
- *                           confirmed floor; the unknown rows are never counted as 0.
+ *   ITEM_QUANTITY_UNKNOWN - the scope itself WAS observed (OBSERVED, CONFIRMED tier) and holds row(s) of
+ *                           this item, but the export did not report those rows' quantity. The storage is
+ *                           not unknown; the item quantity is. The scope's known-quantity rows still count
+ *                           as a confirmed floor; the unknown rows are never counted as 0.
+ * A LAST_SEEN (POTENTIAL) scope's unknown-quantity rows never produce an UNRESOLVED contribution: they are
+ * counted by `unknownQuantityRowCount` on the POTENTIAL contribution only (historical evidence can never
+ * reach confirmed numbers, so it cannot gate them).
  */
 export type UnresolvedEvidenceCause = "STORAGE_UNKNOWN" | "ITEM_QUANTITY_UNKNOWN";
 
@@ -41,7 +45,8 @@ export type UnresolvedEvidenceCause = "STORAGE_UNKNOWN" | "ITEM_QUANTITY_UNKNOWN
  * One contribution toward (or unresolved gap in) account-owned evidence for one base item.
  * `quantity` is absent exactly when `admissibility` is "UNRESOLVED" — never 0. On a CONFIRMED/POTENTIAL
  * contribution, `quantity` sums only rows whose quantity was reported; `unknownQuantityRowCount` (present
- * only when > 0) counts rows of this item whose quantity was not reported, so the sum is a floor.
+ * only when > 0) counts rows of this item whose quantity was not reported, so the sum is a known floor,
+ * never a complete quantity and never a reason to read the unknown rows as 0.
  */
 export interface EvidenceContribution {
   readonly scope: AllocationEvidenceScope;
@@ -73,6 +78,7 @@ export type AllocationReasonCode =
   | "LAST_SEEN_INVENTORY_PRESENT"
   | "LAST_SEEN_NOT_ADMISSIBLE"
   | "UNRESOLVED_STORAGE_PRESENT"
+  | "ITEM_QUANTITY_UNKNOWN_PRESENT"
   | "SURPLUS_CONFIRMED"
   | "SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE"
   | "SALE_PIPELINE_APPROVED"
@@ -121,9 +127,13 @@ export interface ResolvedAllocationResult extends AllocationResultBase {
   readonly demand: Pick<ExplicitDemand, "stableId" | "requiredQuantity" | "purpose">;
   /** Sum of CONFIRMED (OBSERVED-admissible) contributions only. */
   readonly confirmedAvailable: number;
-  /** Sum of POTENTIAL (LAST_SEEN) contributions. Can never satisfy demand or create confirmed surplus. */
+  /**
+   * Sum of KNOWN POTENTIAL (LAST_SEEN) quantities. Can never satisfy demand or create confirmed surplus. A
+   * floor when LAST_SEEN rows have unreported quantity (then LAST_SEEN_INVENTORY_PRESENT says so).
+   */
   readonly potentialAdditionalAvailable: number;
   readonly hasUnresolvedEvidence: boolean;
+  /** Scopes with any UNRESOLVED contribution, whatever the cause; the reasons distinguish unknown storage from unknown item quantity. */
   readonly unresolvedScopes: AllocationEvidenceScope[];
   readonly allocated: number;
   readonly confirmedDeficit: number;
@@ -133,6 +143,10 @@ export interface ResolvedAllocationResult extends AllocationResultBase {
 }
 
 export type AllocationResult = NoActiveDemandResult | ConflictingDemandResult | ResolvedAllocationResult;
+
+function scopeList(evidence: readonly EvidenceContribution[]): AllocationEvidenceScope[] {
+  return [...new Set(evidence.map((e) => e.scope))];
+}
 
 function sum(evidence: readonly EvidenceContribution[], admissibility: AllocationAdmissibility): number {
   return evidence.filter((e) => e.admissibility === admissibility).reduce((total, e) => total + (e.quantity ?? 0), 0);
@@ -154,7 +168,13 @@ export function buildAllocationResult(
   const potentialAdditionalAvailable = sum(evidence, "POTENTIAL");
   const unresolved = evidence.filter((e) => e.admissibility === "UNRESOLVED");
   const hasUnresolvedEvidence = unresolved.length > 0;
-  const unresolvedScopes = [...new Set(unresolved.map((e) => e.scope))];
+  const unresolvedScopes = scopeList(unresolved);
+  // Cause-aware explanation: an unreported quantity in OBSERVED storage is not unknown storage. Evidence
+  // with no recorded cause (hand-built Slice 1 inputs) keeps the original storage meaning.
+  const quantityUnknown = unresolved.filter((e) => e.unresolvedCause === "ITEM_QUANTITY_UNKNOWN");
+  const storageUnknown = unresolved.filter((e) => e.unresolvedCause !== "ITEM_QUANTITY_UNKNOWN");
+  const potential = evidence.filter((e) => e.admissibility === "POTENTIAL");
+  const potentialUnknownQuantityRows = potential.reduce((total, e) => total + (e.unknownQuantityRowCount ?? 0), 0);
   const guildReasons: AllocationReason[] = guildContext.some((g) => (g.quantity ?? 0) > 0)
     ? [{ code: "GUILD_EVIDENCE_EXCLUDED", detail: "Guild-owned evidence is reported for context only; it never satisfies or inflates account demand." }]
     : [];
@@ -189,14 +209,21 @@ export function buildAllocationResult(
 
   const reasons: AllocationReason[] = [{ code: "EXPLICIT_DEMAND_EXISTS" }];
   reasons.push({ code: confirmedDeficit > 0 ? "CONFIRMED_INVENTORY_BELOW_DEMAND" : "CONFIRMED_INVENTORY_MEETS_DEMAND" });
-  if (potentialAdditionalAvailable > 0) {
+  // LAST_SEEN evidence exists when it has a known quantity OR rows of unreported quantity. The unknown rows
+  // are reported, never counted: they add nothing to potentialAdditionalAvailable and gate nothing.
+  if (potentialAdditionalAvailable > 0 || potentialUnknownQuantityRows > 0) {
     reasons.push(
-      { code: "LAST_SEEN_INVENTORY_PRESENT" },
+      potentialUnknownQuantityRows > 0
+        ? { code: "LAST_SEEN_INVENTORY_PRESENT", detail: `${potentialUnknownQuantityRows} LAST_SEEN item row(s) have unreported quantity; potentialAdditionalAvailable (${potentialAdditionalAvailable}) counts known quantities only and is a floor, not a complete historical quantity.` }
+        : { code: "LAST_SEEN_INVENTORY_PRESENT" },
       { code: "LAST_SEEN_NOT_ADMISSIBLE", detail: "Historical LAST_SEEN evidence cannot satisfy demand or create confirmed surplus." },
     );
   }
-  if (hasUnresolvedEvidence) {
-    reasons.push({ code: "UNRESOLVED_STORAGE_PRESENT", detail: `Unresolved account-owned storage scope(s): ${unresolvedScopes.join(", ")}.` });
+  if (storageUnknown.length > 0) {
+    reasons.push({ code: "UNRESOLVED_STORAGE_PRESENT", detail: `Unresolved account-owned storage scope(s): ${scopeList(storageUnknown).join(", ")}.` });
+  }
+  if (quantityUnknown.length > 0) {
+    reasons.push({ code: "ITEM_QUANTITY_UNKNOWN_PRESENT", detail: `Observed account-owned storage holds item row(s) with unreported quantity in: ${scopeList(quantityUnknown).join(", ")}. The storage was observed; only those rows' quantities are unknown, so confirmed quantities are a floor.` });
   }
 
   let disposition: Disposition;
@@ -356,9 +383,9 @@ export function projectAccountOwnedEvidenceMap(store: SnapshotReadStore, version
  *
  * A CONFIRMED scope holding rows of this item with unreported quantity contributes its reported quantity
  * as a confirmed floor PLUS a companion UNRESOLVED (`ITEM_QUANTITY_UNKNOWN`) contribution, so the existing
- * conservative gate applies to it exactly as to an UNKNOWN storage scope. A POTENTIAL scope's unreported
- * rows are flagged by `unknownQuantityRowCount` only: historical evidence can never reach confirmed numbers,
- * so it cannot gate them either.
+ * conservative gate applies to it (its explanation is ITEM_QUANTITY_UNKNOWN_PRESENT, not unknown storage).
+ * A POTENTIAL scope's unreported rows are flagged by `unknownQuantityRowCount` only: historical evidence can
+ * never reach confirmed numbers, so it cannot gate them; it is still reported as LAST_SEEN evidence.
  */
 export function evidenceForItem(map: AccountOwnedEvidenceMap, baseItemId: number): { evidence: EvidenceContribution[]; guildContext: GuildContextEntry[] } {
   const evidence: EvidenceContribution[] = [];

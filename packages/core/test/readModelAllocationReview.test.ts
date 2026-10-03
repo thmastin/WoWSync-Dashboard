@@ -99,6 +99,7 @@ test("Slice 2 Scenario 1 — no active demands: held account-owned items are una
       assert.equal(entry.allocationState, "UNALLOCATED");
       for (const field of FORBIDDEN_UNALLOCATED_FIELDS) assert.ok(!(field in entry), `unallocated entry must not carry "${field}"`);
       assert.equal(entry.hasUnresolvedEvidence, false);
+      assert.equal(entry.potentialUnknownQuantityRowCount, 0, "fully known entries state zero unknown historical rows explicitly");
     }
     assert.equal(entryFor(data, 900001).confirmedQuantity, 30);
     const warbandHeld = entryFor(data, 900004);
@@ -321,6 +322,7 @@ test("Slice 2 Scenario 12 — a present row with unknown quantity is uncertainty
 
     const historical = entryFor(data, HISTORICAL_UNKNOWN);
     assert.equal(historical.potentialQuantity, 0);
+    assert.equal(historical.potentialUnknownQuantityRowCount, 1, "potentialQuantity 0 is a known floor, not a known historical zero");
     assert.equal(historical.holdings[0]!.unknownQuantityRowCount, 1);
     assert.equal(historical.hasUnresolvedEvidence, false, "historical rows cannot reach confirmed numbers, so they cannot gate them");
 
@@ -333,6 +335,142 @@ test("Slice 2 Scenario 12 — a present row with unknown quantity is uncertainty
     assert.equal(allocation.confirmedSurplus, 5);
     assert.equal(allocation.disposition, "REQUIRES_REVIEW");
     assert.ok(allocation.reasons.some((r) => r.code === "SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE"));
+    assert.ok(allocation.reasons.some((r) => r.code === "ITEM_QUANTITY_UNKNOWN_PRESENT"));
+    assert.ok(!allocation.reasons.some((r) => r.code === "UNRESOLVED_STORAGE_PRESENT"), "the bags were observed; only an item quantity is unknown");
+  });
+});
+
+const reasonCodes = (result: { reasons: Array<{ code: string }> }) => result.reasons.map((r) => r.code);
+
+test("Slice 2 correction — LAST_SEEN unknown quantity: entry-level floor marker, never a known historical zero, never a gate", () => {
+  withFixture((store, readModel, imp) => {
+    const HISTORICAL_ONLY = 900601, HISTORICAL_MIXED = 900602, CONFIRMED_PLUS_HISTORICAL = 900603;
+    imp({
+      name: "Anchor",
+      generated: T,
+      bags: observedSection([itemRow(CONFIRMED_PLUS_HISTORICAL, 30)]),
+      bank: observedSection([]),
+      warband: warbandSection("LAST_SEEN", [itemRow(HISTORICAL_ONLY, undefined), itemRow(HISTORICAL_MIXED, 25), itemRow(HISTORICAL_MIXED, undefined), itemRow(CONFIRMED_PLUS_HISTORICAL, undefined)]),
+    });
+    const data = review(readModel);
+
+    // 1. LAST_SEEN-only, unknown quantity.
+    const only = entryFor(data, HISTORICAL_ONLY);
+    assert.equal(only.confirmedQuantity, 0);
+    assert.equal(only.potentialQuantity, 0);
+    assert.equal(only.potentialUnknownQuantityRowCount, 1);
+    assert.equal(only.hasUnresolvedEvidence, false);
+    assert.deepEqual(only.unresolvedScopes, []);
+
+    // 2. LAST_SEEN known N plus one unknown row.
+    const mixed = entryFor(data, HISTORICAL_MIXED);
+    assert.equal(mixed.potentialQuantity, 25);
+    assert.equal(mixed.potentialUnknownQuantityRowCount, 1);
+    assert.equal(mixed.confirmedQuantity, 0);
+
+    const confirmedPlusHistorical = entryFor(data, CONFIRMED_PLUS_HISTORICAL);
+    assert.equal(confirmedPlusHistorical.confirmedQuantity, 30, "an unknown historical row never becomes confirmed");
+    assert.equal(confirmedPlusHistorical.potentialUnknownQuantityRowCount, 1);
+    assert.equal(confirmedPlusHistorical.hasUnresolvedEvidence, false);
+
+    // A historical unknown quantity does not gate confirmed disposition: 30 confirmed vs demand 20 is a clean surplus.
+    store.createDemand({ baseItemId: CONFIRMED_PLUS_HISTORICAL, requiredQuantity: 20 });
+    const allocation = readModel.getItemAllocation({ version: "retail", baseItemId: CONFIRMED_PLUS_HISTORICAL }).data!;
+    assert.equal(allocation.resolution, "RESOLVED");
+    if (allocation.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.equal(allocation.confirmedAvailable, 30);
+    assert.equal(allocation.potentialAdditionalAvailable, 0);
+    assert.equal(allocation.hasUnresolvedEvidence, false);
+    assert.equal(allocation.disposition, "SEND_HELLOMAGS");
+    assert.ok(reasonCodes(allocation).includes("LAST_SEEN_INVENTORY_PRESENT"), "LAST_SEEN evidence is reported even though its quantity is unknown");
+    assert.ok(reasonCodes(allocation).includes("LAST_SEEN_NOT_ADMISSIBLE"));
+  });
+});
+
+test("Slice 2 correction — demanded item with LAST_SEEN unknown quantity: never satisfies demand or becomes confirmed, but is explained", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 900611;
+    imp({ name: "Anchor", generated: T, bags: observedSection([itemRow(ITEM, 10)]), bank: observedSection([]), warband: warbandSection("LAST_SEEN", [itemRow(ITEM, undefined)]) });
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 40 });
+    const result = review(readModel).demanded.items[0]!;
+    assert.deepEqual(result, readModel.getItemAllocation({ version: "retail", baseItemId: ITEM }).data);
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.equal(result.confirmedAvailable, 10);
+    assert.equal(result.allocated, 10);
+    assert.equal(result.confirmedDeficit, 30);
+    assert.equal(result.potentialAdditionalAvailable, 0, "an unknown historical quantity is never counted");
+    assert.equal(result.hasUnresolvedEvidence, false);
+    assert.equal(result.disposition, "HOLD_ALLOCATED");
+    const lastSeen = result.reasons.find((r) => r.code === "LAST_SEEN_INVENTORY_PRESENT");
+    assert.ok(lastSeen, "LAST_SEEN evidence exists despite its unknown quantity");
+    assert.match(lastSeen.detail ?? "", /unreported quantity/);
+    assert.ok(reasonCodes(result).includes("LAST_SEEN_NOT_ADMISSIBLE"));
+    assert.ok(!reasonCodes(result).includes("UNRESOLVED_STORAGE_PRESENT"));
+    assert.ok(!reasonCodes(result).includes("ITEM_QUANTITY_UNKNOWN_PRESENT"));
+  });
+});
+
+test("Slice 2 correction — unknown item quantity in OBSERVED storage is explained as item-quantity uncertainty, not unknown storage; the gate still holds", () => {
+  withFixture((store, readModel, imp) => {
+    const GATED = 900621, ALL_UNKNOWN = 900622;
+    imp({ name: "Anchor", generated: T, bags: observedSection([itemRow(GATED, 35), itemRow(GATED, undefined), itemRow(ALL_UNKNOWN, undefined)]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: GATED, requiredQuantity: 20 });
+    store.createDemand({ baseItemId: ALL_UNKNOWN, requiredQuantity: 5 });
+    const data = review(readModel);
+    assert.equal(data.hasUnresolvedStorage, false);
+
+    const gated = data.demanded.items.find((r) => r.commodity.baseItemId === GATED)!;
+    assert.equal(gated.resolution, "RESOLVED");
+    if (gated.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.equal(gated.confirmedAvailable, 35, "known observed rows remain a confirmed floor");
+    assert.equal(gated.confirmedSurplus, 15);
+    assert.equal(gated.hasUnresolvedEvidence, true);
+    assert.equal(gated.disposition, "REQUIRES_REVIEW");
+    assert.ok(reasonCodes(gated).includes("SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE"));
+    assert.ok(reasonCodes(gated).includes("ITEM_QUANTITY_UNKNOWN_PRESENT"));
+    assert.ok(!reasonCodes(gated).includes("UNRESOLVED_STORAGE_PRESENT"));
+
+    // Reviewer's weak case: every CONFIRMED row of a demanded item has unknown quantity.
+    const allUnknown = data.demanded.items.find((r) => r.commodity.baseItemId === ALL_UNKNOWN)!;
+    assert.equal(allUnknown.resolution, "RESOLVED");
+    if (allUnknown.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.equal(allUnknown.confirmedAvailable, 0, "nothing of known quantity is confirmed; no quantity is invented");
+    assert.equal(allUnknown.allocated, 0);
+    assert.equal(allUnknown.confirmedDeficit, 5, "a floor deficit: it can only shrink once the unknown quantity is known");
+    assert.equal(allUnknown.hasUnresolvedEvidence, true);
+    assert.equal(allUnknown.disposition, "HOLD_ALLOCATED");
+    assert.ok(reasonCodes(allUnknown).includes("ITEM_QUANTITY_UNKNOWN_PRESENT"));
+    const confirmedRow = allUnknown.evidence.find((e) => e.admissibility === "CONFIRMED" && e.scope === "character-bags")!;
+    assert.equal(confirmedRow.unknownQuantityRowCount, 1);
+  });
+});
+
+test("Slice 2 correction — true UNKNOWN storage keeps storage-unknown reasoning, distinct from item-quantity uncertainty when both occur", () => {
+  withFixture((store, readModel, imp) => {
+    const STORAGE_ONLY = 900631, BOTH = 900632;
+    // bank omitted -> State: UNKNOWN
+    imp({ name: "Anchor", generated: T, bags: observedSection([itemRow(STORAGE_ONLY, 35), itemRow(BOTH, 35), itemRow(BOTH, undefined)]), warband: warbandSection("OBSERVED", []) });
+    store.createDemand({ baseItemId: STORAGE_ONLY, requiredQuantity: 20 });
+    store.createDemand({ baseItemId: BOTH, requiredQuantity: 20 });
+    const data = review(readModel);
+
+    const storageOnly = data.demanded.items.find((r) => r.commodity.baseItemId === STORAGE_ONLY)!;
+    assert.equal(storageOnly.disposition, "REQUIRES_REVIEW");
+    const storageReason = storageOnly.reasons.find((r) => r.code === "UNRESOLVED_STORAGE_PRESENT");
+    assert.ok(storageReason);
+    assert.match(storageReason.detail ?? "", /character-bank/);
+    assert.ok(!reasonCodes(storageOnly).includes("ITEM_QUANTITY_UNKNOWN_PRESENT"));
+
+    const both = data.demanded.items.find((r) => r.commodity.baseItemId === BOTH)!;
+    const bothStorage = both.reasons.find((r) => r.code === "UNRESOLVED_STORAGE_PRESENT");
+    const bothQuantity = both.reasons.find((r) => r.code === "ITEM_QUANTITY_UNKNOWN_PRESENT");
+    assert.ok(bothStorage && bothQuantity, "the two causes are reported separately, never collapsed");
+    assert.match(bothStorage.detail ?? "", /character-bank/);
+    assert.doesNotMatch(bothStorage.detail ?? "", /character-bags/, "the observed bags are never described as unknown storage");
+    assert.match(bothQuantity.detail ?? "", /character-bags/);
+    if (both.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.deepEqual([...both.unresolvedScopes].sort(), ["character-bags", "character-bank"]);
   });
 });
 

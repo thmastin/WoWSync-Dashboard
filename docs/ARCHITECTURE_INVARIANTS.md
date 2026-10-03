@@ -139,8 +139,11 @@ for the full semantics; this section lists only the cross-cutting invariants.
    `UNKNOWN` -> `UNRESOLVED` (no quantity field). Warband evidence follows the same tiers. Guild
    evidence is structurally excluded from arithmetic — contextual only (see OWNERSHIP above). A
    present item row with no reported quantity is never summed as 0: the scope's reported rows are a
-   floor flagged by `unknownQuantityRowCount`, and in a `CONFIRMED` scope it also yields an
-   `UNRESOLVED` (`ITEM_QUANTITY_UNKNOWN`) contribution that engages the disposition gate.
+   floor flagged by `unknownQuantityRowCount`. In a `CONFIRMED` scope it also yields an `UNRESOLVED`
+   (`ITEM_QUANTITY_UNKNOWN`) contribution that engages the disposition gate and is explained as
+   `ITEM_QUANTITY_UNKNOWN_PRESENT` — never as unknown storage (`UNRESOLVED_STORAGE_PRESENT` is reserved
+   for storage that was not observed). In a `POTENTIAL` scope it gates nothing and adds nothing to any
+   quantity, but is still reported (LAST_SEEN reasons; the review's `potentialUnknownQuantityRowCount`).
 8. `confirmedAvailable`/`allocated`/`confirmedDeficit`/`confirmedSurplus` are computed from
    `CONFIRMED` evidence only. `POTENTIAL` (historical/`LAST_SEEN`) evidence is tracked separately
    in `potentialAdditionalAvailable` and never added into the confirmed numbers.
