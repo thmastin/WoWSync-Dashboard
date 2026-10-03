@@ -11,16 +11,18 @@ The current **DEV** tunnel runtime is on Omarchy. The root-managed
 `/var/lib/wowsync-dev/db/wowsync.sqlite`. Its runtime key is supplied through a
 systemd credential sourced from `/etc/wowsync/dev/tunnel-api-key`; the secret
 is not stored in this repository or in the unit. The accepted Omarchy tunnel ID
-is `tunnel_6abd1086c3c08191ac4f9c1a64cc6787`. Do not use the old Windows tunnel
-ID for this runtime.
+is not written in this document — volatile operational facts like a tunnel ID
+go stale the moment they're hard-coded. Check it live instead: see
+[`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#do-not-hard-code-the-live-tunnel-id).
+Do not use the old Windows tunnel ID for this runtime.
 
 The old Windows DEV MCP runtime was retired after Omarchy acceptance. The
 Windows capture supervisor no longer starts or monitors tunnel-client; it
 continues to own SavedVariables watching, DEV capture transfer, required SSH
-forwarding, and scheduled startup. Rollback material is intentionally retained
-at `%APPDATA%\tunnel-client\wowsync.yaml`, including the old tunnel ID
-`tunnel_6abac56510a08191a9bf6c8075a8de3f` and its existing credential
-material. The old MCP must not be described or treated as active.
+forwarding, and scheduled startup. Rollback material (the old tunnel profile
+and its credential material) is intentionally retained on the Windows host at
+`%APPDATA%\tunnel-client\wowsync.yaml` for rollback only; its tunnel ID is not
+reproduced here. The old MCP must not be described or treated as active.
 
 `@wowsync-dashboard/mcp` is a thin STDIO adapter over the provider-neutral
 core. Its process path is deliberately:
@@ -233,8 +235,12 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Spell/trainer historical comparison | CAPTURED BUT NOT MCP-EXPOSED | Snapshot diff does not compare these sections: spellbook capture coverage can vary and trainer visits are point-in-time observations, not learned-state transitions. |
 | External game data, auction prices, arbitrary paths/SQL, raw snapshots, mutations | INTENTIONALLY OUT OF MCP SCOPE | Not a provider-neutral captured read capability; no such MCP surface is exposed. |
 
-This pass adds five tools, bringing the implementation to 24 registered tools;
-the five-tool addition is pending external ChatGPT acceptance after the DEV MCP
+This pass added five tools, bringing the implementation to 24 registered tools
+**at that time (2026-09-30)** — since superseded by the Azeroth ERP Slice 1
+addition of `get_item_allocation`, bringing the current total to 25 (see the
+registered-tools table above; do not read "24" here as contradicting that
+current count — this paragraph describes a historical snapshot). That
+five-tool addition was pending external ChatGPT acceptance after the DEV MCP
 reload. No addon/capture changes were made. Remaining capture-dependent gaps
 are known recipes and Renown; spellbook coverage completeness is also bounded
 by what the client captured.
@@ -402,8 +408,9 @@ returned. The observed inventory included 58 Void-Tempered Leather,
 
 The active Omarchy runtime is tunnel-client v0.0.15 under
 `wowsync-dev-mcp-tunnel.service`, running as `wowsync-dev` and owning its local
-stdio MCP child. It reads the Omarchy DEV SQLite database. The Windows MCP
-tunnel `tunnel_6abac56510a08191a9bf6c8075a8de3f` was retired after acceptance;
-its profile and credential material remain only for rollback. The four newer
+stdio MCP child. It reads the Omarchy DEV SQLite database. The old Windows MCP
+tunnel was retired after acceptance; its profile and credential material
+remain only for rollback (tunnel ID not reproduced here — see
+`OPERATIONS_RUNBOOK.md`). The four newer
 retrieval tools are `search_items`, `get_character_storage`,
 `get_shared_storage`, and `get_item_metadata`.

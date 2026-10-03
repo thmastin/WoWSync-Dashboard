@@ -12,6 +12,10 @@ not share code with the addon and never modifies it.
 WoW  →  WoWSync addon  →  WOWSYNC v1 export  →  WoWSync Dashboard
 ```
 
+**Documentation entry point:** [`docs/START_HERE.md`](docs/START_HERE.md) routes design,
+implementation, operations, testing, and roadmap questions to the right document — read it before
+the rest of this README if you're navigating the docs rather than just running the app.
+
 ## What this is (and isn't)
 
 - **Is:** a read-only consumer of WoWSync exports. You paste or drop a
@@ -70,13 +74,25 @@ retrieval path has a separate strict read-only SQLite store and a registered
 research index; it does not reuse the writable Dashboard API as an integration
 boundary.
 
-- [Architecture](docs/ARCHITECTURE.md) — packages, storage, provenance, and
-  read boundaries.
+- [Start here](docs/START_HERE.md) — the fixed documentation entry point and routing table.
+- [Architecture invariants](docs/ARCHITECTURE_INVARIANTS.md) — the durable rules (observation,
+  version, ownership, metadata, ERP, mutation/security); highest authority for design decisions.
+- [System reference](docs/SYSTEM_REFERENCE.md) — current implementation reference, including the
+  two separate read-projection pipelines (Dashboard UI/Ask My Account vs. MCP).
+- [Azeroth ERP architecture](docs/AZEROTH_ERP_ARCHITECTURE.md) — demand/allocation semantics and
+  the Slice 1 live-validation record.
+- [Architecture](docs/ARCHITECTURE.md) — the long-form historical/narrative packages, storage,
+  provenance, and read-boundary doc.
 - [Read/research retrieval design](docs/READ_RETRIEVAL_ARCHITECTURE.md) —
   provider-neutral deterministic queries and registered Markdown research.
-- [MCP development, Secure MCP Tunnel runbook, and Phase 6 acceptance](docs/MCP_DEVELOPMENT.md) —
+- [MCP development, Secure MCP Tunnel runbook, and acceptance history](docs/MCP_DEVELOPMENT.md) —
   optional ChatGPT connection. MCP is not required to run the Dashboard.
+- [Operations runbook](docs/OPERATIONS_RUNBOOK.md) — DEV systemd topology and deployment.
+- [Testing and validation](docs/TESTING_AND_VALIDATION.md) — automated tests, parity testing, and
+  how to record a live-validation event.
 - [Roadmap](docs/ROADMAP.md) — current implementation status and open work.
+- [Non-goals and future architecture](docs/NON_GOALS_AND_FUTURE_ARCHITECTURE.md) — explicit
+  boundaries (TSM/CraftSim/Journalator) and exploratory future ERP ideas.
 - [Midnight research index](docs/MIDNIGHT_12_1_ENDGAME_RESEARCH.md) — current
   game research and linked profession/Renown references.
 

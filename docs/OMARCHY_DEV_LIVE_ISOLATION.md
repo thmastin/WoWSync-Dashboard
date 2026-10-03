@@ -84,8 +84,10 @@ The server path/port selectors are implemented in
 `wowsync-dev`, loads its restricted DEV tunnel key as a systemd credential,
 and launches the local stdio MCP child with explicit DEV DB and research paths.
 It is attached to `wowsync-dev.target`; there is no separate MCP daemon or HTTP
-MCP endpoint. ChatGPT accepted DEV tunnel
-`tunnel_6abd1086c3c08191a9bf6c1a64cc6787` on 2026-09-30. Windows remains the
+MCP endpoint. ChatGPT accepted the DEV tunnel on 2026-09-30; the tunnel ID
+itself is not written here (see
+[`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#do-not-hard-code-the-live-tunnel-id)
+for how to check the live value). Windows remains the
 authoritative database host and capture source; its old MCP tunnel was retired
 after acceptance while capture watching, transfer, SSH forwarding, and
 scheduled startup remain. DEV import/watch commands and the Vite proxy also

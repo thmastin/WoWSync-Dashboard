@@ -282,3 +282,60 @@ These are documented as **future** constraints this architecture must accommodat
     backfills, or mutates SQLite, and it never authors demand — enforced by `SqliteSnapshotReadStore`
     never implementing any write method, not merely by convention (§10, §14, §20).
 15. MCP account-state requests require an explicit version; nothing defaults to Retail.
+
+## Live validation record: Azeroth ERP Slice 1
+
+**This section is a historical acceptance record, not a description of current demand state.**
+It documents one real-data event that proved the full Slice 1 chain end-to-end, on 2026-10-02. The
+demand it describes was later deactivated (see below); do not read this section as "the current
+active demand" at any later date.
+
+**What was tested:** one Retail stackable commodity, item "Void-Tempered Leather", base item ID
+`238511`.
+
+**Observed account-owned inventory at the time** (character-bank evidence, `CONFIRMED`):
+
+| Character | Quantity |
+|---|---|
+| Squashpot | 435 |
+| Virek | 27 |
+| Janne | 5 |
+| **Total confirmed** | **467** |
+
+**Demand used:** a temporary validation `STOCK_TARGET` demand, required quantity **450**, created
+through the normal demand API (not inserted directly into the database).
+
+**Result, via the live ChatGPT DEV MCP path** (`get_item_allocation`, through the real Secure MCP
+Tunnel, not a local test fixture):
+
+| Field | Value |
+|---|---|
+| Resolution | `RESOLVED` |
+| Confirmed available | 467 |
+| Allocated | 450 |
+| Confirmed deficit | 0 |
+| Confirmed surplus | 17 |
+| Potential additional available | 0 |
+| Unresolved evidence | `character-bank` |
+| Disposition | `REQUIRES_REVIEW` |
+
+The disposition landed on `REQUIRES_REVIEW` rather than `SEND_HELLOMAGS` precisely because of the
+conservative UNKNOWN gate (§14): even with a clean confirmed-floor surplus of 17, unresolved
+character-bank evidence elsewhere on the account was enough to withhold the sale recommendation.
+This is the gate working as designed, not a defect in the test.
+
+**Cleanup:** the temporary demand was deactivated afterward through the normal API — a `status`
+flip to `INACTIVE`, never a delete (§10) — so its record and timestamps remain, but it no longer
+participates as an active demand.
+
+**What this proved:** the full chain from raw WoW evidence through to a ChatGPT-visible, correctly
+gated ERP decision, with no step bypassed or faked:
+
+```
+WoW evidence -> SQLite -> explicit demand (API) -> ERP allocation -> DashboardReadModel
+             -> read-only MCP -> Secure MCP Tunnel -> ChatGPT
+```
+
+See [`TESTING_AND_VALIDATION.md`](TESTING_AND_VALIDATION.md) for how to record the next such event
+using this one as a template, and [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current
+(non-historical) summary this record is cross-linked from.

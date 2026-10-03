@@ -1,5 +1,13 @@
 # Architecture
 
+> **This is the long-form, historical/narrative architecture document.** For the fixed
+> documentation entry point and routing table, start at
+> [`START_HERE.md`](START_HERE.md). For the current durable rules, see
+> [`ARCHITECTURE_INVARIANTS.md`](ARCHITECTURE_INVARIANTS.md); for a current implementation
+> reference organized around "what exists now," see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md).
+> This document remains broadly accurate and is kept for the detailed "why" behind many of these
+> decisions; where it and the newer documents disagree, trust the newer documents.
+
 ```
 WoWSync addon (GearExport, separate repo)
         │

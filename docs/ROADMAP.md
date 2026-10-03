@@ -1,11 +1,18 @@
 # WoWSync Roadmap
 
-Last updated: 2026-09-30 (Windows/Omarchy DEV runtime infrastructure accepted and closed; feature-development roadmap reconciled).
+Last updated: 2026-10-02 (Azeroth ERP Vertical Slice 1 shipped and reconciled into this roadmap;
+Omarchy DEV systemd topology tracked; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
+current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
 `feature/dashboard-integration` had not yet merged to `main` (then at `797fc3d`)
 and included the closed shared-storage reconciliation milestone (C1-C6), item-metadata
 consumer, and SavedVariables developer bridge. Validation at that baseline was core
 471, server 161, web 150; typechecks clean and production build successful.
+
+This roadmap predates Azeroth ERP Slice 1 in most of its sections below; reconciled entries are
+marked as such. For ERP-specific forward-looking material, this roadmap defers to
+[`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) rather than
+duplicating it — this file lists ERP-adjacent deferred items by name only, with a link.
 
 ## How to use this roadmap
 
@@ -24,7 +31,9 @@ consumer, and SavedVariables developer bridge. Validation at that baseline was c
   imminent. Nothing here implies a date.
 - **Trust model applies to everything below.** Data is OBSERVED, UNKNOWN, DERIVED, or
   LAST_SEEN. UNKNOWN is never turned into zero/empty, and LAST_SEEN is never shown as
-  current. See [ARCHITECTURE.md](ARCHITECTURE.md) ("Known vs. unknown", "Freshness convention").
+  current. See [ARCHITECTURE_INVARIANTS.md](ARCHITECTURE_INVARIANTS.md) (the durable rules,
+  current authority) and [ARCHITECTURE.md](ARCHITECTURE.md) ("Known vs. unknown", "Freshness
+  convention") for the narrative version.
 
 Where a link points at another repository, the path is given relative to that repository:
 
@@ -105,14 +114,16 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Expand read-only MCP account-state retrieval.** Preserve the narrow typed
-  read-only contract; do not add arbitrary SQL access. First concrete acceptance
-  case: ChatGPT can answer *"How many Midnight skins does Squashpot have in
-  inventory?"* from WoWSync observations. Keep Retail/Midnight and other client
-  versions isolated, and preserve `OBSERVED`, `UNKNOWN`, `LAST_SEEN`, and
-  `DERIVED` semantics. Do not turn missing or inaccessible inventory into zero.
-  Treat this as feature development, not a reason to reopen the accepted runtime
-  infrastructure milestone.
+- [ ] **Azeroth ERP Slice 2+ (not scoped here; do not design in detail in this document).**
+  Slice 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`) is
+  shipped — see [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
+  [`CURRENT_STATE.md`](CURRENT_STATE.md). The next concrete step is a demand-management UI or an
+  MCP mutation tool for demand CRUD (both currently absent — see `CURRENT_STATE.md`, "Current
+  limitations"), but the fuller set of future ERP directions (player-intent/strategy modeling,
+  BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
+  is deliberately left exploratory — see
+  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) rather than
+  committing to any of it here.
 
 - [ ] **GearExport: keep `latestExport` fresh in memory while playing (remove manual `/wowsync`).**
   **Repo:** GearExport only (this Dashboard repo must not modify the addon). Pairs with Slice 1
@@ -240,6 +251,39 @@ equipment, location, trainers, spells, profession coverage, playtime totals,
 Triggers for the scale-dependent items are in the product review, "Later — with explicit
 triggers".
 
+---
+
+## Deferred / Future
+
+Design intent, not implemented. Do not treat anything in this section as current behavior.
+
+- [ ] **Hardcore/SSF version quarantine.** Keep Retail/Midnight, Classic BCC Anniversary, Classic
+  Era, Forever, and a future Hardcore/SSF identity distinct; quarantine ambiguous Hardcore/SSF
+  version input rather than guessing, the same way `UNKNOWN_VERSION` is quarantined today. This
+  was previously (incorrectly) stated in `CURRENT_STATE.md` as current behavior; it is not — no
+  commit anywhere in `packages/*/src` has ever added Hardcore/SSF-aware code. This entry records
+  the design constraint to apply **whenever** a Hardcore/SSF version is eventually modeled, not a
+  statement that modeling it is scheduled. See
+  [`ARCHITECTURE_INVARIANTS.md`](ARCHITECTURE_INVARIANTS.md) (VERSION section) for the invariant
+  framing.
+- [ ] **Azeroth ERP future concepts** (player-intent/strategy modeling, BoE/gear utility,
+  independently-testable reserve policy, exact-item identity, TSM/CraftSim/Journalator
+  integration boundaries). All exploratory, none committed. See
+  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) for the full
+  reasoning rather than duplicating it here.
+- [ ] **Retail Midnight gearing planner.** Folded in from the standalone
+  [`CLAUDE_PROMPT_GEARING_PLANNER_FEASIBILITY.md`](CLAUDE_PROMPT_GEARING_PLANNER_FEASIBILITY.md)
+  prompt, which had no implementing code behind it: a snapshot-based (not live-remote) planner
+  view showing equipped ilvl/slots, item track/rank where directly observable, Mistcrest/currency
+  weekly progress, Great Vault progress, campaign/Renown milestones from an explicit maintained
+  catalogue, and profession snapshot data, with a rule-based "readiness" explanation (evidence +
+  confidence, never a claimed server fact). Explicitly not a generic "what should I do next"
+  coach; no execution of any kind. Treat the original document as superseded context for this
+  entry, not as a standalone spec — verify its API surface against current Retail client
+  signatures before any implementation work begins.
+
+---
+
 ### 10. Addon / data follow-ups
 
 Repository-backed deferred ideas (GearExport `README.md`, "deferred"). Keep later unless
@@ -356,6 +400,22 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
+  `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing
+  demand != demand zero, confirmed/potential/unresolved evidence tiers, guild isolation, the
+  conservative UNKNOWN disposition gate), and the `get_item_allocation` MCP tool (25th registered
+  tool). All six required acceptance scenarios proven twice each (unit +
+  read-model/end-to-end). Real-data live validation through the full chain — WoW evidence ->
+  SQLite -> explicit demand -> ERP allocation -> `DashboardReadModel` -> read-only MCP -> Secure
+  MCP Tunnel -> ChatGPT — succeeded; the temporary validation demand was deactivated afterward.
+  See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) for the full semantics and the
+  live-validation record. Also shipped: the Omarchy DEV systemd topology
+  (`wowsync-dev.target`, `wowsync-dev-dashboard.service`, `wowsync-dev-mcp-tunnel.service`,
+  `wowsync-dev-herdr.service`) is now tracked in the repository under `ops/systemd/`, with
+  `tools/omarchy/install-wowsync-dev.sh` able to reconstruct it on a fresh host (given the
+  documented host-only prerequisites). See
+  [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md). Not yet built: a demand-management UI and any
+  MCP mutation tool — `demandRoutes.ts` has no caller today.
 - **Windows/Omarchy DEV runtime infrastructure accepted and closed (2026-09-30).**
   Hidden Windows sign-in startup, DEV capture and Dashboard access, durable queue
   acknowledgement, credential-free status, and external ChatGPT access through
