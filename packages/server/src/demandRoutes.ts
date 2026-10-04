@@ -83,6 +83,7 @@ export function registerDemandRoutes(app: Express, store: SnapshotStore): void {
   });
 
   // Azeroth ERP Allocation Review: account-wide review for Dashboard UI. Retail-only read-only route.
+  // Uses DashboardReadModel to return read-model results directly (no allocation logic recreation).
   app.get("/api/versions/:version/allocation-review", (req, res) => {
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
@@ -91,6 +92,7 @@ export function registerDemandRoutes(app: Express, store: SnapshotStore): void {
     const demandedLimit = req.query.demandedLimit ? parseInt(req.query.demandedLimit as string, 10) : undefined;
     const unallocatedOffset = req.query.unallocatedOffset ? parseInt(req.query.unallocatedOffset as string, 10) : undefined;
     const unallocatedLimit = req.query.unallocatedLimit ? parseInt(req.query.unallocatedLimit as string, 10) : undefined;
+    const q = req.query.q ? String(req.query.q) : undefined;
 
     if (demandedOffset !== undefined && (!Number.isSafeInteger(demandedOffset) || demandedOffset < 0)) {
       return res.status(400).json({ error: "demandedOffset must be a non-negative integer", code: "INVALID_PAGING" });
@@ -112,6 +114,7 @@ export function registerDemandRoutes(app: Express, store: SnapshotStore): void {
       demandedLimit,
       unallocatedOffset,
       unallocatedLimit,
+      q,
     });
 
     res.json(result);

@@ -249,6 +249,7 @@ export interface AllocationReviewQuery {
   demandedLimit?: number;
   unallocatedOffset?: number;
   unallocatedLimit?: number;
+  q?: string;
 }
 
 export function fetchAllocationReview(version: VersionOrUnknown, query: AllocationReviewQuery = {}, signal?: AbortSignal) {
@@ -257,11 +258,12 @@ export function fetchAllocationReview(version: VersionOrUnknown, query: Allocati
   if (query.demandedLimit !== undefined) params.set("demandedLimit", String(query.demandedLimit));
   if (query.unallocatedOffset !== undefined) params.set("unallocatedOffset", String(query.unallocatedOffset));
   if (query.unallocatedLimit !== undefined) params.set("unallocatedLimit", String(query.unallocatedLimit));
+  if (query.q !== undefined && query.q) params.set("q", query.q);
   const qs = params.toString();
   const path = `/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? "?" + qs : ""}`;
   return request<ReadValue<AccountAllocationReview>>(path, undefined, {
     signal,
-    validate: (body) => isRecord(body) && isRecord(body.provenance),
+    validate: (body) => isRecord(body) && isRecord(body.provenance) && (body.data === undefined || isRecord(body.data)),
   });
 }
 

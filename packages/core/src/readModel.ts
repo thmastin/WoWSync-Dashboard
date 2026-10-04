@@ -185,7 +185,7 @@ export interface SharedStorageReadOwner {
 }
 export interface SharedStorageReadPage { asOf: number; owners: SharedStorageReadOwner[]; ownerOffset: number; ownerLimit: number; totalOwners: number; ownersTruncated: boolean }
 
-export interface AllocationReviewQuery { version: VersionOrUnknown; demandedOffset?: number; demandedLimit?: number; unallocatedOffset?: number; unallocatedLimit?: number }
+export interface AllocationReviewQuery { version: VersionOrUnknown; demandedOffset?: number; demandedLimit?: number; unallocatedOffset?: number; unallocatedLimit?: number; q?: string }
 export type UnallocatedInventoryRead = UnallocatedInventoryEntry & { metadataState: "KNOWN" | "UNKNOWN"; metadata?: ItemMetadataView };
 /** Azeroth ERP Slice 2 account-wide review. `demanded` and `unallocated` are independently paged; `dispositionCounts` covers every demanded item, not only the page. */
 export interface AccountAllocationReview {
@@ -200,6 +200,8 @@ export interface AccountAllocationReview {
   unallocatedItemStringIdentityCounts: UnallocatedItemStringIdentityCounts;
   demanded: BoundedPage<AllocationResult>;
   unallocated: BoundedPage<UnallocatedInventoryRead>;
+  /** Presentation sidecar: item names for each baseItemId in demanded results, keyed by baseItemId. Derived from review/evidence presentation data, attached after paging. Absent if name is unknown. */
+  itemNames: Record<number, string>;
 }
 
 function pageBounds(offset = 0, limit = 50): { offset: number; limit: number } {
@@ -786,9 +788,40 @@ export class DashboardReadModel {
     if (query.version !== "retail") {
       return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
     }
-    const review = buildAllocationReview(projectAccountOwnedEvidenceMap(this.store, query.version), this.store.listDemands(query.version));
+    const evidenceMap = projectAccountOwnedEvidenceMap(this.store, query.version);
+    const review = buildAllocationReview(evidenceMap, this.store.listDemands(query.version));
+
+    // Filter unallocated by search query BEFORE paging
+    let filteredUnallocated = review.unallocated;
+    if (query.q !== undefined && query.q.trim() !== "") {
+      const queryLower = query.q.trim().toLowerCase();
+      const queryNum = /^\d+$/.test(queryLower) ? parseInt(queryLower, 10) : NaN;
+      filteredUnallocated = review.unallocated.filter((entry) => {
+        // Exact item ID match
+        if (!isNaN(queryNum) && entry.baseItemId === queryNum) return true;
+        // Case-insensitive name substring
+        if (entry.name && entry.name.toLowerCase().includes(queryLower)) return true;
+        return false;
+      });
+    }
+
     const demanded = review.demanded.slice(demandedPage.offset, demandedPage.offset + demandedPage.limit);
-    const unallocated = review.unallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
+    const unallocated = filteredUnallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
+
+    // Build itemNames sidecar from evidence map for demanded items (presentation data only)
+    const itemNames: Record<number, string> = {};
+    for (const result of review.demanded) {
+      // Get name from the evidence map (same source as unallocated)
+      for (const scope of evidenceMap.scopes) {
+        if (!scope.items) continue;
+        const tally = scope.items.get(result.commodity.baseItemId);
+        if (tally && tally.name !== undefined) {
+          itemNames[result.commodity.baseItemId] = tally.name;
+          break;
+        }
+      }
+    }
+
     const metadata = new Map(this.store.getItemMetadata(query.version, unallocated.map((entry) => entry.baseItemId)).map((item) => [item.baseItemId, item]));
     return {
       data: {
@@ -806,9 +839,10 @@ export class DashboardReadModel {
           }),
           offset: unallocatedPage.offset,
           limit: unallocatedPage.limit,
-          totalCount: review.unallocated.length,
-          truncated: unallocatedPage.offset + unallocated.length < review.unallocated.length,
+          totalCount: filteredUnallocated.length,
+          truncated: unallocatedPage.offset + unallocated.length < filteredUnallocated.length,
         },
+        itemNames,
       },
       provenance: {
         state: "DERIVED",
