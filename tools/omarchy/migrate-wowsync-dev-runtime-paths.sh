@@ -91,12 +91,11 @@ if [[ "$test_mode" -eq 1 ]]; then
   restore_settle_ms=${WOWSYNC_MIGRATION_TEST_SETTLE_MS:-100}
 fi
 restore_validate_services() {
-  local unit state active result pid cwd
-  local -a values
+  local unit active result pid cwd
   for unit in "${units[@]}"; do
-    state=$(systemctl_cmd show -p ActiveState -p Result -p MainPID --value "$unit") || die "Could not inspect restored $unit state."
-    mapfile -t values <<< "$state"
-    active=${values[0]:-}; result=${values[1]:-}; pid=${values[2]:-}
+    active=$(systemctl_cmd show -p ActiveState --value "$unit") || die "Could not inspect restored $unit ActiveState."
+    result=$(systemctl_cmd show -p Result --value "$unit") || die "Could not inspect restored $unit Result."
+    pid=$(systemctl_cmd show -p MainPID --value "$unit") || die "Could not inspect restored $unit MainPID."
     [[ "$active" == active && "$result" == success ]] || die "$unit is not active/successful after restore (ActiveState=$active Result=$result)."
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || die "$unit has no running process after topology restore (MainPID=$pid)."
     if [[ "$test_mode" -eq 1 ]]; then

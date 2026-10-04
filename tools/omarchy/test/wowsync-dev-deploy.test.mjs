@@ -14,8 +14,10 @@ import {
   assertSchemaCompatible,
   assertRestartCountersStable,
   appendAudit,
+  assertServiceStateHealthy,
   makeConsistentBackup,
   parseRoute,
+  parseSystemdServiceState,
   prepareRelease,
   recoveryPolicy,
   recoverFailedPromotion,
@@ -300,6 +302,18 @@ test('restart counters are validated within the current start window', () => {
   assert.throws(() => assertRestartCountersStable({ units: { [unit]: { NRestarts: '0' } } }, { units: { [unit]: { NRestarts: '1' } } }), /expected 0/);
 });
 
+test('systemd service properties parse by key across order permutations and reject malformed health data', () => {
+  const first = parseSystemdServiceState('ActiveState=active\nSubState=running\nMainPID=66648\nResult=success\nNRestarts=0\n');
+  const second = parseSystemdServiceState('NRestarts=0\nResult=success\nMainPID=66648\nSubState=running\nActiveState=active\n');
+  const expected = { ActiveState: 'active', SubState: 'running', MainPID: 66648, NRestarts: 0, Result: 'success' };
+  assert.deepEqual(first, expected);
+  assert.deepEqual(second, expected);
+  assert.deepEqual(assertServiceStateHealthy('fixture.service', first), expected);
+  assert.throws(() => parseSystemdServiceState('ActiveState=active\nSubState=running\nMainPID=\nResult=success\nNRestarts=0'), /Missing or empty.*MainPID/);
+  assert.throws(() => parseSystemdServiceState('ActiveState=active\nSubState=running\nMainPID=not-a-pid\nResult=success\nNRestarts=0'), /Invalid numeric.*MainPID/);
+  assert.throws(() => assertServiceStateHealthy('fixture.service', { ...expected, Result: '0' }), /not healthy/);
+});
+
 test('root helper rejects arbitrary units and arguments before invoking systemctl', () => {
   const helper = path.resolve('tools/omarchy/wowsync-dev-app-services');
   const badOperation = spawnSync(helper, ['wowsync-dev-herdr.service'], { encoding: 'utf8' });
@@ -395,9 +409,14 @@ case "$1" in
     done
     exit 0 ;;
   show)
-    unit=\${!#}; key=\${unit#wowsync-dev-}; key=\${key%.service}
+    property=$3; unit=$5; key=\${unit#wowsync-dev-}; key=\${key%.service}
     pid=$(cat '${root}/pid-'"$key")
-    printf 'active\\nsuccess\\n%s\\n' "$pid"
+    case "$property" in
+      ActiveState) printf 'active\\n' ;;
+      Result) printf 'success\\n' ;;
+      MainPID) printf '%s\\n' "$pid" ;;
+      *) exit 7 ;;
+    esac
     exit 0 ;;
 esac
 exit 8
@@ -432,6 +451,9 @@ test('topology restore retries refused HTTP, settles, and validates both source-
   assert.equal(await readFile(f.mcpPath, 'utf8'), f.mcp);
   const commands = await readFile(f.log, 'utf8');
   assert.match(commands, /restart wowsync-dev-dashboard\.service wowsync-dev-mcp-tunnel\.service/);
+  assert.match(commands, /show -p ActiveState --value wowsync-dev-dashboard\.service/);
+  assert.match(commands, /show -p Result --value wowsync-dev-dashboard\.service/);
+  assert.match(commands, /show -p MainPID --value wowsync-dev-dashboard\.service/);
   assert.ok(Number(await readFile(path.join(root, 'http-count'), 'utf8')) > 4, 'first refusal was retried and both routes were reprobed during settle');
   assert.match(commands, /daemon-reload/);
 });

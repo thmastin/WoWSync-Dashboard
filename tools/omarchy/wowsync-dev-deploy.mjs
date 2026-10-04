@@ -417,11 +417,47 @@ async function sha256File(file) {
   return createHash('sha256').update(await readFile(file)).digest('hex');
 }
 
-async function serviceState(unit) {
+export function parseSystemdServiceState(output) {
   const fields = ['ActiveState', 'SubState', 'MainPID', 'NRestarts', 'Result'];
-  const output = await run('/usr/bin/systemctl', ['show', ...fields.flatMap((field) => ['-p', field]), '--value', unit]);
-  const values = output.split('\n');
-  return Object.fromEntries(fields.map((field, index) => [field, values[index] ?? '']));
+  const parsed = new Map();
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) throw new Error(`Malformed systemctl show property: ${line}`);
+    const name = line.slice(0, separator);
+    if (!fields.includes(name)) continue;
+    if (parsed.has(name)) throw new Error(`Duplicate systemctl show property: ${name}`);
+    parsed.set(name, line.slice(separator + 1));
+  }
+  for (const field of fields) {
+    if (!parsed.has(field) || parsed.get(field) === '') throw new Error(`Missing or empty systemctl show property: ${field}`);
+  }
+  const parseCounter = (field) => {
+    const value = parsed.get(field);
+    if (!/^\d+$/.test(value)) throw new Error(`Invalid numeric systemctl show property ${field}: ${value}`);
+    const numeric = Number(value);
+    if (!Number.isSafeInteger(numeric)) throw new Error(`Out-of-range systemctl show property ${field}: ${value}`);
+    return numeric;
+  };
+  return {
+    ActiveState: parsed.get('ActiveState'),
+    SubState: parsed.get('SubState'),
+    MainPID: parseCounter('MainPID'),
+    NRestarts: parseCounter('NRestarts'),
+    Result: parsed.get('Result'),
+  };
+}
+
+export function assertServiceStateHealthy(unit, state) {
+  if (state.ActiveState !== 'active' || state.Result !== 'success' || !Number.isInteger(state.MainPID) || state.MainPID <= 0) {
+    throw new Error(`${unit} is not healthy: ${JSON.stringify(state)}`);
+  }
+  return state;
+}
+
+async function serviceState(unit) {
+  const fields = ['ActiveState', 'SubState', 'MainPID', 'Result', 'NRestarts'];
+  const output = await run('/usr/bin/systemctl', ['show', ...fields.flatMap((field) => ['-p', field]), unit]);
+  return parseSystemdServiceState(output);
 }
 
 async function invokeServiceHelper(operation, paths = PATHS) {
@@ -448,9 +484,7 @@ async function assertApplicationServices(expectedSha = null) {
   const expectedCwd = expectedSha ? await realpath(path.join(PATHS.releases, expectedSha)) : null;
   for (const unit of APP_UNITS) {
     states[unit] = await serviceState(unit);
-    if (states[unit].ActiveState !== 'active' || states[unit].Result !== 'success' || Number(states[unit].MainPID) <= 0) {
-      throw new Error(`${unit} is not healthy: ${JSON.stringify(states[unit])}`);
-    }
+    assertServiceStateHealthy(unit, states[unit]);
     if (expectedCwd) {
       const cwd = await realpath(`/proc/${states[unit].MainPID}/cwd`);
       if (cwd !== expectedCwd) throw new Error(`${unit} runs from ${cwd}, expected release ${expectedSha} at ${expectedCwd}.`);
