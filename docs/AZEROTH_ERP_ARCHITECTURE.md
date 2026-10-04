@@ -475,7 +475,9 @@ usable from the Dashboard, with **no change to Slice 1–3 semantics**.
     `unallocated` **before** paging (`filterUnallocatedByQuery`). `unallocated.totalCount`/`truncated`
     describe the matches; `unallocatedItemStringIdentityCounts`, `dispositionCounts`, `unresolvedStorage`
     and `demanded` keep their whole-account meaning. Blank/absent `q` is exactly the previous behavior.
-    A held item with no observed name is still reachable by its id. MCP's tool does not expose `q`.
+    A held item with no observed name is still reachable by its id. MCP's tool does not expose `q` (its strict
+    schema rejects it); MCP's `get_allocation_review` does return `itemNames`, an intentional, documented and
+    protocol-tested part of its contract.
 - **Demand hardening**: `PATCH` and `deactivate` check the demand under the route's `:version` and its
   status **before** mutating: wrong version -> `404 DEMAND_NOT_FOUND`, `INACTIVE` -> `409 DEMAND_INACTIVE`;
   nothing changes in either case. No hard delete, no reactivation; a new target after removal is a new
@@ -510,7 +512,12 @@ usable from the Dashboard, with **no change to Slice 1–3 semantics**.
   none", distinct from Remove target (no modeled intent; surplus unknown again). Add-by-item-ID creates a
   target for an item not held (Keep 100 · Have 0 · Short 100). Removed targets are a collapsed read-only
   history offering "Set new target" (`POST`). After each mutation the page awaits the response and then
-  re-reads the review and demand list; a duplicate target points the user at the existing one.
+  re-reads the review and demand list; a duplicate target points the user at the existing one. A successful
+  edit closes the edit panel and a successful add-by-ID clears its form; a failure leaves the form as typed.
+- **Paging**: the two lists page independently (server `limit` 50). If a read returns a page past the end of
+  rows that still exist (e.g. a mutation removed the last row of a later page), the tab never calls it empty:
+  it says the page is past the end of N rows, offers Previous, and moves to the last valid page and re-reads
+  (a pure paging reducer acting on the completed read; no timer). A search starts the held list at page 1.
 
 ## Live validation record: Azeroth ERP Slice 3
 

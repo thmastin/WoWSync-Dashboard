@@ -303,7 +303,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     // (777 and 4242, each identical to its get_item_allocation result) and unallocated holdings that carry no surplus or
     // disposition at all. Delegates entirely to DashboardReadModel; the database digest check below proves
     // the call wrote nothing.
-    const allocationReview = structured<{ data?: { demanded: { items: Array<{ commodity: { baseItemId: number } }>; totalCount: number }; unallocated: { items: Array<Record<string, unknown> & { baseItemId: number }>; totalCount: number; limit: number }; dispositionCounts: Record<string, number> }; provenance: { state: string } }>(
+    const allocationReview = structured<{ data?: { demanded: { items: Array<{ commodity: { baseItemId: number } }>; totalCount: number }; unallocated: { items: Array<Record<string, unknown> & { baseItemId: number }>; totalCount: number; limit: number }; dispositionCounts: Record<string, number>; itemNames: Record<string, string> }; provenance: { state: string } }>(
       await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", unallocatedLimit: 100 } }),
     );
     assert.equal(allocationReview.provenance.state, "DERIVED");
@@ -311,6 +311,15 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(allocationReview.data?.demanded.items.map((r) => r.commodity.baseItemId), [777, 4242]);
     assert.deepEqual(allocationReview.data?.demanded.items[0], allocation.data);
     assert.deepEqual(allocationReview.data?.demanded.items[1], resolved.data);
+    // Dashboard Allocation tab milestone: the demanded page carries an itemNames presentation sidecar (observed
+    // account-owned evidence names), outside every AllocationResult (the deep-equals above still hold).
+    assert.deepEqual(allocationReview.data?.itemNames, { "777": "Observed Bag Item", "4242": "Observed Full-String Item" });
+    assert.ok(allocationReview.data?.demanded.items.every((r) => !("name" in r)));
+    const pagedNames = structured<{ data?: { itemNames: Record<string, string> } }>(await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", demandedLimit: 1 } }));
+    assert.deepEqual(pagedNames.data?.itemNames, { "777": "Observed Bag Item" }, "names cover only the returned demanded page");
+    // The Dashboard-only unallocated search is not part of the MCP contract: the strict schema rejects it.
+    const searchReview = await client.callTool({ name: "get_allocation_review", arguments: { version: "retail", q: "observed" } });
+    assert.equal(searchReview.isError, true);
     const unallocatedIds = allocationReview.data?.unallocated.items.map((entry) => entry.baseItemId) ?? [];
     assert.ok(!unallocatedIds.includes(777), "a demanded item is never also unallocated");
     assert.ok(unallocatedIds.includes(888), "held bank inventory with no demand is listed as unallocated");
