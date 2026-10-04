@@ -244,7 +244,7 @@ existing SHA release. It does not use the source checkout's `node_modules` and d
 an existing release.
 
 For the correction pass, the reviewed version-2 deploy-tool implementation is commit
-`34c4c3d1c33a7488aee799a820f3b99703f9cfcd`; use that reviewed code for topology migration. The wrapper and
+`12c5d352a383075e4bdea59d1a3cbe8aa29c5a54`; use that reviewed code for topology migration. The wrapper and
 Node entry point still run from the mutable developer checkout; every record captures that checkout
 Git SHA, dirty flag, Node entry SHA-256 and wrapper SHA-256. Before promotion, verify the recorded
 tool identity corresponds to the independently reviewed infrastructure commit. The SHA identifies
