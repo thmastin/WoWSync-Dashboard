@@ -13,9 +13,9 @@ player has explicitly said they want, what is satisfied, what is short, what is 
 it does not act on the player's behalf. **Vertical Slice 1** (this milestone) proves the smallest useful
 version of that question for one Retail stackable commodity against one explicit demand. **Vertical
 Slice 2** (§23) adds the account-wide Account Allocation Review over the same projection and allocator.
-**Vertical Slice 3** (§24, implemented on a feature branch; not yet merged or live-validated) adds held-item
-identity and binding gates so base-item arithmetic and the sale recommendation are withheld when the
-evidence cannot support them.
+**Vertical Slice 3** (§24, shipped and live-validated at
+`81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`) adds held-item identity and binding gates so base-item
+arithmetic and the sale recommendation are withheld when the evidence cannot support them.
 
 ## 2. Central flow
 
@@ -385,7 +385,7 @@ allocation results needing attention, and which account-owned inventory has no m
 
 ## 24. Vertical Slice 3: Held-item identity and binding
 
-**Implemented on `feature/erp-slice3-held-item-identity`; not merged, not live-validated.** Slices 1–2
+**Shipped and live-validated at `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`.** Slices 1–2
 aggregated every held row by base item id. Two demonstrated cases made that unsafe: a confirmed **bound**
 Hearthstone under `STOCK_TARGET 0` produced surplus 1 and `SEND_HELLOMAGS`, and two equipment rows of one
 base item with materially different item strings collapsed into one quantity with a surplus. Slice 3 adds
@@ -441,8 +441,52 @@ Result semantics (`buildAllocationResult`, precedence `NO_ACTIVE_DEMAND` → `CO
 - **Practical consequence**: an item captured only as a bare `item:<id>` can no longer be allocated until a
   full item string is captured for every confirmed row.
 - **Validation**: automated (`heldItemIdentity.test.ts`, `allocation.test.ts`,
-  `readModelAllocation.test.ts`, `readModelAllocationReview.test.ts`, MCP protocol test). Independent review
-  and live validation are pending.
+  `readModelAllocation.test.ts`, `readModelAllocationReview.test.ts`, MCP protocol test); implementation
+  suite passed 1,055/1,055 before deployment, followed by independent review and targeted re-review.
+  The deployed result was checked locally and then through a blind external ChatGPT MCP conversation;
+  binding-only isolation remains covered by automated tests because the real binding case also had
+  unresolved storage evidence. See the Slice 3 live-validation record below.
+
+## Live validation record: Azeroth ERP Slice 3
+
+**Validated source:** `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009` on
+`feature/erp-slice3-held-item-identity`, later fast-forwarded to `main`.
+Blind external ChatGPT validation passed through the refreshed WoWSync DEV MCP connection in a fresh
+conversation. The conversation received Retail, item IDs 244752 and 8529, and instructions to inspect
+allocation and allocation review; it did not receive expected quantities, classes, dispositions, reasons,
+or arithmetic. Both item results matched the deployed production read model, and allocation-review
+entries matched the corresponding `get_item_allocation` results. The review contained two demanded items,
+both `REQUIRES_REVIEW`, and neither item remained in the unallocated/no-demand set.
+
+- **Case A — Evercore Shade (244752):** real OBSERVED Virek bag evidence, quantity 3, three normalized
+  item strings (modifiers 29:32, 29:36, 29:40), class `ITEM_STRING_VARIANTS`, and three unbound rows.
+  With `STOCK_TARGET 0`, the result was `BASE_ITEM_AGGREGATION_UNPROVEN` / `REQUIRES_REVIEW`; `allocated`,
+  `confirmedDeficit`, and `confirmedSurplus` were structurally absent. Reasons included
+  `EXPLICIT_DEMAND_EXISTS`, `ITEM_STRING_VARIANTS_PRESENT`, `BASE_ITEM_AGGREGATION_UNPROVEN`, and
+  `UNRESOLVED_STORAGE_PRESENT`. The two UNKNOWN character-bank scopes (Groit and Hallo) remained UNKNOWN
+  and were not refreshed for validation.
+- **Case B — Noggenfogger Elixir (8529):** real OBSERVED bag evidence, quantity 18, one uniform normalized
+  item string, and five bound rows. With `STOCK_TARGET 0`, confirmed surplus was 18 and disposition was
+  `REQUIRES_REVIEW` with both unresolved-storage and binding gates. Reasons included
+  `EXPLICIT_DEMAND_EXISTS`, `CONFIRMED_INVENTORY_MEETS_DEMAND`, `UNRESOLVED_STORAGE_PRESENT`,
+  `BOUND_INVENTORY_PRESENT`, `SURPLUS_CONFIRMED`, `SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE`, and
+  `SALE_DISPOSITION_GATED_BY_BINDING`. This deliberately demonstrates the composed gates; it does not
+  isolate binding. `bound=yes` does not establish soulbound status, account/Warbound status, or auction,
+  mail, or Hellomags transferability. Automated tests establish binding-only gate behavior.
+
+The review reported two demanded items (244752 and 8529), both in `REQUIRES_REVIEW` (all other
+disposition counts 0). Its unallocated/no-demand set contained 685 entries across pages; neither
+demanded item appeared there. Potential/LAST_SEEN identity and binding facets were reported as context
+only and did not gate; Guild rows remained separate context and were excluded from account allocation
+arithmetic.
+
+Before the temporary demands, confirmed/OBSERVED Retail evidence represented 496 held base items:
+481 `UNIFORM_ITEM_STRING`, 15 `ITEM_STRING_VARIANTS`, and 0 `ITEM_STRING_INCOMPLETE`. Across 643 confirmed
+rows, 0 were bare/incomplete (0%). Potential/LAST_SEEN evidence is separate: 243 base items, all
+`UNIFORM_ITEM_STRING` (0 variants, 0 incomplete), across 251 rows (239 character-bank and 12 Warband),
+with 0 bare item references. LAST_SEEN is contextual and not current. Groit and Hallo account-owned
+character banks remained UNKNOWN; UNKNOWN was not converted to zero. The two temporary Slice 3 demands
+were subsequently deactivated through the normal Dashboard API and retained as inactive records.
 
 ## Live validation record: Azeroth ERP Slice 1
 

@@ -107,3 +107,7 @@ topology (`ops/systemd/`, `tools/omarchy/`) is now tracked in this repository. S
 Azeroth ERP Vertical Slice 2 (the account-wide Account Allocation Review, `get_allocation_review`) is
 shipped, merged to `main`, and live-validated (2026-10-03). See
 [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
+
+Azeroth ERP Vertical Slice 3 (held-item identity and binding gates) is shipped and blindly
+live-validated at `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`; see §24 and its live-validation record
+in [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md).

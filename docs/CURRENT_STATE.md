@@ -16,6 +16,13 @@ fast-forwarded on 2026-10-03 to `77f9c95bdeb5d804bc8bdce68f3e25ad1e9083ee`
 Allocation Review described below. Application behavior on `main` has not changed since that commit;
 documentation-only commits may follow it.
 
+**Azeroth ERP Slice 3 addendum.** Slice 3 was shipped and blindly live-validated through the deployed
+DEV MCP runtime at source `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`; that source is now on `main`.
+See the Slice 3 contract and live-validation record in
+[`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-3).
+The temporary validation demands were deactivated afterward. No active Retail demand remains from
+validation.
+
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
 ## What's shipped
@@ -46,19 +53,23 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-2)).
   Its temporary validation demand was deactivated afterward; no ACTIVE validation demand remains, and
   the record does not describe current demand state.
-- **Azeroth ERP Vertical Slice 3 — Held-item identity and binding** (**implemented on
-  `feature/erp-slice3-held-item-identity` only; not merged to `main`, not independently reviewed, not
-  live-validated**): base-item allocation arithmetic is performed only when the confirmed rows' normalized
+- **Azeroth ERP Vertical Slice 3 — Held-item identity and binding** (**shipped and live-validated** at
+  `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`): base-item allocation arithmetic is performed only when the confirmed rows' normalized
   item strings prove aggregation valid (otherwise the new `BASE_ITEM_AGGREGATION_UNPROVEN` result, with no
   allocation numbers), and confirmed bound or binding-unknown rows withhold `SEND_HELLOMAGS` from a
   confirmed surplus. No new MCP tool and no persistence change. See
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §24.
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §24 and its Slice 3 live-validation record.
+  Binding-only live isolation remains covered by automated tests; the real binding validation composed
+  binding with unresolved character-bank evidence.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a
   number here — it changes as tools are added. With Slice 2 it is **26**, including
   `get_allocation_review` as the newest addition (25 at the Slice 1 baseline). See
   [`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for the registered-tool table.
-- **Live ChatGPT MCP validation**: the Azeroth ERP Slice 1 live validation (Void-Tempered Leather,
+- **Live ChatGPT MCP validation**: Slices 1–3 passed live ChatGPT MCP validation. Slice 3 used a blind
+  external conversation and passed allocation-review parity; the real-data record and separate
+  OBSERVED/LAST_SEEN prevalence are in [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-3).
+  The Azeroth ERP Slice 1 live validation (Void-Tempered Leather,
   base item ID 238511) succeeded end-to-end through the real Omarchy DEV Secure MCP Tunnel path.
   Full record, numbers, and framing: see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-1)

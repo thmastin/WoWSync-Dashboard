@@ -3,7 +3,7 @@
 This document answers "why isn't X built" and records future ERP concepts that are deliberately
 **not** committed to, and not implemented. Everything in this document is either a non-goal
 (WoWSync should not build this) or future/exploratory material (WoWSync might build this
-eventually, but has not). **No sentence here describes shipped code.** For what actually ships
+eventually, but has not). **This document does not define shipped behavior.** For what actually ships
 today, see [`CURRENT_STATE.md`](CURRENT_STATE.md); for what is actively planned next, see
 [`ROADMAP.md`](ROADMAP.md).
 
@@ -40,8 +40,8 @@ exists as an input to WoWSync.
 
 ## Future ERP concepts (not committed, not implemented)
 
-All of the following are clearly future and exploratory. None of them is Azeroth ERP Slice 1,
-which is the only ERP work implemented today (see
+All of the following are clearly future and exploratory. None of them is part of shipped Azeroth ERP
+Slices 1–3 (see
 [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md)).
 
 - **Capability-before-demand/allocation, extended further.** Slice 1 already separates capability
@@ -82,6 +82,6 @@ which is the only ERP work implemented today (see
 This is not a design document for any of the above. It exists to give a future reader (or a future
 implementer) a correct place to stand — and to make clear, when someone asks "why doesn't WoWSync
 do X yet," that the answer is usually "it's a recognized future direction with a named boundary,
-not an oversight." If you are about to start implementing any item above, that is Azeroth ERP
-Slice 3+ work: stop, and get it explicitly scoped and approved first, consistent with
+not an oversight." If you are about to start implementing any item above, that is future Azeroth ERP
+work: stop, and get it explicitly scoped and approved first, consistent with
 [`ROADMAP.md`](ROADMAP.md)'s deferred/exploratory framing.
