@@ -102,25 +102,46 @@ Pipeline B (MCP / ChatGPT):
   SQLite -> DashboardReadModel -> MCP tools -> ChatGPT
 ```
 
-- **Pipeline A** is what renders every page of the Dashboard web UI, and what Ask My Account uses.
-  `POST /api/ask` fetches its own `GET /api/account-context` over a real HTTP self-call (not a
-  second in-process code path) and projects fresh every time — there is no caching layer.
-- **Pipeline B** is what every MCP tool reads from. `DashboardReadModel`
-  (`packages/core/src/readModel.ts`) is consumed by exactly two things in this codebase: its own
-  module, and `packages/mcp/src/server.ts`. `packages/web/src` never imports it.
-- **Despite its name, `DashboardReadModel` does not power the Dashboard UI.** The name is a
-  historical artifact; treat it as "the MCP read model," not as a Dashboard-UI dependency.
-- Both pipelines read the same underlying SQLite data and are expected to agree on overlapping
+**Exception: Allocation Review (Azeroth ERP Slice 2 Dashboard UI) uses Pipeline C:**
+
+```
+Pipeline C (Dashboard Allocation UI only):
+  SQLite -> DashboardReadModel.getAllocationReview -> Dashboard Allocation Tab
+  (server route: GET /api/versions/:version/allocation-review)
+```
+
+Pipeline C is a **narrow, read-only second consumer of DashboardReadModel**, used only for the
+Dashboard's Allocation Tab. It does not affect the main Dashboard UI (Pipeline A), which continues
+to use `AccountFacts`/`AccountContext` exclusively. The exception exists because Allocation Review
+is account-scoped demand + evidence aggregation — a distinct operation from the per-character facts
+in Pipeline A.
+
+- **Pipeline A** is what renders every page of the Dashboard web UI except the Allocation Tab, and
+  what Ask My Account uses. `POST /api/ask` fetches its own `GET /api/account-context` over a real
+  HTTP self-call (not a second in-process code path) and projects fresh every time — there is no
+  caching layer.
+- **Pipeline B** is what every MCP tool reads from. `DashboardReadModel` (`packages/core/src/readModel.ts`)
+  is consumed by exactly three things: its own module, `packages/mcp/src/server.ts`, and (narrowly)
+  `packages/server/src/demandRoutes.ts` for the allocation-review route only.
+- **Pipeline C** (Allocation Review) uses `DashboardReadModel.getAllocationReview()` to produce
+  the `AccountAllocationReview` document. The allocation review is Retail-only, account-scoped, and
+  derives demand + allocation state plus unallocated inventory (no surplus, no disposition, evidence
+  only). It is not part of the general Dashboard UI projection and does not imply the entire
+  Dashboard has switched pipelines.
+- **`packages/web/src` imports `DashboardReadModel` types only for Allocation Review** (`getAllocationReview`
+  result types). It never imports the read model itself; the actual query is issued by the server
+  at `GET /api/versions/:version/allocation-review`.
+- Both pipelines A and B read the same underlying SQLite data and are expected to agree on overlapping
   questions (e.g. "what spells does this character know"). **`packages/core/test/readModelParity.test.ts`
   is not a cross-pipeline test, despite its name.** It imports and exercises only
   `DashboardReadModel` and `SqliteSnapshotStore` directly — it never imports `AccountFacts`,
   `AccountContext`, or `LlmContext` — so it cannot be comparing Pipeline A's output against
   Pipeline B's. What it actually proves: that `DashboardReadModel`'s own query methods
-  (`getCharacterSpells`, `getCharacterTrainer`, `getAccountCurrencies`, `getAccountChanges`)
-  correctly bound/page their results, stay scoped to the right version/snapshot, and preserve
-  `OBSERVED`/`LAST_SEEN`/`UNKNOWN`/`DERIVED` provenance — an internal correctness test of Pipeline
-  B alone. **No automated test currently compares Pipeline A's and Pipeline B's outputs against
-  each other.** Treat that absence as a current gap, not a covered risk, when changing either
+  (`getCharacterSpells`, `getCharacterTrainer`, `getAccountCurrencies`, `getAccountChanges`,
+  `getAllocationReview`) correctly bound/page their results, stay scoped to the right version/snapshot,
+  and preserve `OBSERVED`/`LAST_SEEN`/`UNKNOWN`/`DERIVED` provenance — an internal correctness test of
+  Pipeline B/C alone. **No automated test currently compares Pipeline A's and Pipeline B/C's outputs
+  against each other.** Treat that absence as a current gap, not a covered risk, when changing either
   pipeline's projection logic.
 
 ## Shared-storage journal: `sharedStorage.ts` + `sharedStorageApi.ts`
@@ -164,17 +185,21 @@ four MCP tools: `list_research_documents`, `search_research`, `get_research_sect
 ## `DashboardReadModel`
 
 A narrowly scoped, deterministic read surface over `SnapshotReadStore`. Not an HTTP wrapper, SQL
-surface, filesystem browser, or provider adapter. Its only current consumer is `packages/mcp`
-(see "The two read-projection pipelines" above). Every stateful operation requires an explicit
-recognized WoW version; character lookup returns an explicit ambiguity result rather than guessing
-across realms.
+surface, filesystem browser, or provider adapter. Its consumers are `packages/mcp` (Pipeline B,
+all MCP tools), and `packages/server` (Pipeline C, the Dashboard's Allocation Review tab via
+`getAllocationReview()`). Every stateful operation requires an explicit recognized WoW version;
+character lookup returns an explicit ambiguity result rather than guessing across realms.
+Allocation review is Retail-only and account-scoped; all other query methods are version-agnostic.
 
 ## Server API surface
 
 `packages/server/src/app.ts` exposes the import endpoints, `GET /api/versions/:version/account-facts`,
 `GET /api/account-context`, `POST /api/ask` (Ask My Account), shared-storage read/delete routes, and
-the demand CRUD routes (`demandRoutes.ts` — registered, but with no current caller; see "Demand
-lifecycle" below).
+the demand and allocation-review routes (`demandRoutes.ts`). Demand CRUD routes (`POST`, `PATCH`,
+`POST /deactivate`) are used by the Dashboard Allocation Tab. The read-only
+`GET /api/versions/:version/allocation-review` route (called by the Dashboard UI) returns an
+`AccountAllocationReview` document: every active demand's allocation result plus account-owned
+inventory with no active demand (evidence only, never surplus).
 
 ## Demand lifecycle
 

@@ -98,22 +98,23 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
 ## Current limitations
 
-- **No demand-management UI.** Demand CRUD HTTP routes exist (`packages/server/src/demandRoutes.ts`)
-  but have no caller anywhere in this codebase — no UI, no MCP mutation tool. The only way to
-  manage a demand today is a direct HTTP call.
 - **No MCP mutation capability, anywhere.** Every MCP tool, including `get_item_allocation` and
   `get_allocation_review`, is structurally read-only (SQLite opened `readOnly: true`; the `SnapshotReadStore` interface has no
   write methods). MCP never authors demand.
+- **Allocation Tab implemented but not live-validated.** The Dashboard now has a Retail-only Allocation
+  Tab (`#/retail/allocation`) for demand authoring and allocation review. It is implemented and test-validated
+  but has not yet undergone independent live testing on real account data. The read-model query
+  (`getAllocationReview`) is used by the Dashboard UI (a new second consumer besides MCP), and the
+  demand CRUD routes are now callable by the Allocation Tab UI. See [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)
+  ("The two read-projection pipelines", Pipeline C) for the narrow scope.
 - Azeroth ERP Slice 1 is Retail-only, one commodity per demand, account-scoped (no character
-  scope), and covers `STOCK_TARGET` only. Slice 2's review is Retail-only, has no Dashboard UI, does
-  not value or rank unallocated inventory, and treats Hellomags as an ordinary character. See
+  scope), and covers `STOCK_TARGET` only. Slice 2's review is Retail-only and does
+  not value or rank unallocated inventory, and treats Hellomags as an ordinary character. The
+  Allocation Tab UI is the first Dashboard consumer of the Slice 2 review. See
   [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) for everything
   explicitly deferred beyond it.
 - Warband account scope is `installation-local`, not a true Battle.net account ID — two Battle.net
   accounts imported into one installation are currently indistinguishable.
-- No demand-management UI, no Dashboard-UI consumer of `DashboardReadModel` (that read model
-  serves MCP only — see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)), and no public
-  Dashboard/MCP endpoint of any kind.
 
 ## Development gates
 
