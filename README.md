@@ -342,6 +342,31 @@ character whose export happened to carry it.
   `DELETE /api/shared-storage/guilds/:guildClubId` with a JSON body `{"confirmOwnerKey": "<owner key from GET>"}`
   (404 `SHARED_OWNER_NOT_FOUND` when there is nothing to clear). Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Allocation (Retail stock targets)
+
+> **Status:** implemented on `feature/erp-allocation-tab`, awaiting independent review and DEV validation. Not yet
+> live-validated or merged.
+
+Retail → **Allocation** tab (`#/retail/allocation`): say how many of an item the whole account should keep, and see
+how the account's observed storage (character bags and banks plus the Warband bank) measures up. Nothing here moves,
+mails, sells, or posts anything; a sale suggestion is a recommendation only.
+
+- **Your targets.** Each target reads like "Keep 100 · Have 40 · Short 60", "On target", "17 surplus · Eligible for
+  Hellomags", or "At least 17 surplus · Needs review". **Edit** changes the quantity or purpose; **Remove target**
+  deactivates it (kept as history, never deleted), after which the item has no target and its surplus is unknown again.
+- **Keep 0 is a real target** ("I want none of this"): confirmed holdings above 0 can become surplus. It is different
+  from removing the target, which means you have not said what you want.
+- **Held with no target.** No target means surplus is unknown, so these items are **not surplus** and show no surplus
+  or disposition. Search by name or exact item ID; pages through every match. **Set target** starts a target from a row.
+- **Add a target by item ID** for something the account does not hold yet (it shows as short by the full amount).
+- **Honest uncertainty.** Unseen account-owned storage is stated once at the top. Unknown stack quantities show as a
+  minimum ("Seen ≥ 12"); last-seen (historical) quantities are shown separately and never counted; Guild Bank holdings
+  are shown as "Guild-owned, not counted". When held rows of one item have different item strings, allocation is
+  **not computed** and the target needs review; no zero is shown in its place.
+- **API.** `GET /api/versions/retail/allocation-review` (optional `demandedOffset`, `demandedLimit`,
+  `unallocatedOffset`, `unallocatedLimit`, `q`) and the demand routes under `/api/versions/retail/demands`. Design:
+  [docs/AZEROTH_ERP_ARCHITECTURE.md](docs/AZEROTH_ERP_ARCHITECTURE.md) §25.
+
 ## Item info (expansion and crafting reagents)
 
 Current WoWSync exports carry an additive `[ITEM METADATA]` section: what the game client itself reported about each

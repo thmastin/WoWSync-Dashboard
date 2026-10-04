@@ -245,7 +245,7 @@ or as a location whose contents need to be observed by this slice.
 `AllocationResult.reasons` is a list of stable, typed `AllocationReasonCode` values (with an optional
 free-text `detail`), not prose. The same deterministic result — demand, confirmed/potential/unresolved
 evidence, allocation numbers, disposition, and reasons — is intended to be consumed identically by the
-Dashboard UI (not built in Slice 1, see §19), Ask My Account, MCP, future scheduled exception detection,
+Dashboard UI (not built in Slice 1, see §19; the Allocation tab, §25), Ask My Account, MCP, future scheduled exception detection,
 and tests. An LLM consumer explains this structured truth; it does not reconstruct the arithmetic from
 prose, and it cannot author demand (§14, §20).
 
@@ -259,6 +259,7 @@ prose, and it cannot author demand (§14, §20).
   `packages/server/src/demandRoutes.ts`.
 - No demand-management UI. The proof is the API plus deterministic tests; a UI was judged premature
   before the allocator itself was proven (see the Slice 1 implementation report for the tradeoff).
+  (Historical Slice 1 scope. The Dashboard Allocation tab, §25, is the later UI milestone.)
 - Read model: `DashboardReadModel.getItemAllocation` is the one new orchestration method.
 - MCP: one new read-only tool, `get_item_allocation` (see `docs/MCP_DEVELOPMENT.md`).
 
@@ -331,6 +332,9 @@ allocation results needing attention, and which account-owned inventory has no m
   unrecognized version is rejected). Pure assembly lives in `packages/core/src/allocationReview.ts`
   (`buildAllocationReview`).
 - **MCP**: one new read-only tool, `get_allocation_review` (see `docs/MCP_DEVELOPMENT.md`). No mutation.
+- **Dashboard additions (§25)**: an optional unallocated search `q` and a demanded-page `itemNames`
+  presentation sidecar. Both are presentation-level; neither changes an `AllocationResult`, a
+  disposition, or any whole-list count.
 - **Result**:
   - `unresolvedStorage` / `hasUnresolvedStorage` — whole account-owned scopes whose contents are UNKNOWN
     (a character's bags/bank, or a Warband never observed). Reported once; they apply to every item.
@@ -378,7 +382,7 @@ allocation results needing attention, and which account-owned inventory has no m
   rule turning unallocated inventory into surplus, dispositions or sale recommendations for unallocated
   inventory, new demand types, demand-authoring UI, MCP demand mutation, character-scoped demand,
   exact-equipment allocation, transfer plans, `/bankx` or any execution, scheduling/alerts, persisted review
-  results, non-Retail allocation, a Dashboard UI for the review, and any special Hellomags policy.
+  results, non-Retail allocation, a Dashboard UI for the review (later: §25), and any special Hellomags policy.
 - **Validation**: automated (`packages/core/test/readModelAllocationReview.test.ts`, plus the MCP
   protocol test) and live-validated end to end on 2026-10-03 — see
   [Live validation record: Azeroth ERP Slice 2](#live-validation-record-azeroth-erp-slice-2).
@@ -446,6 +450,67 @@ Result semantics (`buildAllocationResult`, precedence `NO_ACTIVE_DEMAND` → `CO
   The deployed result was checked locally and then through a blind external ChatGPT MCP conversation;
   binding-only isolation remains covered by automated tests because the real binding case also had
   unresolved storage evidence. See the Slice 3 live-validation record below.
+
+## 25. Dashboard Allocation tab (Retail stock targets + allocation review)
+
+**Implemented on `feature/erp-allocation-tab`; awaiting independent review and DEV validation. Not
+live-validated, not on `main`.** The first user-facing Azeroth ERP surface: Slices 1–3 made directly
+usable from the Dashboard, with **no change to Slice 1–3 semantics**.
+
+- **Placement**: a Retail-only top-level tab, `#/retail/allocation` (routing follows Shared Storage:
+  `patchRoute` moves the view to Retail; the tab button is shown only for Retail). Not inside Items
+  (Pipeline A inventory semantics) and not inside Economy (realm-scoped presentation): allocation is
+  account-wide intent plus ERP evidence.
+- **Read boundary**: `GET /api/versions/:version/allocation-review` builds a `DashboardReadModel` over the
+  server's `SnapshotStore` and returns `getAllocationReview`'s `ReadValue` unchanged. It is the second,
+  narrow consumer of `DashboardReadModel` (MCP is the first); it does not route through MCP, recompute
+  allocation, or merge `DashboardReadModel` into `AccountFacts`/`AccountContext`.
+- **Read-model additions** (both in `getAllocationReview`):
+  - `itemNames: Record<baseItemId, name>` for the **demanded page**, attached after paging from the same
+    account-owned evidence projection (`itemNameForItem`: first observed name across account-owned scopes;
+    guild scopes and AccountFacts are never read). Unknown names have no key; the UI falls back to the item
+    ID. The name is never placed in an `AllocationResult`, so every demanded entry still deep-equals
+    `getItemAllocation`.
+  - `q`: case-insensitive observed-name substring, or an exact base item id (all digits), filtering
+    `unallocated` **before** paging (`filterUnallocatedByQuery`). `unallocated.totalCount`/`truncated`
+    describe the matches; `unallocatedItemStringIdentityCounts`, `dispositionCounts`, `unresolvedStorage`
+    and `demanded` keep their whole-account meaning. Blank/absent `q` is exactly the previous behavior.
+    A held item with no observed name is still reachable by its id. MCP's tool does not expose `q`.
+- **Demand hardening**: `PATCH` and `deactivate` check the demand under the route's `:version` and its
+  status **before** mutating: wrong version -> `404 DEMAND_NOT_FOUND`, `INACTIVE` -> `409 DEMAND_INACTIVE`;
+  nothing changes in either case. No hard delete, no reactivation; a new target after removal is a new
+  demand via `POST` (duplicate active -> `409 DEMAND_CONFLICT` + `existingStableId`, unchanged).
+- **Presentation layer**: `packages/web/src/allocationView.ts` is the single place allocation meaning is
+  turned into display state; `AllocationTab.tsx` renders its output. Quantity cells are typed
+  `numeric` (with exact / at-least / at-most bounds), `withheld(reason)`, or `notApplicable`; nothing
+  absent is read as 0.
+  - **RESOLVED**: "Keep N" is `demand.requiredQuantity` (never `allocated`). Deficit: "Keep 100 · Have 40 ·
+    Short 60", or "Up to 60 short" with an explanation when unresolved evidence could hold more. Exact:
+    "On target". Positive surplus with `SEND_HELLOMAGS`: "17 surplus", "Eligible for Hellomags",
+    "Recommendation only. Nothing is moved automatically." Gated surplus (`REQUIRES_REVIEW`): "At least 17
+    surplus · Needs review" under unresolved evidence (a floor), or "17 surplus · Needs review" when only
+    binding gates it.
+  - **BASE_ITEM_AGGREGATION_UNPROVEN**: Keep and Seen are shown; allocated/short/surplus are
+    `withheld("not computed")` and the row reads "Allocation: not computed · Needs review" with the
+    variants ("N different versions of this item") or incomplete-identity explanation. No raw item strings.
+  - **CONFLICTING_DEMAND**: shown, never filtered: the conflicting targets (resolved from the demand list),
+    "Allocation: not computed", and a per-target remove action. No arithmetic is computed client-side.
+  - **NO_ACTIVE_DEMAND**: represented by "Held with no target" — "No target set, so surplus is unknown.
+    This is not surplus." Those rows carry no surplus, deficit, allocation, or disposition field at all.
+  - **UNKNOWN**: unseen account-owned storage is one account-level status built from `unresolvedStorage`
+    (counts by scope, no character names, no chore prompt); rows mention it only where it changes their
+    outcome (an "up to" shortfall, a gated surplus). Unknown stack quantities in observed storage give a
+    lower bound ("Seen ≥ 12") and an "Unknown quantity" chip.
+  - **LAST_SEEN**: a separate muted line ("+8 last seen (historical)"), never added to Have/Seen;
+    LAST_SEEN binding appears in detail only.
+  - **Binding**: "Bound" / "Binding unknown" chips from confirmed rows; bound=no is described as "not
+    reported bound (this does not prove it can be traded or moved)", never as tradeable.
+  - **Guild**: detail only, "Guild-owned, not counted".
+- **Authoring**: "Keep N" (integer >= 0) with optional purpose; Keep 0 is valid and explained as "want
+  none", distinct from Remove target (no modeled intent; surplus unknown again). Add-by-item-ID creates a
+  target for an item not held (Keep 100 · Have 0 · Short 100). Removed targets are a collapsed read-only
+  history offering "Set new target" (`POST`). After each mutation the page awaits the response and then
+  re-reads the review and demand list; a duplicate target points the user at the existing one.
 
 ## Live validation record: Azeroth ERP Slice 3
 

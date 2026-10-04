@@ -48,6 +48,14 @@ Where a link points at another repository, the path is given relative to that re
 
 Work happening now.
 
+- [ ] **ERP Allocation Tab — Dashboard stock targets + allocation review: implemented, awaiting
+  independent review and DEV validation.** Branch `feature/erp-allocation-tab` (from `main` at
+  `17f44a2`). Retail-only `#/retail/allocation` tab for authoring `STOCK_TARGET` demands and reading the
+  Slice 1–3 allocation review, over the narrow `GET /api/versions/:version/allocation-review` route
+  (second consumer of `DashboardReadModel`), with version-scoped / inactive-safe demand mutations. Not
+  merged, not deployed to DEV, not live-validated. Contract:
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §25.
+
 - [x] **Forever completion pass (GearExport): complete.** GearExport branch
   `feature/retail-bank-support-implementation`, commit
   `791cb9d33d9b979441550858a6708c61a4d4dcdd` (`feat: complete live-validated Forever support`).
@@ -119,9 +127,10 @@ Work intended next, in this order.
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
-  [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is still a direct HTTP call: a
-  demand-management UI or an MCP mutation tool for demand CRUD are both absent (see
-  `CURRENT_STATE.md`, "Current limitations"; MCP mutation would overturn an enforced invariant), and
+  [`CURRENT_STATE.md`](CURRENT_STATE.md). On `main`, demand management is still a direct HTTP
+  call; the Dashboard Allocation tab (see Active) adds the demand-management UI once reviewed. An MCP
+  mutation tool for demand CRUD remains absent by design (MCP mutation would overturn an enforced
+  invariant), and
   a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
   BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
   is deliberately left exploratory — see

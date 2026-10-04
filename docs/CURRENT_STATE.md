@@ -23,6 +23,11 @@ See the Slice 3 contract and live-validation record in
 The temporary validation demands were deactivated afterward. No active Retail demand remains from
 validation.
 
+**ERP Allocation Tab addendum (not on `main`).** The Dashboard Allocation tab milestone is
+**implemented on `feature/erp-allocation-tab` and awaiting independent review and DEV validation**.
+It is not merged, not deployed to DEV, and not live-validated; nothing below describing `main` changes
+until it is. See "Implemented, awaiting review" below.
+
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
 ## What's shipped
@@ -96,25 +101,38 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
   database, importer/receiver, MCP/tunnel, or production credential set there. The authoritative
   WoWSync database and normal capture path remain on Windows.
 
+## Implemented, awaiting review (not shipped)
+
+- **ERP Allocation Tab — Dashboard stock targets + allocation review** (`feature/erp-allocation-tab`):
+  a Retail-only top-level tab at `#/retail/allocation` that authors `STOCK_TARGET` demands (set
+  "Keep N" with an optional purpose, edit, remove = deactivate, add by item ID for items not held) and
+  presents the Slice 1–3 allocation review: account-level unseen-storage status shown once, Your
+  targets (every result variant, including `BASE_ITEM_AGGREGATION_UNPROVEN` as "Allocation: not
+  computed" and `CONFLICTING_DEMAND` as needing review), Held with no target (explicitly not surplus;
+  searchable by name or exact item ID; paged), and a collapsed read-only Removed targets history. It
+  reads `GET /api/versions/:version/allocation-review`, the narrow Dashboard consumer of
+  `DashboardReadModel.getAllocationReview` (see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)); MCP
+  sees the same persisted demands. The demand routes now reject wrong-version and INACTIVE mutations
+  before changing anything. Allocation semantics are unchanged. **Not live-validated**: DEV/UI
+  validation has not happened.
+
 ## Current limitations
 
+- **On `main`, there is still no demand-management UI** — demand is managed by direct HTTP calls until
+  the Allocation tab (above) is reviewed and merged.
 - **No MCP mutation capability, anywhere.** Every MCP tool, including `get_item_allocation` and
   `get_allocation_review`, is structurally read-only (SQLite opened `readOnly: true`; the `SnapshotReadStore` interface has no
   write methods). MCP never authors demand.
-- **Allocation Tab implemented but not live-validated.** The Dashboard now has a Retail-only Allocation
-  Tab (`#/retail/allocation`) for demand authoring and allocation review. It is implemented and test-validated
-  but has not yet undergone independent live testing on real account data. The read-model query
-  (`getAllocationReview`) is used by the Dashboard UI (a new second consumer besides MCP), and the
-  demand CRUD routes are now callable by the Allocation Tab UI. See [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)
-  ("The two read-projection pipelines", Pipeline C) for the narrow scope.
 - Azeroth ERP Slice 1 is Retail-only, one commodity per demand, account-scoped (no character
-  scope), and covers `STOCK_TARGET` only. Slice 2's review is Retail-only and does
-  not value or rank unallocated inventory, and treats Hellomags as an ordinary character. The
-  Allocation Tab UI is the first Dashboard consumer of the Slice 2 review. See
+  scope), and covers `STOCK_TARGET` only. Slice 2's review is Retail-only, has no Dashboard UI, does
+  not value or rank unallocated inventory, and treats Hellomags as an ordinary character. See
   [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) for everything
   explicitly deferred beyond it.
 - Warband account scope is `installation-local`, not a true Battle.net account ID — two Battle.net
   accounts imported into one installation are currently indistinguishable.
+- On `main`, `DashboardReadModel` serves MCP only; on `feature/erp-allocation-tab` it also serves the one
+  Allocation route (see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)). There is no public
+  Dashboard/MCP endpoint of any kind.
 
 ## Development gates
 
