@@ -487,7 +487,7 @@ async function shaAtSource(paths = PATHS) {
   return validateSha(await gitAt(['rev-parse', 'HEAD'], paths.source));
 }
 
-async function verifyInitialRuntime(previousSha, targetSha, paths = PATHS) {
+async function verifyInitialRuntime(previousSha, targetSha, paths = PATHS, unitsMigrated = false) {
   validateSha(previousSha);
   const sourceReal = await realpath(paths.source);
   const sourceUnits = {};
@@ -496,6 +496,15 @@ async function verifyInitialRuntime(previousSha, targetSha, paths = PATHS) {
     if (state.ActiveState !== 'active' || Number(state.MainPID) <= 0) throw new Error(`Initial migration requires active ${unit}: ${JSON.stringify(state)}`);
     const cwd = await realpath(`/proc/${state.MainPID}/cwd`);
     if (cwd !== sourceReal) throw new Error(`${unit} is not running from the declared old source runtime (${cwd}).`);
+    const unitWorkingDirectory = await run('/usr/bin/systemctl', ['show', '-p', 'WorkingDirectory', '--value', unit]);
+    const unitExecStart = await run('/usr/bin/systemctl', ['show', '-p', 'ExecStart', '--value', unit]);
+    if (unitsMigrated) {
+      if (unitWorkingDirectory !== paths.current || !unitExecStart.includes(`${paths.current}/packages/`)) throw new Error(`${unit} installed unit is not configured for the seeded release path.`);
+    } else {
+      if (unitWorkingDirectory !== paths.source) throw new Error(`${unit} old unit WorkingDirectory is ${unitWorkingDirectory}, expected source checkout ${paths.source}.`);
+      const expectedEntry = unit === APP_UNITS[0] ? 'packages/server/src/index.ts' : `${paths.source}/packages/mcp/src/index.ts`;
+      if (!unitExecStart.includes(expectedEntry)) throw new Error(`${unit} old ExecStart does not identify expected source runtime entry ${expectedEntry}.`);
+    }
     sourceUnits[unit] = { ...state, cwd };
   }
   const appPaths = ['package-lock.json', 'tsconfig.base.json', 'packages/core', 'packages/server', 'packages/mcp', 'packages/web'];
@@ -535,7 +544,7 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
   if (initialMode && activeSha !== sha) throw new Error(`Initial migration requires current seeded to requested same-SHA release ${sha}.`);
   if (initialMode && activeSha !== null && activeSha !== sha) throw new Error(`Initial migration pointer is ${activeSha}; expected seeded SHA ${sha}.`);
   if (!initialMode || activeSha === sha) await assertReleaseUnitPaths();
-  const initialRuntime = initialMode ? await verifyInitialRuntime(previousRuntimeSha, sha, paths) : null;
+  const initialRuntime = initialMode ? await verifyInitialRuntime(previousRuntimeSha, sha, paths, true) : null;
   const previousSha = initialMode ? initialRuntime.sha : activeSha;
   if (!initialMode && activeSha === sha) {
     const services = await assertApplicationServices(sha);
