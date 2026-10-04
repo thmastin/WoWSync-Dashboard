@@ -14,6 +14,7 @@ import type {
   VersionOrUnknown,
   VersionSummary,
 } from "./types.ts";
+import type { AccountAllocationReview, ExplicitDemand, ReadValue } from "@wowsync-dashboard/core";
 
 /**
  * What went wrong, in terms a caller can act on:
@@ -238,5 +239,74 @@ export function deleteSharedStorageOwner(owner: SharedOwnerIdentity) {
     path,
     { method: "DELETE", body: JSON.stringify({ confirmOwnerKey: owner.ownerKey }) },
     { validate: (body) => hasObject("deleted")(body) && isRecord((body as { deleted: { owner?: unknown } }).deleted.owner) },
+  );
+}
+
+// --- Azeroth ERP Allocation Review (Dashboard UI read-only) --------------------------------------------------
+
+export interface AllocationReviewQuery {
+  demandedOffset?: number;
+  demandedLimit?: number;
+  unallocatedOffset?: number;
+  unallocatedLimit?: number;
+}
+
+export function fetchAllocationReview(version: VersionOrUnknown, query: AllocationReviewQuery = {}, signal?: AbortSignal) {
+  const params = new URLSearchParams();
+  if (query.demandedOffset !== undefined) params.set("demandedOffset", String(query.demandedOffset));
+  if (query.demandedLimit !== undefined) params.set("demandedLimit", String(query.demandedLimit));
+  if (query.unallocatedOffset !== undefined) params.set("unallocatedOffset", String(query.unallocatedOffset));
+  if (query.unallocatedLimit !== undefined) params.set("unallocatedLimit", String(query.unallocatedLimit));
+  const qs = params.toString();
+  const path = `/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? "?" + qs : ""}`;
+  return request<ReadValue<AccountAllocationReview>>(path, undefined, {
+    signal,
+    validate: (body) => isRecord(body) && isRecord(body.provenance),
+  });
+}
+
+export interface CreateDemandInput {
+  baseItemId: number;
+  requiredQuantity: number;
+  purpose?: string;
+}
+
+export function createDemand(version: VersionOrUnknown, input: CreateDemandInput, signal?: AbortSignal) {
+  return request<{ demand: ExplicitDemand }>(
+    `/api/versions/${encodeURIComponent(version)}/demands`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        demandType: "STOCK_TARGET",
+        baseItemId: input.baseItemId,
+        requiredQuantity: input.requiredQuantity,
+        purpose: input.purpose,
+      }),
+    },
+    { signal, validate: hasObject("demand") },
+  );
+}
+
+export interface UpdateDemandInput {
+  requiredQuantity?: number;
+  purpose?: string;
+}
+
+export function updateDemand(version: VersionOrUnknown, stableId: string, input: UpdateDemandInput, signal?: AbortSignal) {
+  return request<{ demand: ExplicitDemand }>(
+    `/api/versions/${encodeURIComponent(version)}/demands/${encodeURIComponent(stableId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+    { signal, validate: hasObject("demand") },
+  );
+}
+
+export function deactivateDemand(version: VersionOrUnknown, stableId: string, signal?: AbortSignal) {
+  return request<{ demand: ExplicitDemand }>(
+    `/api/versions/${encodeURIComponent(version)}/demands/${encodeURIComponent(stableId)}/deactivate`,
+    { method: "POST", body: "{}" },
+    { signal, validate: hasObject("demand") },
   );
 }
