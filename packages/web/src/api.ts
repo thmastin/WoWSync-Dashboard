@@ -13,8 +13,10 @@ import type {
   StoredSnapshot,
   VersionOrUnknown,
   VersionSummary,
+  AllocationReviewRead,
+  ExplicitDemand,
 } from "./types.ts";
-import type { AccountAllocationReview, ExplicitDemand, ReadValue } from "@wowsync-dashboard/core";
+import { ALLOCATION_RESOLUTIONS } from "./types.ts";
 
 /**
  * What went wrong, in terms a caller can act on:
@@ -242,73 +244,103 @@ export function deleteSharedStorageOwner(owner: SharedOwnerIdentity) {
   );
 }
 
-// --- Azeroth ERP Allocation Review (Dashboard UI read-only) --------------------------------------------------
+// --- Azeroth ERP: explicit demand + allocation review (Dashboard Allocation tab) -------------------------------
+// GET /api/versions/:version/allocation-review serves DashboardReadModel.getAllocationReview as is; the demand
+// routes create / edit / deactivate STOCK_TARGET demands. The client never computes allocation.
 
-export interface AllocationReviewQuery {
+export interface AllocationReviewParams {
   demandedOffset?: number;
   demandedLimit?: number;
   unallocatedOffset?: number;
   unallocatedLimit?: number;
+  /** Unallocated search: name substring or exact item id. Blank is omitted (no filtering). */
   q?: string;
 }
 
-export function fetchAllocationReview(version: VersionOrUnknown, query: AllocationReviewQuery = {}, signal?: AbortSignal) {
-  const params = new URLSearchParams();
-  if (query.demandedOffset !== undefined) params.set("demandedOffset", String(query.demandedOffset));
-  if (query.demandedLimit !== undefined) params.set("demandedLimit", String(query.demandedLimit));
-  if (query.unallocatedOffset !== undefined) params.set("unallocatedOffset", String(query.unallocatedOffset));
-  if (query.unallocatedLimit !== undefined) params.set("unallocatedLimit", String(query.unallocatedLimit));
-  if (query.q !== undefined && query.q) params.set("q", query.q);
-  const qs = params.toString();
-  const path = `/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? "?" + qs : ""}`;
-  return request<ReadValue<AccountAllocationReview>>(path, undefined, {
-    signal,
-    validate: (body) => isRecord(body) && isRecord(body.provenance) && (body.data === undefined || isRecord(body.data)),
-  });
+const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isPage = (v: unknown): v is { items: unknown[] } =>
+  isRecord(v) && Array.isArray(v.items) && isNumber(v.offset) && isNumber(v.limit) && isNumber(v.totalCount) && typeof v.truncated === "boolean";
+const isDemandView = (v: unknown) => isRecord(v) && typeof v.stableId === "string" && isNumber(v.requiredQuantity);
+
+/**
+ * One demanded result, checked against its OWN variant: the arithmetic a variant carries must be present and
+ * numeric, and an unknown `resolution` (a future semantic this client cannot present) is a shape failure,
+ * never something rendered by guesswork.
+ */
+export function isAllocationResult(v: unknown): boolean {
+  if (!isRecord(v) || !isRecord(v.commodity) || !isNumber(v.commodity.baseItemId) || !Array.isArray(v.reasons) || !Array.isArray(v.evidence) || !Array.isArray(v.guildContext)) return false;
+  if (typeof v.resolution !== "string" || !(ALLOCATION_RESOLUTIONS as readonly string[]).includes(v.resolution)) return false;
+  if (!isRecord(v.confirmedItemStringIdentity) || !isRecord(v.confirmedBinding) || !isRecord(v.potentialBinding)) return false;
+  switch (v.resolution) {
+    case "RESOLVED":
+      return isDemandView(v.demand) && isNumber(v.confirmedAvailable) && isNumber(v.potentialAdditionalAvailable) && isNumber(v.allocated) && isNumber(v.confirmedDeficit) && isNumber(v.confirmedSurplus) && typeof v.hasUnresolvedEvidence === "boolean";
+    case "BASE_ITEM_AGGREGATION_UNPROVEN":
+      return isDemandView(v.demand) && isNumber(v.confirmedQuantity) && isNumber(v.potentialQuantity) && typeof v.hasUnresolvedEvidence === "boolean";
+    case "CONFLICTING_DEMAND":
+      return Array.isArray(v.conflictingDemandIds);
+    default:
+      return true;
+  }
 }
 
-export interface CreateDemandInput {
+/** The allocation-review ReadValue: provenance always; `data` (when present) with both pages, the account status, and only known result variants. */
+export function isAllocationReviewRead(body: unknown): body is AllocationReviewRead {
+  if (!isRecord(body) || !isRecord(body.provenance) || typeof body.provenance.state !== "string") return false;
+  if (body.data === undefined) return true;
+  const data = body.data;
+  if (!isRecord(data) || !Array.isArray(data.unresolvedStorage) || typeof data.hasUnresolvedStorage !== "boolean" || !isRecord(data.itemNames)) return false;
+  if (!isPage(data.demanded) || !isPage(data.unallocated)) return false;
+  if (!data.demanded.items.every(isAllocationResult)) return false;
+  return data.unallocated.items.every((e) => isRecord(e) && e.allocationState === "UNALLOCATED" && isNumber(e.baseItemId) && isNumber(e.confirmedQuantity) && isNumber(e.potentialQuantity));
+}
+
+export function fetchAllocationReview(version: VersionOrUnknown, params: AllocationReviewParams = {}, signal?: AbortSignal) {
+  const search = new URLSearchParams();
+  for (const key of ["demandedOffset", "demandedLimit", "unallocatedOffset", "unallocatedLimit"] as const) {
+    if (params[key] !== undefined) search.set(key, String(params[key]));
+  }
+  const q = params.q?.trim();
+  if (q) search.set("q", q);
+  const qs = search.toString();
+  return request<AllocationReviewRead>(`/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? `?${qs}` : ""}`, undefined, { signal, validate: isAllocationReviewRead });
+}
+
+/** Every demand for a version, any status (the removed-target history and conflict lookups read this). */
+export function fetchDemands(version: VersionOrUnknown, signal?: AbortSignal) {
+  return request<{ demands: ExplicitDemand[] }>(`/api/versions/${encodeURIComponent(version)}/demands`, undefined, { signal, validate: hasArray("demands") });
+}
+
+export interface DemandInput {
   baseItemId: number;
   requiredQuantity: number;
+  /** Blank means no purpose; it is omitted rather than sent as "". */
   purpose?: string;
 }
 
-export function createDemand(version: VersionOrUnknown, input: CreateDemandInput, signal?: AbortSignal) {
+/** Creates a new ACTIVE STOCK_TARGET demand. A duplicate is the server's 409 DEMAND_CONFLICT (see describeDemandError). */
+export function createDemand(version: VersionOrUnknown, input: DemandInput) {
+  const purpose = input.purpose?.trim();
   return request<{ demand: ExplicitDemand }>(
     `/api/versions/${encodeURIComponent(version)}/demands`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        demandType: "STOCK_TARGET",
-        baseItemId: input.baseItemId,
-        requiredQuantity: input.requiredQuantity,
-        purpose: input.purpose,
-      }),
-    },
-    { signal, validate: hasObject("demand") },
+    { method: "POST", body: JSON.stringify({ demandType: "STOCK_TARGET", baseItemId: input.baseItemId, requiredQuantity: input.requiredQuantity, ...(purpose ? { purpose } : {}) }) },
+    { validate: hasObject("demand") },
   );
 }
 
-export interface UpdateDemandInput {
-  requiredQuantity?: number;
-  purpose?: string;
-}
-
-export function updateDemand(version: VersionOrUnknown, stableId: string, input: UpdateDemandInput, signal?: AbortSignal) {
+/** Edits an ACTIVE demand's quantity and purpose (purpose "" clears it). An inactive demand answers 409 DEMAND_INACTIVE. */
+export function updateDemand(version: VersionOrUnknown, stableId: string, input: { requiredQuantity: number; purpose: string }) {
   return request<{ demand: ExplicitDemand }>(
     `/api/versions/${encodeURIComponent(version)}/demands/${encodeURIComponent(stableId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    },
-    { signal, validate: hasObject("demand") },
+    { method: "PATCH", body: JSON.stringify({ requiredQuantity: input.requiredQuantity, purpose: input.purpose.trim() }) },
+    { validate: hasObject("demand") },
   );
 }
 
-export function deactivateDemand(version: VersionOrUnknown, stableId: string, signal?: AbortSignal) {
+/** "Remove target": sets the demand INACTIVE. Never a delete; the record stays as history. */
+export function deactivateDemand(version: VersionOrUnknown, stableId: string) {
   return request<{ demand: ExplicitDemand }>(
     `/api/versions/${encodeURIComponent(version)}/demands/${encodeURIComponent(stableId)}/deactivate`,
     { method: "POST", body: "{}" },
-    { signal, validate: hasObject("demand") },
+    { validate: hasObject("demand") },
   );
 }

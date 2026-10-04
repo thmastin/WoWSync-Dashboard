@@ -265,7 +265,7 @@ export default function App() {
                 )}
               </div>
 
-              {route.view === "shared" ? null : scoped && scoped.isRealmScoped ? (
+              {route.view === "shared" || route.view === "allocation" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
@@ -297,10 +297,10 @@ export default function App() {
                 onOpenCharacter={openCharacter}
               />
             )}
-            {route.view !== "shared" && route.view !== "research" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && route.view !== "research" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster

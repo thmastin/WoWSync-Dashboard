@@ -606,3 +606,120 @@ export interface SharedStorageIntegrityErrorBody {
 
 // Item metadata (game-client enrichment). The types live with the pure core module the server serializes with.
 export type { ItemMetadataResponse, ItemMetadataView, FacetState, ExpansionInfo } from "@wowsync-dashboard/core/itemMetadata.ts";
+
+// --- Azeroth ERP: explicit demand + allocation review ----------------------------------------------------------
+// Mirrors packages/core/src/demand.ts, allocation.ts, allocationReview.ts, heldItemIdentity.ts and the
+// DashboardReadModel.getAllocationReview ReadValue served by GET /api/versions/:version/allocation-review.
+// Absent numbers are absent (never 0): NO_ACTIVE_DEMAND, CONFLICTING_DEMAND and BASE_ITEM_AGGREGATION_UNPROVEN
+// results structurally carry no allocated / confirmedDeficit / confirmedSurplus.
+
+export type DemandStatus = "ACTIVE" | "INACTIVE";
+export interface ExplicitDemand {
+  stableId: string;
+  gameVersion: "retail";
+  demandType: "STOCK_TARGET";
+  commodity: { kind: "commodity"; gameVersion: "retail"; baseItemId: number };
+  requiredQuantity: number;
+  purpose?: string;
+  status: DemandStatus;
+  supersedesStableId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type AllocationEvidenceScope = "character-bags" | "character-bank" | "warband";
+export type AllocationAdmissibility = "CONFIRMED" | "POTENTIAL" | "UNRESOLVED";
+export interface EvidenceContribution {
+  scope: AllocationEvidenceScope;
+  admissibility: AllocationAdmissibility;
+  /** Absent exactly when UNRESOLVED - never 0. */
+  quantity?: number;
+  unknownQuantityRowCount?: number;
+  unresolvedCause?: "STORAGE_UNKNOWN" | "ITEM_QUANTITY_UNKNOWN";
+  identityKey?: string;
+  observedAt?: number;
+}
+export interface GuildContextEntry {
+  ownerKey: string;
+  admissibility: AllocationAdmissibility;
+  quantity?: number;
+  unknownQuantityRowCount?: number;
+  observedAt?: number;
+}
+export type ItemStringIdentityClass = "UNIFORM_ITEM_STRING" | "ITEM_STRING_VARIANTS" | "ITEM_STRING_INCOMPLETE" | "NONE_HELD";
+export interface ItemStringIdentity { class: ItemStringIdentityClass; distinctItemStringCount: number }
+export interface BindingFacet { boundRowCount: number; unboundRowCount: number; unknownRowCount: number }
+export interface HeldItemFacets {
+  confirmedItemStringIdentity: ItemStringIdentity;
+  potentialItemStringIdentity: ItemStringIdentity;
+  confirmedBinding: BindingFacet;
+  potentialBinding: BindingFacet;
+}
+export interface AllocationReason { code: string; detail?: string }
+export type Disposition = "HOLD_ALLOCATED" | "SEND_HELLOMAGS" | "NO_ACTION" | "REQUIRES_REVIEW";
+export type AllocationResolution = "RESOLVED" | "NO_ACTIVE_DEMAND" | "CONFLICTING_DEMAND" | "BASE_ITEM_AGGREGATION_UNPROVEN";
+export const ALLOCATION_RESOLUTIONS: readonly AllocationResolution[] = ["RESOLVED", "NO_ACTIVE_DEMAND", "CONFLICTING_DEMAND", "BASE_ITEM_AGGREGATION_UNPROVEN"];
+
+interface AllocationResultBase extends HeldItemFacets {
+  commodity: { kind: "commodity"; gameVersion: "retail"; baseItemId: number };
+  guildContext: GuildContextEntry[];
+  reasons: AllocationReason[];
+  evidence: EvidenceContribution[];
+}
+export type DemandView = Pick<ExplicitDemand, "stableId" | "requiredQuantity" | "purpose">;
+export interface NoActiveDemandResult extends AllocationResultBase { resolution: "NO_ACTIVE_DEMAND"; disposition: "NO_ACTION" }
+export interface ConflictingDemandResult extends AllocationResultBase { resolution: "CONFLICTING_DEMAND"; disposition: "REQUIRES_REVIEW"; conflictingDemandIds: string[] }
+export interface ResolvedAllocationResult extends AllocationResultBase {
+  resolution: "RESOLVED";
+  demand: DemandView;
+  confirmedAvailable: number;
+  potentialAdditionalAvailable: number;
+  hasUnresolvedEvidence: boolean;
+  unresolvedScopes: AllocationEvidenceScope[];
+  allocated: number;
+  confirmedDeficit: number;
+  /** A confirmed FLOOR. */
+  confirmedSurplus: number;
+  disposition: Disposition;
+}
+export interface BaseItemAggregationUnprovenResult extends AllocationResultBase {
+  resolution: "BASE_ITEM_AGGREGATION_UNPROVEN";
+  demand: DemandView;
+  confirmedQuantity: number;
+  potentialQuantity: number;
+  hasUnresolvedEvidence: boolean;
+  unresolvedScopes: AllocationEvidenceScope[];
+  disposition: "REQUIRES_REVIEW";
+}
+export type AllocationResult = NoActiveDemandResult | ConflictingDemandResult | BaseItemAggregationUnprovenResult | ResolvedAllocationResult;
+
+export interface UnallocatedInventoryEntry extends HeldItemFacets {
+  allocationState: "UNALLOCATED";
+  baseItemId: number;
+  name?: string;
+  confirmedQuantity: number;
+  potentialQuantity: number;
+  potentialUnknownQuantityRowCount: number;
+  hasUnresolvedEvidence: boolean;
+  unresolvedScopes: AllocationEvidenceScope[];
+  holdings: EvidenceContribution[];
+  guildContext: GuildContextEntry[];
+  metadataState: "KNOWN" | "UNKNOWN";
+}
+export interface UnresolvedStorageScope { scope: AllocationEvidenceScope; identityKey?: string }
+export interface AllocationPage<T> { items: T[]; offset: number; limit: number; totalCount: number; truncated: boolean }
+export interface AccountAllocationReview {
+  version: VersionOrUnknown;
+  unresolvedStorage: UnresolvedStorageScope[];
+  hasUnresolvedStorage: boolean;
+  unidentifiedItemRowCount: number;
+  dispositionCounts: Record<Disposition, number>;
+  unallocatedItemStringIdentityCounts: { confirmed: Record<ItemStringIdentityClass, number>; potential: Record<ItemStringIdentityClass, number> };
+  demanded: AllocationPage<AllocationResult>;
+  unallocated: AllocationPage<UnallocatedInventoryEntry>;
+  /** Presentation sidecar for the demanded page; an unknown name has no key. JSON object keys are strings. */
+  itemNames: Record<string, string>;
+}
+export interface AllocationReviewProvenance { state: "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN"; version: VersionOrUnknown; source?: string; reason?: string; warning?: string }
+/** The ReadValue the route returns: `data` is absent with UNKNOWN provenance (e.g. a non-Retail version). */
+export interface AllocationReviewRead { data?: AccountAllocationReview; provenance: AllocationReviewProvenance }

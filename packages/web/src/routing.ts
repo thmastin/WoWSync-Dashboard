@@ -4,7 +4,8 @@
 //   #/<version>/characters?realm=&q=&class=&age=&sort=
 //   #/<version>/economy?realm=
 //   #/<version>/professions?realm=
-//   #/<version>/shared
+//   #/<version>/shared                 (Retail-only; patchRoute moves it to retail)
+//   #/<version>/allocation             (Retail-only; patchRoute moves it to retail)
 //   #/<version>/items?q=&realm=&storage=&bound=
 //   #/<version>/c/<identityKey>[/snapshot/<id>]?from=overview|characters|...
 // localStorage keeps only the last version, used when the hash is empty.
