@@ -211,7 +211,7 @@ printf '%s\n' "$REVIEWED_SHA" | sudo tee /root/wowsync-deploy-export/.reviewed-s
 sudo chown root:root /root/wowsync-deploy-export/.reviewed-source-sha
 sudo chmod 0444 /root/wowsync-deploy-export/.reviewed-source-sha
 sudo chmod -R a-w /root/wowsync-deploy-export
-sudo sha256sum --check --strict /root/wowsync-deploy-export/ops/privileged-artifact-sha256.txt
+sudo sh -c 'cd /root/wowsync-deploy-export && sha256sum --check --strict ops/privileged-artifact-sha256.txt'
 sudo /root/wowsync-deploy-export/tools/omarchy/bootstrap-wowsync-dev-deploy.sh "$REVIEWED_SHA"
 ```
 

@@ -352,17 +352,35 @@ export function recoveryPolicy({ initialMode = false, schemaChanged = false, can
   return { action: 'restore-previous-release-and-validate', mayStartPreviousCode: true };
 }
 
-export async function recoverFailedPromotion({ initialMode = false, schemaChanged = false, candidateStarted = false, stop, setPrevious, startPrevious, validatePrevious }) {
+export async function recoverFailedPromotion({ initialMode = false, schemaChanged = false, candidateStarted = false, priorStopResult, stop, setPrevious, startPrevious, validatePrevious }) {
   const policy = recoveryPolicy({ initialMode, schemaChanged, candidateStarted });
   if (!policy.mayStartPreviousCode) {
+    if (priorStopResult) return { state: 'stopped-review-required', stopResult: priorStopResult, action: policy.action };
     try { await stop(); return { state: 'stopped-review-required', stopResult: 'succeeded', action: policy.action }; }
     catch (error) { return { state: 'stopped-review-required', stopResult: `failed: ${error.message}`, action: policy.action }; }
   }
-  await stop();
+  if (priorStopResult !== 'succeeded') await stop();
   await setPrevious();
   await startPrevious();
   const validation = await validatePrevious();
   return { state: 'validated', action: policy.action, validation };
+}
+
+// Record the attempt before invoking the service boundary: systemd may launch
+// Dashboard and still return an error to the caller.
+export async function startCandidateConservatively(start, markMayHaveStarted) {
+  markMayHaveStarted();
+  return start();
+}
+
+// Stop first, then inspect schema. If stop or inspection fails, compatibility
+// is unknown and callers must not start old application code automatically.
+export async function stopCandidateThenInspectSchema({ candidateMayHaveRun, stop, inspectSchema }) {
+  if (!candidateMayHaveRun) return { stopResult: 'not-needed', schemaChanged: false };
+  try { await stop(); }
+  catch (error) { return { stopResult: `failed: ${error.message}`, schemaChanged: null }; }
+  try { return { stopResult: 'succeeded', schemaChanged: await inspectSchema() }; }
+  catch { return { stopResult: 'succeeded', schemaChanged: null }; }
 }
 
 export async function waitForReadiness({ fetchFn = fetch, baseUrl, routes = DEFAULT_VALIDATION_ROUTES, timeoutMs = 30000, intervalMs = 250, settleMs = 1500, sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), onProbe = () => {} }) {
@@ -581,8 +599,7 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
     if (JSON.stringify(beforeEvidence) !== JSON.stringify(backupEvidence)) throw new Error('SQLite online backup data evidence does not match the stopped runtime database.');
     backupSha256 = await sha256File(backupPath);
     await atomicSetCurrent(paths.releases, sha);
-    await invokeServiceHelper('start', paths);
-    candidateStarted = true;
+    await startCandidateConservatively(() => invokeServiceHelper('start', paths), () => { candidateStarted = true; });
     const serviceAtStart = await assertApplicationServices(sha);
     await waitForReadiness({ baseUrl: paths.baseUrl, routes });
     const serviceStates = await assertApplicationServices(sha);
@@ -623,14 +640,21 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     if (candidateValidated) throw new Error(`Deployment passed application validation, but operational audit write failed; no rollback was triggered. Audit path: ${paths.audit}. ${error.message}`);
-    let schemaEvidenceAfter = null;
-    try { schemaEvidenceAfter = databaseEvidence(paths.database); schemaChanged = beforeEvidence ? !assertSchemaCompatible(beforeEvidence, schemaEvidenceAfter) : null; }
-    catch { if (!candidateStarted) schemaChanged = false; }
+    const preRecovery = await stopCandidateThenInspectSchema({
+      candidateMayHaveRun: candidateStarted,
+      stop: () => invokeServiceHelper('stop', paths),
+      inspectSchema: () => {
+        const after = databaseEvidence(paths.database);
+        return beforeEvidence ? !assertSchemaCompatible(beforeEvidence, after) : null;
+      },
+    });
+    schemaChanged = preRecovery.schemaChanged;
     let recoveredValidated = false;
     let recovery;
     try {
       recovery = await recoverFailedPromotion({
         initialMode, schemaChanged, candidateStarted,
+        priorStopResult: candidateStarted ? preRecovery.stopResult : undefined,
         stop: () => invokeServiceHelper('stop', paths),
         setPrevious: () => atomicSetCurrent(paths.releases, previousSha),
         startPrevious: () => invokeServiceHelper('start', paths),

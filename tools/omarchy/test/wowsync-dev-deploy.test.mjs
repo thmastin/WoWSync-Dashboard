@@ -19,6 +19,8 @@ import {
   prepareRelease,
   recoveryPolicy,
   recoverFailedPromotion,
+  startCandidateConservatively,
+  stopCandidateThenInspectSchema,
   resolveExactCommit,
   validateRemoteRef,
   validateSha,
@@ -225,6 +227,61 @@ test('promotion recovery runs prior code only after unchanged-schema validation 
   assert.deepEqual(events, ['stop']);
 });
 
+test('a rejected candidate start is conservatively treated as possibly running', async () => {
+  let candidateStarted = false;
+  await assert.rejects(startCandidateConservatively(async () => {
+    // Simulate systemd starting the process and then returning an error.
+    throw new Error('helper lost its response after launch');
+  }, () => { candidateStarted = true; }), /after launch/);
+  assert.equal(candidateStarted, true);
+  const events = [];
+  const recovery = await recoverFailedPromotion({
+    candidateStarted,
+    schemaChanged: null,
+    stop: async () => events.push('stop'),
+    setPrevious: async () => events.push('set-previous'),
+    startPrevious: async () => events.push('start-previous'),
+    validatePrevious: async () => events.push('validate'),
+  });
+  assert.equal(recovery.state, 'stopped-review-required');
+  assert.deepEqual(events, ['stop']);
+});
+
+test('candidate stop precedes schema inspection and stop/read failures leave compatibility unknown', async () => {
+  const events = [];
+  const inspected = await stopCandidateThenInspectSchema({
+    candidateMayHaveRun: true,
+    stop: async () => { events.push('stop'); },
+    inspectSchema: async () => { events.push('schema'); return false; },
+  });
+  assert.deepEqual(events, ['stop', 'schema']);
+  assert.deepEqual(inspected, { stopResult: 'succeeded', schemaChanged: false });
+  const stopFailed = await stopCandidateThenInspectSchema({
+    candidateMayHaveRun: true,
+    stop: async () => { throw new Error('stop failed'); },
+    inspectSchema: async () => { events.push('must-not-read'); return false; },
+  });
+  assert.deepEqual(stopFailed, { stopResult: 'failed: stop failed', schemaChanged: null });
+  const readFailed = await stopCandidateThenInspectSchema({
+    candidateMayHaveRun: true,
+    stop: async () => {},
+    inspectSchema: async () => { throw new Error('database unreadable'); },
+  });
+  assert.deepEqual(readFailed, { stopResult: 'succeeded', schemaChanged: null });
+  events.length = 0;
+  const review = await recoverFailedPromotion({
+    schemaChanged: null,
+    candidateStarted: true,
+    priorStopResult: stopFailed.stopResult,
+    stop: async () => events.push('retry-stop'),
+    setPrevious: async () => events.push('set-previous'),
+    startPrevious: async () => events.push('start-previous'),
+    validatePrevious: async () => {},
+  });
+  assert.equal(review.stopResult, 'failed: stop failed');
+  assert.deepEqual(events, [], 'failed stop is preserved without attempting old-code startup');
+});
+
 test('bounded readiness polling accepts delayed startup and rejects timeout', async () => {
   let now = 0;
   let calls = 0;
@@ -311,6 +368,86 @@ async function migrationFixture(root) {
   await writeFile(path.join(bin, 'curl'), '#!/usr/bin/bash\nexit 0\n', { mode: 0o755 });
   return { source, releases, release, unitDir, dashPath, mcpPath, dashboard, mcp, log };
 }
+
+async function restoreMigrationFixture(root, alwaysFailHttp = false) {
+  const f = await migrationFixture(root);
+  const state = path.join(root, 'etc/wowsync/dev/runtime-path-migration');
+  const backup = path.join(state, '20261004T000000Z-123');
+  await mkdir(backup, { recursive: true });
+  await writeFile(path.join(backup, 'wowsync-dev-dashboard.service'), f.dashboard);
+  await writeFile(path.join(backup, 'wowsync-dev-mcp-tunnel.service'), f.mcp);
+  await symlink(backup, path.join(state, 'current'));
+  await writeFile(f.dashPath, f.dashboard.replaceAll(f.source, path.join(f.releases, 'current')));
+  await writeFile(f.mcpPath, f.mcp.replaceAll(f.source, path.join(f.releases, 'current')));
+  await writeFile(path.join(root, 'http-always-fails'), alwaysFailHttp ? 'yes' : 'no');
+  await writeFile(path.join(root, 'http-count'), '0');
+  await writeFile(path.join(root, 'bin/systemctl'), `#!/usr/bin/bash
+printf '%s\\n' "$*" >> '${f.log}'
+case "$1" in
+  daemon-reload) exit 0 ;;
+  --job-mode=ignore-dependencies)
+    [[ "$2" == restart ]] || exit 9
+    shift 2
+    for unit in "$@"; do
+      key=\${unit#wowsync-dev-}; key=\${key%.service}
+      (cd '${f.source}' && exec /usr/bin/sleep 60) >/dev/null 2>&1 &
+      echo $! > '${root}/pid-'"$key"
+    done
+    exit 0 ;;
+  show)
+    unit=\${!#}; key=\${unit#wowsync-dev-}; key=\${key%.service}
+    pid=$(cat '${root}/pid-'"$key")
+    printf 'active\\nsuccess\\n%s\\n' "$pid"
+    exit 0 ;;
+esac
+exit 8
+`, { mode: 0o755 });
+  await writeFile(path.join(root, 'bin/curl'), `#!/usr/bin/bash
+url=\${!#}
+count=$(cat '${root}/http-count'); count=$((count + 1)); echo "$count" > '${root}/http-count'
+if [[ "$(cat '${root}/http-always-fails')" == yes || ( "$count" -eq 1 && "$url" == */ ) ]]; then code=503; else code=200; fi
+printf '%s' "$code"
+exit 0
+`, { mode: 0o755 });
+  await writeFile(path.join(root, 'bin/sleep'), '#!/usr/bin/bash\nexec /usr/bin/sleep "$1"\n', { mode: 0o755 });
+  const stopWorkers = async () => {
+    for (const key of ['dashboard', 'mcp-tunnel']) {
+      const pid = await readFile(path.join(root, `pid-${key}`), 'utf8').catch(() => '');
+      if (/^\d+\n?$/.test(pid)) spawnSync('/usr/bin/kill', ['-TERM', pid.trim()]);
+    }
+  };
+  return { ...f, state, backup, stopWorkers };
+}
+
+test('topology restore retries refused HTTP, settles, and validates both source-checkout units', async (t) => {
+  const root = await tempDir(t);
+  const f = await restoreMigrationFixture(root);
+  t.after(f.stopWorkers);
+  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['restore', 'CURRENT'], {
+    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root, WOWSYNC_MIGRATION_TEST_TIMEOUT_MS: '1000', WOWSYNC_MIGRATION_TEST_INTERVAL_MS: '20', WOWSYNC_MIGRATION_TEST_SETTLE_MS: '60' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /HTTP stable/);
+  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
+  assert.equal(await readFile(f.mcpPath, 'utf8'), f.mcp);
+  const commands = await readFile(f.log, 'utf8');
+  assert.match(commands, /restart wowsync-dev-dashboard\.service wowsync-dev-mcp-tunnel\.service/);
+  assert.ok(Number(await readFile(path.join(root, 'http-count'), 'utf8')) > 4, 'first refusal was retried and both routes were reprobed during settle');
+  assert.match(commands, /daemon-reload/);
+});
+
+test('topology restore readiness timeout is bounded and diagnostic', async (t) => {
+  const root = await tempDir(t);
+  const f = await restoreMigrationFixture(root, true);
+  t.after(f.stopWorkers);
+  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['restore', 'CURRENT'], {
+    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root, WOWSYNC_MIGRATION_TEST_TIMEOUT_MS: '100', WOWSYNC_MIGRATION_TEST_INTERVAL_MS: '10', WOWSYNC_MIGRATION_TEST_SETTLE_MS: '20' },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /readiness timed out after 100ms/);
+  assert.match(result.stderr, /HTTP 503/);
+  assert.ok(Number(await readFile(path.join(root, 'http-count'), 'utf8')) < 50, 'timeout prevents unbounded polling');
+});
 
 test('unit migration validates both proposals before replacement and leaves originals on preflight failure', async (t) => {
   const root = await tempDir(t);
