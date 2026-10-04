@@ -9,7 +9,7 @@ PartOf=wowsync-dev.target
 Type=simple
 User=wowsync-dev
 Group=wowsync-dev
-WorkingDirectory=/home/wowsync-dev/src/WoWSync-Dashboard
+WorkingDirectory=/home/wowsync-dev/releases/current
 LoadCredential=tunnel-api-key:/etc/wowsync/dev/tunnel-api-key
 # CONTROL_PLANE_TUNNEL_ID is supplied at runtime via this optional EnvironmentFile
 # (note the leading "-": the unit still starts without it, though tunnel-client
@@ -19,8 +19,8 @@ LoadCredential=tunnel-api-key:/etc/wowsync/dev/tunnel-api-key
 # line argument here. See ops/systemd/wowsync-dev-mcp-tunnel.env.example.
 EnvironmentFile=-/etc/wowsync/dev/mcp-tunnel.env
 Environment=WOWSYNC_MCP_DB_PATH=/var/lib/wowsync-dev/db/wowsync.sqlite
-Environment=WOWSYNC_MCP_RESEARCH_ROOT=/home/wowsync-dev/src/WoWSync-Dashboard/docs
-ExecStart=/opt/wowsync/dev-tools/tunnel-client/v0.0.15/tunnel-client run --control-plane.api-key=file:%d/tunnel-api-key "--mcp.command=/usr/bin/node /home/wowsync-dev/src/WoWSync-Dashboard/packages/mcp/src/index.ts"
+Environment=WOWSYNC_MCP_RESEARCH_ROOT=/home/wowsync-dev/releases/current/docs
+ExecStart=/opt/wowsync/dev-tools/tunnel-client/v0.0.15/tunnel-client run --control-plane.api-key=file:%d/tunnel-api-key "--mcp.command=/usr/bin/node /home/wowsync-dev/releases/current/packages/mcp/src/index.ts"
 Restart=on-failure
 RestartSec=5s
 KillMode=control-group

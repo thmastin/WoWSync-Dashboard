@@ -9,9 +9,10 @@ artifact on Omarchy is not evidence that LIVE is active.
 
 | Role | Identity | Writable areas | Deliberately inaccessible |
 | --- | --- | --- | --- |
-| DEV checkout, Dashboard, agents, Herdr | `wowsync-dev` | `/home/wowsync-dev`, `/var/lib/wowsync-dev` | LIVE DB, config, secrets, backups, release writes, personal Herdr socket |
+| DEV source checkout, agents, Herdr | `wowsync-dev` | `/home/wowsync-dev`, `/var/lib/wowsync-dev` | LIVE DB, config, secrets, backups, personal Herdr socket |
+| DEV Dashboard/MCP runtime and SHA releases | `wowsync-dev` | `/home/wowsync-dev/releases`, `/var/lib/wowsync-dev` runtime state | LIVE DB/config/credentials/backups/releases, personal Herdr socket |
 | Future LIVE Dashboard and importer | `wowsync-live` | `/var/lib/wowsync-live` | DEV checkout/worktrees |
-| Release promotion and backups | administrator | `/opt/wowsync/releases`, `/var/backups/wowsync-live`, `/etc/wowsync`, system units and firewall | None by Unix permissions |
+| Future LIVE release promotion and backups | administrator | `/opt/wowsync/releases`, `/var/backups/wowsync-live`, `/etc/wowsync`, system units and firewall | None by Unix permissions |
 
 Neither service identity belongs to `wheel` or `docker`. The current personal
 `thmastin` login does have administrator and Docker access, so it is **not** the
@@ -20,13 +21,35 @@ ownership and the DEV-only Herdr socket enforce the host boundary.
 An existing host-wide passwordless `asdcontrol` sudo rule was disabled by moving
 `/etc/sudoers.d/asdcontrol` to
 `/etc/sudoers.d/asdcontrol.pre-wowsync`. The separate `%wheel` rule in
-`/etc/sudoers.d/omarchy-asdcontrol` preserves personal display control. Neither
-WoWSync identity may have any sudo command privilege.
+`/etc/sudoers.d/omarchy-asdcontrol` preserves personal display control. The
+one-time deployment-helper bootstrap installs only the narrowly constrained
+`wowsync-dev-app-services` root helper for stopping/starting/restarting the two
+DEV application units and reading their warning-level journal entries. Until
+that bootstrap is performed, the DEV identity has no sudo command rule. The
+helper cannot run arbitrary systemctl commands or name arbitrary units. The fixed
+service actions ignore dependency propagation so the active umbrella target is
+not deactivated when a child unit is cycled. The exception is installed by the
+explicit deployment-helper bootstrap in
+[`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#one-time-privilege-bootstrap).
+The `wowsync-live` identity has no sudo privilege.
+
+Completed DEV release trees are owned by `wowsync-dev` but have write bits
+removed after build; the Dashboard/MCP systemd sandboxes also keep release
+paths read-only while allowing only their existing `/var/lib/wowsync-dev`
+state paths to be writable. The developer and runtime share the `wowsync-dev`
+identity, so Unix permissions do not isolate an agent from a service process.
+The separate release tree and read-only modes prevent ordinary checkout changes
+from altering the running application and catch accidental release edits.
 
 ## Files and processes
 
-- DEV Git checkout: `/home/wowsync-dev/src/WoWSync-Dashboard`; isolated task
+- DEV developer Git checkout: `/home/wowsync-dev/src/WoWSync-Dashboard`; isolated task
   worktrees: `/home/wowsync-dev/worktrees/<task>`.
+- DEV application deployment cache/staging: `/home/wowsync-dev/deploy/`.
+  Completed exact-SHA releases are `/home/wowsync-dev/releases/<sha>` and the
+  active runtime pointer is `/home/wowsync-dev/releases/current`. Each release
+  contains its source, npm workspace dependencies, and web build. `current`
+  changes atomically; `wowsync-codex` continues entering the developer checkout.
 - Pinned, administrator-owned LIVE source release:
   `/opt/wowsync/releases/<commit>`. This is not a DEV Git checkout. The initial
   source archive is non-authoritative and needs a separately validated runtime
@@ -43,7 +66,7 @@ WoWSync identity may have any sudo command privilege.
   credentials are installed in this milestone.
 - Root-private future LIVE backup target: `/var/backups/wowsync-live`.
   Neither account should rely on a network filesystem for SQLite/WAL.
-- DEV research comes from the DEV checkout's `docs` tree; LIVE research comes
+- DEV research comes from the active release's `docs` tree; LIVE research comes
   from the pinned release's root-owned `docs` tree. Set
   `WOWSYNC_MCP_RESEARCH_ROOT` explicitly to that tree when launching MCP.
 - Logs use the system journal. Runtime directories under `/run` can be added
@@ -82,7 +105,8 @@ The server path/port selectors are implemented in
 `packages/mcp/src/index.ts`. Root-managed
 `wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
 `wowsync-dev`, loads its restricted DEV tunnel key as a systemd credential,
-and launches the local stdio MCP child with explicit DEV DB and research paths.
+and launches the local stdio MCP child from `releases/current` with explicit
+DEV DB and research paths.
 It is attached to `wowsync-dev.target`; there is no separate MCP daemon or HTTP
 MCP endpoint. ChatGPT accepted the DEV tunnel on 2026-09-30; the tunnel ID
 itself is not written here (see

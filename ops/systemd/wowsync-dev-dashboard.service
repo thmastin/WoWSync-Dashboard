@@ -6,13 +6,13 @@ After=network.target
 Type=simple
 User=wowsync-dev
 Group=wowsync-dev
-WorkingDirectory=/home/wowsync-dev/src/WoWSync-Dashboard
+WorkingDirectory=/home/wowsync-dev/releases/current
 Environment=WOWSYNC_DATA_DIR=/var/lib/wowsync-dev/db
 Environment=WOWSYNC_DB_PATH=/var/lib/wowsync-dev/db/wowsync.sqlite
 Environment=WOWSYNC_HOST=127.0.0.1
 Environment=PORT=4174
 Environment=WOWSYNC_URL=http://127.0.0.1:4174
-ExecStart=/usr/bin/node packages/server/src/index.ts
+ExecStart=/usr/bin/node /home/wowsync-dev/releases/current/packages/server/src/index.ts
 Restart=on-failure
 UMask=0077
 NoNewPrivileges=yes

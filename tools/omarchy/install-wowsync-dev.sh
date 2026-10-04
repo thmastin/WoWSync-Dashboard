@@ -13,6 +13,16 @@ set -euo pipefail
 # actually run; this script only lays down unit files.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+runtime_current='/home/wowsync-dev/releases/current'
+if [[ ! -L "$runtime_current" || ! -r "$runtime_current/release.json" ]]; then
+  echo 'No active SHA release at /home/wowsync-dev/releases/current; prepare and activate a release before installing/starting the DEV units.' >&2
+  exit 1
+fi
+runtime_sha="$(basename -- "$(readlink -f -- "$runtime_current")")"
+if [[ ! "$runtime_sha" =~ ^[0-9a-f]{40}$ ]] || ! grep -Fq "\"sha\": \"$runtime_sha\"" "$runtime_current/release.json"; then
+  echo 'The current DEV runtime pointer is not a verified SHA-named release.' >&2
+  exit 1
+fi
 sudo install -D -o root -g root -m 0644 \
   "$repo_root/ops/systemd/wowsync-dev.target" \
   /etc/systemd/system/wowsync-dev.target

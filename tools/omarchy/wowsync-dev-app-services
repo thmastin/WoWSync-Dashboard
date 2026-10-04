@@ -1,0 +1,37 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+# Root-owned, sudoers-allowlisted boundary. The operation is an enum and the
+# unit list is fixed; callers can never name another unit or pass systemctl
+# arguments.
+if [[ $# -ge 1 ]]; then
+  operation="$1"
+else
+  echo 'Usage: wowsync-dev-app-services {stop|start|restart|warnings [UTC_TIMESTAMP]}' >&2
+  exit 64
+fi
+
+case "$operation" in
+  stop|start|restart)
+    [[ $# -eq 1 ]] || { echo 'Application service operation accepts no extra arguments.' >&2; exit 64; }
+    # Ignore dependency stop propagation so this exact-unit operation does not
+    # deactivate wowsync-dev.target through its Requires= relationship.
+    exec /usr/bin/systemctl --job-mode=ignore-dependencies "$operation" \
+      wowsync-dev-dashboard.service \
+      wowsync-dev-mcp-tunnel.service
+    ;;
+  warnings)
+    [[ $# -eq 2 && "$2" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
+      echo 'Usage: wowsync-dev-app-services warnings YYYY-MM-DDTHH:MM:SSZ' >&2
+      exit 64
+    }
+    exec /usr/bin/journalctl --no-pager --output=short-iso --priority=warning \
+      --since="$2" --lines=200 \
+      --unit=wowsync-dev-dashboard.service \
+      --unit=wowsync-dev-mcp-tunnel.service
+    ;;
+  *)
+    echo 'Allowed operations: stop, start, restart, warnings' >&2
+    exit 64
+    ;;
+esac

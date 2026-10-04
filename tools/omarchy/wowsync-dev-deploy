@@ -1,0 +1,14 @@
+#!/usr/bin/bash
+set -euo pipefail
+umask 077
+
+readonly DEPLOY_HOME="/home/wowsync-dev/deploy"
+readonly RELEASE_HOME="/home/wowsync-dev/releases"
+readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ "$(/usr/bin/id -un)" != 'wowsync-dev' ]]; then
+  echo 'Run this deployment command as the wowsync-dev identity; root must not run build scripts.' >&2
+  exit 77
+fi
+mkdir -p "$DEPLOY_HOME" "$RELEASE_HOME"
+exec /usr/bin/flock --nonblock "$DEPLOY_HOME/deploy.lock" \
+  /usr/bin/node "$REPO_ROOT/tools/omarchy/wowsync-dev-deploy.mjs" "$@"

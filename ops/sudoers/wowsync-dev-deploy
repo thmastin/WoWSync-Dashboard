@@ -1,0 +1,3 @@
+# Keep this command argument unrestricted only because the root-owned helper
+# accepts exactly one operation from a fixed enum and fixes the unit names.
+wowsync-dev ALL=(root) NOPASSWD: /usr/local/sbin/wowsync-dev-app-services
