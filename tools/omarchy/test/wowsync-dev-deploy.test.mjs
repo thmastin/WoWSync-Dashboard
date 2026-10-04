@@ -13,11 +13,13 @@ import {
   databaseEvidence,
   assertSchemaCompatible,
   assertRestartCountersStable,
+  assertTargetActive,
   appendAudit,
   assertServiceStateHealthy,
   makeConsistentBackup,
   parseRoute,
   parseSystemdServiceState,
+  parseSystemdTargetState,
   prepareRelease,
   recoveryPolicy,
   recoverFailedPromotion,
@@ -312,6 +314,14 @@ test('systemd service properties parse by key across order permutations and reje
   assert.throws(() => parseSystemdServiceState('ActiveState=active\nSubState=running\nMainPID=\nResult=success\nNRestarts=0'), /Missing or empty.*MainPID/);
   assert.throws(() => parseSystemdServiceState('ActiveState=active\nSubState=running\nMainPID=not-a-pid\nResult=success\nNRestarts=0'), /Invalid numeric.*MainPID/);
   assert.throws(() => assertServiceStateHealthy('fixture.service', { ...expected, Result: '0' }), /not healthy/);
+});
+
+test('systemd target health uses only its named ActiveState and SubState properties', () => {
+  const healthy = parseSystemdTargetState('ActiveState=active\nSubState=active\n');
+  assert.deepEqual(healthy, { ActiveState: 'active', SubState: 'active' });
+  assert.deepEqual(assertTargetActive(healthy), healthy);
+  assert.throws(() => assertTargetActive(parseSystemdTargetState('SubState=dead\nActiveState=inactive\n')), /not active/);
+  assert.throws(() => parseSystemdTargetState('SubState=active\n'), /Missing or empty.*ActiveState/);
 });
 
 test('root helper rejects arbitrary units and arguments before invoking systemctl', () => {

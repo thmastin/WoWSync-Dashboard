@@ -454,10 +454,37 @@ export function assertServiceStateHealthy(unit, state) {
   return state;
 }
 
+export function parseSystemdTargetState(output) {
+  const fields = ['ActiveState', 'SubState'];
+  const parsed = new Map();
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) throw new Error(`Malformed systemctl target property: ${line}`);
+    const name = line.slice(0, separator);
+    if (!fields.includes(name)) continue;
+    if (parsed.has(name)) throw new Error(`Duplicate systemctl target property: ${name}`);
+    parsed.set(name, line.slice(separator + 1));
+  }
+  for (const field of fields) {
+    if (!parsed.has(field) || parsed.get(field) === '') throw new Error(`Missing or empty systemctl target property: ${field}`);
+  }
+  return { ActiveState: parsed.get('ActiveState'), SubState: parsed.get('SubState') };
+}
+
+export function assertTargetActive(state) {
+  if (state.ActiveState !== 'active') throw new Error(`wowsync-dev.target is not active: ${JSON.stringify(state)}`);
+  return state;
+}
+
 async function serviceState(unit) {
   const fields = ['ActiveState', 'SubState', 'MainPID', 'Result', 'NRestarts'];
   const output = await run('/usr/bin/systemctl', ['show', ...fields.flatMap((field) => ['-p', field]), unit]);
   return parseSystemdServiceState(output);
+}
+
+async function targetState(unit) {
+  const output = await run('/usr/bin/systemctl', ['show', '-p', 'ActiveState', '-p', 'SubState', unit]);
+  return parseSystemdTargetState(output);
 }
 
 async function invokeServiceHelper(operation, paths = PATHS) {
@@ -490,8 +517,7 @@ async function assertApplicationServices(expectedSha = null) {
       if (cwd !== expectedCwd) throw new Error(`${unit} runs from ${cwd}, expected release ${expectedSha} at ${expectedCwd}.`);
     }
   }
-  const target = await serviceState('wowsync-dev.target');
-  if (target.ActiveState !== 'active') throw new Error(`wowsync-dev.target is not active: ${JSON.stringify(target)}`);
+  const target = assertTargetActive(await targetState('wowsync-dev.target'));
   return { target, units: states };
 }
 
@@ -757,7 +783,8 @@ async function backupOnly(label, routes, paths = PATHS) {
   if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(label)) throw new Error('Backup label must be 1-48 lowercase letters, digits, or hyphens.');
   const at = new Date().toISOString();
   const services = {};
-  for (const unit of [...APP_UNITS, 'wowsync-dev.target', 'wowsync-dev-herdr.service']) services[unit] = await serviceState(unit);
+  for (const unit of [...APP_UNITS, 'wowsync-dev-herdr.service']) services[unit] = await serviceState(unit);
+  services['wowsync-dev.target'] = assertTargetActive(await targetState('wowsync-dev.target'));
   const http = await validateHttp(routes);
   const filename = `${at.replaceAll(':', '').replaceAll('-', '')}-${randomUUID().slice(0, 8)}-${label}.sqlite`;
   const backupPath = path.join(paths.backups, filename);
