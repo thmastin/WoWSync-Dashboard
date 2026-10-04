@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiError } from "../src/api.ts";
-import { AllocationBody, DemandForm, TargetRow, settleDemandMutation, targetAnchorId, type AllocationHandlers } from "../src/components/AllocationTab.tsx";
+import { AllocationBody, DemandForm, INITIAL_PAGING, TargetRow, pagingReducer, settleDemandMutation, submitDemandForm, targetAnchorId, type AllocationHandlers } from "../src/components/AllocationTab.tsx";
 import { KEEP_ZERO_EXPLANATION, NO_TARGET_EXPLANATION, REMOVE_TARGET_EXPLANATION, UNPROVEN_VARIANTS_EXPLANATION, targetRowView, targetRowViews } from "../src/allocationView.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute } from "../src/routing.ts";
 import { conflicting, demand, heldEntry, read, resolved, reviewData, unproven } from "./allocationFixtures.ts";
@@ -15,7 +15,8 @@ import { conflicting, demand, heldEntry, read, resolved, reviewData, unproven } 
 const render = (el: ReactElement) => renderToStaticMarkup(el);
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
 const noop = () => {};
-const handlers: AllocationHandlers = { onRetry: noop, onSearch: noop, onDemandedPage: noop, onUnallocatedPage: noop, onCreate: noop, onUpdate: noop, onDeactivate: noop };
+const accepted = async () => true;
+const handlers: AllocationHandlers = { onRetry: noop, onSearch: noop, onDemandedPage: noop, onUnallocatedPage: noop, onCreate: accepted, onUpdate: accepted, onDeactivate: accepted };
 type BodyProps = Parameters<typeof AllocationBody>[0];
 const body = (props: Partial<BodyProps>) => render(createElement(AllocationBody, { version: "retail", status: "ready", query: "", busy: false, handlers, ...props }));
 /** The markup between two headings (a section's own content). */
@@ -155,7 +156,7 @@ test("create / add-by-ID: Set target on held rows and an item-ID form with the K
 });
 
 test("Keep 0 explanation shows for a 0 target, distinct from Remove target", () => {
-  const t = text(render(createElement(DemandForm, { mode: "create", baseItemId: 5, initialKeep: "0", busy: false, onSubmit: noop })));
+  const t = text(render(createElement(DemandForm, { mode: "create", baseItemId: 5, initialKeep: "0", busy: false, onSubmit: accepted })));
   assert.ok(t.includes(KEEP_ZERO_EXPLANATION));
 });
 
@@ -186,6 +187,53 @@ test("removed targets: a collapsed, read-only history with 'Set new target' (or 
   assert.match(t, /Set new target/);
   assert.match(t, /Mycobloom was Keep 7 .*This item has a current target; edit it under Your targets\./);
   assert.doesNotMatch(t, /\bEdit\b(?! it under)|Reactivate/);
+});
+
+// --- stale paging offset ---------------------------------------------------------------------------------------------
+
+test("a page past the end of existing rows is never shown as empty, and offers Previous to the last valid page", () => {
+  const targets = reviewData({ demandedItems: [] });
+  const stale = read({ ...targets, demanded: { items: [], offset: 50, limit: 50, totalCount: 50, truncated: false }, unallocated: { items: [], offset: 50, limit: 50, totalCount: 50, truncated: false } });
+  const html = body({ read: stale, demands: [] });
+  const t = text(html);
+  assert.doesNotMatch(t, /No targets yet|Nothing held without a target/);
+  assert.match(t, /This page is past the end of your 50 targets\./);
+  assert.match(t, /This page is past the end of the 50 items held without a target\./);
+  assert.equal((t.match(/← Previous No rows on this page · 50 in total Next →/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*>← Previous/, "Previous is enabled in both sections");
+  const searched = text(body({ read: stale, demands: [], query: "ore" }));
+  assert.match(searched, /past the end of the 50 matching items/);
+  assert.doesNotMatch(searched, /No held item without a target matches/);
+});
+
+test("paging reducer: a completed read past the end moves to the last valid page and re-reads; a read for an abandoned offset is ignored", () => {
+  let state = pagingReducer(INITIAL_PAGING, { type: "unallocatedPage", offset: 50 });
+  state = pagingReducer(state, { type: "demandedPage", offset: 100 });
+  const tick = state.tick;
+  const page = (offset: number, totalCount: number, n = 0) => ({ items: Array.from({ length: n }, (_, i) => i), offset, limit: 50, totalCount, truncated: false });
+  // The mutation removed the last row of each later page.
+  const next = pagingReducer(state, { type: "loaded", data: { demanded: page(100, 100) as never, unallocated: page(50, 50) as never } });
+  assert.deepEqual([next.demandedOffset, next.unallocatedOffset, next.tick], [50, 0, tick + 1]);
+  // The re-read is in range: no further change (no loop).
+  assert.equal(pagingReducer(next, { type: "loaded", data: { demanded: page(50, 100, 50) as never, unallocated: page(0, 50, 50) as never } }), next);
+  // A late answer for an offset the user already left never moves the page.
+  assert.equal(pagingReducer(next, { type: "loaded", data: { demanded: page(100, 100) as never, unallocated: page(50, 50) as never } }), next);
+  // Search always starts the held list at its first page.
+  assert.equal(pagingReducer({ ...next, unallocatedOffset: 150 }, { type: "search", q: "  ore " }).unallocatedOffset, 0);
+  assert.equal(pagingReducer(next, { type: "search", q: "  ore " }).query, "ore");
+});
+
+test("forms: the server's success closes/resets; a validation problem never submits; a failure leaves the form as typed", async () => {
+  const sent: unknown[] = [];
+  const ok = await submitDemandForm({ itemId: "12345", keep: "100", purpose: "Raid" }, "byId", undefined, async (input) => (sent.push(input), true));
+  assert.deepEqual(ok, { ok: true });
+  assert.deepEqual(sent, [{ baseItemId: 12345, requiredQuantity: 100, purpose: "Raid" }]);
+  assert.deepEqual(await submitDemandForm({ itemId: "", keep: "100", purpose: "" }, "byId", undefined, async () => assert.fail("must not submit")), { ok: false, problem: "Enter an item ID (a positive whole number)." });
+  assert.deepEqual(await submitDemandForm({ itemId: "", keep: "-1", purpose: "" }, "edit", 7, async () => assert.fail("must not submit")), { ok: false, problem: "Enter a whole number of 0 or more." });
+  assert.deepEqual(await submitDemandForm({ itemId: "", keep: "0", purpose: "" }, "edit", 7, async () => false), { ok: false }, "a rejected mutation is not success: the edit form stays open");
+  const source = readFileSync(new URL("../src/components/AllocationTab.tsx", import.meta.url), "utf8");
+  assert.match(source, /if \(!result\.ok\) return;\s*if \(mode === "byId"\) \{\s*setItemId\(""\);\s*setKeep\(""\);\s*setPurpose\(""\);/, "add-by-ID resets only after success");
+  assert.match(source, /mode="edit"[\s\S]*?onDone=\{\(\) => setMode\("view"\)\}/, "the edit panel closes on success");
 });
 
 // --- mutation outcome: awaited, deterministic refresh ---------------------------------------------------------------

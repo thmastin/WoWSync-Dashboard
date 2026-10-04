@@ -500,16 +500,31 @@ export interface PageView {
   text: string;
   prevOffset?: number;
   nextOffset?: number;
+  /** The page is past the end of rows that DO exist (e.g. the last row of a later page moved away): never "empty". */
+  pastEnd: boolean;
+}
+
+/**
+ * The offset to move to when a page has come back empty while rows still exist (a mutation removed the last row
+ * of a later page, or the list shrank): the last valid page for the server's own limit. Undefined when the page is
+ * fine, or when there are genuinely no rows.
+ */
+export function recoveryOffset(page: Pick<AllocationPage<unknown>, "items" | "offset" | "limit" | "totalCount">): number | undefined {
+  if (page.items.length > 0 || page.totalCount === 0 || page.offset < page.totalCount) return undefined;
+  return Math.floor((page.totalCount - 1) / page.limit) * page.limit;
 }
 
 export function pageView(page: Pick<AllocationPage<unknown>, "items" | "offset" | "limit" | "totalCount">): PageView {
-  if (page.totalCount === 0 || page.items.length === 0) return { text: `0 of ${page.totalCount}` };
+  const recover = recoveryOffset(page);
+  if (recover !== undefined) return { text: `No rows on this page · ${page.totalCount} in total`, prevOffset: recover, pastEnd: true };
+  if (page.totalCount === 0 || page.items.length === 0) return { text: `0 of ${page.totalCount}`, pastEnd: false };
   const first = page.offset + 1;
   const last = page.offset + page.items.length;
   return {
     text: `${first}–${last} of ${page.totalCount}`,
     ...(page.offset > 0 ? { prevOffset: Math.max(page.offset - page.limit, 0) } : {}),
     ...(last < page.totalCount ? { nextOffset: last } : {}),
+    pastEnd: false,
   };
 }
 

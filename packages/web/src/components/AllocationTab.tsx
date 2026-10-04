@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useReducer, useState, type FormEvent } from "react";
 import { createDemand, deactivateDemand, fetchAllocationReview, fetchDemands, updateDemand } from "../api.ts";
 import {
   NO_TARGET_EXPLANATION,
@@ -12,6 +12,7 @@ import {
   noTargetRowView,
   pageView,
   parseItemId,
+  recoveryOffset,
   parseKeepQuantity,
   removedTargetViews,
   targetRowViews,
@@ -21,7 +22,7 @@ import {
   type TargetRowView,
 } from "../allocationView.ts";
 import { formatAbsoluteTime } from "../format.ts";
-import type { AllocationReviewRead, ExplicitDemand, VersionOrUnknown } from "../types.ts";
+import type { AccountAllocationReview, AllocationReviewRead, ExplicitDemand, VersionOrUnknown } from "../types.ts";
 import { useAsync } from "../useAsync.ts";
 import ErrorNotice from "./ErrorNotice.tsx";
 
@@ -40,9 +41,27 @@ export interface AllocationHandlers {
   onSearch: (q: string) => void;
   onDemandedPage: (offset: number) => void;
   onUnallocatedPage: (offset: number) => void;
-  onCreate: (input: DemandSubmit) => void;
-  onUpdate: (stableId: string, input: DemandSubmit) => void;
-  onDeactivate: (stableId: string) => void;
+  /** Mutations resolve true only after the server accepted the change (forms close/reset only then). */
+  onCreate: (input: DemandSubmit) => Promise<boolean>;
+  onUpdate: (stableId: string, input: DemandSubmit) => Promise<boolean>;
+  onDeactivate: (stableId: string) => Promise<boolean>;
+}
+
+/**
+ * Validates the form's text and, if valid, submits it and waits for the server. `ok` is true only when the
+ * mutation succeeded; a validation problem never reaches the server, and a failed request leaves the form as is.
+ */
+export async function submitDemandForm(
+  fields: { itemId: string; keep: string; purpose: string },
+  mode: "create" | "edit" | "byId",
+  baseItemId: number | undefined,
+  onSubmit: (input: DemandSubmit) => Promise<boolean>,
+): Promise<{ ok: boolean; problem?: string }> {
+  const id = mode === "byId" ? parseItemId(fields.itemId) : baseItemId !== undefined ? { value: baseItemId } : { error: "No item selected." };
+  if ("error" in id) return { ok: false, problem: id.error };
+  const quantity = parseKeepQuantity(fields.keep);
+  if ("error" in quantity) return { ok: false, problem: quantity.error };
+  return { ok: await onSubmit({ baseItemId: id.value, requiredQuantity: quantity.value, purpose: fields.purpose }) };
 }
 
 function CellValue({ cell }: { cell: Cell }) {
@@ -58,28 +77,34 @@ export function DemandForm({
   busy,
   onSubmit,
   onCancel,
+  onDone,
 }: {
   mode: "create" | "edit" | "byId";
   baseItemId?: number;
   initialKeep?: string;
   initialPurpose?: string;
   busy: boolean;
-  onSubmit: (input: DemandSubmit) => void;
+  onSubmit: (input: DemandSubmit) => Promise<boolean>;
   onCancel?: () => void;
+  /** Called after the server accepted the submission (e.g. close the edit panel). */
+  onDone?: () => void;
 }) {
   const [itemId, setItemId] = useState(baseItemId !== undefined ? String(baseItemId) : "");
   const [keep, setKeep] = useState(initialKeep);
   const [purpose, setPurpose] = useState(initialPurpose);
   const [problem, setProblem] = useState<string | null>(null);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    const id = mode === "byId" ? parseItemId(itemId) : baseItemId !== undefined ? { value: baseItemId } : { error: "No item selected." };
-    if ("error" in id) return setProblem(id.error);
-    const quantity = parseKeepQuantity(keep);
-    if ("error" in quantity) return setProblem(quantity.error);
-    setProblem(null);
-    onSubmit({ baseItemId: id.value, requiredQuantity: quantity.value, purpose });
+    const result = await submitDemandForm({ itemId, keep, purpose }, mode, baseItemId, onSubmit);
+    setProblem(result.problem ?? null);
+    if (!result.ok) return;
+    if (mode === "byId") {
+      setItemId("");
+      setKeep("");
+      setPurpose("");
+    }
+    onDone?.();
   }
 
   return (
@@ -223,7 +248,7 @@ export function TargetRow({
                 {c.requiredQuantity !== undefined ? `Keep ${c.requiredQuantity}` : "A target whose quantity is not loaded"}
                 {c.purpose ? ` · ${c.purpose}` : ""}
               </span>
-              <button className="secondary-button" type="button" disabled={busy} onClick={() => handlers.onDeactivate(c.stableId)}>
+              <button className="secondary-button" type="button" disabled={busy} onClick={() => void handlers.onDeactivate(c.stableId)}>
                 Remove this target
               </button>
             </li>
@@ -275,13 +300,14 @@ export function TargetRow({
           busy={busy}
           onSubmit={(input) => handlers.onUpdate(row.demand!.stableId, input)}
           onCancel={() => setMode("view")}
+          onDone={() => setMode("view")}
         />
       )}
       {row.demand && mode === "remove" && (
         <div className="allocation-remove-confirm">
           <p className="small">{REMOVE_TARGET_EXPLANATION}</p>
           <div className="allocation-actions">
-            <button className="danger-button" type="button" disabled={busy} onClick={() => handlers.onDeactivate(row.demand!.stableId)}>
+            <button className="danger-button" type="button" disabled={busy} onClick={() => void handlers.onDeactivate(row.demand!.stableId).then((ok) => ok && setMode("view"))}>
               Remove target
             </button>
             <button className="secondary-button" type="button" onClick={() => setMode("view")}>
@@ -314,7 +340,7 @@ function NoTargetRow({ row, busy, onCreate }: { row: ReturnType<typeof noTargetR
           </button>
         )}
       </div>
-      {open && <DemandForm mode="create" baseItemId={row.baseItemId} busy={busy} onSubmit={onCreate} onCancel={() => setOpen(false)} />}
+      {open && <DemandForm mode="create" baseItemId={row.baseItemId} busy={busy} onSubmit={onCreate} onCancel={() => setOpen(false)} onDone={() => setOpen(false)} />}
     </li>
   );
 }
@@ -329,7 +355,7 @@ function RemovedRow({ row, busy, onCreate }: { row: ReturnType<typeof removedTar
       {row.hasActiveTarget ? (
         <span className="muted small">This item has a current target; edit it under Your targets.</span>
       ) : open ? (
-        <DemandForm mode="create" baseItemId={row.baseItemId} initialKeep={String(row.requiredQuantity)} initialPurpose={row.purpose ?? ""} busy={busy} onSubmit={onCreate} onCancel={() => setOpen(false)} />
+        <DemandForm mode="create" baseItemId={row.baseItemId} initialKeep={String(row.requiredQuantity)} initialPurpose={row.purpose ?? ""} busy={busy} onSubmit={onCreate} onCancel={() => setOpen(false)} onDone={() => setOpen(false)} />
       ) : (
         <button className="secondary-button" type="button" onClick={() => setOpen(true)}>
           Set new target
@@ -439,8 +465,12 @@ export function AllocationBody({
 
       <section className="allocation-section" aria-labelledby="allocation-targets-heading">
         <h3 id="allocation-targets-heading">Your targets</h3>
-        {targets.length === 0 ? (
+        {targets.length === 0 && data.demanded.totalCount === 0 ? (
           <p className="muted small">No targets yet. Set one from Held with no target below, or add one by item ID.</p>
+        ) : targets.length === 0 ? (
+          <p className="small allocation-past-end" role="status">
+            This page is past the end of your {data.demanded.totalCount} targets. Showing the last page…
+          </p>
         ) : (
           targets.map((row) => (
             <TargetRow key={row.baseItemId} row={row} busy={busy} focused={focusedItemId === row.baseItemId} handlers={handlers} />
@@ -483,8 +513,12 @@ export function AllocationBody({
             </button>
           )}
         </form>
-        {held.length === 0 ? (
+        {held.length === 0 && data.unallocated.totalCount === 0 ? (
           <p className="muted small">{query ? `No held item without a target matches “${query}”.` : "Nothing held without a target."}</p>
+        ) : held.length === 0 ? (
+          <p className="small allocation-past-end" role="status">
+            This page is past the end of the {data.unallocated.totalCount} {query ? "matching items" : "items held without a target"}. Showing the last page…
+          </p>
         ) : (
           <ul className="compact-list allocation-held-list">
             {held.map((row) => (
@@ -512,37 +546,87 @@ export function AllocationBody({
   );
 }
 
+/** The tab's paging/search state. `tick` re-reads the review; every change to it is an explicit action. */
+export interface PagingState {
+  demandedOffset: number;
+  unallocatedOffset: number;
+  query: string;
+  tick: number;
+}
+export type PagingAction =
+  | { type: "search"; q: string }
+  | { type: "demandedPage"; offset: number }
+  | { type: "unallocatedPage"; offset: number }
+  | { type: "reload" }
+  | { type: "loaded"; data: Pick<AccountAllocationReview, "demanded" | "unallocated"> };
+export const INITIAL_PAGING: PagingState = { demandedOffset: 0, unallocatedOffset: 0, query: "", tick: 0 };
+
+/**
+ * Pure paging transitions. A search starts the held list at its first page. After each completed read
+ * ("loaded"), a page that came back past the end of rows that still exist (e.g. a mutation removed the last row
+ * of a later page) moves to the last valid page and re-reads once; a read for an offset the state has already
+ * left is ignored. Nothing here waits on a timer.
+ */
+export function pagingReducer(state: PagingState, action: PagingAction): PagingState {
+  switch (action.type) {
+    case "search":
+      return { ...state, query: action.q.trim(), unallocatedOffset: 0, tick: state.tick + 1 };
+    case "demandedPage":
+      return { ...state, demandedOffset: action.offset, tick: state.tick + 1 };
+    case "unallocatedPage":
+      return { ...state, unallocatedOffset: action.offset, tick: state.tick + 1 };
+    case "reload":
+      return { ...state, tick: state.tick + 1 };
+    case "loaded": {
+      const demanded = action.data.demanded.offset === state.demandedOffset ? recoveryOffset(action.data.demanded) : undefined;
+      const unallocated = action.data.unallocated.offset === state.unallocatedOffset ? recoveryOffset(action.data.unallocated) : undefined;
+      if (demanded === undefined && unallocated === undefined) return state;
+      return {
+        ...state,
+        ...(demanded !== undefined ? { demandedOffset: demanded } : {}),
+        ...(unallocated !== undefined ? { unallocatedOffset: unallocated } : {}),
+        tick: state.tick + 1,
+      };
+    }
+  }
+}
+
 /**
  * The Allocation tab (Retail): reads GET /api/versions/:version/allocation-review and the demand list, and edits
  * STOCK_TARGET demands. Every successful change is awaited and then triggers one re-read of both, so the item
  * moves between Your targets and Held with no target from the server's own answer.
  */
 export default function AllocationTab({ activeVersion, refreshTick }: { activeVersion: VersionOrUnknown; refreshTick: number }) {
-  const [reloadTick, setReloadTick] = useState(0);
-  const [query, setQuery] = useState("");
-  const [demandedOffset, setDemandedOffset] = useState(0);
-  const [unallocatedOffset, setUnallocatedOffset] = useState(0);
+  const [paging, dispatch] = useReducer(pagingReducer, INITIAL_PAGING);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ tone: "ok" | "error"; message: string } | null>(null);
   const [focusedItemId, setFocusedItemId] = useState<number | null>(null);
-  const tick = refreshTick + reloadTick;
+  const tick = refreshTick + paging.tick;
+  const { demandedOffset, unallocatedOffset, query } = paging;
   // One resource per version; a page/search change or a completed mutation re-reads it (keeping what is shown until the answer arrives).
   const review = useAsync((signal) => fetchAllocationReview(activeVersion, { demandedOffset, demandedLimit: PAGE_SIZE, unallocatedOffset, unallocatedLimit: PAGE_SIZE, q: query }, signal), `allocation:${activeVersion}`, tick);
   const demands = useAsync((signal) => fetchDemands(activeVersion, signal).then((r) => r.demands), `demands:${activeVersion}`, tick);
+
+  // After each completed read: recover from a page left past the end (see pagingReducer).
+  useEffect(() => {
+    if (review.state.status === "ready" && review.state.data.data) dispatch({ type: "loaded", data: review.state.data.data });
+  }, [review.state]);
 
   useEffect(() => {
     if (focusedItemId === null) return;
     document.getElementById(targetAnchorId(focusedItemId))?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focusedItemId, review.state.data]);
 
-  async function mutate(run: () => Promise<unknown>, done: string, focus?: number) {
+  async function mutate(run: () => Promise<unknown>, done: string, focus?: number): Promise<boolean> {
     setBusy(true);
     const outcome = await settleDemandMutation(run, done);
     setBusy(false);
     setFlash(outcome.flash);
     const existing = outcome.existingStableId ? demands.state.data?.find((d) => d.stableId === outcome.existingStableId) : undefined;
-    setFocusedItemId(existing ? existing.commodity.baseItemId : outcome.flash.tone === "ok" ? (focus ?? null) : null);
-    if (outcome.reload) setReloadTick((t) => t + 1);
+    const ok = outcome.flash.tone === "ok";
+    setFocusedItemId(existing ? existing.commodity.baseItemId : ok ? (focus ?? null) : null);
+    if (outcome.reload) dispatch({ type: "reload" });
+    return ok;
   }
 
   const handlers: AllocationHandlers = {
@@ -550,22 +634,12 @@ export default function AllocationTab({ activeVersion, refreshTick }: { activeVe
       review.retry();
       demands.retry();
     },
-    onSearch: (q) => {
-      setQuery(q.trim());
-      setUnallocatedOffset(0);
-      setReloadTick((t) => t + 1);
-    },
-    onDemandedPage: (offset) => {
-      setDemandedOffset(offset);
-      setReloadTick((t) => t + 1);
-    },
-    onUnallocatedPage: (offset) => {
-      setUnallocatedOffset(offset);
-      setReloadTick((t) => t + 1);
-    },
-    onCreate: (input) => void mutate(() => createDemand(activeVersion, input), `Target set: keep ${input.requiredQuantity} of item ${input.baseItemId}.`, input.baseItemId),
-    onUpdate: (stableId, input) => void mutate(() => updateDemand(activeVersion, stableId, { requiredQuantity: input.requiredQuantity, purpose: input.purpose }), `Target updated: keep ${input.requiredQuantity}.`, input.baseItemId),
-    onDeactivate: (stableId) => void mutate(() => deactivateDemand(activeVersion, stableId), "Target removed. The item has no target now, so its surplus is unknown."),
+    onSearch: (q) => dispatch({ type: "search", q }),
+    onDemandedPage: (offset) => dispatch({ type: "demandedPage", offset }),
+    onUnallocatedPage: (offset) => dispatch({ type: "unallocatedPage", offset }),
+    onCreate: (input) => mutate(() => createDemand(activeVersion, input), `Target set: keep ${input.requiredQuantity} of item ${input.baseItemId}.`, input.baseItemId),
+    onUpdate: (stableId, input) => mutate(() => updateDemand(activeVersion, stableId, { requiredQuantity: input.requiredQuantity, purpose: input.purpose }), `Target updated: keep ${input.requiredQuantity}.`, input.baseItemId),
+    onDeactivate: (stableId) => mutate(() => deactivateDemand(activeVersion, stableId), "Target removed. The item has no target now, so its surplus is unknown."),
   };
 
   const failed = review.state.status === "error" ? review.state.error : demands.state.status === "error" ? demands.state.error : undefined;

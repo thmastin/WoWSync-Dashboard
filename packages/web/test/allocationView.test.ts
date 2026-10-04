@@ -20,6 +20,7 @@ import {
   knownNames,
   noTargetRowView,
   pageView,
+  recoveryOffset,
   parseItemId,
   parseKeepQuantity,
   removedTargetViews,
@@ -253,10 +254,21 @@ test("duplicate-target error maps to 'already has a target, edit it instead' wit
 });
 
 test("paging view: range text and previous/next offsets only where they exist", () => {
-  assert.deepEqual(pageView({ items: [1, 2], offset: 0, limit: 2, totalCount: 5 }), { text: "1–2 of 5", nextOffset: 2 });
-  assert.deepEqual(pageView({ items: [1, 2], offset: 2, limit: 2, totalCount: 5 }), { text: "3–4 of 5", prevOffset: 0, nextOffset: 4 });
-  assert.deepEqual(pageView({ items: [1], offset: 4, limit: 2, totalCount: 5 }), { text: "5–5 of 5", prevOffset: 2 });
-  assert.deepEqual(pageView({ items: [], offset: 0, limit: 2, totalCount: 0 }), { text: "0 of 0" });
+  assert.deepEqual(pageView({ items: [1, 2], offset: 0, limit: 2, totalCount: 5 }), { text: "1–2 of 5", nextOffset: 2, pastEnd: false });
+  assert.deepEqual(pageView({ items: [1, 2], offset: 2, limit: 2, totalCount: 5 }), { text: "3–4 of 5", prevOffset: 0, nextOffset: 4, pastEnd: false });
+  assert.deepEqual(pageView({ items: [1], offset: 4, limit: 2, totalCount: 5 }), { text: "5–5 of 5", prevOffset: 2, pastEnd: false });
+  assert.deepEqual(pageView({ items: [], offset: 0, limit: 2, totalCount: 0 }), { text: "0 of 0", pastEnd: false });
+});
+
+test("stale offset: a page past the end of existing rows is never 'empty' and offers the last valid page", () => {
+  // The review's example: the last row of page 2 moved away, so offset 50 now holds nothing while 50 rows exist.
+  const stale = { items: [], offset: 50, limit: 50, totalCount: 50 };
+  assert.equal(recoveryOffset(stale), 0);
+  assert.deepEqual(pageView(stale), { text: "No rows on this page · 50 in total", prevOffset: 0, pastEnd: true });
+  assert.equal(recoveryOffset({ items: [], offset: 300, limit: 50, totalCount: 120 }), 100, "the LAST valid page, not the first");
+  assert.equal(recoveryOffset({ items: [], offset: 200, limit: 100, totalCount: 101 }), 100, "uses the server's own limit");
+  assert.equal(recoveryOffset({ items: [], offset: 0, limit: 50, totalCount: 0 }), undefined, "genuinely empty stays empty");
+  assert.equal(recoveryOffset({ items: [1], offset: 50, limit: 50, totalCount: 51 }), undefined);
 });
 
 test("character labels from identity keys", () => {
