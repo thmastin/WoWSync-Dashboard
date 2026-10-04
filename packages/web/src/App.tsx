@@ -13,6 +13,7 @@ import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
+import AllocationTab from "./components/AllocationTab.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -253,9 +254,14 @@ export default function App() {
                   Research
                 </button>
                 {activeVersion === "retail" && (
-                  <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
-                    Shared Storage
-                  </button>
+                  <>
+                    <button className={tabView === "allocation" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "allocation" }))}>
+                      Allocation
+                    </button>
+                    <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
+                      Shared Storage
+                    </button>
+                  </>
                 )}
               </div>
 
@@ -279,6 +285,7 @@ export default function App() {
               ) : null}
             </div>
 
+            {route.view === "allocation" && <AllocationTab activeVersion={activeVersion} refreshTick={refreshTick} />}
             {route.view === "shared" && <SharedStorageView />}
             {route.view === "research" && <MidnightResearch />}
             {scoped && route.view === "items" && (

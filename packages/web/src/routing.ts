@@ -12,7 +12,7 @@
 import type { VersionOrUnknown } from "./types.ts";
 import { WOW_VERSIONS } from "./versions.ts";
 
-export type RouteView = "overview" | "characters" | "economy" | "professions" | "shared" | "items" | "research" | "detail";
+export type RouteView = "overview" | "characters" | "economy" | "professions" | "shared" | "items" | "research" | "allocation" | "detail";
 
 export interface AppRoute {
   version: VersionOrUnknown;
@@ -35,8 +35,8 @@ export interface AppRoute {
   boundFilter: string;
 }
 
-const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "detail"]);
-const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research"]);
+const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation", "detail"]);
+const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation"]);
 
 export function isVersion(value: string): value is VersionOrUnknown {
   return (WOW_VERSIONS as string[]).includes(value) || value === "unknown-version";
@@ -147,7 +147,7 @@ export function patchRoute(current: AppRoute, patch: Partial<AppRoute>): AppRout
     next.snapshotId = undefined;
     if (patch.from === undefined) next.from = null;
   }
-  if (next.view === "shared" && next.version !== "retail") {
+  if ((next.view === "shared" || next.view === "allocation") && next.version !== "retail") {
     next.version = "retail";
   }
   return next;
