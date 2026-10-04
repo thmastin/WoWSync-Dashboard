@@ -1,5 +1,11 @@
 # Omarchy DEV/LIVE isolation
 
+**Deployment topology status:** exact-SHA release tooling is implemented on its feature branch for
+review. Privileged bootstrap has not occurred and topology migration has not occurred. Active DEV
+Dashboard/MCP still run from `/home/wowsync-dev/src/WoWSync-Dashboard`; `releases/current` is the
+intended runtime path after separately approved migration. The live inline MCP tunnel-ID drift is
+preserved and tracked separately.
+
 This host layout separates WoWSync development from a future authoritative
 Omarchy LIVE deployment. The authoritative Windows database remains on Windows
 until a separate, human-approved migration and cutover. A directory or release
@@ -22,18 +28,18 @@ An existing host-wide passwordless `asdcontrol` sudo rule was disabled by moving
 `/etc/sudoers.d/asdcontrol` to
 `/etc/sudoers.d/asdcontrol.pre-wowsync`. The separate `%wheel` rule in
 `/etc/sudoers.d/omarchy-asdcontrol` preserves personal display control. The
-one-time deployment-helper bootstrap installs only the narrowly constrained
+not-yet-performed deployment-helper bootstrap is designed to install only the narrowly constrained
 `wowsync-dev-app-services` root helper for stopping/starting/restarting the two
 DEV application units and reading their warning-level journal entries. Until
 that bootstrap is performed, the DEV identity has no sudo command rule. The
 helper cannot run arbitrary systemctl commands or name arbitrary units. The fixed
 service actions ignore dependency propagation so the active umbrella target is
-not deactivated when a child unit is cycled. The exception is installed by the
+not deactivated when a child unit is cycled. If installed, the exception is added by the
 explicit deployment-helper bootstrap in
 [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#one-time-privilege-bootstrap).
 The `wowsync-live` identity has no sudo privilege.
 
-Completed DEV release trees are owned by `wowsync-dev` but have write bits
+After migration, completed DEV release trees will be owned by `wowsync-dev` but have write bits
 removed after build; the Dashboard/MCP systemd sandboxes also keep release
 paths read-only while allowing only their existing `/var/lib/wowsync-dev`
 state paths to be writable. The developer and runtime share the `wowsync-dev`
@@ -45,7 +51,7 @@ from altering the running application and catch accidental release edits.
 
 - DEV developer Git checkout: `/home/wowsync-dev/src/WoWSync-Dashboard`; isolated task
   worktrees: `/home/wowsync-dev/worktrees/<task>`.
-- DEV application deployment cache/staging: `/home/wowsync-dev/deploy/`.
+- Intended post-migration DEV application deployment cache/staging: `/home/wowsync-dev/deploy/`.
   Completed exact-SHA releases are `/home/wowsync-dev/releases/<sha>` and the
   active runtime pointer is `/home/wowsync-dev/releases/current`. Each release
   contains its source, npm workspace dependencies, and web build. `current`

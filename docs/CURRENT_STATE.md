@@ -25,6 +25,13 @@ validation.
 
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
+**DEV application deployment infrastructure status.** Exact-SHA release tooling is implemented on
+`feature/dev-exact-sha-deploy` for independent review. Privileged bootstrap has not occurred and
+runtime topology migration has not occurred. Active DEV Dashboard/MCP still run from
+`/home/wowsync-dev/src/WoWSync-Dashboard`; `/home/wowsync-dev/releases/current` is the intended
+post-migration path. Herdr remains on the developer checkout. The live inline tunnel-ID drift is
+unmodified and separate.
+
 ## What's shipped
 
 - **Core Dashboard**: import (manual paste, `import:saved` CLI, `watch:saved`/capture receiver —

@@ -162,6 +162,14 @@ not make.
 
 ## Exact-SHA DEV application releases
 
+**Operational status on this infrastructure feature branch:** deployment infrastructure is
+implemented for review only. Privileged bootstrap has **not** occurred and topology migration has
+**not** occurred. Active DEV still runs Dashboard and MCP from
+`/home/wowsync-dev/src/WoWSync-Dashboard`; Herdr also runs from that developer/source checkout.
+`/home/wowsync-dev/releases/current` is the intended post-migration runtime path. Checked-in unit
+paths do not describe the currently installed units until migration is separately approved and
+completed. The live inline tunnel-ID configuration remains untouched.
+
 The DEV source checkout and running application are separate:
 
 - Agent/developer workspace: `/home/wowsync-dev/src/WoWSync-Dashboard`.
@@ -173,27 +181,56 @@ The DEV source checkout and running application are separate:
   captures, receipts, inbox, and deployment audit/backup data. Promotion never relocates or
   recreates it.
 
-Dashboard and MCP use `releases/current`. Herdr continues to use the source checkout and is not
+The release tree's removed write bits are an accidental-change guard, not a security boundary:
+`wowsync-dev` owns both releases and its developer checkout and can restore those bits. The useful
+isolation is that ordinary source-checkout edits do not alter a separate release path, while the
+systemd service sandbox mounts application source read-only and mutable state under `/var/lib`.
+
+After topology migration, Dashboard and MCP use `releases/current`. Herdr continues to use the source checkout and is not
 part of application promotion. The app units are restarted by name; never restart
 `wowsync-dev.target` for an application release because that also affects the tunnel through
 `PartOf=` and makes the lifecycle less explicit.
 
-### One-time privilege bootstrap
+### One-time privilege bootstrap (administrator-controlled trusted export)
 
-After this deployment tooling is present in the DEV source checkout, an administrator installs the
-root-owned fixed service helper and its sudoers entry once:
+Root must never execute privileged content directly from the wowsync-dev-writable checkout. Tate
+reviews the exact full infrastructure commit SHA and every hash in its artifact manifest before
+authorizing the bootstrap. The administrator fetches that reviewed branch into a root-owned bare
+mirror, verifies the resulting full SHA, exports the commit to a root-owned directory, and marks
+the export read-only:
 
 ```bash
-sudo /home/wowsync-dev/src/WoWSync-Dashboard/tools/omarchy/install-wowsync-dev-deploy-helper.sh
+REVIEWED_SHA=FULL_REVIEWED_SHA
+sudo install -d -o root -g root -m 0700 /root/wowsync-deploy-review.git /root/wowsync-deploy-export
+sudo git -C /root/wowsync-deploy-review.git init --bare
+sudo git -C /root/wowsync-deploy-review.git remote add origin REVIEWED_REPOSITORY_URL
+sudo git -C /root/wowsync-deploy-review.git fetch origin refs/heads/feature/dev-exact-sha-deploy
+test "$(sudo git -C /root/wowsync-deploy-review.git rev-parse FETCH_HEAD^{commit})" = "$REVIEWED_SHA"
+sudo git -C /root/wowsync-deploy-review.git archive "$REVIEWED_SHA" | sudo tar -x -C /root/wowsync-deploy-export --no-same-owner
+printf '%s\n' "$REVIEWED_SHA" | sudo tee /root/wowsync-deploy-export/.reviewed-source-sha >/dev/null
+sudo chown root:root /root/wowsync-deploy-export/.reviewed-source-sha
+sudo chmod 0444 /root/wowsync-deploy-export/.reviewed-source-sha
+sudo chmod -R a-w /root/wowsync-deploy-export
+sudo sha256sum --check --strict /root/wowsync-deploy-export/ops/privileged-artifact-sha256.txt
+sudo /root/wowsync-deploy-export/tools/omarchy/bootstrap-wowsync-dev-deploy.sh "$REVIEWED_SHA"
 ```
+
+Replace both uppercase placeholders only with values Tate has checked from the reviewed commit.
+Tate independently verifies the four pinned values in `ops/privileged-artifact-sha256.txt` against
+the same SHA before authorizing the command. The bootstrap rechecks the marker, root ownership/no
+group-world write bits, and hashes before installing anything. It stages helpers as root-owned
+files and restores the previous sudoers file if full configuration validation fails.
 
 The installed helper accepts only `stop`, `start`, `restart`, or a bounded `warnings UTC_TIMESTAMP`
 query. Its service operations name only `wowsync-dev-dashboard.service` and
 `wowsync-dev-mcp-tunnel.service`; its journal query reads warnings for only those units. It rejects
 extra arguments and arbitrary unit names. `wowsync-dev` receives no general `systemctl` access or
 arbitrary root shell. The helper uses systemd's `ignore-dependencies` job mode on its fixed app-unit list
-so stopping Dashboard does not deactivate `wowsync-dev.target` through `Requires=`. Root never runs
-Git build hooks, `npm ci`, tests, or application build scripts.
+so stopping Dashboard does not deactivate `wowsync-dev.target` through `Requires=`. The sudoers
+rule grants no `SETENV`; during bootstrap Tate confirms the host's effective `env_reset` default
+and checks `sudo -l`/the sudoers configuration for any matching `SETENV` grant. Journal access is limited to warnings
+for the two fixed units. Bootstrap validates the exact temporary sudoers content before atomic
+rename. Root never runs Git build hooks, `npm ci`, tests, or application build scripts.
 Until an administrator performs the bootstrap, DEV retains its current no-sudo state. This
 bootstrap is the documented narrow exception to the prior no-sudo rule.
 
@@ -206,6 +243,13 @@ unexpected source files, dependency symlinks escaping the release, and any colli
 existing SHA release. It does not use the source checkout's `node_modules` and does not overwrite
 an existing release.
 
+For this reviewed infrastructure, the expected deploy-tool API version is `2`. The wrapper and
+Node entry point still run from the mutable developer checkout; every record captures that checkout
+Git SHA, dirty flag, Node entry SHA-256 and wrapper SHA-256. Before promotion, verify the recorded
+tool identity corresponds to the independently reviewed infrastructure commit. The SHA identifies
+the checkout revision; file hashes and dirty state expose local edits but do not make the checkout
+immutable.
+
 Prepare/build without changing the live runtime:
 
 ```bash
@@ -215,12 +259,13 @@ Prepare/build without changing the live runtime:
 
 Promote the exact prepared SHA. Supply optional feature-route expectations as `--route
 PATH=STATUS`; the defaults check `/` and `/api/versions` for HTTP 200. Promotion verifies the ref
-again, validates the release, stops only Dashboard and MCP, records the pre-change data evidence,
-creates a SQLite online backup, atomically switches `current`, starts only those two units, and
-validates service state, HTTP, existing-table row counts/content digests, exact demand fields,
-unchanged active Herdr PID, the still active target, and warning-level journal output. Newly
-created tables are recorded. A schema change that alters existing table rows is rejected and
-requires separate migration review. `node:sqlite` online backup includes committed WAL contents;
+again, validates the release, records an intent before mutation, stops only Dashboard and MCP,
+records pre-change schema/data evidence, creates a SQLite online backup, atomically switches
+`current`, starts only those two units, polls Dashboard readiness to a bounded timeout, holds a
+short settle window, then checks service state, HTTP, schema compatibility, Herdr PID, target
+state, and restart counters at zero/stable for this invocation. Counts and demand observations are
+audit evidence; capture writes during validation are allowed and do not trigger false data rollback.
+A schema change prevents automatic restart of old code. `node:sqlite` online backup includes committed WAL contents;
 backup integrity is checked and its SHA-256 and path are recorded. Audit JSONL is at
 `/var/lib/wowsync-dev/deployments.jsonl`.
 
@@ -230,12 +275,13 @@ backup integrity is checked and its SHA-256 and path are recorded. Audit JSONL i
   --route /api/versions/retail/allocation-review=200
 ```
 
-If validation fails, the tool switches back to the prior code release (or the explicitly declared
-prior source SHA during the first topology migration), starts the same two services, records the
-failure, and leaves SQLite untouched. If the release introduced an incompatible schema change,
-database recovery is a separate explicit operator decision: first stop writers and preserve the
-post-deployment database, then decide whether restoring the recorded backup is appropriate.
-Normal code rollback never restores SQLite automatically.
+If validation fails with unchanged schema, the tool switches back to the prior release, restarts
+only Dashboard/MCP, and validates that recovery before claiming success. During initial same-SHA
+topology migration, failure stops the application units and requires reverse-topology recovery;
+resetting the pointer is not reported as restoring the source-checkout topology. If schema changed,
+services remain stopped for operator review and old code is not started. Code rollback is not
+database rollback. Forward-only schema changes may prevent safe automatic code rollback. Database
+restoration is a separate explicit decision and may discard post-backup observations.
 
 Rollback to a retained SHA is:
 
@@ -254,7 +300,8 @@ the first release must be the currently running application SHA
 `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`. The expected branch must still resolve to that exact
 SHA; if it has moved, stop and identify a remote ref that resolves to the same commit.
 
-1. Capture current unit/data/HTTP state and prepare the exact release:
+1. Capture current unit/data/HTTP state, prepare and build the exact release, and take a consistent
+   online backup before changing units:
 
    ```bash
    tools/omarchy/wowsync-dev-deploy prepare \
@@ -264,22 +311,34 @@ SHA; if it has moved, stop and identify a remote ref that resolves to the same c
      --route /api/versions/retail/allocation-review=404
    ```
 
-2. Complete the one-time helper bootstrap above.
-3. As administrator, update only old source-root strings in the two installed app units and run
-   `systemctl daemon-reload`. This path-only step preserves the live MCP tunnel-ID command exactly
-   and does not restart services:
+2. Complete the one-time helper bootstrap above. Then seed `current` to the same SHA without
+   restarting services. This verifies both old application processes still use the source checkout
+   and the explicitly supplied running SHA:
 
    ```bash
-   sudo env WOWSYNC_DEV_MIGRATION_SHA=81f66eeb8a035acf3c633f6fa9d8693cc4f9a009 \
-     /home/wowsync-dev/src/WoWSync-Dashboard/tools/omarchy/migrate-wowsync-dev-runtime-paths.sh
+   tools/omarchy/wowsync-dev-deploy seed-initial \
+     81f66eeb8a035acf3c633f6fa9d8693cc4f9a009 \
+     refs/heads/feature/erp-slice3-held-item-identity \
+     --previous-runtime-sha 81f66eeb8a035acf3c633f6fa9d8693cc4f9a009
+   ```
+
+3. As administrator, run the installed migration helper. It validates both proposed unit files and
+   the exact same-SHA release/current pointer before touching either unit, makes root-owned
+   timestamped backups, then replaces both files transactionally and daemon-reloads without
+   restarting services. It preserves the live MCP tunnel-ID command exactly:
+
+   ```bash
+   sudo /usr/local/libexec/wowsync-dev/migrate-runtime-paths apply
    ```
 
    Do not run the broad unit installer here: the live MCP unit has an unrelated inline tunnel-ID
-   deviation, and the tracked env-file form is not being migrated in this milestone. The path-only
-   script preserves every other installed unit line.
-4. Promote the same SHA through the new path. The explicit previous-runtime SHA is mandatory while
-   `current` does not yet exist; the tool verifies the active Dashboard still runs from the source
-   checkout and that its application/package dependency tree matches the declared SHA.
+   deviation, and the tracked env-file form is not being migrated in this milestone. Migration
+   preserves every other installed unit line.
+4. Promote the same SHA through the new path. The explicit previous-runtime SHA identifies initial
+   topology migration; the tool verifies both Dashboard and MCP still run from the source
+   checkout and compares application source against the explicitly supplied old runtime SHA. It
+   records its own Git SHA and identifies the tool workspace as mutable; it does not assume the
+   developer checkout HEAD identifies the running application.
 
    ```bash
    tools/omarchy/wowsync-dev-deploy promote \
@@ -293,6 +352,18 @@ SHA; if it has moved, stop and identify a remote ref that resolves to the same c
    pointer and starts Dashboard/MCP. Herdr remains running from the developer checkout. Verify
    resolved process working directories, exact release SHA, service `Result`/`NRestarts`, route
    results, database checks, Herdr PID, and journal warnings before accepting the topology.
+
+If same-SHA promotion fails after units were migrated, it leaves the application services stopped
+and reports that no old runtime was restored. The exact reverse-topology action is:
+
+```bash
+sudo /usr/local/libexec/wowsync-dev/migrate-runtime-paths restore CURRENT
+```
+
+That command restores the timestamped original Dashboard/MCP unit files, daemon-reloads, starts
+only Dashboard and MCP, and verifies both processes returned to the source-checkout path plus
+Dashboard HTTP/API health. It leaves Herdr alone and does not restore SQLite. Review the promotion
+audit and database backup separately before deciding any database recovery.
 
 After that topology is independently accepted, the first feature promotion is the ERP Allocation
 Tab SHA below. This is the future command; it is not part of the infrastructure migration:
@@ -309,16 +380,25 @@ The tool will refuse if the remote ref no longer resolves to that exact SHA.
 ### Audit and retention
 
 Each successful prepare writes a `release.json` with full SHA, verified remote ref/origin, prepare
-time, and the Git source manifest. Each promotion/rollback audit record includes prior and deployed
-SHA, UTC time, backup path/hash/integrity result, before/after database evidence, unit state/PID/
-restart counters, HTTP checks, Herdr identity, and warning-level journal output. Failed validation
-and automatic code rollback are also recorded. These records live outside releases and the
-database.
+time, and the Git source manifest. `deployments.jsonl` is an operational audit log, not tamper-proof
+history: `wowsync-dev` owns it. Each record has a schema version and the deployment tool version,
+Git SHA, and entry-file hash (the tool is run from a mutable developer checkout). Intent and
+success/failure records identify requested SHA/ref, prior/candidate SHA, backup result, schema
+change, service and HTTP validation, and recovery attempt/result. Journal collection is diagnostic;
+its failure is recorded and cannot trigger rollback. Audit-write failure before mutation prevents
+the action; after successful validation it is reported without turning the healthy candidate into
+an automatic rollback. The log and backups are outside releases and SQLite.
 
 Do not automatically prune releases or backups. Retain the active release and at least the two
 previously validated releases; retain all SQLite deployment backups for at least 90 days and the
 10 most recent. Manual pruning must confirm a release is not `current`, no process working
 directory resolves into it, and no open validation/rollback record relies on its backup.
+
+Follow-up hardening intentionally deferred: release metadata hashes tracked source but not generated
+`node_modules`/`dist`; workspace symlink checks do not cover all Node parent-directory lookups;
+failed prepare and pointer-temp cleanup can leave artifacts for inspection; and same-identity
+ownership/mode is not a security boundary. Schema-only validation removes full-row hashing from the
+promotion path and avoids blocking on ordinary capture writes.
 
 ### Tool acceptance checks
 

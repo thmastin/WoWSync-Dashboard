@@ -1,5 +1,11 @@
 # ops/systemd
 
+**Current host state:** the exact-SHA deployment infrastructure is on its feature branch for
+review. Privileged bootstrap and topology migration have not happened. Active DEV Dashboard/MCP
+still execute from `/home/wowsync-dev/src/WoWSync-Dashboard`. The `releases/current` paths below
+describe the intended topology after the separately reviewed same-SHA migration. The live tunnel
+ID remains inline in the installed MCP unit; this known drift is separate from release promotion.
+
 Reconstructed systemd unit definitions for the Omarchy DEV runtime
 (`wowsync-dev` user). Agent work remains in the developer checkout
 `/home/wowsync-dev/src/WoWSync-Dashboard`; Dashboard and MCP code run from the stable

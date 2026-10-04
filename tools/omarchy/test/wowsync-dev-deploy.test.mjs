@@ -9,13 +9,20 @@ import {
   assertWorkspaceSelfContained,
   atomicSetCurrent,
   currentSha,
+  collectJournalWarnings,
   databaseEvidence,
+  assertSchemaCompatible,
+  assertRestartCountersStable,
+  appendAudit,
   makeConsistentBackup,
   parseRoute,
   prepareRelease,
+  recoveryPolicy,
+  recoverFailedPromotion,
   resolveExactCommit,
   validateRemoteRef,
   validateSha,
+  waitForReadiness,
 } from '../wowsync-dev-deploy.mjs';
 
 async function tempDir(t) {
@@ -169,6 +176,73 @@ test('online backup contains committed WAL data and passes integrity_check', asy
   db.close();
 });
 
+test('schema evidence detects structural changes while legitimate writes preserve compatibility', async (t) => {
+  const root = await tempDir(t);
+  const dbPath = path.join(root, 'schema.sqlite');
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec("CREATE TABLE observations(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO observations(name) VALUES ('before');");
+  const before = databaseEvidence(dbPath);
+  db.exec("INSERT INTO observations(name) VALUES ('capture-after-start');");
+  const afterWrite = databaseEvidence(dbPath);
+  assert.equal(assertSchemaCompatible(before, afterWrite), true);
+  db.exec('CREATE INDEX observations_name ON observations(name);');
+  const afterSchema = databaseEvidence(dbPath);
+  assert.equal(assertSchemaCompatible(before, afterSchema), false);
+  db.close();
+});
+
+test('recovery policy allows old code only with unchanged schema and non-initial promotion', () => {
+  assert.deepEqual(recoveryPolicy({ initialMode: true, schemaChanged: false }), {
+    action: 'stop-and-reverse-topology', mayStartPreviousCode: false,
+  });
+  assert.equal(recoveryPolicy({ schemaChanged: true }).mayStartPreviousCode, false);
+  assert.equal(recoveryPolicy({ schemaChanged: false }).mayStartPreviousCode, true);
+});
+
+test('promotion recovery runs prior code only after unchanged-schema validation and handles initial mode explicitly', async () => {
+  const events = [];
+  const callbacks = {
+    stop: async () => events.push('stop'),
+    setPrevious: async () => events.push('pointer-previous'),
+    startPrevious: async () => events.push('start-previous'),
+    validatePrevious: async () => { events.push('validate-previous'); return { http: 'ok' }; },
+  };
+  const unchanged = await recoverFailedPromotion({ ...callbacks, schemaChanged: false, candidateStarted: true });
+  assert.equal(unchanged.state, 'validated');
+  assert.deepEqual(events, ['stop', 'pointer-previous', 'start-previous', 'validate-previous']);
+  events.length = 0;
+  const changed = await recoverFailedPromotion({ ...callbacks, schemaChanged: true, candidateStarted: true });
+  assert.equal(changed.state, 'stopped-review-required');
+  assert.deepEqual(events, ['stop']);
+  events.length = 0;
+  const initial = await recoverFailedPromotion({ ...callbacks, initialMode: true });
+  assert.equal(initial.action, 'stop-and-reverse-topology');
+  assert.deepEqual(events, ['stop']);
+  events.length = 0;
+  const unknown = await recoverFailedPromotion({ ...callbacks, schemaChanged: null, candidateStarted: true });
+  assert.equal(unknown.state, 'stopped-review-required');
+  assert.deepEqual(events, ['stop']);
+});
+
+test('bounded readiness polling accepts delayed startup and rejects timeout', async () => {
+  let now = 0;
+  let calls = 0;
+  const delayed = async () => ({ status: ++calls < 3 ? 503 : 200 });
+  const sleepFn = async (ms) => { now += ms; };
+  const routes = [{ path: '/', status: 200 }];
+  await waitForReadiness({ fetchFn: delayed, baseUrl: 'http://fixture/', routes, timeoutMs: 1000, intervalMs: 100, settleMs: 200, sleepFn, now: () => now });
+  assert.ok(calls >= 4, 'readiness retried until healthy, then probed through settle window');
+  now = 0;
+  await assert.rejects(waitForReadiness({ fetchFn: async () => ({ status: 503 }), baseUrl: 'http://fixture/', routes, timeoutMs: 350, intervalMs: 100, settleMs: 100, sleepFn, now: () => now }), /timed out/);
+});
+
+test('restart counters are validated within the current start window', () => {
+  const unit = 'wowsync-dev-dashboard.service';
+  assert.doesNotThrow(() => assertRestartCountersStable({ units: { [unit]: { NRestarts: '0' } } }, { units: { [unit]: { NRestarts: '0' } } }));
+  assert.throws(() => assertRestartCountersStable({ units: { [unit]: { NRestarts: '0' } } }, { units: { [unit]: { NRestarts: '1' } } }), /expected 0/);
+});
+
 test('root helper rejects arbitrary units and arguments before invoking systemctl', () => {
   const helper = path.resolve('tools/omarchy/wowsync-dev-app-services');
   const badOperation = spawnSync(helper, ['wowsync-dev-herdr.service'], { encoding: 'utf8' });
@@ -181,4 +255,88 @@ test('root helper rejects arbitrary units and arguments before invoking systemct
   assert.equal(sudoers.status, 0);
   assert.match(sudoers.stdout, /^wowsync-dev ALL=\(root\) NOPASSWD: \/usr\/local\/sbin\/wowsync-dev-app-services$/m);
   assert.doesNotMatch(sudoers.stdout, /systemctl|ALL\s*=\s*\(ALL\)/);
+});
+
+test('bootstrap and migration refuse unprivileged execution before touching host paths', async () => {
+  const bootstrap = spawnSync(path.resolve('tools/omarchy/bootstrap-wowsync-dev-deploy.sh'), ['a'.repeat(40)], { encoding: 'utf8' });
+  assert.equal(bootstrap.status, 77);
+  assert.match(bootstrap.stderr, /Run as administrator/);
+  const migration = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], { encoding: 'utf8' });
+  assert.equal(migration.status, 77);
+  assert.match(migration.stderr, /requires root/);
+});
+
+test('pinned privileged artifact hashes and sudoers syntax validate', () => {
+  const hashes = spawnSync('/usr/bin/sha256sum', ['--check', '--strict', 'ops/privileged-artifact-sha256.txt'], { encoding: 'utf8' });
+  assert.equal(hashes.status, 0, hashes.stdout + hashes.stderr);
+  const sudoers = spawnSync('/usr/sbin/visudo', ['-cf', 'ops/sudoers/wowsync-dev-deploy'], { encoding: 'utf8' });
+  assert.equal(sudoers.status, 0, sudoers.stdout + sudoers.stderr);
+});
+
+test('audit records always carry schema version and are append-only JSONL', async (t) => {
+  const root = await tempDir(t);
+  const audit = path.join(root, 'var', 'deployments.jsonl');
+  await appendAudit({ operation: 'PREPARE_FAILURE', requestedSha: 'a'.repeat(40) }, { audit });
+  const record = JSON.parse((await readFile(audit, 'utf8')).trim());
+  assert.equal(record.schemaVersion, 2);
+  assert.equal(record.operation, 'PREPARE_FAILURE');
+});
+
+test('journal warning collection failure is diagnostic data, not a deployment failure', async () => {
+  const diagnostic = await collectJournalWarnings('2026-10-04T00:00:00Z', {}, async () => { throw new Error('journal unavailable'); });
+  assert.deepEqual(diagnostic, { ok: false, error: 'journal unavailable' });
+});
+
+async function migrationFixture(root) {
+  const source = path.join(root, 'src', 'WoWSync-Dashboard');
+  const releases = path.join(root, 'releases');
+  const release = path.join(releases, '81f66eeb8a035acf3c633f6fa9d8693cc4f9a009');
+  const unitDir = path.join(root, 'etc/systemd/system');
+  const bin = path.join(root, 'bin');
+  await mkdir(source, { recursive: true });
+  await mkdir(release, { recursive: true });
+  await mkdir(unitDir, { recursive: true });
+  await mkdir(bin, { recursive: true });
+  await writeFile(path.join(release, 'release.json'), '{"sha": "81f66eeb8a035acf3c633f6fa9d8693cc4f9a009"}\n');
+  await symlink(release, path.join(releases, 'current'));
+  const dashboard = '[Service]\nWorkingDirectory=' + source + '\nExecStart=/usr/bin/node packages/server/src/index.ts\n';
+  const mcp = '[Service]\nWorkingDirectory=' + source + '\nEnvironment=WOWSYNC_MCP_RESEARCH_ROOT=' + source + '/docs\nExecStart=/test/tunnel --mcp.command=/usr/bin/node ' + source + '/packages/mcp/src/index.ts\n';
+  const dashPath = path.join(unitDir, 'wowsync-dev-dashboard.service');
+  const mcpPath = path.join(unitDir, 'wowsync-dev-mcp-tunnel.service');
+  await writeFile(dashPath, dashboard);
+  await writeFile(mcpPath, mcp);
+  const log = path.join(root, 'commands.log');
+  await writeFile(path.join(bin, 'systemd-analyze'), '#!/usr/bin/bash\nexit 0\n', { mode: 0o755 });
+  await writeFile(path.join(bin, 'systemctl'), `#!/usr/bin/bash\nprintf '%s\\n' "$*" >> '${log}'\nexit 0\n`, { mode: 0o755 });
+  await writeFile(path.join(bin, 'curl'), '#!/usr/bin/bash\nexit 0\n', { mode: 0o755 });
+  return { source, releases, release, unitDir, dashPath, mcpPath, dashboard, mcp, log };
+}
+
+test('unit migration validates both proposals before replacement and leaves originals on preflight failure', async (t) => {
+  const root = await tempDir(t);
+  const f = await migrationFixture(root);
+  await writeFile(f.mcpPath, '[Service]\nWorkingDirectory=/unexpected\n');
+  const badMcp = await readFile(f.mcpPath, 'utf8');
+  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], {
+    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root },
+  });
+  assert.notEqual(result.status, 0);
+  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
+  assert.equal(await readFile(f.mcpPath, 'utf8'), badMcp);
+  assert.equal((await readFile(f.log, 'utf8').catch(() => '')).includes('daemon-reload'), false);
+});
+
+test('unit migration restores both original files after a simulated mid-replacement failure', async (t) => {
+  const root = await tempDir(t);
+  const f = await migrationFixture(root);
+  await writeFile(path.join(root, 'fail-replace-once'), 'fail');
+  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], {
+    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /originals restored/);
+  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
+  assert.equal(await readFile(f.mcpPath, 'utf8'), f.mcp);
+  assert.match(await readFile(f.log, 'utf8'), /daemon-reload/);
+  assert.doesNotMatch(await readFile(f.log, 'utf8'), / start /);
 });

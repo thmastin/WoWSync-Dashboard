@@ -10,5 +10,4 @@ if [[ "$(/usr/bin/id -un)" != 'wowsync-dev' ]]; then
   exit 77
 fi
 mkdir -p "$DEPLOY_HOME" "$RELEASE_HOME"
-exec /usr/bin/flock --nonblock "$DEPLOY_HOME/deploy.lock" \
-  /usr/bin/node "$REPO_ROOT/tools/omarchy/wowsync-dev-deploy.mjs" "$@"
+exec /usr/bin/node "$REPO_ROOT/tools/omarchy/wowsync-dev-deploy.mjs" "$@"

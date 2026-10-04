@@ -1,7 +1,7 @@
 #!/usr/bin/node
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, open, readFile, readdir, realpath, rename, rm, lstat, readlink, writeFile, appendFile, symlink, chmod } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, rename, rm, lstat, readlink, writeFile, symlink, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync, backup } from 'node:sqlite';
 
@@ -296,16 +296,16 @@ export function databaseEvidence(dbPath) {
     const integrity = db.prepare('PRAGMA integrity_check').all();
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') throw new Error(`SQLite integrity_check failed: ${JSON.stringify(integrity)}`);
     const counts = {};
-    const rowDigests = {};
     for (const table of tables) {
       const safeTable = table.replaceAll('"', '""');
       counts[table] = db.prepare(`SELECT COUNT(*) AS count FROM "${safeTable}"`).get().count;
-      const columns = db.prepare(`PRAGMA table_info("${safeTable}")`).all().map((column) => `"${column.name.replaceAll('"', '""')}"`);
-      const query = db.prepare(`SELECT * FROM "${safeTable}" ORDER BY ${columns.join(', ')}`);
-      const digest = createHash('sha256');
-      for (const row of query.iterate()) digest.update(JSON.stringify(row)).update('\n');
-      rowDigests[table] = digest.digest('hex');
     }
+    const userVersion = db.prepare('PRAGMA user_version').get().user_version;
+    const schema = db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name, tbl_name`).all().map((item) => ({
+      ...item, sql: item.sql?.replace(/\s+/g, ' ').trim() ?? null,
+    }));
+    const schemaSha256 = createHash('sha256').update(JSON.stringify({ userVersion, schema })).digest('hex');
     let demand = null;
     if (tables.includes('demands')) {
       demand = {
@@ -314,7 +314,7 @@ export function databaseEvidence(dbPath) {
         latestUpdatedAt: db.prepare('SELECT MAX(updated_at) AS value FROM demands').get().value,
       };
     }
-    return { integrityCheck: 'ok', counts, rowDigests, demand };
+    return { integrityCheck: 'ok', userVersion, schema, schemaSha256, counts, demand };
   } finally { db.close(); }
 }
 
@@ -340,13 +340,58 @@ export async function makeConsistentBackup(dbPath, backupPath) {
   return backupPath;
 }
 
-function assertExistingDataPreserved(before, after) {
+export function assertSchemaCompatible(before, after) {
   if (before.integrityCheck !== 'ok' || after.integrityCheck !== 'ok') throw new Error('SQLite integrity_check did not pass before and after deployment.');
-  for (const [table, count] of Object.entries(before.counts)) {
-    if (after.counts[table] !== count) throw new Error(`Persistent row count changed for ${table}: ${count} -> ${after.counts[table] ?? 'table missing'}`);
-    if (after.rowDigests[table] !== before.rowDigests[table]) throw new Error(`Persistent row contents changed for ${table}.`);
+  return before.userVersion === after.userVersion && before.schemaSha256 === after.schemaSha256;
+}
+
+export function recoveryPolicy({ initialMode = false, schemaChanged = false, candidateStarted = false }) {
+  if (initialMode) return { action: 'stop-and-reverse-topology', mayStartPreviousCode: false };
+  if (schemaChanged === true || (candidateStarted && schemaChanged !== false)) return { action: 'stop-review-required', mayStartPreviousCode: false };
+  return { action: 'restore-previous-release-and-validate', mayStartPreviousCode: true };
+}
+
+export async function recoverFailedPromotion({ initialMode = false, schemaChanged = false, candidateStarted = false, stop, setPrevious, startPrevious, validatePrevious }) {
+  const policy = recoveryPolicy({ initialMode, schemaChanged, candidateStarted });
+  if (!policy.mayStartPreviousCode) {
+    try { await stop(); return { state: 'stopped-review-required', stopResult: 'succeeded', action: policy.action }; }
+    catch (error) { return { state: 'stopped-review-required', stopResult: `failed: ${error.message}`, action: policy.action }; }
   }
-  if (JSON.stringify(before.demand) !== JSON.stringify(after.demand)) throw new Error(`Demand state changed during deployment: before=${JSON.stringify(before.demand)} after=${JSON.stringify(after.demand)}`);
+  await stop();
+  await setPrevious();
+  await startPrevious();
+  const validation = await validatePrevious();
+  return { state: 'validated', action: policy.action, validation };
+}
+
+export async function waitForReadiness({ fetchFn = fetch, baseUrl, routes = DEFAULT_VALIDATION_ROUTES, timeoutMs = 30000, intervalMs = 250, settleMs = 1500, sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now(), onProbe = () => {} }) {
+  const deadline = now() + timeoutMs;
+  let lastError = 'no successful readiness response';
+  while (now() < deadline) {
+    try {
+      const results = [];
+      for (const route of routes) {
+        const response = await fetchFn(new URL(route.path, baseUrl), { signal: AbortSignal.timeout(Math.min(5000, timeoutMs)) });
+        results.push({ path: route.path, status: response.status });
+        if (response.status !== route.status) throw new Error(`${route.path}: HTTP ${response.status}, expected ${route.status}`);
+      }
+      onProbe({ ok: true, results });
+      const settleDeadline = now() + settleMs;
+      while (now() < settleDeadline) {
+        await sleepFn(Math.min(intervalMs, settleDeadline - now()));
+        for (const route of routes) {
+          const response = await fetchFn(new URL(route.path, baseUrl), { signal: AbortSignal.timeout(Math.min(5000, timeoutMs)) });
+          if (response.status !== route.status) throw new Error(`readiness stability check ${route.path}: HTTP ${response.status}, expected ${route.status}`);
+        }
+      }
+      return results;
+    } catch (error) {
+      lastError = error.message;
+      onProbe({ ok: false, error: lastError });
+      await sleepFn(Math.min(intervalMs, Math.max(1, deadline - now())));
+    }
+  }
+  throw new Error(`Dashboard readiness timed out after ${timeoutMs}ms: ${lastError}`);
 }
 
 async function sha256File(file) {
@@ -407,49 +452,75 @@ async function assertReleaseUnitPaths() {
   }
 }
 
-function assertRestartCountersStable(before, after) {
-  for (const unit of APP_UNITS) {
-    const beforeCount = before.units[unit].NRestarts;
+export function assertRestartCountersStable(before, after) {
+  for (const unit of Object.keys(after.units)) {
+    const beforeCount = before.units?.[unit]?.NRestarts;
     const afterCount = after.units[unit].NRestarts;
-    if (beforeCount !== afterCount) throw new Error(`${unit} NRestarts changed during deployment: ${beforeCount} -> ${afterCount}`);
+    if (Number(afterCount) !== 0) throw new Error(`${unit} NRestarts is ${afterCount} after start/settle; expected 0 for the current invocation.`);
+    if (beforeCount !== undefined && Number(beforeCount) !== Number(afterCount)) throw new Error(`${unit} NRestarts changed during validation: ${beforeCount} -> ${afterCount}.`);
   }
 }
 
-async function appendAudit(record, paths = PATHS) {
+export async function appendAudit(record, paths = PATHS) {
   await mkdir(path.dirname(paths.audit), { recursive: true, mode: 0o700 });
-  await appendFile(paths.audit, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  const handle = await open(paths.audit, 'a', 0o600);
+  try { await handle.write(`${JSON.stringify({ schemaVersion: 2, ...record })}\n`); await handle.sync(); }
+  finally { await handle.close(); }
+}
+
+async function deploymentToolIdentity(paths = PATHS) {
+  const gitSha = await gitAt(['rev-parse', 'HEAD'], paths.source).catch(() => 'unavailable');
+  const dirty = await gitAt(['status', '--porcelain=v1', '--untracked-files=all'], paths.source).catch(() => 'unavailable');
+  return {
+    version: '2', gitSha, dirtyCheckout: dirty !== '', mutableCheckout: true,
+    entrySha256: await sha256File(new URL(import.meta.url).pathname),
+    wrapperSha256: await sha256File(path.join(path.dirname(new URL(import.meta.url).pathname), 'wowsync-dev-deploy')),
+  };
+}
+
+export async function collectJournalWarnings(since, paths = PATHS, reader = readJournalWarnings) {
+  try { return { ok: true, output: await reader(since, paths) }; }
+  catch (error) { return { ok: false, error: error.message }; }
 }
 
 async function shaAtSource(paths = PATHS) {
-  const sha = await gitAt(['rev-parse', 'HEAD'], paths.source);
-  validateSha(sha);
-  const dirty = await gitAt(['status', '--porcelain=v1', '--untracked-files=all'], paths.source);
-  if (dirty) throw new Error('Developer/source checkout is dirty; refusing first topology promotion.');
-  return sha;
+  return validateSha(await gitAt(['rev-parse', 'HEAD'], paths.source));
 }
 
 async function verifyInitialRuntime(previousSha, targetSha, paths = PATHS) {
   validateSha(previousSha);
-  const sourceHead = await shaAtSource(paths);
   const sourceReal = await realpath(paths.source);
-  const dashboard = await serviceState(APP_UNITS[0]);
-  const dashboardCwd = await realpath(`/proc/${dashboard.MainPID}/cwd`);
-  if (dashboardCwd !== sourceReal) throw new Error(`No current release pointer exists and Dashboard is not running from the source checkout (${dashboardCwd}).`);
-  const diff = spawnSync('/usr/bin/git', ['-C', paths.source, 'diff', '--exit-code', previousSha, sourceHead, '--', 'packages', 'package-lock.json', 'tsconfig.base.json'], { encoding: 'utf8' });
-  if (diff.status !== 0) throw new Error(`Source checkout application tree differs from declared previous runtime SHA ${previousSha}.`);
+  const sourceUnits = {};
+  for (const unit of APP_UNITS) {
+    const state = await serviceState(unit);
+    if (state.ActiveState !== 'active' || Number(state.MainPID) <= 0) throw new Error(`Initial migration requires active ${unit}: ${JSON.stringify(state)}`);
+    const cwd = await realpath(`/proc/${state.MainPID}/cwd`);
+    if (cwd !== sourceReal) throw new Error(`${unit} is not running from the declared old source runtime (${cwd}).`);
+    sourceUnits[unit] = { ...state, cwd };
+  }
+  const appPaths = ['package-lock.json', 'tsconfig.base.json', 'packages/core', 'packages/server', 'packages/mcp', 'packages/web'];
+  const diff = spawnSync('/usr/bin/git', ['-C', paths.source, 'diff', '--exit-code', previousSha, '--', ...appPaths], { encoding: 'utf8' });
+  if (diff.status !== 0) throw new Error(`Source checkout application files differ from explicitly declared old runtime SHA ${previousSha}; checked paths: ${appPaths.join(', ')}.`);
   const oldPackage = JSON.parse(await gitAt(['show', `${previousSha}:package.json`], paths.source));
-  const newPackage = JSON.parse(await readFile(path.join(paths.source, 'package.json'), 'utf8'));
-  const significant = (manifest) => ({ name: manifest.name, version: manifest.version, type: manifest.type, workspaces: manifest.workspaces, engines: manifest.engines, dependencies: manifest.dependencies, devDependencies: manifest.devDependencies, scripts: Object.fromEntries(['start', 'test', 'build:web', 'dev:server', 'dev:web'].map((key) => [key, manifest.scripts?.[key]])) });
-  if (JSON.stringify(significant(oldPackage)) !== JSON.stringify(significant(newPackage))) throw new Error(`Source checkout package runtime configuration differs from ${previousSha}.`);
+  const currentPackage = JSON.parse(await readFile(path.join(paths.source, 'package.json'), 'utf8'));
+  const runtimePackageFields = (manifest) => ({
+    name: manifest.name, version: manifest.version, type: manifest.type,
+    workspaces: manifest.workspaces, engines: manifest.engines,
+    dependencies: manifest.dependencies, devDependencies: manifest.devDependencies,
+    scripts: Object.fromEntries(['start', 'test', 'build:web', 'dev:server', 'dev:web'].map((key) => [key, manifest.scripts?.[key]])),
+  });
+  if (JSON.stringify(runtimePackageFields(oldPackage)) !== JSON.stringify(runtimePackageFields(currentPackage))) {
+    throw new Error(`Source checkout runtime package configuration differs from declared previous SHA ${previousSha}.`);
+  }
   const targetManifest = await validateRelease(path.join(paths.releases, targetSha), targetSha, paths);
   const previousReleaseSource = targetManifest.sourceManifest;
   if (targetSha !== previousSha || previousReleaseSource.length === 0) throw new Error(`Initial topology migration must seed the running exact SHA ${previousSha}; requested ${targetSha}.`);
-  return previousSha;
+  return { sha: previousSha, sourceUnits, developerTool: { gitSha: await shaAtSource(paths), mutableCheckout: true } };
 }
 
 async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATHS) {
+  const tool = await deploymentToolIdentity(paths);
   await resolveExactCommit(sha, ref, paths);
-  await assertReleaseUnitPaths();
   let releasePath = path.join(paths.releases, sha);
   try {
     await lstat(releasePath);
@@ -460,27 +531,35 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
   }
 
   const activeSha = await currentSha(paths.releases);
-  const previousSha = activeSha ?? await verifyInitialRuntime(previousRuntimeSha ?? '', sha, paths);
-  if (activeSha === sha) {
+  const initialMode = previousRuntimeSha !== null;
+  if (initialMode && activeSha !== sha) throw new Error(`Initial migration requires current seeded to requested same-SHA release ${sha}.`);
+  if (initialMode && activeSha !== null && activeSha !== sha) throw new Error(`Initial migration pointer is ${activeSha}; expected seeded SHA ${sha}.`);
+  if (!initialMode || activeSha === sha) await assertReleaseUnitPaths();
+  const initialRuntime = initialMode ? await verifyInitialRuntime(previousRuntimeSha, sha, paths) : null;
+  const previousSha = initialMode ? initialRuntime.sha : activeSha;
+  if (!initialMode && activeSha === sha) {
     const services = await assertApplicationServices(sha);
     const http = await validateHttp(routes);
-    const result = { operation: 'no-op', previousSha, deployedSha: sha, at: new Date().toISOString(), services, http, validation: 'passed' };
+    const result = { schemaVersion: 2, operation: 'PROMOTE_NOOP', tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, deployedSha: sha, at: new Date().toISOString(), services, http, validation: 'passed' };
     await appendAudit(result, paths);
     console.log(`Already running ${sha}; no restart or backup performed.`);
     return;
   }
 
   const preparedAt = new Date().toISOString();
-  await readJournalWarnings(preparedAt, paths);
-  const wasActive = await assertApplicationServices(activeSha);
+  const journalBefore = await collectJournalWarnings(preparedAt, paths);
+  const wasActive = await assertApplicationServices(initialMode ? null : activeSha);
   const herdrBefore = await serviceState('wowsync-dev-herdr.service');
-  let stopped = false;
   let backupPath;
   let backupSha256;
   let beforeEvidence;
+  let schemaChanged = null;
+  let candidateStarted = false;
+  let candidateValidated = false;
+  const intent = { schemaVersion: 2, operation: 'PROMOTE_INTENT', tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, initialMode, at: preparedAt, journalBefore };
+  await appendAudit(intent, paths);
   try {
     await invokeServiceHelper('stop', paths);
-    stopped = true;
     beforeEvidence = databaseEvidence(paths.database);
     const stamp = `${preparedAt.replaceAll(':', '').replaceAll('-', '')}-${randomUUID().slice(0, 8)}`;
     backupPath = path.join(paths.backups, `${stamp}-${previousSha}-to-${sha}.sqlite`);
@@ -490,49 +569,105 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
     backupSha256 = await sha256File(backupPath);
     await atomicSetCurrent(paths.releases, sha);
     await invokeServiceHelper('start', paths);
-    stopped = false;
-
+    candidateStarted = true;
+    const serviceAtStart = await assertApplicationServices(sha);
+    await waitForReadiness({ baseUrl: paths.baseUrl, routes });
     const serviceStates = await assertApplicationServices(sha);
-    assertRestartCountersStable(wasActive, serviceStates);
+    assertRestartCountersStable(serviceAtStart, serviceStates);
     const http = await validateHttp(routes);
     const afterEvidence = databaseEvidence(paths.database);
-    assertExistingDataPreserved(beforeEvidence, afterEvidence);
+    schemaChanged = !assertSchemaCompatible(beforeEvidence, afterEvidence);
+    if (schemaChanged) throw new Error(`Database schema changed during candidate validation (user_version ${beforeEvidence.userVersion} -> ${afterEvidence.userVersion}, schema ${beforeEvidence.schemaSha256} -> ${afterEvidence.schemaSha256}). Code rollback requires an operator compatibility decision.`);
     const herdrAfter = await serviceState('wowsync-dev-herdr.service');
     if (herdrBefore.MainPID !== herdrAfter.MainPID || herdrAfter.ActiveState !== 'active') {
       throw new Error(`Herdr changed during application deployment: before=${JSON.stringify(herdrBefore)} after=${JSON.stringify(herdrAfter)}`);
     }
+    candidateValidated = true;
     const result = {
-      schemaVersion: 1,
-      operation: 'promote',
+      schemaVersion: 2,
+      operation: 'PROMOTE_SUCCESS',
+      tool,
+      requestedSha: sha,
+      requestedRef: ref,
       previousSha,
       deployedSha: sha,
+      candidateSha: sha,
+      initialMode,
       expectedRef: ref,
       at: new Date().toISOString(),
       backup: { path: backupPath, sha256: backupSha256, integrityCheck: 'ok', data: backupEvidence },
-      dataBefore: beforeEvidence,
-      dataAfter: afterEvidence,
+      dataBefore: { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, demand: beforeEvidence.demand },
+      dataAfter: { integrityCheck: afterEvidence.integrityCheck, userVersion: afterEvidence.userVersion, schemaSha256: afterEvidence.schemaSha256, demand: afterEvidence.demand },
+      schemaChanged,
       previousServices: wasActive,
       services: serviceStates,
       herdr: herdrAfter,
       http,
-      journalWarnings: await readJournalWarnings(preparedAt, paths),
+      journalDiagnostics: await collectJournalWarnings(preparedAt, paths),
       validation: 'passed',
     };
     await appendAudit(result, paths);
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
+    if (candidateValidated) throw new Error(`Deployment passed application validation, but operational audit write failed; no rollback was triggered. Audit path: ${paths.audit}. ${error.message}`);
+    let schemaEvidenceAfter = null;
+    try { schemaEvidenceAfter = databaseEvidence(paths.database); schemaChanged = beforeEvidence ? !assertSchemaCompatible(beforeEvidence, schemaEvidenceAfter) : null; }
+    catch { if (!candidateStarted) schemaChanged = false; }
+    let recoveredValidated = false;
+    let recovery;
     try {
-      await invokeServiceHelper('stop', paths);
-      if (previousSha) await atomicSetCurrent(paths.releases, previousSha);
-      else await rm(paths.current, { force: true });
-      await invokeServiceHelper('start', paths);
+      recovery = await recoverFailedPromotion({
+        initialMode, schemaChanged, candidateStarted,
+        stop: () => invokeServiceHelper('stop', paths),
+        setPrevious: () => atomicSetCurrent(paths.releases, previousSha),
+        startPrevious: () => invokeServiceHelper('start', paths),
+        validatePrevious: async () => {
+          await waitForReadiness({ baseUrl: paths.baseUrl, routes: DEFAULT_VALIDATION_ROUTES });
+          const restoredServices = await assertApplicationServices(previousSha);
+          assertRestartCountersStable({}, restoredServices);
+          const restoredHttp = await validateHttp(DEFAULT_VALIDATION_ROUTES, paths.baseUrl);
+          const diagnostics = await collectJournalWarnings(preparedAt, paths);
+          const herdrAfter = await serviceState('wowsync-dev-herdr.service');
+          return { services: restoredServices, http: restoredHttp, herdr: herdrAfter, journalDiagnostics: diagnostics };
+        },
+      });
     } catch (rollbackError) {
-      await appendAudit({ schemaVersion: 1, operation: 'failed-promotion', previousSha, attemptedSha: sha, expectedRef: ref, at: new Date().toISOString(), backupPath, backupSha256, error: error.message, rollbackError: rollbackError.message, validation: 'failed; manual recovery required' }, paths).catch(() => {});
+      await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_FAILURE', tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, schemaChanged, error: error.message, recoveryAttempted: true, recoveryResult: `failed: ${rollbackError.message}`, at: new Date().toISOString() }, paths);
       throw new Error(`Deployment failed (${error.message}); automatic code rollback/restart also failed (${rollbackError.message}). Inspect services immediately.`);
     }
-    await appendAudit({ schemaVersion: 1, operation: 'failed-promotion', previousSha, attemptedSha: sha, expectedRef: ref, at: new Date().toISOString(), backupPath, backupSha256, error: error.message, validation: 'failed; previous code restored; database unchanged' }, paths).catch(() => {});
-    throw new Error(`Deployment validation failed; code pointer restored to ${previousSha ?? 'source checkout'}; database was not restored. ${error.message}`);
+    if (recovery.state === 'stopped-review-required') {
+      const recoveryCommand = initialMode ? 'sudo /usr/local/libexec/wowsync-dev/migrate-runtime-paths restore CURRENT' : null;
+      await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_FAILURE', tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, initialMode, backupPath, backupSha256, schemaChanged, error: error.message, recoveryAttempted: true, recoveryResult: recovery.state, recoveryAction: recovery.action, candidateStopResult: recovery.stopResult, oldTopologyRestore: recoveryCommand, at: new Date().toISOString() }, paths);
+      if (initialMode) throw new Error(`Initial same-SHA topology promotion failed: ${error.message}. Application units were stopped (${recovery.stopResult}); no previous-code restoration is claimed. Exact reverse-topology action: ${recoveryCommand}. SQLite was not restored.`);
+      throw new Error(`Candidate failed after changing database schema. Services were stopped (${recovery.stopResult}); previous code was not started. Review compatibility before any code rollback. Backup: ${backupPath}. ${error.message}`);
+    }
+    recoveredValidated = true;
+    try {
+      await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_FAILURE', tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, schemaChanged: false, error: error.message, recoveryAttempted: true, recoveryResult: 'validated', restored: recovery.validation, at: new Date().toISOString() }, paths);
+    } catch (auditError) {
+      throw new Error(`Previous release ${previousSha} was restored and validated, but its recovery audit could not be written: ${auditError.message}`);
+    }
+    throw new Error(`Deployment validation failed; previous release ${previousSha} was restarted and validated; database was not restored. ${error.message}`);
   }
+}
+
+async function seedInitial(sha, ref, previousRuntimeSha, paths = PATHS) {
+  const tool = await deploymentToolIdentity(paths);
+  await resolveExactCommit(sha, ref, paths);
+  await validateRelease(path.join(paths.releases, sha), sha, paths);
+  if (await currentSha(paths.releases)) throw new Error('Initial seed requires releases/current to be absent.');
+  const runtime = await verifyInitialRuntime(previousRuntimeSha, sha, paths);
+  const at = new Date().toISOString();
+  await appendAudit({ schemaVersion: 2, operation: 'INITIAL_SEED_INTENT', tool, requestedSha: sha, requestedRef: ref, previousSha: previousRuntimeSha, candidateSha: sha, at }, paths);
+  await atomicSetCurrent(paths.releases, sha);
+  try {
+    await appendAudit({ schemaVersion: 2, operation: 'INITIAL_SEED_SUCCESS', tool, requestedSha: sha, requestedRef: ref, previousSha: previousRuntimeSha, candidateSha: sha, release: path.join(paths.releases, sha), runtime, at: new Date().toISOString() }, paths);
+  } catch (error) {
+    error.message = `current was seeded to ${sha}, but the success audit write failed: ${error.message}`;
+    error.seededCurrent = true;
+    throw error;
+  }
+  console.log(`Seeded releases/current to same-SHA release ${sha}; services were not changed.`);
 }
 
 async function rollback(sha, routes, paths = PATHS) {
@@ -547,6 +682,7 @@ async function rollback(sha, routes, paths = PATHS) {
 }
 
 async function backupOnly(label, routes, paths = PATHS) {
+  const tool = await deploymentToolIdentity(paths);
   if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(label)) throw new Error('Backup label must be 1-48 lowercase letters, digits, or hyphens.');
   const at = new Date().toISOString();
   const services = {};
@@ -556,23 +692,28 @@ async function backupOnly(label, routes, paths = PATHS) {
   const backupPath = path.join(paths.backups, filename);
   await makeConsistentBackup(paths.database, backupPath);
   const backupEvidence = databaseEvidence(backupPath);
-  const record = { schemaVersion: 1, operation: 'backup', label, at, backup: { path: backupPath, sha256: await sha256File(backupPath), integrityCheck: 'ok', data: backupEvidence }, services, http };
+  const record = { schemaVersion: 2, operation: 'BACKUP_SUCCESS', tool, label, at, backup: { path: backupPath, sha256: await sha256File(backupPath), integrityCheck: 'ok', data: backupEvidence }, services, http };
   await appendAudit(record, paths);
   console.log(JSON.stringify(record, null, 2));
 }
 
 async function promoteRetained(sha, previousSha, routes, paths) {
+  const tool = await deploymentToolIdentity(paths);
   const at = new Date().toISOString();
-  await readJournalWarnings(at, paths);
-  const servicesBefore = await assertApplicationServices(previousSha).catch(() => null);
+  const journalBefore = await collectJournalWarnings(at, paths);
+  await assertApplicationServices(previousSha);
   const herdrBefore = await serviceState('wowsync-dev-herdr.service');
-  let stopped = false;
   let backupPath;
   let backupSha256;
+  let before;
+  let schemaChanged = null;
+  let candidateStarted = false;
+  let candidateValidated = false;
+  let recoveryValidated = false;
+  await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_INTENT', tool, requestedSha: sha, requestedRef: null, previousSha, candidateSha: sha, at, journalBefore }, paths);
   try {
     await invokeServiceHelper('stop', paths);
-    stopped = true;
-    const before = databaseEvidence(paths.database);
+    before = databaseEvidence(paths.database);
     backupPath = path.join(paths.backups, `${at.replaceAll(':', '').replaceAll('-', '')}-${randomUUID().slice(0, 8)}-${previousSha}-to-${sha}.sqlite`);
     await makeConsistentBackup(paths.database, backupPath);
     const backupEvidence = databaseEvidence(backupPath);
@@ -580,27 +721,45 @@ async function promoteRetained(sha, previousSha, routes, paths) {
     backupSha256 = await sha256File(backupPath);
     await atomicSetCurrent(paths.releases, sha);
     await invokeServiceHelper('start', paths);
-    stopped = false;
+    candidateStarted = true;
+    const serviceAtStart = await assertApplicationServices(sha);
+    await waitForReadiness({ baseUrl: paths.baseUrl, routes });
     const services = await assertApplicationServices(sha);
-    if (servicesBefore) assertRestartCountersStable(servicesBefore, services);
+    assertRestartCountersStable(serviceAtStart, services);
     const http = await validateHttp(routes);
     const after = databaseEvidence(paths.database);
-    assertExistingDataPreserved(before, after);
+    schemaChanged = !assertSchemaCompatible(before, after);
+    if (schemaChanged) throw new Error('Database schema changed during rollback candidate validation; prior code must not be automatically restarted.');
     const herdrAfter = await serviceState('wowsync-dev-herdr.service');
     if (herdrBefore.MainPID !== herdrAfter.MainPID || herdrAfter.ActiveState !== 'active') throw new Error('Herdr was restarted or became inactive.');
-    const record = { schemaVersion: 1, operation: 'rollback', previousSha, deployedSha: sha, at: new Date().toISOString(), backup: { path: backupPath, sha256: backupSha256, integrityCheck: 'ok', data: backupEvidence }, dataBefore: before, dataAfter: after, services, herdr: herdrAfter, http, journalWarnings: await readJournalWarnings(at, paths), validation: 'passed' };
+    candidateValidated = true;
+    const record = { schemaVersion: 2, operation: 'ROLLBACK_SUCCESS', tool, requestedSha: sha, requestedRef: null, previousSha, candidateSha: sha, deployedSha: sha, at: new Date().toISOString(), backup: { path: backupPath, sha256: backupSha256, integrityCheck: 'ok', data: backupEvidence }, dataBefore: { integrityCheck: before.integrityCheck, userVersion: before.userVersion, schemaSha256: before.schemaSha256, demand: before.demand }, dataAfter: { integrityCheck: after.integrityCheck, userVersion: after.userVersion, schemaSha256: after.schemaSha256, demand: after.demand }, schemaChanged, services, herdr: herdrAfter, http, journalDiagnostics: await collectJournalWarnings(at, paths), validation: 'passed' };
     await appendAudit(record, paths);
     console.log(JSON.stringify(record, null, 2));
   } catch (error) {
+    if (candidateValidated) throw new Error(`Rollback target passed application validation, but audit write failed; no further rollback was triggered. ${error.message}`);
+    if (!recoveryPolicy({ schemaChanged, candidateStarted }).mayStartPreviousCode) {
+      let stopResult = 'failed';
+      try { await invokeServiceHelper('stop', paths); stopResult = 'succeeded'; } catch (stopError) { stopResult = `failed: ${stopError.message}`; }
+      await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_FAILURE', tool, requestedSha: sha, previousSha, candidateSha: sha, backupPath, backupSha256, schemaChanged, error: error.message, recoveryAttempted: true, recoveryResult: 'stopped-review-required', candidateStopResult: stopResult, at: new Date().toISOString() }, paths);
+      throw new Error(`Rollback candidate failed and schema changed or could not be verified (${schemaChanged}). Services stopped (${stopResult}); previous code was not restarted. Operator compatibility review required. ${error.message}`);
+    }
     try {
       await invokeServiceHelper('stop', paths);
       await atomicSetCurrent(paths.releases, previousSha);
       await invokeServiceHelper('start', paths);
+      await waitForReadiness({ baseUrl: paths.baseUrl, routes: DEFAULT_VALIDATION_ROUTES });
+      const restoredServices = await assertApplicationServices(previousSha);
+      assertRestartCountersStable({}, restoredServices);
+      const restoredHttp = await validateHttp(DEFAULT_VALIDATION_ROUTES, paths.baseUrl);
+      recoveryValidated = true;
+      await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_FAILURE', tool, requestedSha: sha, previousSha, candidateSha: sha, backupPath, backupSha256, schemaChanged: false, error: error.message, recoveryAttempted: true, recoveryResult: 'validated', restored: { services: restoredServices, http: restoredHttp }, at: new Date().toISOString() }, paths);
     } catch (rollbackError) {
-      await appendAudit({ schemaVersion: 1, operation: 'failed-rollback', previousSha, attemptedSha: sha, at: new Date().toISOString(), backupPath, backupSha256, error: error.message, rollbackError: rollbackError.message, validation: 'failed; manual recovery required' }, paths).catch(() => {});
+      if (recoveryValidated) throw new Error(`Previous release ${previousSha} was restored and validated, but its recovery audit could not be written: ${rollbackError.message}`);
+      await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_FAILURE', tool, requestedSha: sha, previousSha, candidateSha: sha, at: new Date().toISOString(), backupPath, backupSha256, error: error.message, recoveryAttempted: true, recoveryResult: `failed: ${rollbackError.message}` }, paths);
       throw new Error(`Rollback validation failed (${error.message}); restoring previous code ${previousSha} also failed (${rollbackError.message}).`);
     }
-    await appendAudit({ schemaVersion: 1, operation: 'failed-rollback', previousSha, attemptedSha: sha, at: new Date().toISOString(), backupPath, backupSha256, error: error.message, validation: 'failed; previous code restored; database unchanged' }, paths).catch(() => {});
+    await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_FAILURE', tool, requestedSha: sha, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true, recoveryResult: 'validated', at: new Date().toISOString() }, paths);
     throw new Error(`Rollback validation failed; code pointer restored to ${previousSha}; database was not restored. ${error.message}`);
   }
 }
@@ -610,6 +769,7 @@ function usage() {
   wowsync-dev-deploy backup <label> [--route /path=HTTP_STATUS ...]
   wowsync-dev-deploy prepare <full-sha> <refs/heads/branch|refs/tags/tag>
   wowsync-dev-deploy promote <full-sha> <refs/heads/branch|refs/tags/tag> [--previous-runtime-sha <full-sha>] [--route /path=HTTP_STATUS ...]
+  wowsync-dev-deploy seed-initial <full-sha> <refs/heads/branch|refs/tags/tag> --previous-runtime-sha <full-sha>
   wowsync-dev-deploy rollback <retained-full-sha> [--route /path=HTTP_STATUS ...]
 
 Default post-promotion checks are GET / and GET /api/versions => HTTP 200.
@@ -619,7 +779,7 @@ Use --route to add a feature-specific expected HTTP status (for example an expec
 
 function parseArgs(args) {
   const command = args.shift();
-  if (!['backup', 'prepare', 'promote', 'rollback'].includes(command)) { usage(); process.exit(64); }
+  if (!['backup', 'prepare', 'promote', 'seed-initial', 'rollback'].includes(command)) { usage(); process.exit(64); }
   if (command === 'backup') {
     const label = args.shift();
     const routes = [...DEFAULT_VALIDATION_ROUTES];
@@ -637,9 +797,10 @@ function parseArgs(args) {
   while (args.length) {
     const option = args.shift();
     if (option === '--route') routes.push(parseRoute(args.shift()));
-    else if (option === '--previous-runtime-sha' && command === 'promote') previousRuntimeSha = validateSha(args.shift());
+    else if (option === '--previous-runtime-sha' && ['promote', 'seed-initial'].includes(command)) previousRuntimeSha = validateSha(args.shift());
     else throw new Error(`Unknown option: ${option}`);
   }
+  if (command === 'seed-initial' && !previousRuntimeSha) throw new Error('seed-initial requires --previous-runtime-sha FULL_SHA.');
   return { command, sha, ref, routes, previousRuntimeSha };
 }
 
@@ -650,18 +811,51 @@ async function main(argv) {
   if (parsed.command === 'backup') {
     await backupOnly(parsed.label, parsed.routes);
   } else if (parsed.command === 'prepare') {
-    const release = await prepareRelease(parsed.sha, parsed.ref);
-    console.log(`Prepared immutable SHA release: ${release}`);
+    const tool = await deploymentToolIdentity();
+    try {
+      const release = await prepareRelease(parsed.sha, parsed.ref);
+      await appendAudit({ schemaVersion: 2, operation: 'PREPARE_SUCCESS', tool, requestedSha: parsed.sha, requestedRef: parsed.ref, candidateSha: parsed.sha, release, at: new Date().toISOString() });
+      console.log(`Prepared immutable SHA release: ${release}`);
+    } catch (error) {
+      await appendAudit({ schemaVersion: 2, operation: 'PREPARE_FAILURE', tool, requestedSha: parsed.sha, requestedRef: parsed.ref, candidateSha: parsed.sha, error: error.message, at: new Date().toISOString() });
+      throw error;
+    }
   } else if (parsed.command === 'promote') {
-    await promote(parsed.sha, parsed.ref, parsed.routes, parsed.previousRuntimeSha);
+    try { await promote(parsed.sha, parsed.ref, parsed.routes, parsed.previousRuntimeSha); }
+    catch (error) {
+      await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_COMMAND_FAILURE', tool: await deploymentToolIdentity(), requestedSha: parsed.sha, requestedRef: parsed.ref, candidateSha: parsed.sha, previousSha: await currentSha(PATHS.releases).catch(() => null), error: error.message, at: new Date().toISOString() });
+      throw error;
+    }
+  } else if (parsed.command === 'seed-initial') {
+    try { await seedInitial(parsed.sha, parsed.ref, parsed.previousRuntimeSha); }
+    catch (error) {
+      await appendAudit({ schemaVersion: 2, operation: error.seededCurrent ? 'INITIAL_SEED_AUDIT_FAILURE' : 'INITIAL_SEED_FAILURE', tool: await deploymentToolIdentity(), requestedSha: parsed.sha, requestedRef: parsed.ref, previousSha: parsed.previousRuntimeSha, candidateSha: parsed.sha, pointerChanged: Boolean(error.seededCurrent), error: error.message, at: new Date().toISOString() });
+      throw error;
+    }
   } else {
-    await rollback(parsed.sha, parsed.routes);
+    try { await rollback(parsed.sha, parsed.routes); }
+    catch (error) {
+      await appendAudit({ schemaVersion: 2, operation: 'ROLLBACK_COMMAND_FAILURE', tool: await deploymentToolIdentity(), requestedSha: parsed.sha, requestedRef: null, candidateSha: parsed.sha, previousSha: await currentSha(PATHS.releases).catch(() => null), error: error.message, at: new Date().toISOString() });
+      throw error;
+    }
   }
 }
 
 if (import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  main(process.argv.slice(2)).catch((error) => {
-    console.error(`wowsync-dev-deploy: ${error.message}`);
-    process.exitCode = 1;
-  });
+  const args = process.argv.slice(2);
+  const underLock = args[0] === '--under-lock';
+  if (underLock) args.shift();
+  const lockPath = '/home/wowsync-dev/deploy/deploy.lock';
+  await mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  const parentCommand = (await readFile(`/proc/${process.ppid}/cmdline`, 'utf8').catch(() => '')).replaceAll('\0', ' ');
+  const validLockParent = underLock && parentCommand.includes('/usr/bin/flock') && parentCommand.includes(lockPath);
+  if (!validLockParent) {
+    const result = spawnSync('/usr/bin/flock', ['--nonblock', lockPath, '/usr/bin/node', path.resolve(process.argv[1]), '--under-lock', ...args], { stdio: 'inherit', env: process.env });
+    process.exitCode = result.status ?? 1;
+  } else {
+    main(args).catch((error) => {
+      console.error(`wowsync-dev-deploy: ${error.message}`);
+      process.exitCode = 1;
+    });
+  }
 }
