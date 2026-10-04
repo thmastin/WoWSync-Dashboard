@@ -175,7 +175,7 @@ for the full semantics; this section lists only the cross-cutting invariants.
     Slice 3: both paths go through the single `allocationForItem`, and held-item facets are read
     from the same projection (`ItemTally.heldRows` via `heldItemFacetsForItem`).
 
-**SLICE 3 — IMPLEMENTED ON A FEATURE BRANCH, NOT MERGED OR LIVE-VALIDATED**
+**SLICE 3 — SHIPPED AND LIVE-VALIDATED** (`81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`)
 
 15. **Base-item aggregation must be proven, never assumed.** Confirmed rows of one base item are
     aggregated only when their captured item strings, normalized by blanking linkLevel and specID

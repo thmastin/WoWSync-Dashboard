@@ -1,7 +1,7 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-03 (Azeroth ERP Vertical Slice 2 shipped, merged and live-validated; Slice 1
-shipped 2026-10-02; Omarchy DEV systemd topology tracked; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
+Last updated: 2026-10-04 (Azeroth ERP Vertical Slice 3 shipped, merged and live-validated; see
+[`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
 `feature/dashboard-integration` had not yet merged to `main` (then at `797fc3d`)
@@ -114,9 +114,10 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Azeroth ERP Slice 3+ (not scoped here; do not design in detail in this document).**
-  Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`) and 2
-  (account-wide review, `get_allocation_review`) exist — see
+- [ ] **Azeroth ERP Slice 4+ (not scoped here; do not design in detail in this document).**
+  Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
+  (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
+  shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
   [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is still a direct HTTP call: a
   demand-management UI or an MCP mutation tool for demand CRUD are both absent (see
@@ -420,6 +421,18 @@ Guard against re-adding. This is not a changelog.
   temporary validation demand was deactivated afterward. See
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23 and its Slice 2 live-validation
   record.
+- **Azeroth ERP Vertical Slice 3 — Held-item identity and binding: shipped, merged to `main`, and
+  blindly live-validated (2026-10-04)** at source
+  `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`. Real Evercore Shade evidence validated the identity gate
+  and structurally absent allocation arithmetic; real Noggenfogger Elixir evidence validated the
+  composed unresolved-storage and binding gates, with binding-only isolation covered by automated
+  tests. Blind external ChatGPT MCP validation and allocation-review parity passed. The confirmed
+  Retail population had 15 variant and 0 incomplete base items (0 of 643 confirmed rows bare or
+  incomplete); LAST_SEEN/POTENTIAL prevalence is recorded separately in
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-3).
+  Groit and Hallo character banks remained UNKNOWN and were not refreshed for validation. The temporary
+  validation demands were deactivated afterward. The known MCP tunnel unit drift remains a separate
+  operational follow-up; it was not changed as part of this milestone.
 - **Azeroth ERP Vertical Slice 1: shipped and live-validated (2026-10-02).** Durable
   `STOCK_TARGET` demands, deterministic allocation reasoning (capability != demand, missing
   demand != demand zero, confirmed/potential/unresolved evidence tiers, guild isolation, the

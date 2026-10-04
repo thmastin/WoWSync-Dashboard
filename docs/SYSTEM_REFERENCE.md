@@ -193,7 +193,10 @@ call, tallied by base item id, with guild owners kept in a separate list; `evide
 per-item lookup that yields `CONFIRMED`/`POTENTIAL`/`UNRESOLVED` evidence (`projectAccountOwnedEvidence`
 is the Slice 1 entry point composing the two). `buildAllocationResult` combines that with an
 `ExplicitDemand` into the discriminated `AllocationResult` union
-(`NO_ACTIVE_DEMAND`/`CONFLICTING_DEMAND`/`RESOLVED`) and applies the disposition gate.
+(`NO_ACTIVE_DEMAND`/`CONFLICTING_DEMAND`/`BASE_ITEM_AGGREGATION_UNPROVEN`/`RESOLVED`) and applies
+identity and disposition gates. Slice 3 reads held-item identity and binding facets from that same
+projection; see [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §24 and its live-validation
+record.
 
 `packages/core/src/allocationReview.ts` (Slice 2): `buildAllocationReview` partitions one projection
 into `demanded` (each ACTIVE demand through `buildAllocationResult`) and `unallocated` (account-owned
