@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, open, readFile, readdir, realpath, rename, rm, lstat, readlink, writeFile, symlink, chmod } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync, backup } from 'node:sqlite';
 
 function execFile(file, args, options = {}) {
@@ -469,12 +470,15 @@ export async function appendAudit(record, paths = PATHS) {
 }
 
 async function deploymentToolIdentity(paths = PATHS) {
-  const gitSha = await gitAt(['rev-parse', 'HEAD'], paths.source).catch(() => 'unavailable');
-  const dirty = await gitAt(['status', '--porcelain=v1', '--untracked-files=all'], paths.source).catch(() => 'unavailable');
+  const entryPath = fileURLToPath(import.meta.url);
+  const entryDir = path.dirname(entryPath);
+  const toolRoot = await gitAt(['rev-parse', '--show-toplevel'], entryDir).catch(() => paths.source);
+  const gitSha = await gitAt(['rev-parse', 'HEAD'], toolRoot).catch(() => 'unavailable');
+  const dirty = await gitAt(['status', '--porcelain=v1', '--untracked-files=all'], toolRoot).catch(() => 'unavailable');
   return {
-    version: '2', gitSha, dirtyCheckout: dirty !== '', mutableCheckout: true,
-    entrySha256: await sha256File(new URL(import.meta.url).pathname),
-    wrapperSha256: await sha256File(path.join(path.dirname(new URL(import.meta.url).pathname), 'wowsync-dev-deploy')),
+    version: '2', gitSha, toolRoot, dirtyCheckout: dirty !== '', mutableCheckout: true,
+    entrySha256: await sha256File(entryPath),
+    wrapperSha256: await sha256File(path.join(entryDir, 'wowsync-dev-deploy')),
   };
 }
 
