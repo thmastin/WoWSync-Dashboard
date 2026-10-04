@@ -243,7 +243,8 @@ unexpected source files, dependency symlinks escaping the release, and any colli
 existing SHA release. It does not use the source checkout's `node_modules` and does not overwrite
 an existing release.
 
-For this reviewed infrastructure, the expected deploy-tool API version is `2`. The wrapper and
+For the correction pass, the reviewed version-2 deploy-tool implementation is commit
+`34c4c3d1c33a7488aee799a820f3b99703f9cfcd`; use that reviewed code for topology migration. The wrapper and
 Node entry point still run from the mutable developer checkout; every record captures that checkout
 Git SHA, dirty flag, Node entry SHA-256 and wrapper SHA-256. Before promotion, verify the recorded
 tool identity corresponds to the independently reviewed infrastructure commit. The SHA identifies
