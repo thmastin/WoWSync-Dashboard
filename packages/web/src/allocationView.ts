@@ -66,6 +66,7 @@ export function buildTargetRowViews(review: AccountAllocationReview, itemNames: 
   const views: TargetRowView[] = [];
 
   for (const result of review.demanded.items) {
+    // Skip NO_ACTIVE_DEMAND and CONFLICTING_DEMAND — they're handled separately in the UI
     if (result.resolution === "NO_ACTIVE_DEMAND" || result.resolution === "CONFLICTING_DEMAND") {
       continue;
     }
@@ -97,30 +98,34 @@ export function buildTargetRowViews(review: AccountAllocationReview, itemNames: 
     let confirmedAvailableCell: CellState;
 
     if (result.resolution === "BASE_ITEM_AGGREGATION_UNPROVEN") {
+      // BASE_ITEM_AGGREGATION_UNPROVEN: allocation numbers are withheld, but confirmed quantity is shown
       allocatedCell = notApplicableCell();
       deficitCell = notApplicableCell();
       surplusCell = notApplicableCell();
-      confirmedAvailableCell = numericCell(result.confirmedQuantity);
+      confirmedAvailableCell = numericCell(result.confirmedQuantity ?? 0);
       reasonChips.push({ text: "UNPROVEN", detail: "Item string variants prevent aggregation" });
     } else if (result.resolution === "RESOLVED") {
-      confirmedAvailableCell = numericCell(result.confirmedAvailable);
-      allocatedCell = numericCell(result.allocated);
+      confirmedAvailableCell = numericCell(result.confirmedAvailable ?? 0);
+      allocatedCell = numericCell(result.allocated ?? 0);
 
       if (result.confirmedDeficit > 0) {
         deficitCell = numericCell(result.confirmedDeficit);
         surplusCell = notApplicableCell();
       } else if (result.confirmedSurplus > 0) {
         deficitCell = notApplicableCell();
+        // Gate surplus by unresolved evidence or binding
         if (gatedBy.includes("unresolved") || gatedBy.includes("binding")) {
           surplusCell = withheldCell("Needs review");
         } else {
           surplusCell = numericCell(result.confirmedSurplus);
         }
       } else {
+        // No deficit, no surplus (on target)
         deficitCell = notApplicableCell();
         surplusCell = notApplicableCell();
       }
     } else {
+      // Fallback for unknown resolution states
       allocatedCell = notApplicableCell();
       deficitCell = notApplicableCell();
       surplusCell = notApplicableCell();

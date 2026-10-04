@@ -202,6 +202,8 @@ export interface AccountAllocationReview {
   unallocated: BoundedPage<UnallocatedInventoryRead>;
   /** Presentation sidecar: item names for each baseItemId in demanded results, keyed by baseItemId. Derived from review/evidence presentation data, attached after paging. Absent if name is unknown. */
   itemNames: Record<number, string>;
+  /** INACTIVE demands for reference: previously removed targets. No edit/reactivate; user must set a new active demand. */
+  inactiveTargets?: ExplicitDemand[];
 }
 
 function pageBounds(offset = 0, limit = 50): { offset: number; limit: number } {
@@ -789,7 +791,8 @@ export class DashboardReadModel {
       return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
     }
     const evidenceMap = projectAccountOwnedEvidenceMap(this.store, query.version);
-    const review = buildAllocationReview(evidenceMap, this.store.listDemands(query.version));
+    const allDemands = this.store.listDemands(query.version);
+    const review = buildAllocationReview(evidenceMap, allDemands);
 
     // Filter unallocated by search query BEFORE paging
     let filteredUnallocated = review.unallocated;
@@ -822,6 +825,9 @@ export class DashboardReadModel {
       }
     }
 
+    // Extract inactive STOCK_TARGET demands for the "Where did my target go?" section
+    const inactiveTargets = allDemands.filter((d) => d.status === "INACTIVE" && d.demandType === "STOCK_TARGET");
+
     const metadata = new Map(this.store.getItemMetadata(query.version, unallocated.map((entry) => entry.baseItemId)).map((item) => [item.baseItemId, item]));
     return {
       data: {
@@ -843,12 +849,14 @@ export class DashboardReadModel {
           truncated: unallocatedPage.offset + unallocated.length < filteredUnallocated.length,
         },
         itemNames,
+        ...(inactiveTargets.length > 0 ? { inactiveTargets } : {}),
       },
       provenance: {
         state: "DERIVED",
         version: query.version,
         source: "explicit demand plus character-storage and shared-storage evidence",
         warning: "Recomputed on every read; nothing is stored. Unallocated inventory has no active demand and is never surplus: no surplus, disposition, or sale recommendation can be determined for it.",
+        itemNames,
       },
     };
   }
