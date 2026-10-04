@@ -114,6 +114,33 @@ function heldAccountItems(map: AccountOwnedEvidenceMap): Map<number, string | un
 }
 
 /**
+ * The presentation name for one base item, read from the SAME account-owned evidence projection the review
+ * uses: the first name any CONFIRMED/POTENTIAL account-owned scope recorded for it, or undefined when no
+ * account-owned row carried one. Guild scopes are never consulted, and no other pipeline (AccountFacts, item
+ * metadata) is read. Presentation only: never an input to allocation.
+ */
+export function itemNameForItem(map: AccountOwnedEvidenceMap, baseItemId: number): string | undefined {
+  for (const source of map.scopes) {
+    const name = source.items?.get(baseItemId)?.name;
+    if (name !== undefined) return name;
+  }
+  return undefined;
+}
+
+/**
+ * The Dashboard Allocation tab's unallocated search. An empty or whitespace-only query returns the list
+ * unchanged. Otherwise an entry matches when its observed name contains the query case-insensitively, or when
+ * the query is all digits and equals its base item id exactly. An entry with no observed name can still be
+ * found by its id, so no held inventory is unreachable. Order is preserved; this never reclassifies anything.
+ */
+export function filterUnallocatedByQuery<T extends Pick<UnallocatedInventoryEntry, "baseItemId" | "name">>(entries: readonly T[], query: string | undefined): T[] {
+  const needle = (query ?? "").trim().toLowerCase();
+  if (needle === "") return [...entries];
+  const exactId = /^\d+$/.test(needle) ? Number(needle) : undefined;
+  return entries.filter((entry) => entry.baseItemId === exactId || (entry.name !== undefined && entry.name.toLowerCase().includes(needle)));
+}
+
+/**
  * Builds the full (unpaged) account allocation review from one evidence projection and the version's
  * demands. Pure: no I/O, no clock reads. `demands` may contain any status/type; only ACTIVE STOCK_TARGET
  * demands allocate. More than one ACTIVE demand for one item is handed to `buildAllocationResult`, which

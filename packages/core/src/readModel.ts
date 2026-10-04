@@ -3,7 +3,7 @@
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
-import { buildAllocationReview, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
+import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
 import type { CapturedCharacterState, EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
@@ -185,7 +185,20 @@ export interface SharedStorageReadOwner {
 }
 export interface SharedStorageReadPage { asOf: number; owners: SharedStorageReadOwner[]; ownerOffset: number; ownerLimit: number; totalOwners: number; ownersTruncated: boolean }
 
-export interface AllocationReviewQuery { version: VersionOrUnknown; demandedOffset?: number; demandedLimit?: number; unallocatedOffset?: number; unallocatedLimit?: number; q?: string }
+export interface AllocationReviewQuery {
+  version: VersionOrUnknown;
+  demandedOffset?: number;
+  demandedLimit?: number;
+  unallocatedOffset?: number;
+  unallocatedLimit?: number;
+  /**
+   * Optional unallocated search (Dashboard Allocation tab): case-insensitive observed-name substring, or an exact
+   * base item id. Applied BEFORE unallocated paging, so `unallocated.totalCount` counts matches. It never filters
+   * `demanded`, and the whole-list fields (`unallocatedItemStringIdentityCounts`, `dispositionCounts`,
+   * `unresolvedStorage`) keep describing the whole account. Empty/absent: no filtering.
+   */
+  q?: string;
+}
 export type UnallocatedInventoryRead = UnallocatedInventoryEntry & { metadataState: "KNOWN" | "UNKNOWN"; metadata?: ItemMetadataView };
 /** Azeroth ERP Slice 2 account-wide review. `demanded` and `unallocated` are independently paged; `dispositionCounts` covers every demanded item, not only the page. */
 export interface AccountAllocationReview {
@@ -200,10 +213,13 @@ export interface AccountAllocationReview {
   unallocatedItemStringIdentityCounts: UnallocatedItemStringIdentityCounts;
   demanded: BoundedPage<AllocationResult>;
   unallocated: BoundedPage<UnallocatedInventoryRead>;
-  /** Presentation sidecar: item names for each baseItemId in demanded results, keyed by baseItemId. Derived from review/evidence presentation data, attached after paging. Absent if name is unknown. */
+  /**
+   * Presentation sidecar for the demanded PAGE: base item id -> the name observed in account-owned evidence
+   * (`itemNameForItem`, the same projection the review reads). Attached after paging like unallocated metadata.
+   * An item with no observed name has no key (unknown, never an empty string). Deliberately NOT part of any
+   * AllocationResult, so each demanded entry still deep-equals getItemAllocation for the same item.
+   */
   itemNames: Record<number, string>;
-  /** INACTIVE demands for reference: previously removed targets. No edit/reactivate; user must set a new active demand. */
-  inactiveTargets?: ExplicitDemand[];
 }
 
 function pageBounds(offset = 0, limit = 50): { offset: number; limit: number } {
@@ -791,43 +807,16 @@ export class DashboardReadModel {
       return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
     }
     const evidenceMap = projectAccountOwnedEvidenceMap(this.store, query.version);
-    const allDemands = this.store.listDemands(query.version);
-    const review = buildAllocationReview(evidenceMap, allDemands);
-
-    // Filter unallocated by search query BEFORE paging
-    let filteredUnallocated = review.unallocated;
-    if (query.q !== undefined && query.q.trim() !== "") {
-      const queryLower = query.q.trim().toLowerCase();
-      const queryNum = /^\d+$/.test(queryLower) ? parseInt(queryLower, 10) : NaN;
-      filteredUnallocated = review.unallocated.filter((entry) => {
-        // Exact item ID match
-        if (!isNaN(queryNum) && entry.baseItemId === queryNum) return true;
-        // Case-insensitive name substring
-        if (entry.name && entry.name.toLowerCase().includes(queryLower)) return true;
-        return false;
-      });
-    }
-
+    const review = buildAllocationReview(evidenceMap, this.store.listDemands(query.version));
+    // Search filters unallocated entries BEFORE paging; whole-list counts above stay whole-account.
+    const matchingUnallocated = filterUnallocatedByQuery(review.unallocated, query.q);
     const demanded = review.demanded.slice(demandedPage.offset, demandedPage.offset + demandedPage.limit);
-    const unallocated = filteredUnallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
-
-    // Build itemNames sidecar from evidence map for demanded items (presentation data only)
+    const unallocated = matchingUnallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
     const itemNames: Record<number, string> = {};
-    for (const result of review.demanded) {
-      // Get name from the evidence map (same source as unallocated)
-      for (const scope of evidenceMap.scopes) {
-        if (!scope.items) continue;
-        const tally = scope.items.get(result.commodity.baseItemId);
-        if (tally && tally.name !== undefined) {
-          itemNames[result.commodity.baseItemId] = tally.name;
-          break;
-        }
-      }
+    for (const result of demanded) {
+      const name = itemNameForItem(evidenceMap, result.commodity.baseItemId);
+      if (name !== undefined) itemNames[result.commodity.baseItemId] = name;
     }
-
-    // Extract inactive STOCK_TARGET demands for the "Where did my target go?" section
-    const inactiveTargets = allDemands.filter((d) => d.status === "INACTIVE" && d.demandType === "STOCK_TARGET");
-
     const metadata = new Map(this.store.getItemMetadata(query.version, unallocated.map((entry) => entry.baseItemId)).map((item) => [item.baseItemId, item]));
     return {
       data: {
@@ -845,18 +834,16 @@ export class DashboardReadModel {
           }),
           offset: unallocatedPage.offset,
           limit: unallocatedPage.limit,
-          totalCount: filteredUnallocated.length,
-          truncated: unallocatedPage.offset + unallocated.length < filteredUnallocated.length,
+          totalCount: matchingUnallocated.length,
+          truncated: unallocatedPage.offset + unallocated.length < matchingUnallocated.length,
         },
         itemNames,
-        ...(inactiveTargets.length > 0 ? { inactiveTargets } : {}),
       },
       provenance: {
         state: "DERIVED",
         version: query.version,
         source: "explicit demand plus character-storage and shared-storage evidence",
         warning: "Recomputed on every read; nothing is stored. Unallocated inventory has no active demand and is never surplus: no surplus, disposition, or sale recommendation can be determined for it.",
-        itemNames,
       },
     };
   }
