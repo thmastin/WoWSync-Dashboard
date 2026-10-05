@@ -1,10 +1,10 @@
 # Omarchy DEV/LIVE isolation
 
-**Deployment topology status:** exact-SHA release tooling is implemented on its feature branch for
-review. Privileged bootstrap has not occurred and topology migration has not occurred. Active DEV
-Dashboard/MCP still run from `/home/wowsync-dev/src/WoWSync-Dashboard`; `releases/current` is the
-intended runtime path after separately approved migration. The live inline MCP tunnel-ID drift is
-preserved and tracked separately.
+**Deployment topology status:** DEV Dashboard/MCP run from the immutable exact-SHA release at
+`/home/wowsync-dev/releases/current`; workspace edits cannot change them. Changes reach DEV only
+through `wowsync-dev-deploy deploy <ref> <validated-sha>` (see
+[`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)). The live inline MCP tunnel-ID
+drift is preserved and tracked separately.
 
 This host layout separates WoWSync development from a future authoritative
 Omarchy LIVE deployment. The authoritative Windows database remains on Windows
@@ -28,18 +28,16 @@ An existing host-wide passwordless `asdcontrol` sudo rule was disabled by moving
 `/etc/sudoers.d/asdcontrol` to
 `/etc/sudoers.d/asdcontrol.pre-wowsync`. The separate `%wheel` rule in
 `/etc/sudoers.d/omarchy-asdcontrol` preserves personal display control. The
-not-yet-performed deployment-helper bootstrap is designed to install only the narrowly constrained
-`wowsync-dev-app-services` root helper for stopping/starting/restarting the two
-DEV application units and reading their warning-level journal entries. Until
-that bootstrap is performed, the DEV identity has no sudo command rule. The
-helper cannot run arbitrary systemctl commands or name arbitrary units. The fixed
-service actions ignore dependency propagation so the active umbrella target is
-not deactivated when a child unit is cycled. If installed, the exception is added by the
-explicit deployment-helper bootstrap in
-[`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#one-time-privilege-bootstrap).
+DEV identity's only sudo rule is the root-owned `wowsync-dev-app-services`
+helper for stopping/starting/restarting the two DEV application units and
+reading their warning-level journal entries; it cannot run arbitrary systemctl
+commands or name arbitrary units, and it ignores dependency propagation so the
+active umbrella target is not deactivated when a child unit is cycled. The
+personal login may run only the `wowsync-dev-deploy` launcher as `wowsync-dev`.
+Both rules are in `ops/sudoers/wowsync-dev-deploy`.
 The `wowsync-live` identity has no sudo privilege.
 
-After migration, completed DEV release trees will be owned by `wowsync-dev` but have write bits
+Completed DEV release trees are owned by `wowsync-dev` but have write bits
 removed after build; the Dashboard/MCP systemd sandboxes also keep release
 paths read-only while allowing only their existing `/var/lib/wowsync-dev`
 state paths to be writable. The developer and runtime share the `wowsync-dev`
@@ -49,13 +47,14 @@ from altering the running application and catch accidental release edits.
 
 ## Files and processes
 
-- DEV developer Git checkout: `/home/wowsync-dev/src/WoWSync-Dashboard`; isolated task
-  worktrees: `/home/wowsync-dev/worktrees/<task>`.
-- Intended post-migration DEV application deployment cache/staging: `/home/wowsync-dev/deploy/`.
+- DEV developer Git checkout: `/home/wowsync-dev/src/WoWSync-Dashboard` (also Herdr's working
+  directory); isolated task worktrees: `/home/wowsync-dev/worktrees/<task>`. Agents may equally work
+  in ordinary worktrees under the personal login; no workspace is the DEV runtime.
+- DEV application deployment cache/staging: `/home/wowsync-dev/deploy/`.
   Completed exact-SHA releases are `/home/wowsync-dev/releases/<sha>` and the
   active runtime pointer is `/home/wowsync-dev/releases/current`. Each release
   contains its source, npm workspace dependencies, and web build. `current`
-  changes atomically; `wowsync-codex` continues entering the developer checkout.
+  changes atomically, only through `wowsync-dev-deploy`.
 - Pinned, administrator-owned LIVE source release:
   `/opt/wowsync/releases/<commit>`. This is not a DEV Git checkout. The initial
   source archive is non-authoritative and needs a separately validated runtime
@@ -150,7 +149,7 @@ the DEV Herdr and Dashboard units adds defense within those service cgroups.
 SSH denies logins by both WoWSync service identities, including the host's
 world-connectable local SSH socket; DEV service namespaces also hide that
 socket, personal home/user bus, LIVE trees, and system D-Bus/CUPS sockets.
-DEV has no personal Herdr, Docker, sudo, LIVE credential, or LIVE file access.
+DEV has no personal Herdr, Docker, general sudo, LIVE credential, or LIVE file access.
 Ports and worktrees are not substitutes for the Unix identity boundary.
 
 ## Validation and rollback
@@ -203,8 +202,9 @@ starts. DEV Codex authentication is provisioned separately, not copied from the
 personal account. See repository `AGENTS.md` for the single-primary-agent
 operating model and human gates.
 The DEV CLI uses a complete packaged 0.157.1 installation at
-`/opt/wowsync/dev-tools/codex-npm-0.157.1`; the existing
-`/usr/local/bin/wowsync-codex` launcher resolves it and enters the DEV checkout.
-This was validated from a fresh launched session on 2026-09-30. See
-[DEV_CODEX_PACKAGE_REPAIR.md](DEV_CODEX_PACKAGE_REPAIR.md) for package history
-and remaining host-only daemon checks.
+`/opt/wowsync/dev-tools/codex-npm-0.157.1`. See
+[DEV_CODEX_PACKAGE_REPAIR.md](DEV_CODEX_PACKAGE_REPAIR.md) for package history.
+No agent-specific launcher is part of the development or deployment workflow:
+agents work in ordinary workspaces and deploy only with `wowsync-dev-deploy`.
+The host-managed `/usr/local/bin/wowsync-codex` convenience launcher is not
+tracked here and is not required.

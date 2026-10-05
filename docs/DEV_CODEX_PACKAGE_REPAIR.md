@@ -1,5 +1,9 @@
 # DEV Codex package repair
 
+> Historical installation record. `wowsync-codex` is an optional host convenience, not part of the
+> development or deployment workflow: agents work in ordinary workspaces and deploy to DEV only with
+> `wowsync-dev-deploy` (see [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)).
+
 Inspected and applied by the host administrator on 2026-09-30. The active
 `/opt/wowsync/dev-tools/codex` now resolves to the complete pinned npm package
 at `codex-npm-0.157.1/bin/codex`. The existing launcher remains host-managed at

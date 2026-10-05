@@ -32,12 +32,14 @@ The temporary validation target was removed afterward; zero ACTIVE Retail target
 
 For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 
-**DEV application deployment infrastructure status.** Exact-SHA release tooling is implemented on
-`feature/dev-exact-sha-deploy` for independent review. Privileged bootstrap has not occurred and
-runtime topology migration has not occurred. Active DEV Dashboard/MCP still run from
-`/home/wowsync-dev/src/WoWSync-Dashboard`; `/home/wowsync-dev/releases/current` is the intended
-post-migration path. Herdr remains on the developer checkout. The live inline tunnel-ID drift is
-unmodified and separate.
+**DEV application deployment.** DEV Dashboard/MCP run from immutable exact-SHA releases at
+`/home/wowsync-dev/releases/current`; the one-time runtime topology migration is complete, and Herdr
+stays on the developer checkout. Deploying is one deliberate command,
+`wowsync-dev-deploy deploy <ref> <validated-sha>`, which builds, backs up, switches, validates, and
+recovers automatically (see [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)). That
+tooling lives on `feature/dev-exact-sha-deploy` until reviewed and merged; installing its launcher
+and sudoers rule (`tools/omarchy/install-wowsync-dev-deploy.sh`) is a separate approved host step.
+The live inline tunnel-ID drift is unmodified and separate.
 
 ## What's shipped
 
@@ -140,9 +142,10 @@ unmodified and separate.
 
 ## Development gates
 
-The primary agent may inspect and change this DEV repository, run normal development commands and
-validation, and commit/push validated work to `feature/dashboard-integration`. It must not merge
-to `main`. Tate remains the gate for authoritative database migration, production credentials,
+Agents work autonomously in isolated workspaces or worktrees on feature branches: they may inspect
+and change the repository, run development commands and validation, and commit/push validated work
+to their feature branch. Deploying to persistent DEV is deliberate: only when explicitly asked, with
+`wowsync-dev-deploy deploy <ref> <validated-sha>`. Agents must not merge to `main`. Tate remains the gate for authoritative database migration, production credentials,
 Windows LIVE destination switch, destructive LIVE work, addon deployment/live-game validation
 (including `/reload`), and merge to `main`.
 

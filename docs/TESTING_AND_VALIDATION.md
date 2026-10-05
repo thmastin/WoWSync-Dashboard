@@ -97,10 +97,10 @@ on 2026-10-02. It is not enforced, automated, or guaranteed by any code in this 
 Record it here because it materially affects how you validate a newly added or changed MCP tool,
 but do not treat it as something this repository's tests cover.
 
-1. Deploy/update the MCP source through the exact-SHA DEV promotion command documented in
-   [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#exact-sha-dev-application-releases). It restarts
-   only Dashboard and MCP; do not restart `wowsync-dev.target` for application deployment.
-2. Confirm the MCP tunnel service is active and its post-deployment journal has no blocking errors.
+1. Deploy the validated SHA with `wowsync-dev-deploy deploy <ref> <validated-sha>` (see
+   [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)). It restarts only Dashboard
+   and MCP; do not restart `wowsync-dev.target` for application deployment.
+2. Confirm the result reports `MCP: healthy` (or run `wowsync-dev-deploy status`).
 3. In ChatGPT: Plugins -> WoWSync DEV -> Manage app -> Refresh tools.
 4. Start a **new** ChatGPT conversation to validate a newly added/changed tool.
 
