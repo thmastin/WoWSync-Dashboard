@@ -113,6 +113,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_summary",
       "get_character_trainer",
       "get_gear_candidate_evidence",
+      "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
@@ -148,6 +149,33 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.match(unsupportedCandidates.provenance.reason ?? "", /Retail-only/);
     assert.equal(unsupportedCandidates.data, undefined);
     assert.equal((await client.callTool({ name: "get_gear_candidate_evidence", arguments: {} })).isError, true, "version is required");
+
+    const registeredRecipientScreen = tools.find((tool) => tool.name === "get_gear_candidate_recipient_screen")!;
+    assert.deepEqual(registeredRecipientScreen.annotations, { readOnlyHint: true, openWorldHint: false, destructiveHint: false });
+    const schema = registeredRecipientScreen.inputSchema as { required?: string[]; additionalProperties?: boolean; properties?: Record<string, { const?: string; enum?: string[]; maximum?: number; minimum?: number }> };
+    assert.deepEqual(schema.required?.sort(), ["exporterName", "exporterRealm", "recipientName", "recipientRealm", "version"]);
+    assert.equal(schema.additionalProperties, false);
+    assert.equal(schema.properties?.version?.const, "retail");
+    assert.equal(schema.properties?.limit?.maximum, 100);
+    const recipientScreen = structured<{ status: string; value?: { data?: { accountMembership: string; accountMembershipCaveat: string; uncheckedRestrictions: string; candidateEvidence: { captured: boolean; rows?: Array<{ result: string; reason: string; observationState: string }> }; recipientLevel: { evidence: { state: string } } }; provenance: { state: string; snapshotId?: number; derivedFrom?: string[]; warning?: string } } }>(await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero", recipientRealm: "Cairne" } }));
+    assert.equal(recipientScreen.status, "FOUND");
+    assert.equal(recipientScreen.value?.data?.candidateEvidence.captured, true);
+    assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.result, "NOT_RULED_OUT_BY_CHECKED_RULES", "exporter's currentCharacterCanUse=false does not rule out the selected recipient");
+    assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.observationState, "LAST_SEEN");
+    assert.equal(recipientScreen.value?.data?.recipientLevel.evidence.state, "KNOWN");
+    assert.equal(recipientScreen.value?.data?.accountMembership, "NOT_ESTABLISHED_BY_DASHBOARD_IDENTITY");
+    assert.match(recipientScreen.value?.data?.accountMembershipCaveat ?? "", /does not establish/);
+    assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /No equip restrictions were evaluated/);
+    assert.equal(recipientScreen.value?.provenance.state, "DERIVED");
+    assert.ok(recipientScreen.value?.provenance.snapshotId);
+    assert.ok((recipientScreen.value?.provenance.derivedFrom?.length ?? 0) >= 2);
+    assert.equal((await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "classic-era", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero", recipientRealm: "Cairne" } })).isError, true, "tool schema allows Retail only");
+    assert.equal((await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero", recipientRealm: "Cairne", extra: true } })).isError, true, "strict tool schema rejects unlisted fields");
+    assert.equal((await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero" } })).isError, true, "recipient realm is required");
+    const unavailableScreen = structured<{ status: string; value?: { data?: { candidateEvidence: { captured: boolean; rows?: unknown[]; reason?: string } } } }>(await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Zero", exporterRealm: "Cairne", recipientName: "Virek", recipientRealm: "Cairne" } }));
+    assert.equal(unavailableScreen.value?.data?.candidateEvidence.captured, false);
+    assert.equal(unavailableScreen.value?.data?.candidateEvidence.rows, undefined);
+    assert.match(unavailableScreen.value?.data?.candidateEvidence.reason ?? "", /unavailable, not an empty/);
 
     const listed = structured<{ version: string; totalCount: number; truncated: boolean }>(await client.callTool({ name: "list_characters", arguments: { version: "retail" } }));
     assert.equal(listed.version, "retail");
@@ -523,6 +551,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_summary",
       "get_character_trainer",
       "get_gear_candidate_evidence",
+      "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",

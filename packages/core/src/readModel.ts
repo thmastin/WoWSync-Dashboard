@@ -171,6 +171,48 @@ export interface GearCandidateEvidenceRead {
   }>;
   offset: number; limit: number; totalCount: number; truncated: boolean;
 }
+export interface GearCandidateRecipientScreenRead {
+  version: "retail";
+  exporter: GearCandidateEvidenceRead["characters"][number]["identity"];
+  recipient: GearCandidateEvidenceRead["characters"][number]["identity"];
+  accountMembership: "NOT_ESTABLISHED_BY_DASHBOARD_IDENTITY";
+  accountMembershipCaveat: "Dashboard-known Retail identity does not establish that exporter and recipient belong to the same Battle.net account.";
+  candidateEvidence: {
+    captured: boolean;
+    reason?: string;
+    exporterOnlyEvidenceNote: "currentCharacterCanUse describes only the exporting character and is not used to screen the selected recipient.";
+    bindingEvidenceNote: "Binding predicates are raw independent evidence and are not used to infer transferability.";
+    snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown"; candidateObservedAt: number; candidateFreshness: "recent" | "stale" | "unknown" };
+    completeness?: GearCandidatesSection["completeness"];
+    rows?: Array<{
+      /** One-based occurrence within this captured section only; it is not a durable candidate identity. */
+      rowOrdinal: number;
+      candidateState: GearCandidatesSection["rows"][number]["candidateState"];
+      observationState: GearCandidatesSection["rows"][number]["observationState"];
+      result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN";
+      reason: string;
+      requiredLevel: GearCandidatesSection["rows"][number]["requiredLevel"];
+      candidate: GearCandidatesSection["rows"][number];
+    }>;
+    offset?: number;
+    limit?: number;
+    totalCount?: number;
+    truncated?: boolean;
+  };
+  recipientLevel: {
+    evidence: { state: "KNOWN"; value: number; sectionState: SectionState } | { state: "UNKNOWN"; value?: number; sectionState: SectionState; reason: string };
+    snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  };
+  uncheckedRestrictions: "No equip restrictions were evaluated beyond the captured required-level comparison. This result does not establish CanEquip, recipient suitability, upgrade value, or transferability.";
+  paging?: { offset: number; limit: number; totalCount: number; truncated: boolean };
+}
+export type GearCandidateRecipientScreenResolution =
+  | { status: "UNSUPPORTED_VERSION"; version: VersionOrUnknown }
+  | { status: "EXPORTER_NOT_FOUND"; version: "retail"; name: string; realm: string }
+  | { status: "EXPORTER_AMBIGUOUS"; version: "retail"; name: string; realm: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> }
+  | { status: "RECIPIENT_NOT_FOUND"; version: "retail"; name: string; realm: string }
+  | { status: "RECIPIENT_AMBIGUOUS"; version: "retail"; name: string; realm: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> }
+  | { status: "FOUND"; value: ReadValue<GearCandidateRecipientScreenRead> };
 export interface CharacterCurrentState {
   identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string; class?: string; faction?: string; level?: number };
   provenance: ReadProvenance;
@@ -332,6 +374,108 @@ export class DashboardReadModel {
       data: { version: "retail", selection: "latest stored candidate evidence per character", note: "Evidence is snapshot-scoped and may be historical; rows are not merged into account inventory.", characters: items, offset: page.offset, limit: page.limit, totalCount: characters.length, truncated: page.offset + items.length < characters.length },
       provenance: { state: "DERIVED", version: "retail", ...(latestObservedAt !== undefined ? { observedAt: latestObservedAt, freshness: classifyFreshness(latestObservedAt, this.now()) } : {}), source: "latest stored snapshot containing the Retail [GEAR CANDIDATES] sidecar per character", derivedFrom: characters.flatMap((item) => item.snapshot ? [String(item.snapshot.snapshotId)] : []), warning: "Latest stored candidate evidence is not necessarily current inventory; candidate rows are not merged across characters." },
     };
+  }
+
+  /** One deterministic Retail required-level screen; passing this check is not an equipability or suitability claim. */
+  getGearCandidateRecipientScreen(query: { version: VersionOrUnknown; exporterName: string; exporterRealm: string; recipientName: string; recipientRealm: string; offset?: number; limit?: number }): GearCandidateRecipientScreenResolution {
+    requireVersion(query.version);
+    if (query.version !== "retail") return { status: "UNSUPPORTED_VERSION", version: query.version };
+    const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
+
+    const resolveExact = (name: string, realm: string) => this.store.listCharacters("retail").filter((character) =>
+      character.name.toLocaleLowerCase() === name.toLocaleLowerCase() && character.realm.toLocaleLowerCase() === realm.toLocaleLowerCase());
+    const exporterMatches = resolveExact(query.exporterName, query.exporterRealm);
+    if (exporterMatches.length === 0) return { status: "EXPORTER_NOT_FOUND", version: "retail", name: query.exporterName, realm: query.exporterRealm };
+    if (exporterMatches.length > 1) return { status: "EXPORTER_AMBIGUOUS", version: "retail", name: query.exporterName, realm: query.exporterRealm, candidates: exporterMatches.map(({ identityKey, name, realm }) => ({ identityKey, name, realm })) };
+    const recipientMatches = resolveExact(query.recipientName, query.recipientRealm);
+    if (recipientMatches.length === 0) return { status: "RECIPIENT_NOT_FOUND", version: "retail", name: query.recipientName, realm: query.recipientRealm };
+    if (recipientMatches.length > 1) return { status: "RECIPIENT_AMBIGUOUS", version: "retail", name: query.recipientName, realm: query.recipientRealm, candidates: recipientMatches.map(({ identityKey, name, realm }) => ({ identityKey, name, realm })) };
+
+    const exporter = exporterMatches[0]!;
+    const recipient = recipientMatches[0]!;
+    const exporterIdentity = { version: "retail" as const, identityKey: exporter.identityKey, name: exporter.name, realm: exporter.realm };
+    const recipientIdentity = { version: "retail" as const, identityKey: recipient.identityKey, name: recipient.name, realm: recipient.realm };
+    const exporterSnapshots = this.store.listSnapshots(exporter.identityKey);
+    const candidateSnapshot = exporterSnapshots.find((snapshot) => snapshot.parsed.gearCandidates !== undefined);
+    const recipientSnapshot = this.store.listSnapshots(recipient.identityKey)[0];
+    const recipientCharacter = recipientSnapshot?.parsed.character;
+    const recipientObservedAt = recipientSnapshot ? snapshotObservedAt(recipientSnapshot.generatedAt, recipientSnapshot.importedAt) : undefined;
+    const recipientSectionState = recipientCharacter?.status.state ?? "UNKNOWN";
+    const recipientLevelUsable = recipientSectionState === "OBSERVED" && recipientCharacter?.level !== undefined;
+    const recipientLevel: GearCandidateRecipientScreenRead["recipientLevel"] = {
+      evidence: recipientLevelUsable
+        ? { state: "KNOWN", value: recipientCharacter!.level!, sectionState: recipientSectionState }
+        : { state: "UNKNOWN", ...(recipientCharacter?.level !== undefined ? { value: recipientCharacter.level } : {}), sectionState: recipientSectionState,
+          reason: recipientSectionState !== "OBSERVED" ? `Recipient character level provenance is ${recipientSectionState}; only OBSERVED level evidence is used for this screen.` : "Recipient level is not known in the latest stored snapshot." },
+      ...(recipientSnapshot && recipientObservedAt !== undefined ? { snapshot: { snapshotId: recipientSnapshot.id, ...(recipientSnapshot.generatedAt !== undefined ? { generatedAt: recipientSnapshot.generatedAt } : {}), observedAt: recipientObservedAt, importedAt: recipientSnapshot.importedAt, freshness: classifyFreshness(recipientObservedAt, this.now()) } } : {}),
+    };
+
+    let candidateEvidence: GearCandidateRecipientScreenRead["candidateEvidence"];
+    let derivedFrom: string[] = [];
+    if (!candidateSnapshot?.parsed.gearCandidates) {
+      candidateEvidence = { captured: false, exporterOnlyEvidenceNote: "currentCharacterCanUse describes only the exporting character and is not used to screen the selected recipient.", bindingEvidenceNote: "Binding predicates are raw independent evidence and are not used to infer transferability.", reason: "No stored exporter snapshot contains [GEAR CANDIDATES]; candidate evidence is unavailable, not an empty candidate list." };
+    } else {
+      const section = candidateSnapshot.parsed.gearCandidates;
+      const exporterObservedAt = snapshotObservedAt(candidateSnapshot.generatedAt, candidateSnapshot.importedAt);
+      const candidateObservedAt = section.observedAt ?? exporterObservedAt;
+      const allRows = section.rows.map((candidate, index) => {
+        let result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN";
+        let reason: string;
+        if (candidate.requiredLevel.state !== "KNOWN") {
+          result = "UNKNOWN";
+          reason = "Candidate required level is UNKNOWN, so the required-level check cannot be evaluated.";
+        } else if (recipientLevel.evidence.state !== "KNOWN") {
+          result = "UNKNOWN";
+          reason = `Recipient level is not usable for comparison (${recipientLevel.evidence.reason}).`;
+        } else if (!recipientLevelUsable) {
+          result = "UNKNOWN";
+          reason = "Recipient level provenance is insufficient for comparison.";
+        } else if (recipientLevel.evidence.value < candidate.requiredLevel.value) {
+          result = "RULED_OUT";
+          reason = `Captured candidate required level ${candidate.requiredLevel.value} exceeds recipient observed level ${recipientLevel.evidence.value}.`;
+        } else {
+          result = "NOT_RULED_OUT_BY_CHECKED_RULES";
+          reason = `Captured candidate required level ${candidate.requiredLevel.value} does not exceed recipient observed level ${recipientLevel.evidence.value}; no other equip restrictions were evaluated.`;
+        }
+        return { rowOrdinal: index + 1, candidateState: candidate.candidateState, observationState: candidate.observationState, result, reason, requiredLevel: candidate.requiredLevel, candidate };
+      });
+      const rows = allRows.slice(page.offset, page.offset + page.limit);
+      candidateEvidence = {
+        captured: true,
+        exporterOnlyEvidenceNote: "currentCharacterCanUse describes only the exporting character and is not used to screen the selected recipient.",
+        bindingEvidenceNote: "Binding predicates are raw independent evidence and are not used to infer transferability.",
+        snapshot: { snapshotId: candidateSnapshot.id, ...(candidateSnapshot.generatedAt !== undefined ? { generatedAt: candidateSnapshot.generatedAt } : {}), observedAt: exporterObservedAt, importedAt: candidateSnapshot.importedAt, freshness: classifyFreshness(exporterObservedAt, this.now()), candidateObservedAt, candidateFreshness: classifyFreshness(candidateObservedAt, this.now()) },
+        completeness: section.completeness,
+        rows,
+        offset: page.offset,
+        limit: page.limit,
+        totalCount: allRows.length,
+        truncated: page.offset + rows.length < allRows.length,
+      };
+      derivedFrom = [String(candidateSnapshot.id), ...(recipientSnapshot ? [String(recipientSnapshot.id)] : [])];
+    }
+
+    const observationTimes = [candidateEvidence.snapshot?.observedAt, recipientLevel.snapshot?.observedAt].filter((value): value is number => value !== undefined);
+    const latestObservedAt = observationTimes.length > 0 ? Math.max(...observationTimes) : undefined;
+    const value: GearCandidateRecipientScreenRead = {
+      version: "retail",
+      exporter: exporterIdentity,
+      recipient: recipientIdentity,
+      accountMembership: "NOT_ESTABLISHED_BY_DASHBOARD_IDENTITY",
+      accountMembershipCaveat: "Dashboard-known Retail identity does not establish that exporter and recipient belong to the same Battle.net account.",
+      candidateEvidence,
+      recipientLevel,
+      uncheckedRestrictions: "No equip restrictions were evaluated beyond the captured required-level comparison. This result does not establish CanEquip, recipient suitability, upgrade value, or transferability.",
+      ...(candidateEvidence.captured ? { paging: { offset: candidateEvidence.offset!, limit: candidateEvidence.limit!, totalCount: candidateEvidence.totalCount!, truncated: candidateEvidence.truncated! } } : {}),
+    };
+    return { status: "FOUND", value: { data: value, provenance: {
+      state: "DERIVED", version: "retail", identityKey: exporter.identityKey,
+      ...(latestObservedAt !== undefined ? { observedAt: latestObservedAt, freshness: classifyFreshness(latestObservedAt, this.now()) } : {}),
+      ...(candidateEvidence.snapshot ? { importedAt: candidateEvidence.snapshot.importedAt, snapshotId: candidateEvidence.snapshot.snapshotId } : {}),
+      source: "latest stored Retail candidate-bearing exporter snapshot and latest stored recipient character snapshot",
+      ...(derivedFrom.length > 0 ? { derivedFrom } : recipientSnapshot ? { derivedFrom: [String(recipientSnapshot.id)] } : {}),
+      warning: "This is a required-level rule-out screen only. Latest stored evidence may be historical; account membership is not established; no other equip restrictions are evaluated.",
+    } } };
   }
 
   getCharacterSummary(query: CharacterQuery): CharacterResolution<ReadValue<CharacterFacts>> {
