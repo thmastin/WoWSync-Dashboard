@@ -119,9 +119,10 @@ Work intended next, in this order.
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
-  [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is still a direct HTTP call: a
-  demand-management UI or an MCP mutation tool for demand CRUD are both absent (see
-  `CURRENT_STATE.md`, "Current limitations"; MCP mutation would overturn an enforced invariant), and
+  [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is the Retail
+  Dashboard Allocation tab (shipped; see Recently Completed). An MCP
+  mutation tool for demand CRUD remains absent by design (MCP mutation would overturn an enforced
+  invariant), and
   a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
   BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
   is deliberately left exploratory — see
@@ -410,6 +411,13 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **ERP Allocation Tab — Dashboard stock targets + allocation review: shipped, merged to `main`, and
+  DEV-validated (2026-10-04)** at feature source `51628e4514448bb9cfdb56c1214d27ee38fa92e3`. Retail-only `#/retail/allocation` tab
+  authoring `STOCK_TARGET` demands over the narrow `GET /api/versions/:version/allocation-review` route,
+  with version-scoped / inactive-safe demand mutations. Promoted to DEV as that exact SHA (no schema
+  change); a real create/read/evidence/remove UI cycle passed and the temporary target was removed,
+  leaving zero ACTIVE targets. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §25 and
+  its DEV validation record.
 - **Azeroth ERP Vertical Slice 2 — Account Allocation Review: shipped, merged to `main`
   (`77f9c95`), and live-validated (2026-10-03).** `DashboardReadModel.getAllocationReview` and the
   read-only `get_allocation_review` MCP tool: every active demand's allocation result (identical to

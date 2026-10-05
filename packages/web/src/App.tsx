@@ -13,6 +13,7 @@ import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
+import AllocationTab from "./components/AllocationTab.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -253,13 +254,18 @@ export default function App() {
                   Research
                 </button>
                 {activeVersion === "retail" && (
-                  <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
-                    Shared Storage
-                  </button>
+                  <>
+                    <button className={tabView === "allocation" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "allocation" }))}>
+                      Allocation
+                    </button>
+                    <button className={tabView === "shared" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "shared" }))}>
+                      Shared Storage
+                    </button>
+                  </>
                 )}
               </div>
 
-              {route.view === "shared" ? null : scoped && scoped.isRealmScoped ? (
+              {route.view === "shared" || route.view === "allocation" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
@@ -279,6 +285,7 @@ export default function App() {
               ) : null}
             </div>
 
+            {route.view === "allocation" && <AllocationTab activeVersion={activeVersion} refreshTick={refreshTick} />}
             {route.view === "shared" && <SharedStorageView />}
             {route.view === "research" && <MidnightResearch />}
             {scoped && route.view === "items" && (
@@ -290,10 +297,10 @@ export default function App() {
                 onOpenCharacter={openCharacter}
               />
             )}
-            {route.view !== "shared" && route.view !== "research" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && route.view !== "research" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster
