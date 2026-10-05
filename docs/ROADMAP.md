@@ -48,14 +48,6 @@ Where a link points at another repository, the path is given relative to that re
 
 Work happening now.
 
-- [ ] **ERP Allocation Tab — Dashboard stock targets + allocation review: implemented, awaiting
-  independent review and DEV validation.** Branch `feature/erp-allocation-tab` (from `main` at
-  `17f44a2`). Retail-only `#/retail/allocation` tab for authoring `STOCK_TARGET` demands and reading the
-  Slice 1–3 allocation review, over the narrow `GET /api/versions/:version/allocation-review` route
-  (second consumer of `DashboardReadModel`), with version-scoped / inactive-safe demand mutations. Not
-  merged, not deployed to DEV, not live-validated. Contract:
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §25.
-
 - [x] **Forever completion pass (GearExport): complete.** GearExport branch
   `feature/retail-bank-support-implementation`, commit
   `791cb9d33d9b979441550858a6708c61a4d4dcdd` (`feat: complete live-validated Forever support`).
@@ -127,8 +119,8 @@ Work intended next, in this order.
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
-  [`CURRENT_STATE.md`](CURRENT_STATE.md). On `main`, demand management is still a direct HTTP
-  call; the Dashboard Allocation tab (see Active) adds the demand-management UI once reviewed. An MCP
+  [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is the Retail
+  Dashboard Allocation tab (shipped; see Recently Completed). An MCP
   mutation tool for demand CRUD remains absent by design (MCP mutation would overturn an enforced
   invariant), and
   a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
@@ -419,6 +411,13 @@ Guard against re-adding. This is not a changelog.
   (item 14)
 
 **Dashboard**
+- **ERP Allocation Tab — Dashboard stock targets + allocation review: shipped, merged to `main`, and
+  DEV-validated (2026-10-04)** at feature source `51628e4514448bb9cfdb56c1214d27ee38fa92e3`. Retail-only `#/retail/allocation` tab
+  authoring `STOCK_TARGET` demands over the narrow `GET /api/versions/:version/allocation-review` route,
+  with version-scoped / inactive-safe demand mutations. Promoted to DEV as that exact SHA (no schema
+  change); a real create/read/evidence/remove UI cycle passed and the temporary target was removed,
+  leaving zero ACTIVE targets. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §25 and
+  its DEV validation record.
 - **Azeroth ERP Vertical Slice 2 — Account Allocation Review: shipped, merged to `main`
   (`77f9c95`), and live-validated (2026-10-03).** `DashboardReadModel.getAllocationReview` and the
   read-only `get_allocation_review` MCP tool: every active demand's allocation result (identical to

@@ -344,8 +344,8 @@ character whose export happened to carry it.
 
 ## Allocation (Retail stock targets)
 
-> **Status:** implemented on `feature/erp-allocation-tab`, awaiting independent review and DEV validation. Not yet
-> live-validated or merged.
+> **Status:** shipped and DEV-validated (feature source `51628e4`, 2026-10-04). See
+> [docs/AZEROTH_ERP_ARCHITECTURE.md](docs/AZEROTH_ERP_ARCHITECTURE.md) §25.
 
 Retail → **Allocation** tab (`#/retail/allocation`): say how many of an item the whole account should keep, and see
 how the account's observed storage (character bags and banks plus the Warband bank) measures up. Nothing here moves,

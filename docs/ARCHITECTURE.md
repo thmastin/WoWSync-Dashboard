@@ -86,7 +86,7 @@ local management operations. The external path is structurally narrower:
 SQLite with `readOnly: true` through `SqliteSnapshotReadStore`. It never opens
 the writable `SqliteSnapshotStore`, initializes or migrates schema, or performs
 database backfills. Schema upgrades belong to the normal writable application
-path, not to MCP startup. (Separately, on `feature/erp-allocation-tab` the Dashboard server
+path, not to MCP startup. (Separately, the Dashboard server
 constructs an in-process `DashboardReadModel` over its own store for one read route,
 `GET /api/versions/:version/allocation-review`; that is not the MCP path and changes none of the
 above. See `SYSTEM_REFERENCE.md`.) A live WAL database may create SQLite coordination

@@ -453,8 +453,8 @@ Result semantics (`buildAllocationResult`, precedence `NO_ACTIVE_DEMAND` → `CO
 
 ## 25. Dashboard Allocation tab (Retail stock targets + allocation review)
 
-**Implemented on `feature/erp-allocation-tab`; awaiting independent review and DEV validation. Not
-live-validated, not on `main`.** The first user-facing Azeroth ERP surface: Slices 1–3 made directly
+**Shipped: reviewed, DEV-validated at feature source `51628e4514448bb9cfdb56c1214d27ee38fa92e3`, and merged to `main`** (see the
+DEV validation record below). The first user-facing Azeroth ERP surface: Slices 1–3 made directly
 usable from the Dashboard, with **no change to Slice 1–3 semantics**.
 
 - **Placement**: a Retail-only top-level tab, `#/retail/allocation` (routing follows Shared Storage:
@@ -518,6 +518,41 @@ usable from the Dashboard, with **no change to Slice 1–3 semantics**.
   rows that still exist (e.g. a mutation removed the last row of a later page), the tab never calls it empty:
   it says the page is past the end of N rows, offers Previous, and moves to the last valid page and re-reads
   (a pure paging reducer acting on the completed read; no timer). A search starts the held list at page 1.
+
+## Live validation record: Dashboard Allocation tab
+
+**This is a historical acceptance record (2026-10-04), not a description of current demand state.**
+
+**Validated source:** `51628e4514448bb9cfdb56c1214d27ee38fa92e3` on `feature/erp-allocation-tab` (based on `main` at
+`17f44a27f33f055b5244c8e5175e4ef1482bf283`). Before deployment: all four TypeScript `noEmit` checks,
+1134/1134 tests and the web build passed; the `itemNames` MCP sidecar contract and the real
+allocation-review output (contract-tested against the web mirror) were covered.
+
+**DEV deployment:** that exact SHA was prepared as an immutable release and promoted to DEV
+(`PROMOTE_SUCCESS`, previous `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`). No schema change; SQLite
+integrity `ok` before and after; Dashboard and MCP tunnel active with 0 restarts; Herdr untouched;
+`/`, `/api/versions` and `/api/versions/retail/allocation-review` returned 200.
+
+**UI validation (`#/retail/allocation`), starting from zero ACTIVE targets:**
+
+- The account-level status warned that 2 character banks were unobserved and stated that surplus could
+  not be cleared for sale, while confirmed quantities stayed usable.
+- Held with no target listed 687 items under "No target set, so surplus is unknown. This is not
+  surplus." OBSERVED and LAST_SEEN quantities were distinguished; binding evidence and item-string
+  ambiguity were surfaced. Four earlier validation demands appeared only in Removed targets history.
+- A temporary target was created: Tough Jerky (base item 117), Keep 2, purpose "DEV Allocation UI
+  validation". Result: Have 4 · Allocated 2 · Short 0 · "At least 2 surplus" · Needs review (unseen
+  storage), with the surplus explicitly not cleared for sale; the recommendation stayed non-executing.
+  Evidence: OBSERVED bags Hallo (Tichondrius) 3 and Virek (Cairne) 1; confirmed rows share one item
+  string; 2 "not reported bound" (explicitly not proof of tradeability/movability); unresolved
+  account-owned scope `character-bank` gates sale disposition of the confirmed floor surplus.
+- The target was removed. The page reported the item now had no target and unknown surplus; Tough
+  Jerky returned to Held with no target (Seen 4); the removed target was kept in history (Keep 2, same
+  purpose); zero ACTIVE targets remained.
+
+This proves the chain observed inventory -> explicit demand -> allocation -> conservative surplus ->
+unresolved-evidence disposition gate -> explainable evidence -> removal/history through the real UI,
+and visibly preserved "no active demand => surplus cannot be determined" and "unknown storage != zero".
 
 ## Live validation record: Azeroth ERP Slice 3
 
