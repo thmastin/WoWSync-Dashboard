@@ -687,6 +687,19 @@ function candidateInteger(raw: string, column: string, line: string): number {
 function candidateNumber(raw: string, column: string, line: string): GearCandidateEvidence<number> {
   return raw === "?" ? { state: "UNKNOWN" } : { state: "KNOWN", value: candidateInteger(raw, column, line) };
 }
+function candidateFiniteNumber(raw: string, column: string, line: string): GearCandidateEvidence<number> {
+  if (raw === "?") return { state: "UNKNOWN" };
+  // GearExport serializes an unmapped tooltip enum's raw Lua number with
+  // tostring(), so this field may be negative or fractional (and may use an
+  // exponent). Keep that producer evidence without changing the other
+  // candidate fields' non-negative integer contract.
+  if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) {
+    fail(`Malformed [GEAR CANDIDATES] ${column}: expected a finite number or "?"`, line);
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n)) fail(`Malformed [GEAR CANDIDATES] ${column}: value is not finite`, line);
+  return { state: "KNOWN", value: n };
+}
 function candidateString(raw: string): GearCandidateEvidence<string> {
   return raw === "?" ? { state: "UNKNOWN" } : { state: "KNOWN", value: fieldValue(raw)! };
 }
@@ -732,7 +745,7 @@ function parseGearCandidates(lines: string[]): GearCandidatesSection {
     if (observationState !== "OBSERVED" && observationState !== "LAST_SEEN") fail(`Malformed [GEAR CANDIDATES] observationState "${observationState}"`, line);
     const slot = candidateNumber(cols[3]!, "slot", line);
     const containerID = candidateNumber(cols[2]!, "containerID", line);
-    const tooltipRaw = candidateNumber(cols[18]!, "tooltipBindingRawValue", line);
+    const tooltipRaw = candidateFiniteNumber(cols[18]!, "tooltipBindingRawValue", line);
     rows.push({
       candidateState, locationType, containerID, slot,
       itemID: candidateNumber(cols[4]!, "itemID", line), itemString: candidateString(cols[5]!), itemGUID: candidateString(cols[6]!),

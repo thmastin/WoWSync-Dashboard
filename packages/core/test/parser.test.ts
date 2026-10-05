@@ -217,6 +217,24 @@ test("parses Retail gear candidates with UNKNOWN, false, zero, optional GUID, bi
   assert.deepEqual(unknownRow.currentCharacterCanUse, { state: "UNKNOWN" });
 });
 
+test("tooltipBindingRawValue preserves UNKNOWN and finite negative, fractional and zero values", () => {
+  const base = buildWowSyncExport({ character: { clientFamily: "Retail" } });
+  const rowWithRawValue = (value: string) => {
+    const columns = candidateLine.split("\t");
+    columns[18] = value;
+    return columns.join("\t");
+  };
+  const parsedValue = (value: string) => parseWowSyncExport(
+    addCandidateSection(base, candidateSection(undefined, "1", rowWithRawValue(value))),
+  ).gearCandidates!.rows[0]!.tooltipBindingRawValue;
+
+  assert.deepEqual(parsedValue("?"), { state: "UNKNOWN" });
+  assert.deepEqual(parsedValue("0"), { state: "KNOWN", value: 0 });
+  assert.deepEqual(parsedValue("-1"), { state: "KNOWN", value: -1 });
+  assert.deepEqual(parsedValue("1.5"), { state: "KNOWN", value: 1.5 });
+  assert.throws(() => parsedValue("Infinity"), /expected a finite number or "\?"/);
+});
+
 test("gear candidates are optional, captured-empty is distinct, and candidate section is Retail-only", () => {
   const legacy = parseWowSyncExport(buildWowSyncExport({ character: { clientFamily: "Retail" } }));
   assert.equal(legacy.gearCandidates, undefined);
