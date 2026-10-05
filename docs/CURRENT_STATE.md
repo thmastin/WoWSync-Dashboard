@@ -36,9 +36,10 @@ For the fixed onboarding entry point, start at [`START_HERE.md`](START_HERE.md).
 `/home/wowsync-dev/releases/current`; the one-time runtime topology migration is complete, and Herdr
 stays on the developer checkout. Deploying is one deliberate command,
 `wowsync-dev-deploy deploy <ref> <validated-sha>`, which builds, backs up, switches, validates, and
-recovers automatically (see [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)). That
-tooling lives on `feature/dev-exact-sha-deploy` until reviewed and merged; installing its launcher
-and sudoers rule (`tools/omarchy/install-wowsync-dev-deploy.sh`) is a separate approved host step.
+recovers automatically (see [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#deploying-to-dev)). The
+launcher and sudoers rule are installed, the one-time bootstrap is complete, and the tool passed its
+first real-host deployment on 2026-10-05 (`51628e4` -> `7da561362ef740a014fe65276ecccb60536c3af6`;
+record in [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md#history)). That tooling is on `main`.
 The live inline tunnel-ID drift is unmodified and separate.
 
 ## What's shipped

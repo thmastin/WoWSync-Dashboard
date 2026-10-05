@@ -310,12 +310,13 @@ activated atomically, and the previous fragment restored if the full configurati
 validate). It does not start, stop, or deploy anything. Re-run it only when one of those three
 files changes; ordinary deploy-tool changes ship with the next deployment.
 
-### First deployment with this tool
+### First deployment with this tool (completed on this host)
 
-The launcher runs the tool from the deployed release, so the release that is running when the
-launcher is first installed must already contain `tools/omarchy/wowsync-dev-deploy.mjs`. If it does
-not (the launcher says the release "predates this deploy tool"), run the tool once from an export of
-the reviewed commit as `wowsync-dev`:
+This one-time bootstrap was completed on 2026-10-05 (see "History"); it is not part of routine
+deployment. It is kept only for a rebuilt host. The launcher runs the tool from the deployed
+release, so the release that is running when the launcher is first installed must already contain
+`tools/omarchy/wowsync-dev-deploy.mjs`. If it does not (the launcher says the release "predates this
+deploy tool"), run the tool once from an export of the reviewed commit as `wowsync-dev`:
 
 ```bash
 # as wowsync-dev, e.g. `sudo -u wowsync-dev -i`
@@ -368,6 +369,18 @@ The one-time topology migration that moved Dashboard/MCP from the developer chec
 `releases/current` is complete (it preceded the 2026-10-04 Allocation deployment). Its scripts,
 the trusted-export bootstrap, and the `seed-initial`/`--previous-runtime-sha` path were removed
 afterward and remain in Git history.
+
+First real-host validation of the simplified tool (2026-10-05): after independent review, the entry
+points were installed from a clean archive of `7da561362ef740a014fe65276ecccb60536c3af6`; the
+installed `wowsync-dev-deploy status` crossed to `wowsync-dev` non-interactively and reported that
+release `51628e4514448bb9cfdb56c1214d27ee38fa92e3` predated the tool, as expected. The one-time
+bootstrap then ran `deploy feature/dev-exact-sha-deploy 7da561362ef740a014fe65276ecccb60536c3af6`:
+`DEV DEPLOYED` from previous `51628e4…`, release built and tested in staging, SQLite backup OK with
+integrity ok (`/var/lib/wowsync-dev/backups/deploy/20261005T043838.915Z-bbe728c1-51628e4514448bb9cfdb56c1214d27ee38fa92e3-to-7da561362ef740a014fe65276ecccb60536c3af6.sqlite`),
+schema unchanged, Dashboard healthy (`/` 200, `/api/versions` 200), MCP healthy, Herdr untouched,
+no journal warnings. Afterwards the installed `wowsync-dev-deploy status` from the personal login
+reported `DEV STATUS: HEALTHY` at `7da5613…` (last action `PROMOTE_SUCCESS`). The bootstrap is
+complete; every deployment is now `wowsync-dev-deploy deploy <ref> <validated-sha>`.
 
 ## Safe, read-only validation commands
 
