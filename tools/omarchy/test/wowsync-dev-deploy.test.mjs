@@ -16,8 +16,12 @@ import {
   assertTargetActive,
   appendAudit,
   assertServiceStateHealthy,
+  assertFreshReleaseServices,
+  assertReleaseUnitInvocation,
   makeConsistentBackup,
   parseRoute,
+  parseSystemdInvocationId,
+  parseSystemdReleaseUnitState,
   parseSystemdServiceState,
   parseSystemdTargetState,
   prepareRelease,
@@ -28,6 +32,7 @@ import {
   resolveExactCommit,
   validateRemoteRef,
   validateSha,
+  validateStartedRelease,
   waitForReadiness,
 } from '../wowsync-dev-deploy.mjs';
 
@@ -322,6 +327,110 @@ test('systemd target health uses only its named ActiveState and SubState propert
   assert.deepEqual(assertTargetActive(healthy), healthy);
   assert.throws(() => assertTargetActive(parseSystemdTargetState('SubState=dead\nActiveState=inactive\n')), /not active/);
   assert.throws(() => parseSystemdTargetState('SubState=active\n'), /Missing or empty.*ActiveState/);
+});
+
+const DASHBOARD = 'wowsync-dev-dashboard.service';
+const MCP = 'wowsync-dev-mcp-tunnel.service';
+const OLD_INVOCATIONS = { [DASHBOARD]: ['6a3e8aa522144508a0b34044d840b26d'], [MCP]: ['34554b2295dc4b17abaaa176578ade2f'] };
+const NEW_INVOCATIONS = { [DASHBOARD]: 'aa11bb22cc33dd44ee55ff6600778899', [MCP]: '0123456789abcdef0123456789abcdef' };
+
+function releaseUnitShow(unit, current, overrides = {}) {
+  const entry = unit === DASHBOARD
+    ? `/usr/bin/node ${current}/packages/server/src/index.ts`
+    : `/opt/wowsync/dev-tools/tunnel-client/v0.0.15/tunnel-client run --control-plane.api-key=file:/run/credentials/${unit}/tunnel-api-key --mcp.command=/usr/bin/node ${current}/packages/mcp/src/index.ts`;
+  const { InvocationID = NEW_INVOCATIONS[unit], NeedDaemonReload = 'no', WorkingDirectory = current, argv = entry } = overrides;
+  return `NeedDaemonReload=${NeedDaemonReload}\nInvocationID=${InvocationID}\nExecStart={ path=${argv.split(' ')[0]} ; argv[]=${argv} ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=446694 ; code=(null) ; status=0/0 }\nWorkingDirectory=${WorkingDirectory}\n`;
+}
+
+async function releaseFixture(t) {
+  const root = await tempDir(t);
+  const releases = path.join(root, 'releases');
+  const sha = '81f66eeb8a035acf3c633f6fa9d8693cc4f9a009';
+  const other = '2'.repeat(40);
+  await mkdir(path.join(releases, sha), { recursive: true });
+  await mkdir(path.join(releases, other), { recursive: true });
+  await atomicSetCurrent(releases, sha);
+  const paths = { releases, current: path.join(releases, 'current') };
+  const realpathCalls = [];
+  // Simulates the real host: a just-started hardened unit's /proc entry is unreadable.
+  const realpathFn = async (target) => {
+    realpathCalls.push(target);
+    if (target.startsWith('/proc/')) throw Object.assign(new Error(`EACCES: permission denied, realpath '${target}'`), { code: 'EACCES' });
+    return realpath(target);
+  };
+  const unitOverrides = {};
+  const options = {
+    paths,
+    realpathFn,
+    readServiceState: async (unit) => ({ ActiveState: 'active', SubState: 'running', MainPID: unit === DASHBOARD ? 446694 : 446695, NRestarts: 0, Result: 'success' }),
+    readReleaseUnitState: async (unit) => parseSystemdReleaseUnitState(releaseUnitShow(unit, paths.current, unitOverrides[unit])),
+    readTargetState: async () => ({ ActiveState: 'active', SubState: 'active' }),
+  };
+  return { releases, sha, other, paths, options, realpathCalls, unitOverrides };
+}
+
+test('post-start release validation never inspects /proc and succeeds when /proc would return EACCES', async (t) => {
+  const f = await releaseFixture(t);
+  const result = await assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options);
+  assert.equal(result.units[DASHBOARD].InvocationID, NEW_INVOCATIONS[DASHBOARD]);
+  assert.equal(result.units[MCP].MainPID, 446695);
+  assert.deepEqual(f.realpathCalls.filter((target) => target.startsWith('/proc/')), []);
+  for (const fn of [assertFreshReleaseServices, validateStartedRelease, assertReleaseUnitInvocation]) {
+    assert.doesNotMatch(fn.toString(), /\/proc\//, `${fn.name} must not inspect /proc`);
+  }
+});
+
+test('post-start release validation rejects wrong topology, stale configuration, and reused invocations', async (t) => {
+  const f = await releaseFixture(t);
+  f.unitOverrides[DASHBOARD] = { WorkingDirectory: '/home/wowsync-dev/src/WoWSync-Dashboard' };
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /WorkingDirectory is \/home\/wowsync-dev\/src/);
+  f.unitOverrides[DASHBOARD] = { argv: '/usr/bin/node packages/server/src/index.ts' };
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /ExecStart does not execute/);
+  delete f.unitOverrides[DASHBOARD];
+  f.unitOverrides[MCP] = { argv: '/opt/tunnel-client run --mcp.command=/usr/bin/node /home/wowsync-dev/src/WoWSync-Dashboard/packages/mcp/src/index.ts' };
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /mcp-tunnel.service ExecStart does not execute/);
+  f.unitOverrides[MCP] = { NeedDaemonReload: 'yes' };
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /NeedDaemonReload=yes/);
+  f.unitOverrides[MCP] = { InvocationID: OLD_INVOCATIONS[MCP][0] };
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /not a new invocation/);
+  delete f.unitOverrides[MCP];
+  await assert.rejects(assertFreshReleaseServices(f.sha, { [DASHBOARD]: OLD_INVOCATIONS[DASHBOARD] }, f.options), /no recorded pre-stop InvocationID/);
+  await assert.doesNotReject(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options));
+});
+
+test('post-start release validation rejects releases/current resolving to another SHA', async (t) => {
+  const f = await releaseFixture(t);
+  await atomicSetCurrent(f.releases, f.other);
+  await assert.rejects(assertFreshReleaseServices(f.sha, OLD_INVOCATIONS, f.options), /resolves to .*2{40}, expected release 81f66ee/);
+});
+
+test('releases/current is re-checked after readiness and invocations must survive readiness', async (t) => {
+  const f = await releaseFixture(t);
+  const events = [];
+  const result = await validateStartedRelease(f.sha, OLD_INVOCATIONS, { ...f.options, awaitReadiness: async () => events.push('ready') });
+  assert.deepEqual(events, ['ready']);
+  assert.equal(result.afterReadiness.units[DASHBOARD].InvocationID, NEW_INVOCATIONS[DASHBOARD]);
+  await assert.rejects(validateStartedRelease(f.sha, OLD_INVOCATIONS, {
+    ...f.options, awaitReadiness: async () => { await atomicSetCurrent(f.releases, f.other); },
+  }), /resolves to .*2{40}, expected release 81f66ee/);
+  await atomicSetCurrent(f.releases, f.sha);
+  await assert.rejects(validateStartedRelease(f.sha, OLD_INVOCATIONS, {
+    ...f.options, awaitReadiness: async () => { f.unitOverrides[DASHBOARD] = { InvocationID: 'ffffffffffffffffffffffffffffffff' }; },
+  }), /invocation changed during readiness/);
+});
+
+test('systemd release-unit properties parse by key and reject malformed invocation data', () => {
+  const current = '/home/wowsync-dev/releases/current';
+  const text = releaseUnitShow(DASHBOARD, current);
+  const reordered = text.trim().split('\n').reverse().join('\n');
+  assert.deepEqual(parseSystemdReleaseUnitState(reordered), parseSystemdReleaseUnitState(text));
+  assert.equal(parseSystemdInvocationId('InvocationID=6a3e8aa522144508a0b34044d840b26d\n'), '6a3e8aa522144508a0b34044d840b26d');
+  assert.throws(() => parseSystemdInvocationId('InvocationID=\n'), /Missing or empty.*InvocationID/);
+  assert.throws(() => parseSystemdInvocationId('InvocationID=not-an-id\n'), /Invalid.*InvocationID/);
+  assert.throws(() => parseSystemdInvocationId('InvocationID=6a3e8aa522144508a0b34044d840b26d\nInvocationID=6a3e8aa522144508a0b34044d840b26d\n'), /Duplicate/);
+  assert.throws(() => parseSystemdReleaseUnitState(text.replace(/^WorkingDirectory=.*$/m, '')), /Missing or empty.*WorkingDirectory/);
+  assert.throws(() => parseSystemdReleaseUnitState(text.replace('NeedDaemonReload=no', 'NeedDaemonReload=maybe')), /Invalid.*NeedDaemonReload/);
+  assert.throws(() => parseSystemdReleaseUnitState(`${text}garbage\n`), /Malformed/);
 });
 
 test('root helper rejects arbitrary units and arguments before invoking systemctl', () => {

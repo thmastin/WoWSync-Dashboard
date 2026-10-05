@@ -40,6 +40,10 @@ const PATHS = Object.freeze({
 });
 
 const APP_UNITS = ['wowsync-dev-dashboard.service', 'wowsync-dev-mcp-tunnel.service'];
+const RELEASE_ENTRIES = Object.freeze({
+  'wowsync-dev-dashboard.service': 'packages/server/src/index.ts',
+  'wowsync-dev-mcp-tunnel.service': 'packages/mcp/src/index.ts',
+});
 const DEFAULT_VALIDATION_ROUTES = [
   { path: '/', status: 200 },
   { path: '/api/versions', status: 200 },
@@ -476,6 +480,49 @@ export function assertTargetActive(state) {
   return state;
 }
 
+function parseShowProperties(output, fields, label) {
+  const parsed = new Map();
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) throw new Error(`Malformed systemctl ${label} property: ${line}`);
+    const name = line.slice(0, separator);
+    if (!fields.includes(name)) continue;
+    if (parsed.has(name)) throw new Error(`Duplicate systemctl ${label} property: ${name}`);
+    parsed.set(name, line.slice(separator + 1));
+  }
+  for (const field of fields) {
+    if (!parsed.has(field) || parsed.get(field) === '') throw new Error(`Missing or empty systemctl ${label} property: ${field}`);
+  }
+  if (!/^[0-9a-f]{32}$/.test(parsed.get('InvocationID'))) throw new Error(`Invalid systemctl ${label} property InvocationID: ${parsed.get('InvocationID')}`);
+  return Object.fromEntries(parsed);
+}
+
+export function parseSystemdInvocationId(output) {
+  return parseShowProperties(output, ['InvocationID'], 'invocation').InvocationID;
+}
+
+export function parseSystemdReleaseUnitState(output) {
+  const state = parseShowProperties(output, ['InvocationID', 'NeedDaemonReload', 'WorkingDirectory', 'ExecStart'], 'release unit');
+  if (!['yes', 'no'].includes(state.NeedDaemonReload)) throw new Error(`Invalid systemctl release unit property NeedDaemonReload: ${state.NeedDaemonReload}`);
+  return state;
+}
+
+// A new InvocationID proves systemd started this unit after the pre-stop
+// invocation ended; the loaded unit proves it was started via releases/current.
+export function assertReleaseUnitInvocation(unit, state, { current, priorInvocationIds }) {
+  const entry = RELEASE_ENTRIES[unit];
+  if (!entry) throw new Error(`No release entry point is defined for ${unit}.`);
+  if (state.NeedDaemonReload !== 'no') throw new Error(`${unit} has NeedDaemonReload=${state.NeedDaemonReload}; the running invocation may not match the installed unit.`);
+  if (state.WorkingDirectory !== current) throw new Error(`${unit} WorkingDirectory is ${state.WorkingDirectory}, expected ${current}.`);
+  const argv = [...state.ExecStart.matchAll(/argv\[\]=([^;]*) ;/g)];
+  if (argv.length !== 1 || !argv[0][1].split(/\s+/).includes(`${current}/${entry}`)) {
+    throw new Error(`${unit} ExecStart does not execute ${current}/${entry}: ${state.ExecStart}`);
+  }
+  if (!Array.isArray(priorInvocationIds) || priorInvocationIds.length === 0) throw new Error(`${unit} has no recorded pre-stop InvocationID; invocation freshness cannot be proven.`);
+  if (priorInvocationIds.includes(state.InvocationID)) throw new Error(`${unit} InvocationID ${state.InvocationID} is not a new invocation after the stop.`);
+  return state;
+}
+
 async function serviceState(unit) {
   const fields = ['ActiveState', 'SubState', 'MainPID', 'Result', 'NRestarts'];
   const output = await run('/usr/bin/systemctl', ['show', ...fields.flatMap((field) => ['-p', field]), unit]);
@@ -485,6 +532,21 @@ async function serviceState(unit) {
 async function targetState(unit) {
   const output = await run('/usr/bin/systemctl', ['show', '-p', 'ActiveState', '-p', 'SubState', unit]);
   return parseSystemdTargetState(output);
+}
+
+async function releaseUnitState(unit) {
+  const output = await run('/usr/bin/systemctl', ['show', '-p', 'InvocationID', '-p', 'NeedDaemonReload', '-p', 'WorkingDirectory', '-p', 'ExecStart', unit]);
+  return parseSystemdReleaseUnitState(output);
+}
+
+async function captureInvocationIds(readInvocationId = async (unit) => parseSystemdInvocationId(await run('/usr/bin/systemctl', ['show', '-p', 'InvocationID', unit]))) {
+  const ids = {};
+  for (const unit of APP_UNITS) ids[unit] = [await readInvocationId(unit)];
+  return ids;
+}
+
+function excludedInvocations(preStop, observed) {
+  return Object.fromEntries(APP_UNITS.map((unit) => [unit, [...(preStop[unit] ?? []), ...(observed[unit] ?? [])]]));
 }
 
 async function invokeServiceHelper(operation, paths = PATHS) {
@@ -506,6 +568,9 @@ async function validateHttp(routes, baseUrl = PATHS.baseUrl) {
   return results;
 }
 
+// Pre-stop/no-op checks of long-running services only. Never call this with a
+// SHA after starting units: a just-started hardened unit's /proc/<MainPID>/cwd
+// was unreadable (EACCES) on the real host. Use assertFreshReleaseServices.
 async function assertApplicationServices(expectedSha = null) {
   const states = {};
   const expectedCwd = expectedSha ? await realpath(path.join(PATHS.releases, expectedSha)) : null;
@@ -519,6 +584,53 @@ async function assertApplicationServices(expectedSha = null) {
   }
   const target = assertTargetActive(await targetState('wowsync-dev.target'));
   return { target, units: states };
+}
+
+// Post-start validation. Proves each unit is a new invocation, started through
+// the releases/current topology, while releases/current resolves to the
+// expected immutable release — without inspecting another process's /proc.
+export async function assertFreshReleaseServices(expectedSha, priorInvocations, {
+  paths = PATHS,
+  readServiceState = serviceState,
+  readReleaseUnitState = releaseUnitState,
+  readTargetState = targetState,
+  realpathFn = realpath,
+  observedInvocations = {},
+} = {}) {
+  validateSha(expectedSha);
+  const expectedRelease = await realpathFn(path.join(paths.releases, expectedSha));
+  const assertCurrent = async () => {
+    const resolved = await realpathFn(paths.current);
+    if (resolved !== expectedRelease) throw new Error(`${paths.current} resolves to ${resolved}, expected release ${expectedSha} at ${expectedRelease}.`);
+  };
+  await assertCurrent();
+  const units = {};
+  for (const unit of APP_UNITS) {
+    const state = assertServiceStateHealthy(unit, await readServiceState(unit));
+    const release = await readReleaseUnitState(unit);
+    (observedInvocations[unit] ??= []).push(release.InvocationID);
+    assertReleaseUnitInvocation(unit, release, { current: paths.current, priorInvocationIds: priorInvocations[unit] });
+    units[unit] = { ...state, InvocationID: release.InvocationID };
+  }
+  await assertCurrent();
+  const target = assertTargetActive(await readTargetState('wowsync-dev.target'));
+  return { target, units };
+}
+
+// Validate at start, wait for readiness, then validate again: the same fresh
+// invocations must survive readiness and releases/current must still resolve
+// to the expected release afterwards.
+export async function validateStartedRelease(expectedSha, priorInvocations, { awaitReadiness, ...options }) {
+  const atStart = await assertFreshReleaseServices(expectedSha, priorInvocations, options);
+  await awaitReadiness();
+  const afterReadiness = await assertFreshReleaseServices(expectedSha, priorInvocations, options);
+  for (const unit of APP_UNITS) {
+    if (afterReadiness.units[unit].InvocationID !== atStart.units[unit].InvocationID) {
+      throw new Error(`${unit} invocation changed during readiness: ${atStart.units[unit].InvocationID} -> ${afterReadiness.units[unit].InvocationID}.`);
+    }
+  }
+  assertRestartCountersStable(atStart, afterReadiness);
+  return { atStart, afterReadiness };
 }
 
 async function assertReleaseUnitPaths() {
@@ -576,6 +688,9 @@ async function verifyInitialRuntime(previousSha, targetSha, paths = PATHS, units
   for (const unit of APP_UNITS) {
     const state = await serviceState(unit);
     if (state.ActiveState !== 'active' || Number(state.MainPID) <= 0) throw new Error(`Initial migration requires active ${unit}: ${JSON.stringify(state)}`);
+    // Pre-stop only: after unit migration, systemd reports the new releases/current
+    // configuration, so only the long-running process's cwd shows it is still the
+    // old source-checkout runtime. Post-start checks must not use /proc.
     const cwd = await realpath(`/proc/${state.MainPID}/cwd`);
     if (cwd !== sourceReal) throw new Error(`${unit} is not running from the declared old source runtime (${cwd}).`);
     const unitWorkingDirectory = await run('/usr/bin/systemctl', ['show', '-p', 'WorkingDirectory', '--value', unit]);
@@ -640,6 +755,8 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
   const preparedAt = new Date().toISOString();
   const journalBefore = await collectJournalWarnings(preparedAt, paths);
   const wasActive = await assertApplicationServices(initialMode ? null : activeSha);
+  const preStopInvocations = await captureInvocationIds();
+  const observedInvocations = {};
   const herdrBefore = await serviceState('wowsync-dev-herdr.service');
   let backupPath;
   let backupSha256;
@@ -660,10 +777,9 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
     backupSha256 = await sha256File(backupPath);
     await atomicSetCurrent(paths.releases, sha);
     await startCandidateConservatively(() => invokeServiceHelper('start', paths), () => { candidateStarted = true; });
-    const serviceAtStart = await assertApplicationServices(sha);
-    await waitForReadiness({ baseUrl: paths.baseUrl, routes });
-    const serviceStates = await assertApplicationServices(sha);
-    assertRestartCountersStable(serviceAtStart, serviceStates);
+    const { afterReadiness: serviceStates } = await validateStartedRelease(sha, preStopInvocations, {
+      paths, observedInvocations, awaitReadiness: () => waitForReadiness({ baseUrl: paths.baseUrl, routes }),
+    });
     const http = await validateHttp(routes);
     const afterEvidence = databaseEvidence(paths.database);
     schemaChanged = !assertSchemaCompatible(beforeEvidence, afterEvidence);
@@ -720,7 +836,7 @@ async function promote(sha, ref, routes, previousRuntimeSha = null, paths = PATH
         startPrevious: () => invokeServiceHelper('start', paths),
         validatePrevious: async () => {
           await waitForReadiness({ baseUrl: paths.baseUrl, routes: DEFAULT_VALIDATION_ROUTES });
-          const restoredServices = await assertApplicationServices(previousSha);
+          const restoredServices = await assertFreshReleaseServices(previousSha, excludedInvocations(preStopInvocations, observedInvocations), { paths });
           assertRestartCountersStable({}, restoredServices);
           const restoredHttp = await validateHttp(DEFAULT_VALIDATION_ROUTES, paths.baseUrl);
           const diagnostics = await collectJournalWarnings(preparedAt, paths);
@@ -800,6 +916,8 @@ async function promoteRetained(sha, previousSha, routes, paths) {
   const at = new Date().toISOString();
   const journalBefore = await collectJournalWarnings(at, paths);
   await assertApplicationServices(previousSha);
+  const preStopInvocations = await captureInvocationIds();
+  const observedInvocations = {};
   const herdrBefore = await serviceState('wowsync-dev-herdr.service');
   let backupPath;
   let backupSha256;
@@ -820,10 +938,9 @@ async function promoteRetained(sha, previousSha, routes, paths) {
     await atomicSetCurrent(paths.releases, sha);
     await invokeServiceHelper('start', paths);
     candidateStarted = true;
-    const serviceAtStart = await assertApplicationServices(sha);
-    await waitForReadiness({ baseUrl: paths.baseUrl, routes });
-    const services = await assertApplicationServices(sha);
-    assertRestartCountersStable(serviceAtStart, services);
+    const { afterReadiness: services } = await validateStartedRelease(sha, preStopInvocations, {
+      paths, observedInvocations, awaitReadiness: () => waitForReadiness({ baseUrl: paths.baseUrl, routes }),
+    });
     const http = await validateHttp(routes);
     const after = databaseEvidence(paths.database);
     schemaChanged = !assertSchemaCompatible(before, after);
@@ -847,7 +964,7 @@ async function promoteRetained(sha, previousSha, routes, paths) {
       await atomicSetCurrent(paths.releases, previousSha);
       await invokeServiceHelper('start', paths);
       await waitForReadiness({ baseUrl: paths.baseUrl, routes: DEFAULT_VALIDATION_ROUTES });
-      const restoredServices = await assertApplicationServices(previousSha);
+      const restoredServices = await assertFreshReleaseServices(previousSha, excludedInvocations(preStopInvocations, observedInvocations), { paths });
       assertRestartCountersStable({}, restoredServices);
       const restoredHttp = await validateHttp(DEFAULT_VALIDATION_ROUTES, paths.baseUrl);
       recoveryValidated = true;
