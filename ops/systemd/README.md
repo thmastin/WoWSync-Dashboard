@@ -1,15 +1,12 @@
 # ops/systemd
 
-**Current host state:** the exact-SHA deployment infrastructure is on its feature branch for
-review. Privileged bootstrap and topology migration have not happened. Active DEV Dashboard/MCP
-still execute from `/home/wowsync-dev/src/WoWSync-Dashboard`. The `releases/current` paths below
-describe the intended topology after the separately reviewed same-SHA migration. The live tunnel
-ID remains inline in the installed MCP unit; this known drift is separate from release promotion.
+**Current host state:** DEV Dashboard/MCP run from `/home/wowsync-dev/releases/current`, as
+these units describe. The live tunnel ID remains inline in the installed MCP unit; this known drift
+is separate from release deployment.
 
 Reconstructed systemd unit definitions for the Omarchy DEV runtime
-(`wowsync-dev` user). Agent work remains in the developer checkout
-`/home/wowsync-dev/src/WoWSync-Dashboard`; Dashboard and MCP code run from the stable
-`/home/wowsync-dev/releases/current` pointer. These are
+(`wowsync-dev` user). Development happens in ordinary workspaces; Dashboard and MCP code run from
+the stable `/home/wowsync-dev/releases/current` pointer. These are
 tracked here so the DEV host's service topology is reviewable and
 reproducible from the repo, not only discoverable by `systemctl cat` on the
 live host.
@@ -44,11 +41,8 @@ Units:
 Application releases are complete SHA-pinned trees under
 `/home/wowsync-dev/releases/<full-sha>`; `current` is switched atomically.
 The SQLite database and other mutable runtime state stay under
-`/var/lib/wowsync-dev`. See `docs/OPERATIONS_RUNBOOK.md` for the canonical
-prepare/promote/rollback command and the one-time path migration procedure.
-The migration script changes only source-path strings in the installed Dashboard
-and MCP units, preserving the current live tunnel-ID argument and all other
-unit settings; it reloads systemd but does not restart services.
+`/var/lib/wowsync-dev`. Deploy with `wowsync-dev-deploy deploy <ref> <validated-sha>`; see
+"Deploying to DEV" in `docs/OPERATIONS_RUNBOOK.md`.
 
 Credential and tunnel-ID *values* are never committed here — only path
 references and a placeholder `.example` file.

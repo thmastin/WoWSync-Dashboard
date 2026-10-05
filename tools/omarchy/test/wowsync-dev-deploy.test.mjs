@@ -203,15 +203,16 @@ test('schema evidence detects structural changes while legitimate writes preserv
   db.close();
 });
 
-test('recovery policy allows old code only with unchanged schema and non-initial promotion', () => {
-  assert.deepEqual(recoveryPolicy({ initialMode: true, schemaChanged: false }), {
-    action: 'stop-and-reverse-topology', mayStartPreviousCode: false,
+test('recovery policy allows old code only with unchanged schema', () => {
+  assert.deepEqual(recoveryPolicy({ schemaChanged: false }), {
+    action: 'restore-previous-release-and-validate', mayStartPreviousCode: true,
   });
+  assert.equal(recoveryPolicy({ schemaChanged: null, candidateStarted: true }).mayStartPreviousCode, false);
   assert.equal(recoveryPolicy({ schemaChanged: true }).mayStartPreviousCode, false);
   assert.equal(recoveryPolicy({ schemaChanged: false }).mayStartPreviousCode, true);
 });
 
-test('promotion recovery runs prior code only after unchanged-schema validation and handles initial mode explicitly', async () => {
+test('promotion recovery runs prior code only after unchanged-schema validation', async () => {
   const events = [];
   const callbacks = {
     stop: async () => events.push('stop'),
@@ -225,10 +226,6 @@ test('promotion recovery runs prior code only after unchanged-schema validation 
   events.length = 0;
   const changed = await recoverFailedPromotion({ ...callbacks, schemaChanged: true, candidateStarted: true });
   assert.equal(changed.state, 'stopped-review-required');
-  assert.deepEqual(events, ['stop']);
-  events.length = 0;
-  const initial = await recoverFailedPromotion({ ...callbacks, initialMode: true });
-  assert.equal(initial.action, 'stop-and-reverse-topology');
   assert.deepEqual(events, ['stop']);
   events.length = 0;
   const unknown = await recoverFailedPromotion({ ...callbacks, schemaChanged: null, candidateStarted: true });
@@ -447,20 +444,21 @@ test('root helper rejects arbitrary units and arguments before invoking systemct
   assert.doesNotMatch(sudoers.stdout, /systemctl|ALL\s*=\s*\(ALL\)/);
 });
 
-test('bootstrap and migration refuse unprivileged execution before touching host paths', async () => {
-  const bootstrap = spawnSync(path.resolve('tools/omarchy/bootstrap-wowsync-dev-deploy.sh'), ['a'.repeat(40)], { encoding: 'utf8' });
-  assert.equal(bootstrap.status, 77);
-  assert.match(bootstrap.stderr, /Run as administrator/);
-  const migration = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], { encoding: 'utf8' });
-  assert.equal(migration.status, 77);
-  assert.match(migration.stderr, /requires root/);
+test('sudoers grants only the helper as root and only the deploy launcher as wowsync-dev', () => {
+  const rules = spawnSync('/usr/bin/grep', ['-v', '^#', path.resolve('ops/sudoers/wowsync-dev-deploy')], { encoding: 'utf8' })
+    .stdout.split('\n').filter((line) => line.trim());
+  assert.deepEqual(rules, [
+    'wowsync-dev ALL=(root) NOPASSWD: /usr/local/sbin/wowsync-dev-app-services',
+    'thmastin ALL=(wowsync-dev) NOPASSWD: /usr/local/bin/wowsync-dev-deploy',
+  ]);
+  const syntax = spawnSync('/usr/sbin/visudo', ['-cf', 'ops/sudoers/wowsync-dev-deploy'], { encoding: 'utf8' });
+  assert.equal(syntax.status, 0, syntax.stdout + syntax.stderr);
 });
 
-test('pinned privileged artifact hashes and sudoers syntax validate', () => {
-  const hashes = spawnSync('/usr/bin/sha256sum', ['--check', '--strict', 'ops/privileged-artifact-sha256.txt'], { encoding: 'utf8' });
-  assert.equal(hashes.status, 0, hashes.stdout + hashes.stderr);
-  const sudoers = spawnSync('/usr/sbin/visudo', ['-cf', 'ops/sudoers/wowsync-dev-deploy'], { encoding: 'utf8' });
-  assert.equal(sudoers.status, 0, sudoers.stdout + sudoers.stderr);
+test('installer refuses unprivileged execution before touching host paths', () => {
+  const result = spawnSync(path.resolve('tools/omarchy/install-wowsync-dev-deploy.sh'), [], { encoding: 'utf8' });
+  assert.equal(result.status, 77);
+  assert.match(result.stderr, /Run as administrator/);
 });
 
 test('audit records always carry schema version and are append-only JSONL', async (t) => {
@@ -475,146 +473,4 @@ test('audit records always carry schema version and are append-only JSONL', asyn
 test('journal warning collection failure is diagnostic data, not a deployment failure', async () => {
   const diagnostic = await collectJournalWarnings('2026-10-04T00:00:00Z', {}, async () => { throw new Error('journal unavailable'); });
   assert.deepEqual(diagnostic, { ok: false, error: 'journal unavailable' });
-});
-
-async function migrationFixture(root) {
-  const source = path.join(root, 'src', 'WoWSync-Dashboard');
-  const releases = path.join(root, 'releases');
-  const release = path.join(releases, '81f66eeb8a035acf3c633f6fa9d8693cc4f9a009');
-  const unitDir = path.join(root, 'etc/systemd/system');
-  const bin = path.join(root, 'bin');
-  await mkdir(source, { recursive: true });
-  await mkdir(release, { recursive: true });
-  await mkdir(unitDir, { recursive: true });
-  await mkdir(bin, { recursive: true });
-  await writeFile(path.join(release, 'release.json'), '{"sha": "81f66eeb8a035acf3c633f6fa9d8693cc4f9a009"}\n');
-  await symlink(release, path.join(releases, 'current'));
-  const dashboard = '[Service]\nWorkingDirectory=' + source + '\nExecStart=/usr/bin/node packages/server/src/index.ts\n';
-  const mcp = '[Service]\nWorkingDirectory=' + source + '\nEnvironment=WOWSYNC_MCP_RESEARCH_ROOT=' + source + '/docs\nExecStart=/test/tunnel --mcp.command=/usr/bin/node ' + source + '/packages/mcp/src/index.ts\n';
-  const dashPath = path.join(unitDir, 'wowsync-dev-dashboard.service');
-  const mcpPath = path.join(unitDir, 'wowsync-dev-mcp-tunnel.service');
-  await writeFile(dashPath, dashboard);
-  await writeFile(mcpPath, mcp);
-  const log = path.join(root, 'commands.log');
-  await writeFile(path.join(bin, 'systemd-analyze'), '#!/usr/bin/bash\nexit 0\n', { mode: 0o755 });
-  await writeFile(path.join(bin, 'systemctl'), `#!/usr/bin/bash\nprintf '%s\\n' "$*" >> '${log}'\nexit 0\n`, { mode: 0o755 });
-  await writeFile(path.join(bin, 'curl'), '#!/usr/bin/bash\nexit 0\n', { mode: 0o755 });
-  return { source, releases, release, unitDir, dashPath, mcpPath, dashboard, mcp, log };
-}
-
-async function restoreMigrationFixture(root, alwaysFailHttp = false) {
-  const f = await migrationFixture(root);
-  const state = path.join(root, 'etc/wowsync/dev/runtime-path-migration');
-  const backup = path.join(state, '20261004T000000Z-123');
-  await mkdir(backup, { recursive: true });
-  await writeFile(path.join(backup, 'wowsync-dev-dashboard.service'), f.dashboard);
-  await writeFile(path.join(backup, 'wowsync-dev-mcp-tunnel.service'), f.mcp);
-  await symlink(backup, path.join(state, 'current'));
-  await writeFile(f.dashPath, f.dashboard.replaceAll(f.source, path.join(f.releases, 'current')));
-  await writeFile(f.mcpPath, f.mcp.replaceAll(f.source, path.join(f.releases, 'current')));
-  await writeFile(path.join(root, 'http-always-fails'), alwaysFailHttp ? 'yes' : 'no');
-  await writeFile(path.join(root, 'http-count'), '0');
-  await writeFile(path.join(root, 'bin/systemctl'), `#!/usr/bin/bash
-printf '%s\\n' "$*" >> '${f.log}'
-case "$1" in
-  daemon-reload) exit 0 ;;
-  --job-mode=ignore-dependencies)
-    [[ "$2" == restart ]] || exit 9
-    shift 2
-    for unit in "$@"; do
-      key=\${unit#wowsync-dev-}; key=\${key%.service}
-      (cd '${f.source}' && exec /usr/bin/sleep 60) >/dev/null 2>&1 &
-      echo $! > '${root}/pid-'"$key"
-    done
-    exit 0 ;;
-  show)
-    property=$3; unit=$5; key=\${unit#wowsync-dev-}; key=\${key%.service}
-    pid=$(cat '${root}/pid-'"$key")
-    case "$property" in
-      ActiveState) printf 'active\\n' ;;
-      Result) printf 'success\\n' ;;
-      MainPID) printf '%s\\n' "$pid" ;;
-      *) exit 7 ;;
-    esac
-    exit 0 ;;
-esac
-exit 8
-`, { mode: 0o755 });
-  await writeFile(path.join(root, 'bin/curl'), `#!/usr/bin/bash
-url=\${!#}
-count=$(cat '${root}/http-count'); count=$((count + 1)); echo "$count" > '${root}/http-count'
-if [[ "$(cat '${root}/http-always-fails')" == yes || ( "$count" -eq 1 && "$url" == */ ) ]]; then code=503; else code=200; fi
-printf '%s' "$code"
-exit 0
-`, { mode: 0o755 });
-  await writeFile(path.join(root, 'bin/sleep'), '#!/usr/bin/bash\nexec /usr/bin/sleep "$1"\n', { mode: 0o755 });
-  const stopWorkers = async () => {
-    for (const key of ['dashboard', 'mcp-tunnel']) {
-      const pid = await readFile(path.join(root, `pid-${key}`), 'utf8').catch(() => '');
-      if (/^\d+\n?$/.test(pid)) spawnSync('/usr/bin/kill', ['-TERM', pid.trim()]);
-    }
-  };
-  return { ...f, state, backup, stopWorkers };
-}
-
-test('topology restore retries refused HTTP, settles, and validates both source-checkout units', async (t) => {
-  const root = await tempDir(t);
-  const f = await restoreMigrationFixture(root);
-  t.after(f.stopWorkers);
-  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['restore', 'CURRENT'], {
-    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root, WOWSYNC_MIGRATION_TEST_TIMEOUT_MS: '1000', WOWSYNC_MIGRATION_TEST_INTERVAL_MS: '20', WOWSYNC_MIGRATION_TEST_SETTLE_MS: '60' },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /HTTP stable/);
-  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
-  assert.equal(await readFile(f.mcpPath, 'utf8'), f.mcp);
-  const commands = await readFile(f.log, 'utf8');
-  assert.match(commands, /restart wowsync-dev-dashboard\.service wowsync-dev-mcp-tunnel\.service/);
-  assert.match(commands, /show -p ActiveState --value wowsync-dev-dashboard\.service/);
-  assert.match(commands, /show -p Result --value wowsync-dev-dashboard\.service/);
-  assert.match(commands, /show -p MainPID --value wowsync-dev-dashboard\.service/);
-  assert.ok(Number(await readFile(path.join(root, 'http-count'), 'utf8')) > 4, 'first refusal was retried and both routes were reprobed during settle');
-  assert.match(commands, /daemon-reload/);
-});
-
-test('topology restore readiness timeout is bounded and diagnostic', async (t) => {
-  const root = await tempDir(t);
-  const f = await restoreMigrationFixture(root, true);
-  t.after(f.stopWorkers);
-  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['restore', 'CURRENT'], {
-    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root, WOWSYNC_MIGRATION_TEST_TIMEOUT_MS: '100', WOWSYNC_MIGRATION_TEST_INTERVAL_MS: '10', WOWSYNC_MIGRATION_TEST_SETTLE_MS: '20' },
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /readiness timed out after 100ms/);
-  assert.match(result.stderr, /HTTP 503/);
-  assert.ok(Number(await readFile(path.join(root, 'http-count'), 'utf8')) < 50, 'timeout prevents unbounded polling');
-});
-
-test('unit migration validates both proposals before replacement and leaves originals on preflight failure', async (t) => {
-  const root = await tempDir(t);
-  const f = await migrationFixture(root);
-  await writeFile(f.mcpPath, '[Service]\nWorkingDirectory=/unexpected\n');
-  const badMcp = await readFile(f.mcpPath, 'utf8');
-  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], {
-    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root },
-  });
-  assert.notEqual(result.status, 0);
-  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
-  assert.equal(await readFile(f.mcpPath, 'utf8'), badMcp);
-  assert.equal((await readFile(f.log, 'utf8').catch(() => '')).includes('daemon-reload'), false);
-});
-
-test('unit migration restores both original files after a simulated mid-replacement failure', async (t) => {
-  const root = await tempDir(t);
-  const f = await migrationFixture(root);
-  await writeFile(path.join(root, 'fail-replace-once'), 'fail');
-  const result = spawnSync(path.resolve('tools/omarchy/migrate-wowsync-dev-runtime-paths.sh'), ['apply'], {
-    encoding: 'utf8', env: { ...process.env, WOWSYNC_MIGRATION_TEST_ROOT: root },
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /originals restored/);
-  assert.equal(await readFile(f.dashPath, 'utf8'), f.dashboard);
-  assert.equal(await readFile(f.mcpPath, 'utf8'), f.mcp);
-  assert.match(await readFile(f.log, 'utf8'), /daemon-reload/);
-  assert.doesNotMatch(await readFile(f.log, 'utf8'), / start /);
 });

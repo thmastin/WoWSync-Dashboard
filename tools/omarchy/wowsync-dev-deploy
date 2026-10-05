@@ -1,13 +1,51 @@
 #!/usr/bin/bash
+# WoWSync DEV deploy launcher, installed root-owned as /usr/local/bin/wowsync-dev-deploy.
+#
+# From any login it switches to the wowsync-dev identity, then runs the deploy
+# tool from the currently deployed immutable release, so workspace checkouts
+# never supply deployment code. A copy that sits next to wowsync-dev-deploy.mjs
+# (a checkout or a release tree) runs that exact tool instead when invoked as
+# wowsync-dev directly. Arguments are passed to the tool unchanged and never
+# evaluated here; the environment is reset to a fixed minimum.
 set -euo pipefail
 umask 077
 
-readonly DEPLOY_HOME="/home/wowsync-dev/deploy"
-readonly RELEASE_HOME="/home/wowsync-dev/releases"
-readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-if [[ "$(/usr/bin/id -un)" != 'wowsync-dev' ]]; then
-  echo 'Run this deployment command as the wowsync-dev identity; root must not run build scripts.' >&2
+readonly DEV_USER='wowsync-dev'
+readonly DEV_HOME='/home/wowsync-dev'
+readonly LAUNCHER='/usr/local/bin/wowsync-dev-deploy'
+readonly CURRENT_RELEASE='/home/wowsync-dev/releases/current'
+readonly SUDO='/usr/bin/sudo'
+readonly NODE='/usr/bin/node'
+
+if [[ "$(/usr/bin/id -un)" != "$DEV_USER" ]]; then
+  if "$SUDO" -n -l -u "$DEV_USER" "$LAUNCHER" >/dev/null 2>&1; then
+    exec "$SUDO" -n -u "$DEV_USER" -- "$LAUNCHER" "$@"
+  fi
+  if [[ -t 0 && -t 2 ]]; then
+    exec "$SUDO" -u "$DEV_USER" -- "$LAUNCHER" "$@"
+  fi
+  echo "wowsync-dev-deploy: cannot switch to $DEV_USER without a password here (the passwordless rule is not installed)." >&2
+  echo 'Run the same command from an interactive terminal so sudo can ask for your password.' >&2
   exit 77
 fi
-mkdir -p "$DEPLOY_HOME" "$RELEASE_HOME"
-exec /usr/bin/node "$REPO_ROOT/tools/omarchy/wowsync-dev-deploy.mjs" "$@"
+
+self_dir="$(/usr/bin/dirname -- "$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")")"
+if [[ -f "$self_dir/wowsync-dev-deploy.mjs" ]]; then
+  tool="$self_dir/wowsync-dev-deploy.mjs"
+else
+  release="$(/usr/bin/realpath -e -- "$CURRENT_RELEASE" 2>/dev/null)" || {
+    echo "wowsync-dev-deploy: no deployed release at $CURRENT_RELEASE." >&2
+    exit 69
+  }
+  tool="$release/tools/omarchy/wowsync-dev-deploy.mjs"
+  [[ -f "$tool" ]] || {
+    echo "wowsync-dev-deploy: deployed release ${release##*/} predates this deploy tool; see docs/OPERATIONS_RUNBOOK.md (first deployment of the tool)." >&2
+    exit 69
+  }
+fi
+
+/usr/bin/mkdir -p -m 0700 "$DEV_HOME/deploy"
+cd "$DEV_HOME/deploy"
+exec /usr/bin/env -i HOME="$DEV_HOME" USER="$DEV_USER" LOGNAME="$DEV_USER" \
+  PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
+  "$NODE" --disable-warning=ExperimentalWarning "$tool" "$@"

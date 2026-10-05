@@ -1,3 +1,12 @@
-# Keep this command argument unrestricted only because the root-owned helper
-# accepts exactly one operation from a fixed enum and fixes the unit names.
+# Installed as /etc/sudoers.d/wowsync-dev-deploy by tools/omarchy/install-wowsync-dev-deploy.sh.
+#
+# The DEV identity may stop/start only the Dashboard and MCP units through the
+# root-owned helper; it accepts one operation from a fixed enum and fixes the
+# unit names, so its arguments are left unrestricted.
 wowsync-dev ALL=(root) NOPASSWD: /usr/local/sbin/wowsync-dev-app-services
+#
+# Tate's login (and agents running under it) may run the deploy launcher as
+# wowsync-dev without a password. This grants wowsync-dev, never root, and only
+# this one root-owned launcher: it ignores the caller's environment, never
+# evaluates its arguments, and runs the deployed release's tool.
+thmastin ALL=(wowsync-dev) NOPASSWD: /usr/local/bin/wowsync-dev-deploy

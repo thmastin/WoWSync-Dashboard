@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "test:deploy-tool": "node --test tools/omarchy/test/wowsync-dev-deploy.test.mjs",
+    "test:deploy-tool": "node --test tools/omarchy/test/wowsync-dev-deploy.test.mjs tools/omarchy/test/wowsync-dev-deploy-workflow.test.mjs",
     "dev:server": "node --watch packages/server/src/index.ts",
     "dev:web": "npm run dev --workspace packages/web",
     "build:web": "npm run build --workspace packages/web",

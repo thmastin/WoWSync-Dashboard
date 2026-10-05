@@ -1,4 +1,0 @@
-c0c6fb8bc3a9e096b4a2de0d713ea1cfbef93ead20777163450d012ea6452941  tools/omarchy/bootstrap-wowsync-dev-deploy.sh
-de6a78f8f170b9555debca1692f90e6ae04f1d78fd2df8b942615810448ccd3f  tools/omarchy/wowsync-dev-app-services
-6c001b95a5d299fc863405ee3ea3f294327bbe113d0c951200bf197776d0024a  tools/omarchy/migrate-wowsync-dev-runtime-paths.sh
-8d9d3b0a138077de3e2aea435d53d68581021aee45c8227c80f73323e98ac0d5  ops/sudoers/wowsync-dev-deploy
