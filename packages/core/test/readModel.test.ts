@@ -131,10 +131,10 @@ test("gear candidate read preserves per-character snapshot provenance, row state
   } finally { store.close(); }
 });
 
-test("Retail gear candidate recipient screen applies only the observed required-level rule and preserves row occurrences", () => {
+test("Retail gear candidate recipient screen applies checked rules and preserves row occurrences", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
-  const row = (requiredLevel: string, observationState = "OBSERVED", currentCanUse = "yes", bound = "no") => ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "123", "item:123:variant", "guid-not-identity", "0", "0", requiredLevel, "4", "0", "INVTYPE_HEAD", bound, "?", "yes", "no", "?", "0", currentCanUse, observationState].join("\t");
+  const row = (requiredLevel: string, observationState = "OBSERVED", currentCanUse = "yes", bound = "no") => ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "123", "item:123:variant", "guid-not-identity", "1", "0", requiredLevel, "4", "4", "INVTYPE_HEAD", bound, "?", "yes", "no", "?", "0", currentCanUse, observationState].join("\t");
   const exportWithCandidates = (name: string, realm: string, level: number, rows: string[], generatedAt: number) => {
     const raw = buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", level } });
     return raw.replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${header}\n${rows.length ? rows.join("\n") : "Candidates: None observed"}\n\n[END]`);
@@ -150,7 +150,7 @@ test("Retail gear candidate recipient screen applies only the observed required-
     const screen = result.value.data!;
     assert.equal(screen.accountMembership, "NOT_ESTABLISHED_BY_DASHBOARD_IDENTITY");
     assert.match(screen.accountMembershipCaveat, /does not establish/);
-    assert.match(screen.uncheckedRestrictions, /No equip restrictions were evaluated/);
+    assert.match(screen.uncheckedRestrictions, /native armor-family plausibility/);
     assert.equal(screen.exporter.name, "Exporter");
     assert.equal(screen.recipient.name, "Recipient");
     assert.equal(screen.candidateEvidence.captured, true);
@@ -170,6 +170,8 @@ test("Retail gear candidate recipient screen applies only the observed required-
     assert.ok(screen.candidateEvidence.snapshot!.freshness);
     assert.equal(screen.recipientLevel.evidence.state, "KNOWN");
     assert.equal(screen.recipientLevel.evidence.value, 90);
+    assert.deepEqual(screen.recipientClass.evidence, { state: "KNOWN", value: "Warrior", normalizedClass: "WARRIOR", sectionState: "OBSERVED" });
+    assert.equal(screen.recipientClass.snapshot?.snapshotId, screen.recipientLevel.snapshot?.snapshotId);
     assert.equal(screen.recipientLevel.snapshot?.snapshotId, store.listSnapshots("retail::cairne::recipient")[0]?.id);
     assert.equal("candidateId" in (screen.candidateEvidence.rows?.[0] ?? {}), false);
     assert.ok(screen.candidateEvidence.rows?.every((entry) => ["RULED_OUT", "NOT_RULED_OUT_BY_CHECKED_RULES", "UNKNOWN"].includes(entry.result)));
@@ -212,6 +214,9 @@ test("Retail gear candidate recipient screen applies only the observed required-
     }
 
     assert.equal(read.getGearCandidateRecipientScreen({ version: "classic-era", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION");
+    for (const version of ["tbc-anniversary", "forever", "unknown-version"] as const) {
+      assert.equal(read.getGearCandidateRecipientScreen({ version, exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION", `${version} must remain outside the Retail-only recipient screen`);
+    }
     assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "missing", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_NOT_FOUND");
     assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "missing", recipientRealm: "Cairne" }).status, "RECIPIENT_NOT_FOUND");
   } finally { store.close(); }
@@ -221,7 +226,7 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
-    const row = "EQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t0\t0\t91\t4\t0\tINVTYPE_HEAD\t?\t?\t?\t?\t?\t?\t?\tOBSERVED";
+    const row = "EQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t1\t0\t91\t4\t4\tINVTYPE_HEAD\t?\t?\t?\t?\t?\t?\t?\tOBSERVED";
     const exporter = buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Exporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 20}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
     const recipient = buildWowSyncExport({ generatedAt: NOW - 10, character: { name: "Recipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", level: 90 } });
     store.importSnapshot(exporter);
@@ -256,6 +261,131 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
       return [...chars, { ...duplicate, identityKey: `${duplicate.identityKey}::duplicate` }];
     };
     assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "RECIPIENT_AMBIGUOUS");
+  } finally { store.close(); }
+});
+
+test("Retail recipient screen applies native armor-family checks only to coherent ordinary body armor", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  const makeRow = (opts: { equipType: string; baseLocation: string; classID?: string; subclassID?: string; requiredLevel?: string; state?: string }) => [
+    "EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "123", "item:123", "?", opts.equipType, "0", opts.requiredLevel ?? "0", opts.classID ?? "4", opts.subclassID ?? "4", opts.baseLocation, "?", "?", "?", "?", "?", "?", "?", opts.state ?? "OBSERVED",
+  ].join("\t");
+  const familyRows = [
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", subclassID: "1" }),
+    makeRow({ equipType: "3", baseLocation: "INVTYPE_SHOULDER", subclassID: "2" }),
+    makeRow({ equipType: "5", baseLocation: "INVTYPE_CHEST", subclassID: "3" }),
+    makeRow({ equipType: "20", baseLocation: "INVTYPE_ROBE", subclassID: "4" }),
+  ];
+  const nonApplicableRows = [
+    makeRow({ equipType: "2", baseLocation: "INVTYPE_NECK", subclassID: "0" }),
+    makeRow({ equipType: "11", baseLocation: "INVTYPE_FINGER", subclassID: "0" }),
+    makeRow({ equipType: "12", baseLocation: "INVTYPE_TRINKET", subclassID: "0" }),
+    makeRow({ equipType: "16", baseLocation: "INVTYPE_CLOAK", subclassID: "0" }),
+    makeRow({ equipType: "14", baseLocation: "INVTYPE_SHIELD", subclassID: "6" }),
+    makeRow({ equipType: "23", baseLocation: "INVTYPE_HOLDABLE", subclassID: "0" }),
+    makeRow({ equipType: "13", baseLocation: "INVTYPE_WEAPON", classID: "2", subclassID: "7" }),
+    makeRow({ equipType: "4", baseLocation: "INVTYPE_BODY", subclassID: "0" }),
+    makeRow({ equipType: "19", baseLocation: "INVTYPE_TABARD", subclassID: "0" }),
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", subclassID: "5" }),
+  ];
+  const uncertainRows = [
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", classID: "?", subclassID: "4" }),
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", subclassID: "?" }),
+    makeRow({ equipType: "?", baseLocation: "INVTYPE_HEAD", subclassID: "1" }),
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_FINGER", subclassID: "1" }),
+    makeRow({ equipType: "999", baseLocation: "INVTYPE_HEAD", subclassID: "1" }),
+    makeRow({ equipType: "11", baseLocation: "INVTYPE_NECK", subclassID: "1" }),
+  ];
+  const compositionRows = [
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", classID: "?", subclassID: "?", requiredLevel: "91" }),
+    makeRow({ equipType: "5", baseLocation: "INVTYPE_CHEST", subclassID: "3", requiredLevel: "?" }),
+    makeRow({ equipType: "20", baseLocation: "INVTYPE_ROBE", subclassID: "4", requiredLevel: "0" }),
+    makeRow({ equipType: "1", baseLocation: "INVTYPE_HEAD", subclassID: "?", requiredLevel: "?" }),
+  ];
+  const allRows = [...familyRows, ...nonApplicableRows, ...uncertainRows, ...compositionRows];
+  const addCandidates = (name: string, realm: string, generatedAt: number, rows: string[]) => buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } })
+    .replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${generatedAt}\nContractVersion: 1\n${header}\n${rows.join("\n")}\n\n[END]`);
+  const addRecipient = (name: string, cls: string, generatedAt: number) => store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: cls, level: 90 } }));
+  const screen = (recipientName: string) => {
+    const result = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "ArmorExporter", exporterRealm: "Cairne", recipientName, recipientRealm: "Cairne", limit: 100 });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") throw new Error("Expected recipient screen");
+    return result.value.data!;
+  };
+  try {
+    store.importSnapshot(addCandidates("ArmorExporter", "Cairne", NOW - 40, allRows));
+    addRecipient("MageRecipient", "Mage", NOW - 30);
+    addRecipient("RogueRecipient", "Rogue", NOW - 29);
+    addRecipient("HunterRecipient", "Hunter", NOW - 28);
+    addRecipient("WarriorRecipient", "Warrior", NOW - 27);
+
+    const expected = [
+      ["MageRecipient", "Cloth"], ["RogueRecipient", "Leather"], ["HunterRecipient", "Mail"], ["WarriorRecipient", "Plate"],
+    ] as const;
+    for (const [name, nativeFamily] of expected) {
+      const result = screen(name);
+      assert.deepEqual(result.recipientClass.evidence, { state: "KNOWN", value: name.replace("Recipient", ""), normalizedClass: name.replace("Recipient", "").toUpperCase(), sectionState: "OBSERVED" });
+      const matchingRow = result.candidateEvidence.rows?.find((row) => row.armorCheck.candidateFamily === nativeFamily);
+      assert.equal(matchingRow?.armorCheck.state, "PASS", `${name} should pass native ${nativeFamily}`);
+    }
+    const mageRows = screen("MageRecipient").candidateEvidence.rows!;
+    const magePlate = mageRows[3]!;
+    assert.equal(magePlate.result, "RULED_OUT");
+    assert.equal(magePlate.armorCheck.state, "RULED_OUT");
+    assert.match(magePlate.armorCheck.reason, /native armor-family mismatch/i);
+    assert.doesNotMatch(magePlate.armorCheck.reason, /cannot equip|CanEquip=false|technically prohibited|unusable by client/i);
+    const warriorRows = screen("WarriorRecipient").candidateEvidence.rows!;
+    assert.equal(warriorRows[2]?.armorCheck.state, "RULED_OUT", "Warrior + Mail body armor is a native-family mismatch");
+    const mageUnknownRows = screen("MageRecipient").candidateEvidence.rows!;
+    assert.equal(mageUnknownRows[familyRows.length + nonApplicableRows.length + 5]?.armorCheck.state, "UNKNOWN", "a known ring inventory type that conflicts with necklace baseEquipLocation is not silently treated as non-applicable");
+
+    const unknownClassExport = buildWowSyncExport({ generatedAt: NOW - 26, character: { name: "UnknownClassRecipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Wizard", level: 90 } });
+    store.importSnapshot(unknownClassExport);
+    const unknownClass = screen("UnknownClassRecipient");
+    assert.equal(unknownClass.recipientClass.evidence.state, "UNKNOWN");
+    assert.equal(unknownClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+
+    const missingClassExport = buildWowSyncExport({ generatedAt: NOW - 25, character: { name: "MissingClassRecipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }).replace("Class: Warrior", "Class: ?");
+    store.importSnapshot(missingClassExport);
+    const missingClass = screen("MissingClassRecipient");
+    assert.equal(missingClass.recipientClass.evidence.state, "UNKNOWN");
+    assert.equal(missingClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+
+    const originalListSnapshots = store.listSnapshots.bind(store);
+    store.listSnapshots = (identityKey) => originalListSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::warriorrecipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, status: { ...snapshot.parsed.character.status, state: "LAST_SEEN" } } } } : snapshot);
+    const lastSeenClass = screen("WarriorRecipient");
+    assert.equal(lastSeenClass.recipientClass.evidence.state, "UNKNOWN");
+    assert.equal(lastSeenClass.recipientClass.evidence.sectionState, "LAST_SEEN");
+    assert.equal(lastSeenClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    store.listSnapshots = (identityKey) => originalListSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::warriorrecipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { status: { state: "UNKNOWN" } } } } : snapshot);
+    const unknownSection = screen("WarriorRecipient");
+    assert.equal(unknownSection.recipientClass.evidence.state, "UNKNOWN");
+    assert.equal(unknownSection.recipientClass.evidence.sectionState, "UNKNOWN");
+    assert.equal(unknownSection.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    store.listSnapshots = originalListSnapshots;
+
+    const missingClassNonArmor = addCandidates("NonArmorExporter", "Cairne", NOW - 24, nonApplicableRows);
+    store.importSnapshot(missingClassNonArmor);
+    const originalClasses = store.listSnapshots.bind(store);
+    store.listSnapshots = (identityKey) => originalClasses(identityKey).map((snapshot) => identityKey === "retail::cairne::missingclassrecipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, class: undefined } } } : snapshot);
+    const nonArmorResult = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "NonArmorExporter", exporterRealm: "Cairne", recipientName: "MissingClassRecipient", recipientRealm: "Cairne" });
+    assert.equal(nonArmorResult.status, "FOUND");
+    if (nonArmorResult.status === "FOUND") {
+      assert.ok(nonArmorResult.value.data?.candidateEvidence.rows?.every((row) => row.armorCheck.state === "NOT_APPLICABLE" && row.result === "NOT_RULED_OUT_BY_CHECKED_RULES"));
+    }
+    store.listSnapshots = originalClasses;
+
+    const composeExporter = addCandidates("ComposeExporter", "Cairne", NOW - 23, compositionRows);
+    store.importSnapshot(composeExporter);
+    const compose = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "ComposeExporter", exporterRealm: "Cairne", recipientName: "WarriorRecipient", recipientRealm: "Cairne" });
+    assert.equal(compose.status, "FOUND");
+    if (compose.status === "FOUND") {
+      assert.deepEqual(compose.value.data?.candidateEvidence.rows?.map((row) => [row.result, row.armorCheck.state]), [
+        ["RULED_OUT", "UNKNOWN"], ["RULED_OUT", "RULED_OUT"], ["NOT_RULED_OUT_BY_CHECKED_RULES", "PASS"], ["UNKNOWN", "UNKNOWN"],
+      ]);
+    }
+    assert.match(screen("WarriorRecipient").uncheckedRestrictions, /native-family mismatch is a plausibility-screen result/i);
+    assert.match(screen("WarriorRecipient").uncheckedRestrictions, /allowed-class, race, faction, profession, unique\/equip/i);
   } finally { store.close(); }
 });
 

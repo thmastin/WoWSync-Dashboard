@@ -171,6 +171,118 @@ export interface GearCandidateEvidenceRead {
   }>;
   offset: number; limit: number; totalCount: number; truncated: boolean;
 }
+type RetailRecipientClass = "MAGE" | "PRIEST" | "WARLOCK" | "DEMONHUNTER" | "DRUID" | "MONK" | "ROGUE" | "EVOKER" | "HUNTER" | "SHAMAN" | "DEATHKNIGHT" | "PALADIN" | "WARRIOR";
+type RetailArmorFamily = "Cloth" | "Leather" | "Mail" | "Plate";
+interface GearCandidateArmorCheck {
+  state: "NOT_APPLICABLE" | "PASS" | "RULED_OUT" | "UNKNOWN";
+  candidateFamily?: RetailArmorFamily;
+  recipientNativeFamily?: RetailArmorFamily;
+  reason: string;
+}
+
+const RETAIL_ARMOR_FAMILY_BY_CLASS: Readonly<Record<RetailRecipientClass, RetailArmorFamily>> = {
+  MAGE: "Cloth", PRIEST: "Cloth", WARLOCK: "Cloth",
+  DEMONHUNTER: "Leather", DRUID: "Leather", MONK: "Leather", ROGUE: "Leather",
+  EVOKER: "Mail", HUNTER: "Mail", SHAMAN: "Mail",
+  DEATHKNIGHT: "Plate", PALADIN: "Plate", WARRIOR: "Plate",
+};
+const RETAIL_CLASS_BY_NORMALIZED_NAME: Readonly<Record<string, RetailRecipientClass>> = {
+  MAGE: "MAGE", PRIEST: "PRIEST", WARLOCK: "WARLOCK",
+  DEMONHUNTER: "DEMONHUNTER", DRUID: "DRUID", MONK: "MONK", ROGUE: "ROGUE",
+  EVOKER: "EVOKER", HUNTER: "HUNTER", SHAMAN: "SHAMAN",
+  DEATHKNIGHT: "DEATHKNIGHT", PALADIN: "PALADIN", WARRIOR: "WARRIOR",
+};
+const RETAIL_ARMOR_CLASS_ID = 4;
+const RETAIL_ARMOR_FAMILY_BY_SUBCLASS: Readonly<Record<number, RetailArmorFamily>> = {
+  1: "Cloth", 2: "Leather", 3: "Mail", 4: "Plate",
+};
+type RetailBodySlot = "HEAD" | "SHOULDER" | "CHEST" | "WAIST" | "LEGS" | "FEET" | "WRIST" | "HAND";
+const RETAIL_EQUIP_TYPE = {
+  HEAD: 1, NECK: 2, SHOULDER: 3, BODY: 4, CHEST: 5, WAIST: 6, LEGS: 7, FEET: 8, WRIST: 9, HAND: 10,
+  FINGER: 11, TRINKET: 12, WEAPON: 13, SHIELD: 14, RANGED: 15, CLOAK: 16, TWO_HAND_WEAPON: 17,
+  BAG: 18, TABARD: 19, ROBE: 20, WEAPON_MAIN_HAND: 21, WEAPON_OFF_HAND: 22, HOLDABLE: 23, AMMO: 24,
+  THROWN: 25, RANGED_RIGHT: 26, QUIVER: 27, RELIC: 28, PROFESSION_TOOL: 29, PROFESSION_GEAR: 30,
+} as const;
+const RETAIL_BODY_SLOT_BY_INVENTORY_TYPE: Readonly<Record<number, RetailBodySlot>> = {
+  [RETAIL_EQUIP_TYPE.HEAD]: "HEAD", [RETAIL_EQUIP_TYPE.SHOULDER]: "SHOULDER", [RETAIL_EQUIP_TYPE.CHEST]: "CHEST",
+  [RETAIL_EQUIP_TYPE.WAIST]: "WAIST", [RETAIL_EQUIP_TYPE.LEGS]: "LEGS", [RETAIL_EQUIP_TYPE.FEET]: "FEET",
+  [RETAIL_EQUIP_TYPE.WRIST]: "WRIST", [RETAIL_EQUIP_TYPE.HAND]: "HAND", [RETAIL_EQUIP_TYPE.ROBE]: "CHEST",
+};
+const RETAIL_BODY_SLOT_BY_BASE_EQUIP_LOCATION: Readonly<Record<string, RetailBodySlot>> = {
+  INVTYPE_HEAD: "HEAD", INVTYPE_SHOULDER: "SHOULDER", INVTYPE_CHEST: "CHEST", INVTYPE_ROBE: "CHEST",
+  INVTYPE_WAIST: "WAIST", INVTYPE_LEGS: "LEGS", INVTYPE_FEET: "FEET", INVTYPE_WRIST: "WRIST", INVTYPE_HAND: "HAND",
+};
+const RETAIL_NON_BODY_LOCATION_BY_INVENTORY_TYPE: Readonly<Record<number, string>> = {
+  [RETAIL_EQUIP_TYPE.NECK]: "NECK", [RETAIL_EQUIP_TYPE.BODY]: "BODY", [RETAIL_EQUIP_TYPE.FINGER]: "FINGER",
+  [RETAIL_EQUIP_TYPE.TRINKET]: "TRINKET", [RETAIL_EQUIP_TYPE.WEAPON]: "WEAPON", [RETAIL_EQUIP_TYPE.SHIELD]: "SHIELD",
+  [RETAIL_EQUIP_TYPE.RANGED]: "RANGED", [RETAIL_EQUIP_TYPE.CLOAK]: "CLOAK", [RETAIL_EQUIP_TYPE.TWO_HAND_WEAPON]: "2HWEAPON",
+  [RETAIL_EQUIP_TYPE.BAG]: "BAG", [RETAIL_EQUIP_TYPE.TABARD]: "TABARD", [RETAIL_EQUIP_TYPE.WEAPON_MAIN_HAND]: "WEAPONMAINHAND",
+  [RETAIL_EQUIP_TYPE.WEAPON_OFF_HAND]: "WEAPONOFFHAND", [RETAIL_EQUIP_TYPE.HOLDABLE]: "HOLDABLE", [RETAIL_EQUIP_TYPE.AMMO]: "AMMO",
+  [RETAIL_EQUIP_TYPE.THROWN]: "THROWN", [RETAIL_EQUIP_TYPE.RANGED_RIGHT]: "RANGEDRIGHT", [RETAIL_EQUIP_TYPE.QUIVER]: "QUIVER",
+  [RETAIL_EQUIP_TYPE.RELIC]: "RELIC", [RETAIL_EQUIP_TYPE.PROFESSION_TOOL]: "PROFESSION_TOOL", [RETAIL_EQUIP_TYPE.PROFESSION_GEAR]: "PROFESSION_GEAR",
+};
+const RETAIL_NON_BODY_BASE_LOCATION_BY_NAME: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.values(RETAIL_NON_BODY_LOCATION_BY_INVENTORY_TYPE).map((location) => [`INVTYPE_${location}`, location]),
+);
+
+function normalizeRetailRecipientClass(raw: string | undefined): RetailRecipientClass | undefined {
+  if (!raw) return undefined;
+  // The WoW class token and canonical English display name differ only by spaces here.
+  return RETAIL_CLASS_BY_NORMALIZED_NAME[raw.trim().replaceAll(" ", "").toUpperCase()];
+}
+
+function evaluateNativeArmorCheck(candidate: GearCandidatesSection["rows"][number], recipientClass: RetailRecipientClass | undefined): GearCandidateArmorCheck {
+  const unknown = (reason: string, candidateFamily?: RetailArmorFamily): GearCandidateArmorCheck => ({ state: "UNKNOWN", ...(candidateFamily ? { candidateFamily } : {}), reason });
+  const notApplicable = (reason: string): GearCandidateArmorCheck => ({ state: "NOT_APPLICABLE", reason });
+
+  if (candidate.classID.state === "KNOWN" && candidate.classID.value !== RETAIL_ARMOR_CLASS_ID) {
+    return notApplicable("Candidate item class is not Armor; native armor-family screening does not apply.");
+  }
+  if (candidate.classID.state === "KNOWN" && candidate.classID.value === RETAIL_ARMOR_CLASS_ID && candidate.subclassID.state === "KNOWN" && RETAIL_ARMOR_FAMILY_BY_SUBCLASS[candidate.subclassID.value] === undefined) {
+    return notApplicable("Candidate armor subclass is outside Cloth, Leather, Mail, and Plate; native armor-family screening does not apply.");
+  }
+
+  const type = candidate.equipType.state === "KNOWN" ? candidate.equipType.value : undefined;
+  const location = candidate.baseEquipLocation.state === "KNOWN" ? candidate.baseEquipLocation.value.toUpperCase() : undefined;
+  const typeBodySlot = type === undefined ? undefined : RETAIL_BODY_SLOT_BY_INVENTORY_TYPE[type];
+  const locationBodySlot = location === undefined ? undefined : RETAIL_BODY_SLOT_BY_BASE_EQUIP_LOCATION[location];
+  const typeNonBodyLocation = type === undefined ? undefined : RETAIL_NON_BODY_LOCATION_BY_INVENTORY_TYPE[type];
+  const locationNonBodyLocation = location === undefined ? undefined : RETAIL_NON_BODY_BASE_LOCATION_BY_NAME[location];
+  const typeCategory = typeBodySlot !== undefined ? `BODY:${typeBodySlot}` : typeNonBodyLocation !== undefined ? `OTHER:${typeNonBodyLocation}` : undefined;
+  const locationCategory = locationBodySlot !== undefined ? `BODY:${locationBodySlot}` : locationNonBodyLocation !== undefined ? `OTHER:${locationNonBodyLocation}` : undefined;
+  const typeUnrecognized = type !== undefined && typeCategory === undefined;
+  const locationUnrecognized = location !== undefined && locationCategory === undefined;
+
+  if (typeUnrecognized || locationUnrecognized) {
+    return unknown("Candidate equipType or baseEquipLocation is an unrecognized slot value; armor applicability was not guessed.");
+  }
+  if (typeCategory !== undefined && locationCategory !== undefined && typeCategory !== locationCategory) {
+    return unknown("Candidate equipType and baseEquipLocation contradict each other; armor slot was not guessed.");
+  }
+  if (typeNonBodyLocation !== undefined || locationNonBodyLocation !== undefined) {
+    return notApplicable("Candidate is identified as non-body equipment; native armor-family screening does not apply.");
+  }
+  if (typeBodySlot === undefined || locationBodySlot === undefined) {
+    return unknown("Candidate equipType and baseEquipLocation do not both identify a coherent ordinary body armor slot.");
+  }
+
+  if (candidate.classID.state !== "KNOWN" || candidate.subclassID.state !== "KNOWN") {
+    return unknown("Candidate classID or subclassID is UNKNOWN for an ordinary body armor slot.");
+  }
+  const candidateFamily = RETAIL_ARMOR_FAMILY_BY_SUBCLASS[candidate.subclassID.value];
+  if (candidate.classID.value !== RETAIL_ARMOR_CLASS_ID || candidateFamily === undefined) {
+    return notApplicable("Candidate is not identified as Cloth, Leather, Mail, or Plate body armor.");
+  }
+  if (recipientClass === undefined) {
+    return unknown("Recipient class is not usable OBSERVED evidence for the native armor-family check.", candidateFamily);
+  }
+  const recipientNativeFamily = RETAIL_ARMOR_FAMILY_BY_CLASS[recipientClass];
+  if (candidateFamily !== recipientNativeFamily) {
+    return { state: "RULED_OUT", candidateFamily, recipientNativeFamily, reason: `Native armor-family mismatch: candidate is ${candidateFamily} body armor, while the recipient's native armor family is ${recipientNativeFamily}. This plausibility-screen result does not establish whether the Retail client technically permits equipping it.` };
+  }
+  return { state: "PASS", candidateFamily, recipientNativeFamily, reason: `Candidate ${candidateFamily} body armor matches the recipient's native ${recipientNativeFamily} armor family.` };
+}
+
 export interface GearCandidateRecipientScreenRead {
   version: "retail";
   exporter: GearCandidateEvidenceRead["characters"][number]["identity"];
@@ -191,6 +303,7 @@ export interface GearCandidateRecipientScreenRead {
       observationState: GearCandidatesSection["rows"][number]["observationState"];
       result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN";
       reason: string;
+      armorCheck: GearCandidateArmorCheck;
       requiredLevel: GearCandidatesSection["rows"][number]["requiredLevel"];
       candidate: GearCandidatesSection["rows"][number];
     }>;
@@ -203,7 +316,13 @@ export interface GearCandidateRecipientScreenRead {
     evidence: { state: "KNOWN"; value: number; sectionState: SectionState } | { state: "UNKNOWN"; value?: number; sectionState: SectionState; reason: string };
     snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
   };
-  uncheckedRestrictions: "No equip restrictions were evaluated beyond the captured required-level comparison. This result does not establish CanEquip, recipient suitability, upgrade value, or transferability.";
+  recipientClass: {
+    evidence:
+      | { state: "KNOWN"; value: string; normalizedClass: RetailRecipientClass; sectionState: "OBSERVED" }
+      | { state: "UNKNOWN"; value?: string; sectionState: SectionState; reason: string };
+    snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  };
+  uncheckedRestrictions: "The screen checks required level and Retail native armor-family plausibility for ordinary body armor. A native-family mismatch is a plausibility-screen result, not proof the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip. Item-specific allowed-class, race, faction, profession, unique/equip, and other restrictions were not evaluated. This result does not establish recipient suitability, upgrade value, or transferability.";
   paging?: { offset: number; limit: number; totalCount: number; truncated: boolean };
 }
 export type GearCandidateRecipientScreenResolution =
@@ -376,7 +495,7 @@ export class DashboardReadModel {
     };
   }
 
-  /** One deterministic Retail required-level screen; passing this check is not an equipability or suitability claim. */
+  /** Retail required-level and native armor-family plausibility screen; passing is not an equipability or suitability claim. */
   getGearCandidateRecipientScreen(query: { version: VersionOrUnknown; exporterName: string; exporterRealm: string; recipientName: string; recipientRealm: string; offset?: number; limit?: number }): GearCandidateRecipientScreenResolution {
     requireVersion(query.version);
     if (query.version !== "retail") return { status: "UNSUPPORTED_VERSION", version: query.version };
@@ -402,11 +521,23 @@ export class DashboardReadModel {
     const recipientObservedAt = recipientSnapshot ? snapshotObservedAt(recipientSnapshot.generatedAt, recipientSnapshot.importedAt) : undefined;
     const recipientSectionState = recipientCharacter?.status.state ?? "UNKNOWN";
     const recipientLevelUsable = recipientSectionState === "OBSERVED" && recipientCharacter?.level !== undefined;
+    const normalizedRecipientClass = recipientSectionState === "OBSERVED" ? normalizeRetailRecipientClass(recipientCharacter?.class) : undefined;
     const recipientLevel: GearCandidateRecipientScreenRead["recipientLevel"] = {
       evidence: recipientLevelUsable
         ? { state: "KNOWN", value: recipientCharacter!.level!, sectionState: recipientSectionState }
         : { state: "UNKNOWN", ...(recipientCharacter?.level !== undefined ? { value: recipientCharacter.level } : {}), sectionState: recipientSectionState,
           reason: recipientSectionState !== "OBSERVED" ? `Recipient character level provenance is ${recipientSectionState}; only OBSERVED level evidence is used for this screen.` : "Recipient level is not known in the latest stored snapshot." },
+      ...(recipientSnapshot && recipientObservedAt !== undefined ? { snapshot: { snapshotId: recipientSnapshot.id, ...(recipientSnapshot.generatedAt !== undefined ? { generatedAt: recipientSnapshot.generatedAt } : {}), observedAt: recipientObservedAt, importedAt: recipientSnapshot.importedAt, freshness: classifyFreshness(recipientObservedAt, this.now()) } } : {}),
+    };
+    const recipientClass: GearCandidateRecipientScreenRead["recipientClass"] = {
+      evidence: normalizedRecipientClass !== undefined
+        ? { state: "KNOWN", value: recipientCharacter!.class!, normalizedClass: normalizedRecipientClass, sectionState: "OBSERVED" }
+        : { state: "UNKNOWN", ...(recipientCharacter?.class !== undefined ? { value: recipientCharacter.class } : {}), sectionState: recipientSectionState,
+          reason: recipientSectionState !== "OBSERVED"
+            ? `Recipient class provenance is ${recipientSectionState}; only OBSERVED recognized Retail class evidence is used for this screen.`
+            : recipientCharacter?.class === undefined
+              ? "Recipient class is not known in the latest stored snapshot."
+              : `Recipient class value is not a recognized Retail class: ${recipientCharacter.class}.` },
       ...(recipientSnapshot && recipientObservedAt !== undefined ? { snapshot: { snapshotId: recipientSnapshot.id, ...(recipientSnapshot.generatedAt !== undefined ? { generatedAt: recipientSnapshot.generatedAt } : {}), observedAt: recipientObservedAt, importedAt: recipientSnapshot.importedAt, freshness: classifyFreshness(recipientObservedAt, this.now()) } } : {}),
     };
 
@@ -419,25 +550,24 @@ export class DashboardReadModel {
       const exporterObservedAt = snapshotObservedAt(candidateSnapshot.generatedAt, candidateSnapshot.importedAt);
       const candidateObservedAt = section.observedAt ?? exporterObservedAt;
       const allRows = section.rows.map((candidate, index) => {
-        let result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN";
-        let reason: string;
+        let levelCheck: { state: "RULED_OUT" | "PASS" | "UNKNOWN"; reason: string };
         if (candidate.requiredLevel.state !== "KNOWN") {
-          result = "UNKNOWN";
-          reason = "Candidate required level is UNKNOWN, so the required-level check cannot be evaluated.";
+          levelCheck = { state: "UNKNOWN", reason: "Candidate required level is UNKNOWN, so the required-level check cannot be evaluated." };
         } else if (recipientLevel.evidence.state !== "KNOWN") {
-          result = "UNKNOWN";
-          reason = `Recipient level is not usable for comparison (${recipientLevel.evidence.reason}).`;
+          levelCheck = { state: "UNKNOWN", reason: `Recipient level is not usable for comparison (${recipientLevel.evidence.reason}).` };
         } else if (!recipientLevelUsable) {
-          result = "UNKNOWN";
-          reason = "Recipient level provenance is insufficient for comparison.";
+          levelCheck = { state: "UNKNOWN", reason: "Recipient level provenance is insufficient for comparison." };
         } else if (recipientLevel.evidence.value < candidate.requiredLevel.value) {
-          result = "RULED_OUT";
-          reason = `Captured candidate required level ${candidate.requiredLevel.value} exceeds recipient observed level ${recipientLevel.evidence.value}.`;
+          levelCheck = { state: "RULED_OUT", reason: `Captured candidate required level ${candidate.requiredLevel.value} exceeds recipient observed level ${recipientLevel.evidence.value}.` };
         } else {
-          result = "NOT_RULED_OUT_BY_CHECKED_RULES";
-          reason = `Captured candidate required level ${candidate.requiredLevel.value} does not exceed recipient observed level ${recipientLevel.evidence.value}; no other equip restrictions were evaluated.`;
+          levelCheck = { state: "PASS", reason: `Captured candidate required level ${candidate.requiredLevel.value} does not exceed recipient observed level ${recipientLevel.evidence.value}.` };
         }
-        return { rowOrdinal: index + 1, candidateState: candidate.candidateState, observationState: candidate.observationState, result, reason, requiredLevel: candidate.requiredLevel, candidate };
+        const armorCheck = evaluateNativeArmorCheck(candidate, normalizedRecipientClass);
+        const result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN" =
+          levelCheck.state === "RULED_OUT" || armorCheck.state === "RULED_OUT" ? "RULED_OUT" :
+            levelCheck.state === "UNKNOWN" || armorCheck.state === "UNKNOWN" ? "UNKNOWN" : "NOT_RULED_OUT_BY_CHECKED_RULES";
+        const reason = `Required-level check: ${levelCheck.reason} Armor-family check: ${armorCheck.reason}`;
+        return { rowOrdinal: index + 1, candidateState: candidate.candidateState, observationState: candidate.observationState, result, reason, armorCheck, requiredLevel: candidate.requiredLevel, candidate };
       });
       const rows = allRows.slice(page.offset, page.offset + page.limit);
       candidateEvidence = {
@@ -465,7 +595,8 @@ export class DashboardReadModel {
       accountMembershipCaveat: "Dashboard-known Retail identity does not establish that exporter and recipient belong to the same Battle.net account.",
       candidateEvidence,
       recipientLevel,
-      uncheckedRestrictions: "No equip restrictions were evaluated beyond the captured required-level comparison. This result does not establish CanEquip, recipient suitability, upgrade value, or transferability.",
+      recipientClass,
+      uncheckedRestrictions: "The screen checks required level and Retail native armor-family plausibility for ordinary body armor. A native-family mismatch is a plausibility-screen result, not proof the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip. Item-specific allowed-class, race, faction, profession, unique/equip, and other restrictions were not evaluated. This result does not establish recipient suitability, upgrade value, or transferability.",
       ...(candidateEvidence.captured ? { paging: { offset: candidateEvidence.offset!, limit: candidateEvidence.limit!, totalCount: candidateEvidence.totalCount!, truncated: candidateEvidence.truncated! } } : {}),
     };
     return { status: "FOUND", value: { data: value, provenance: {
@@ -474,7 +605,7 @@ export class DashboardReadModel {
       ...(candidateEvidence.snapshot ? { importedAt: candidateEvidence.snapshot.importedAt, snapshotId: candidateEvidence.snapshot.snapshotId } : {}),
       source: "latest stored Retail candidate-bearing exporter snapshot and latest stored recipient character snapshot",
       ...(derivedFrom.length > 0 ? { derivedFrom } : recipientSnapshot ? { derivedFrom: [String(recipientSnapshot.id)] } : {}),
-      warning: "This is a required-level rule-out screen only. Latest stored evidence may be historical; account membership is not established; no other equip restrictions are evaluated.",
+      warning: "This screen checks required level and Retail native armor-family plausibility for ordinary body armor only. Native-family mismatch is not proof that the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip; latest stored evidence may be historical and account membership is not established.",
     } } };
   }
 
