@@ -344,12 +344,14 @@ test("Retail recipient screen applies native armor-family checks only to coheren
     const unknownClass = screen("UnknownClassRecipient");
     assert.equal(unknownClass.recipientClass.evidence.state, "UNKNOWN");
     assert.equal(unknownClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    assert.equal(unknownClass.candidateEvidence.rows?.find((row) => row.candidate.classID.state === "KNOWN" && row.candidate.classID.value === 2)?.weaponProficiencyCheck.state, "UNKNOWN");
 
     const missingClassExport = buildWowSyncExport({ generatedAt: NOW - 25, character: { name: "MissingClassRecipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }).replace("Class: Warrior", "Class: ?");
     store.importSnapshot(missingClassExport);
     const missingClass = screen("MissingClassRecipient");
     assert.equal(missingClass.recipientClass.evidence.state, "UNKNOWN");
     assert.equal(missingClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    assert.equal(missingClass.candidateEvidence.rows?.find((row) => row.candidate.classID.state === "KNOWN" && row.candidate.classID.value === 2)?.weaponProficiencyCheck.state, "UNKNOWN");
 
     const originalListSnapshots = store.listSnapshots.bind(store);
     store.listSnapshots = (identityKey) => originalListSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::warriorrecipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, status: { ...snapshot.parsed.character.status, state: "LAST_SEEN" } } } } : snapshot);
@@ -357,11 +359,13 @@ test("Retail recipient screen applies native armor-family checks only to coheren
     assert.equal(lastSeenClass.recipientClass.evidence.state, "UNKNOWN");
     assert.equal(lastSeenClass.recipientClass.evidence.sectionState, "LAST_SEEN");
     assert.equal(lastSeenClass.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    assert.equal(lastSeenClass.candidateEvidence.rows?.find((row) => row.candidate.classID.state === "KNOWN" && row.candidate.classID.value === 2)?.weaponProficiencyCheck.state, "UNKNOWN");
     store.listSnapshots = (identityKey) => originalListSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::warriorrecipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { status: { state: "UNKNOWN" } } } } : snapshot);
     const unknownSection = screen("WarriorRecipient");
     assert.equal(unknownSection.recipientClass.evidence.state, "UNKNOWN");
     assert.equal(unknownSection.recipientClass.evidence.sectionState, "UNKNOWN");
     assert.equal(unknownSection.candidateEvidence.rows?.[0]?.armorCheck.state, "UNKNOWN");
+    assert.equal(unknownSection.candidateEvidence.rows?.find((row) => row.candidate.classID.state === "KNOWN" && row.candidate.classID.value === 2)?.weaponProficiencyCheck.state, "UNKNOWN");
     store.listSnapshots = originalListSnapshots;
 
     const missingClassNonArmor = addCandidates("NonArmorExporter", "Cairne", NOW - 24, nonApplicableRows);
@@ -371,7 +375,10 @@ test("Retail recipient screen applies native armor-family checks only to coheren
     const nonArmorResult = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "NonArmorExporter", exporterRealm: "Cairne", recipientName: "MissingClassRecipient", recipientRealm: "Cairne" });
     assert.equal(nonArmorResult.status, "FOUND");
     if (nonArmorResult.status === "FOUND") {
-      assert.ok(nonArmorResult.value.data?.candidateEvidence.rows?.every((row) => row.armorCheck.state === "NOT_APPLICABLE" && row.result === "NOT_RULED_OUT_BY_CHECKED_RULES"));
+      const rows = nonArmorResult.value.data?.candidateEvidence.rows ?? [];
+      const identifiedWeapon = rows.find((row) => row.candidate.classID.state === "KNOWN" && row.candidate.classID.value === 2);
+      assert.equal(identifiedWeapon?.weaponProficiencyCheck.state, "UNKNOWN", "an identified weapon with unusable recipient class is not N/A");
+      assert.ok(rows.filter((row) => row !== identifiedWeapon).every((row) => row.armorCheck.state === "NOT_APPLICABLE" && row.result === "NOT_RULED_OUT_BY_CHECKED_RULES"));
     }
     store.listSnapshots = originalClasses;
 
@@ -385,7 +392,94 @@ test("Retail recipient screen applies native armor-family checks only to coheren
       ]);
     }
     assert.match(screen("WarriorRecipient").uncheckedRestrictions, /native-family mismatch is a plausibility-screen result/i);
+    assert.match(screen("WarriorRecipient").uncheckedRestrictions, /class-level weapon proficiency\/access/);
+    assert.match(screen("WarriorRecipient").uncheckedRestrictions, /Weapon PASS does not establish specialization suitability/);
     assert.match(screen("WarriorRecipient").uncheckedRestrictions, /allowed-class, race, faction, profession, unique\/equip/i);
+  } finally { store.close(); }
+});
+
+test("Retail weapon proficiency screen covers the current class and supported subclass matrix", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  const subclasses = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 18, 19];
+  const passByClass: Record<string, number[]> = {
+    DeathKnight: [0, 1, 4, 5, 6, 7, 8], DemonHunter: [0, 7, 9, 13, 15], Druid: [4, 5, 6, 10, 13, 15],
+    Evoker: [0, 1, 4, 5, 7, 8, 10, 13, 15], Hunter: [1, 2, 3, 6, 8, 10, 18], Mage: [7, 10, 15, 19],
+    Monk: [0, 4, 6, 7, 10, 13], Paladin: [0, 1, 4, 5, 6, 7, 8], Priest: [4, 10, 15, 19],
+    Rogue: [0, 4, 7, 13, 15], Shaman: [0, 1, 4, 5, 10, 13, 15], Warlock: [7, 10, 15, 19],
+    Warrior: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 15, 18],
+  };
+  const row = (subclass: string, options: { cls?: string; type?: string; location?: string; req?: string; usable?: string; bound?: string; candidateState?: string } = {}) => [
+    options.candidateState ?? "EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "123", "item:123", "?", options.type ?? "?", "0", options.req ?? "0", options.cls ?? "2", subclass,
+    options.location ?? "?", options.bound ?? "?", "?", "?", "?", "?", "?", options.usable ?? "?", "OBSERVED",
+  ].join("\t");
+  const weaponRows = subclasses.map((subclass) => row(String(subclass)));
+  const specialRows = [row("11"), row("12"), row("14"), row("16"), row("17"), row("20"), row("?"), row("999"), row("0", { cls: "4", type: "2", location: "INVTYPE_NECK" }), row("4", { cls: "4", type: "1", location: "INVTYPE_HEAD" }), row("7", { type: "17", location: "INVTYPE_2HWEAPON" }), row("1", { type: "13", location: "INVTYPE_WEAPON" }), row("7", { type: "13", location: "INVTYPE_WEAPONMAINHAND", usable: "yes", bound: "yes" }), row("7", { type: "13", location: "INVTYPE_WEAPON", usable: "no", bound: "no" }), row("7", { type: "13", location: "INVTYPE_2HWEAPON" }), row("7", { cls: "?", type: "13", location: "INVTYPE_WEAPON" }), row("7", { candidateState: "UNKNOWN" })];
+  const allRows = [...weaponRows, ...specialRows];
+  const addCandidates = () => buildWowSyncExport({ generatedAt: NOW - 40, character: { name: "WeaponExporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } })
+    .replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 40}\nContractVersion: 1\n${header}\n${allRows.join("\n")}\n\n[END]`);
+  const addRecipient = (name: string, cls: string, generatedAt: number) => store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: cls, level: 90 } }));
+  const screen = (name: string) => {
+    const result = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "WeaponExporter", exporterRealm: "Cairne", recipientName: name, recipientRealm: "Cairne", limit: 100 });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") throw new Error("Expected recipient screen");
+    return result.value.data!.candidateEvidence.rows!;
+  };
+  try {
+    store.importSnapshot(addCandidates());
+    let generatedAt = NOW - 30;
+    for (const cls of Object.keys(passByClass)) { addRecipient(cls + "Recipient", cls, generatedAt++); }
+    for (const [cls, passSubclasses] of Object.entries(passByClass)) {
+      const rows = screen(cls + "Recipient");
+      for (let index = 0; index < subclasses.length; index++) {
+        const subclass = subclasses[index]!;
+        const expected = cls === "Hunter" && [0, 7, 15].includes(subclass) ? "UNKNOWN" : passSubclasses.includes(subclass) ? "PASS" : "RULED_OUT";
+        assert.equal(rows[index]?.weaponProficiencyCheck.state, expected, cls + " subclass " + subclass);
+      }
+    }
+    const dhRows = screen("DemonHunterRecipient");
+    assert.equal(dhRows[subclasses.indexOf(15)]?.weaponProficiencyCheck.state, "PASS", "Demon Hunter dagger is current Retail access");
+    assert.equal(dhRows[subclasses.indexOf(9)]?.weaponProficiencyCheck.state, "PASS");
+    const mageRows = screen("MageRecipient");
+    assert.equal(mageRows[subclasses.indexOf(1)]?.weaponProficiencyCheck.state, "RULED_OUT", "Mage + two-handed axe mismatch");
+    assert.equal(mageRows[subclasses.indexOf(9)]?.weaponProficiencyCheck.state, "RULED_OUT", "non-Demon-Hunter warglaive mismatch");
+    assert.equal(mageRows[subclasses.indexOf(0)]?.weaponProficiencyCheck.state, "RULED_OUT", "subclass zero is a real one-handed axe");
+    for (let index = weaponRows.length; index < weaponRows.length + 6; index++) { assert.equal(mageRows[index]?.weaponProficiencyCheck.state, "UNKNOWN", "unsupported weapon subclass row " + index); }
+    assert.equal(mageRows[weaponRows.length + 6]?.weaponProficiencyCheck.state, "UNKNOWN", "unknown subclass");
+    assert.equal(mageRows[weaponRows.length + 7]?.weaponProficiencyCheck.state, "UNKNOWN", "out-of-range subclass");
+    assert.equal(mageRows[weaponRows.length + 8]?.weaponProficiencyCheck.state, "NOT_APPLICABLE", "known non-weapon class");
+    assert.equal(mageRows[weaponRows.length + 9]?.weaponProficiencyCheck.state, "NOT_APPLICABLE", "armor coexists with armor check");
+    assert.equal(mageRows[weaponRows.length + 10]?.weaponProficiencyCheck.state, "UNKNOWN", "one-handed family contradicts two-handed location");
+    assert.equal(mageRows[weaponRows.length + 11]?.weaponProficiencyCheck.state, "UNKNOWN", "two-handed family contradicts ordinary weapon location");
+    assert.equal(mageRows[weaponRows.length + 12]?.weaponProficiencyCheck.state, "PASS", "coherent location evidence does not alter result");
+    assert.equal(mageRows[weaponRows.length + 13]?.weaponProficiencyCheck.state, "PASS", "currentCharacterCanUse and binding fields are irrelevant");
+    assert.equal(mageRows[weaponRows.length + 14]?.weaponProficiencyCheck.state, "UNKNOWN", "contradictory equipType and baseEquipLocation");
+    assert.equal(mageRows[weaponRows.length + 15]?.weaponProficiencyCheck.state, "UNKNOWN", "classID unknown is not inferred from slot evidence");
+    assert.equal(mageRows[weaponRows.length + 16]?.weaponProficiencyCheck.state, "UNKNOWN", "candidate state unknown remains unresolved");
+    for (const index of [subclasses.indexOf(0), subclasses.indexOf(7), subclasses.indexOf(15)]) {
+      const check = screen("HunterRecipient")[index]!.weaponProficiencyCheck;
+      assert.equal(check.state, "UNKNOWN");
+      assert.match(check.reason, /specialization-dependent/i);
+      assert.match(check.reason, /recipient specialization is not checked/i);
+    }
+    assert.equal(screen("HunterRecipient")[subclasses.indexOf(2)]?.weaponProficiencyCheck.state, "PASS", "Hunter bow pass");
+    assert.equal(screen("HunterRecipient")[subclasses.indexOf(18)]?.weaponProficiencyCheck.state, "PASS", "Hunter crossbow pass");
+
+    const composeRows = [
+      row("1"), row("15", { req: "100" }), row("11", { req: "100" }), row("11"), row("4", { cls: "4", type: "11", location: "INVTYPE_FINGER" }),
+    ];
+    const composeExport = buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "ComposeWeaponExporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } })
+      .replace("\n\n[END]", "\n\n[GEAR CANDIDATES]\nState: complete; observed=" + (NOW - 20) + "\nContractVersion: 1\n" + header + "\n" + composeRows.join("\n") + "\n\n[END]");
+    store.importSnapshot(composeExport);
+    const compose = new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "ComposeWeaponExporter", exporterRealm: "Cairne", recipientName: "MageRecipient", recipientRealm: "Cairne", limit: 100 });
+    assert.equal(compose.status, "FOUND");
+    if (compose.status === "FOUND") {
+      const rows = compose.value.data!.candidateEvidence.rows!;
+      assert.deepEqual(rows.map((item) => [item.result, item.armorCheck.state, item.weaponProficiencyCheck.state]), [
+        ["RULED_OUT", "NOT_APPLICABLE", "RULED_OUT"], ["RULED_OUT", "NOT_APPLICABLE", "PASS"], ["RULED_OUT", "NOT_APPLICABLE", "UNKNOWN"], ["UNKNOWN", "NOT_APPLICABLE", "UNKNOWN"], ["NOT_RULED_OUT_BY_CHECKED_RULES", "NOT_APPLICABLE", "NOT_APPLICABLE"],
+      ]);
+    }
+    assert.match(screen("MageRecipient")[0]!.reason, /Weapon-proficiency check:/);
   } finally { store.close(); }
 });
 

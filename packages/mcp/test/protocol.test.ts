@@ -153,6 +153,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const registeredRecipientScreen = tools.find((tool) => tool.name === "get_gear_candidate_recipient_screen")!;
     assert.deepEqual(registeredRecipientScreen.annotations, { readOnlyHint: true, openWorldHint: false, destructiveHint: false });
     assert.match(registeredRecipientScreen.description ?? "", /native armor-family plausibility/);
+    assert.match(registeredRecipientScreen.description ?? "", /class-level weapon proficiency\/access/);
+    assert.match(registeredRecipientScreen.description ?? "", /specialization-dependent/);
+    assert.match(registeredRecipientScreen.description ?? "", /specialization suitability/);
     assert.match(registeredRecipientScreen.description ?? "", /do not prove.*technically forbids/i);
     assert.match(registeredRecipientScreen.description ?? "", /positive results do not mean CanEquip/i);
     const schema = registeredRecipientScreen.inputSchema as { required?: string[]; additionalProperties?: boolean; properties?: Record<string, { const?: string; enum?: string[]; maximum?: number; minimum?: number }> };
@@ -160,7 +163,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(schema.additionalProperties, false);
     assert.equal(schema.properties?.version?.const, "retail");
     assert.equal(schema.properties?.limit?.maximum, 100);
-    const recipientScreen = structured<{ status: string; value?: { data?: { accountMembership: string; accountMembershipCaveat: string; uncheckedRestrictions: string; recipientClass: { evidence: { state: string; value?: string; normalizedClass?: string; sectionState: string }; snapshot?: { snapshotId: number } }; candidateEvidence: { captured: boolean; rows?: Array<{ result: string; reason: string; observationState: string; armorCheck: { state: string; candidateFamily?: string; recipientNativeFamily?: string } }> }; recipientLevel: { evidence: { state: string }; snapshot?: { snapshotId: number } } }; provenance: { state: string; snapshotId?: number; derivedFrom?: string[]; warning?: string } } }>(await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero", recipientRealm: "Cairne" } }));
+    const recipientScreen = structured<{ status: string; value?: { data?: { accountMembership: string; accountMembershipCaveat: string; uncheckedRestrictions: string; recipientClass: { evidence: { state: string; value?: string; normalizedClass?: string; sectionState: string }; snapshot?: { snapshotId: number } }; candidateEvidence: { captured: boolean; rows?: Array<{ result: string; reason: string; observationState: string; armorCheck: { state: string; candidateFamily?: string; recipientNativeFamily?: string }; weaponProficiencyCheck: { state: string; candidateFamily?: string } }> }; recipientLevel: { evidence: { state: string }; snapshot?: { snapshotId: number } } }; provenance: { state: string; snapshotId?: number; derivedFrom?: string[]; warning?: string } } }>(await client.callTool({ name: "get_gear_candidate_recipient_screen", arguments: { version: "retail", exporterName: "Virek", exporterRealm: "Cairne", recipientName: "Zero", recipientRealm: "Cairne" } }));
     assert.equal(recipientScreen.status, "FOUND");
     assert.equal(recipientScreen.value?.data?.candidateEvidence.captured, true);
     assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.result, "NOT_RULED_OUT_BY_CHECKED_RULES", "exporter's currentCharacterCanUse=false does not rule out the selected recipient");
@@ -170,10 +173,15 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(recipientScreen.value?.data?.recipientClass.snapshot?.snapshotId, recipientScreen.value?.data?.recipientLevel.snapshot?.snapshotId);
     assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.armorCheck.state, "PASS");
     assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.armorCheck.candidateFamily, "Plate");
+    assert.equal(recipientScreen.value?.data?.candidateEvidence.rows?.[0]?.weaponProficiencyCheck.state, "NOT_APPLICABLE");
     assert.equal(recipientScreen.value?.data?.accountMembership, "NOT_ESTABLISHED_BY_DASHBOARD_IDENTITY");
     assert.match(recipientScreen.value?.data?.accountMembershipCaveat ?? "", /does not establish/);
     assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /native armor-family plausibility/);
+    assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /class-level weapon proficiency\/access/);
+    assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /Weapon PASS does not establish specialization suitability/);
     assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /do not establish CanEquip/);
+    assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /transferability/);
+    assert.match(recipientScreen.value?.data?.uncheckedRestrictions ?? "", /allocation/);
     assert.equal(recipientScreen.value?.provenance.state, "DERIVED");
     assert.ok(recipientScreen.value?.provenance.snapshotId);
     assert.ok((recipientScreen.value?.provenance.derivedFrom?.length ?? 0) >= 2);

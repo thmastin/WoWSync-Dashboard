@@ -179,6 +179,86 @@ interface GearCandidateArmorCheck {
   recipientNativeFamily?: RetailArmorFamily;
   reason: string;
 }
+type RetailWeaponFamily = "ONE_HANDED_AXE" | "TWO_HANDED_AXE" | "BOW" | "GUN" | "ONE_HANDED_MACE" | "TWO_HANDED_MACE" | "POLEARM" | "ONE_HANDED_SWORD" | "TWO_HANDED_SWORD" | "WARGLAIVE" | "STAFF" | "FIST_WEAPON" | "DAGGER" | "CROSSBOW" | "WAND";
+interface GearCandidateWeaponProficiencyCheck {
+  state: "NOT_APPLICABLE" | "PASS" | "RULED_OUT" | "UNKNOWN";
+  candidateFamily?: RetailWeaponFamily;
+  reason: string;
+}
+
+const RETAIL_WEAPON_CLASS_ID = 2;
+const RETAIL_WEAPON_FAMILY_BY_SUBCLASS: Readonly<Record<number, RetailWeaponFamily>> = {
+  0: "ONE_HANDED_AXE", 1: "TWO_HANDED_AXE", 2: "BOW", 3: "GUN", 4: "ONE_HANDED_MACE",
+  5: "TWO_HANDED_MACE", 6: "POLEARM", 7: "ONE_HANDED_SWORD", 8: "TWO_HANDED_SWORD", 9: "WARGLAIVE",
+  10: "STAFF", 13: "FIST_WEAPON", 15: "DAGGER", 18: "CROSSBOW", 19: "WAND",
+};
+const RETAIL_WEAPON_PROFICIENCIES: Readonly<Record<RetailRecipientClass, ReadonlySet<RetailWeaponFamily>>> = {
+  DEATHKNIGHT: new Set(["ONE_HANDED_AXE", "TWO_HANDED_AXE", "ONE_HANDED_MACE", "TWO_HANDED_MACE", "POLEARM", "ONE_HANDED_SWORD", "TWO_HANDED_SWORD"]),
+  DEMONHUNTER: new Set(["ONE_HANDED_AXE", "ONE_HANDED_SWORD", "FIST_WEAPON", "DAGGER", "WARGLAIVE"]),
+  DRUID: new Set(["ONE_HANDED_MACE", "TWO_HANDED_MACE", "POLEARM", "STAFF", "FIST_WEAPON", "DAGGER"]),
+  EVOKER: new Set(["ONE_HANDED_AXE", "TWO_HANDED_AXE", "ONE_HANDED_MACE", "TWO_HANDED_MACE", "ONE_HANDED_SWORD", "TWO_HANDED_SWORD", "STAFF", "FIST_WEAPON", "DAGGER"]),
+  HUNTER: new Set(["TWO_HANDED_AXE", "BOW", "GUN", "POLEARM", "TWO_HANDED_SWORD", "STAFF", "CROSSBOW"]),
+  MAGE: new Set(["ONE_HANDED_SWORD", "STAFF", "DAGGER", "WAND"]),
+  MONK: new Set(["ONE_HANDED_AXE", "ONE_HANDED_MACE", "POLEARM", "ONE_HANDED_SWORD", "STAFF", "FIST_WEAPON"]),
+  PALADIN: new Set(["ONE_HANDED_AXE", "TWO_HANDED_AXE", "ONE_HANDED_MACE", "TWO_HANDED_MACE", "POLEARM", "ONE_HANDED_SWORD", "TWO_HANDED_SWORD"]),
+  PRIEST: new Set(["ONE_HANDED_MACE", "STAFF", "DAGGER", "WAND"]),
+  ROGUE: new Set(["ONE_HANDED_AXE", "ONE_HANDED_MACE", "ONE_HANDED_SWORD", "FIST_WEAPON", "DAGGER"]),
+  SHAMAN: new Set(["ONE_HANDED_AXE", "TWO_HANDED_AXE", "ONE_HANDED_MACE", "TWO_HANDED_MACE", "STAFF", "FIST_WEAPON", "DAGGER"]),
+  WARLOCK: new Set(["ONE_HANDED_SWORD", "STAFF", "DAGGER", "WAND"]),
+  WARRIOR: new Set(["ONE_HANDED_AXE", "TWO_HANDED_AXE", "BOW", "GUN", "ONE_HANDED_MACE", "TWO_HANDED_MACE", "POLEARM", "ONE_HANDED_SWORD", "TWO_HANDED_SWORD", "STAFF", "FIST_WEAPON", "DAGGER", "CROSSBOW"]),
+};
+const RETAIL_TWO_HANDED_WEAPON_FAMILIES: ReadonlySet<RetailWeaponFamily> = new Set(["TWO_HANDED_AXE", "TWO_HANDED_MACE", "POLEARM", "TWO_HANDED_SWORD", "STAFF"]);
+const RETAIL_ONE_HANDED_WEAPON_FAMILIES: ReadonlySet<RetailWeaponFamily> = new Set(["ONE_HANDED_AXE", "ONE_HANDED_MACE", "ONE_HANDED_SWORD", "WARGLAIVE", "FIST_WEAPON", "DAGGER"]);
+const RETAIL_EQUIP_LOCATION_BY_TYPE: Readonly<Record<number, string>> = {
+  13: "INVTYPE_WEAPON", 17: "INVTYPE_2HWEAPON", 21: "INVTYPE_WEAPONMAINHAND", 22: "INVTYPE_WEAPONOFFHAND", 15: "INVTYPE_RANGED", 26: "INVTYPE_RANGEDRIGHT",
+};
+const RETAIL_WEAPON_LOCATION_ALIASES: Readonly<Record<string, string>> = {
+  INVTYPE_WEAPON: "WEAPON", INVTYPE_WEAPONMAINHAND: "WEAPON", INVTYPE_WEAPONOFFHAND: "WEAPON",
+  INVTYPE_2HWEAPON: "2HWEAPON", INVTYPE_RANGED: "RANGED", INVTYPE_RANGEDRIGHT: "RANGED",
+};
+
+function evaluateWeaponProficiencyCheck(candidate: GearCandidatesSection["rows"][number], recipientClass: RetailRecipientClass | undefined): GearCandidateWeaponProficiencyCheck {
+  const unknown = (reason: string, candidateFamily?: RetailWeaponFamily): GearCandidateWeaponProficiencyCheck => ({ state: "UNKNOWN", ...(candidateFamily ? { candidateFamily } : {}), reason });
+  if (candidate.classID.state === "KNOWN" && candidate.classID.value !== RETAIL_WEAPON_CLASS_ID) {
+    return { state: "NOT_APPLICABLE", reason: "Candidate item class is known not to be Weapon; class-level weapon proficiency screening does not apply." };
+  }
+  if (candidate.classID.state !== "KNOWN") return unknown("Candidate classID is UNKNOWN; weapon applicability is not inferred from equipType or baseEquipLocation.");
+  if (candidate.subclassID.state !== "KNOWN") return unknown("Candidate Weapon subclassID is UNKNOWN; weapon family cannot be determined.");
+  const candidateFamily = RETAIL_WEAPON_FAMILY_BY_SUBCLASS[candidate.subclassID.value];
+  if (candidateFamily === undefined) return unknown(`Candidate Weapon subclassID ${candidate.subclassID.value} is unsupported or legacy; current Retail proficiency was not guessed.`);
+
+  const typeLocationRaw = candidate.equipType.state === "KNOWN" ? RETAIL_EQUIP_LOCATION_BY_TYPE[candidate.equipType.value] : undefined;
+  const typeLocation = typeLocationRaw === undefined ? undefined : RETAIL_WEAPON_LOCATION_ALIASES[typeLocationRaw];
+  const baseLocation = candidate.baseEquipLocation.state === "KNOWN" ? RETAIL_WEAPON_LOCATION_ALIASES[candidate.baseEquipLocation.value.trim().toUpperCase()] : undefined;
+  const knownNonWeaponType = candidate.equipType.state === "KNOWN" && typeLocation === undefined && (RETAIL_BODY_SLOT_BY_INVENTORY_TYPE[candidate.equipType.value] !== undefined || RETAIL_NON_BODY_LOCATION_BY_INVENTORY_TYPE[candidate.equipType.value] !== undefined);
+  const normalizedBaseEquipLocation = candidate.baseEquipLocation.state === "KNOWN" ? candidate.baseEquipLocation.value.trim().toUpperCase() : undefined;
+  const knownNonWeaponBaseLocation = normalizedBaseEquipLocation !== undefined && RETAIL_WEAPON_LOCATION_ALIASES[normalizedBaseEquipLocation] === undefined && (RETAIL_BODY_SLOT_BY_BASE_EQUIP_LOCATION[normalizedBaseEquipLocation] !== undefined || RETAIL_NON_BODY_BASE_LOCATION_BY_NAME[normalizedBaseEquipLocation] !== undefined);
+  if (knownNonWeaponType || knownNonWeaponBaseLocation) {
+    return unknown("Known equipType or baseEquipLocation identifies a non-weapon slot, contradicting the captured Weapon item class.", candidateFamily);
+  }
+  if ((candidate.equipType.state === "KNOWN" && typeLocation !== undefined) && (candidate.baseEquipLocation.state === "KNOWN" && baseLocation !== undefined) && typeLocation !== baseLocation) {
+    return unknown("Known equipType and baseEquipLocation contradict each other; weapon family result was withheld.", candidateFamily);
+  }
+  const location = typeLocation ?? baseLocation;
+  if (location === "2HWEAPON" && RETAIL_ONE_HANDED_WEAPON_FAMILIES.has(candidateFamily)) {
+    return unknown("Known two-handed location contradicts the captured one-handed weapon subclass.", candidateFamily);
+  }
+  if (location === "WEAPON" && RETAIL_TWO_HANDED_WEAPON_FAMILIES.has(candidateFamily)) {
+    return unknown("Known ordinary weapon location contradicts the captured two-handed weapon subclass.", candidateFamily);
+  }
+  if (location === "RANGED" && RETAIL_TWO_HANDED_WEAPON_FAMILIES.has(candidateFamily)) {
+    return unknown("Known ranged location contradicts the captured two-handed weapon subclass.", candidateFamily);
+  }
+  if (candidate.candidateState !== "EQUIPPABLE") return unknown("Candidate state is UNKNOWN; class-level weapon proficiency was not asserted for an unresolved candidate.", candidateFamily);
+  if (recipientClass === undefined) return unknown("Recipient class is not usable OBSERVED evidence for the weapon proficiency check.", candidateFamily);
+  if (recipientClass === "HUNTER" && (candidateFamily === "ONE_HANDED_AXE" || candidateFamily === "ONE_HANDED_SWORD" || candidateFamily === "DAGGER")) {
+    return unknown(`Retail ${candidateFamily.replaceAll("_", " ").toLowerCase()} access is specialization-dependent for Hunters; recipient specialization is not checked by this screen.`, candidateFamily);
+  }
+  if (RETAIL_WEAPON_PROFICIENCIES[recipientClass].has(candidateFamily)) {
+    return { state: "PASS", candidateFamily, reason: `Recipient class has current Retail class-level proficiency/access for ${candidateFamily.replaceAll("_", " ").toLowerCase()}. This does not establish specialization suitability, ability compatibility, or full CanEquip.` };
+  }
+  return { state: "RULED_OUT", candidateFamily, reason: `Current Retail class-level weapon proficiency mismatch: recipient class does not have checked access for ${candidateFamily.replaceAll("_", " ").toLowerCase()}. This is not a full CanEquip determination.` };
+}
 
 const RETAIL_ARMOR_FAMILY_BY_CLASS: Readonly<Record<RetailRecipientClass, RetailArmorFamily>> = {
   MAGE: "Cloth", PRIEST: "Cloth", WARLOCK: "Cloth",
@@ -304,6 +384,7 @@ export interface GearCandidateRecipientScreenRead {
       result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN";
       reason: string;
       armorCheck: GearCandidateArmorCheck;
+      weaponProficiencyCheck: GearCandidateWeaponProficiencyCheck;
       requiredLevel: GearCandidatesSection["rows"][number]["requiredLevel"];
       candidate: GearCandidatesSection["rows"][number];
     }>;
@@ -322,7 +403,7 @@ export interface GearCandidateRecipientScreenRead {
       | { state: "UNKNOWN"; value?: string; sectionState: SectionState; reason: string };
     snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
   };
-  uncheckedRestrictions: "The screen checks required level and Retail native armor-family plausibility for ordinary body armor. A native-family mismatch is a plausibility-screen result, not proof the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip. Item-specific allowed-class, race, faction, profession, unique/equip, and other restrictions were not evaluated. This result does not establish recipient suitability, upgrade value, or transferability.";
+  uncheckedRestrictions: string;
   paging?: { offset: number; limit: number; totalCount: number; truncated: boolean };
 }
 export type GearCandidateRecipientScreenResolution =
@@ -563,11 +644,12 @@ export class DashboardReadModel {
           levelCheck = { state: "PASS", reason: `Captured candidate required level ${candidate.requiredLevel.value} does not exceed recipient observed level ${recipientLevel.evidence.value}.` };
         }
         const armorCheck = evaluateNativeArmorCheck(candidate, normalizedRecipientClass);
+        const weaponProficiencyCheck = evaluateWeaponProficiencyCheck(candidate, normalizedRecipientClass);
         const result: "RULED_OUT" | "NOT_RULED_OUT_BY_CHECKED_RULES" | "UNKNOWN" =
-          levelCheck.state === "RULED_OUT" || armorCheck.state === "RULED_OUT" ? "RULED_OUT" :
-            levelCheck.state === "UNKNOWN" || armorCheck.state === "UNKNOWN" ? "UNKNOWN" : "NOT_RULED_OUT_BY_CHECKED_RULES";
-        const reason = `Required-level check: ${levelCheck.reason} Armor-family check: ${armorCheck.reason}`;
-        return { rowOrdinal: index + 1, candidateState: candidate.candidateState, observationState: candidate.observationState, result, reason, armorCheck, requiredLevel: candidate.requiredLevel, candidate };
+          levelCheck.state === "RULED_OUT" || armorCheck.state === "RULED_OUT" || weaponProficiencyCheck.state === "RULED_OUT" ? "RULED_OUT" :
+            levelCheck.state === "UNKNOWN" || armorCheck.state === "UNKNOWN" || weaponProficiencyCheck.state === "UNKNOWN" ? "UNKNOWN" : "NOT_RULED_OUT_BY_CHECKED_RULES";
+        const reason = `Required-level check: ${levelCheck.reason} Armor-family check: ${armorCheck.reason} Weapon-proficiency check: ${weaponProficiencyCheck.reason}`;
+        return { rowOrdinal: index + 1, candidateState: candidate.candidateState, observationState: candidate.observationState, result, reason, armorCheck, weaponProficiencyCheck, requiredLevel: candidate.requiredLevel, candidate };
       });
       const rows = allRows.slice(page.offset, page.offset + page.limit);
       candidateEvidence = {
@@ -596,7 +678,7 @@ export class DashboardReadModel {
       candidateEvidence,
       recipientLevel,
       recipientClass,
-      uncheckedRestrictions: "The screen checks required level and Retail native armor-family plausibility for ordinary body armor. A native-family mismatch is a plausibility-screen result, not proof the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip. Item-specific allowed-class, race, faction, profession, unique/equip, and other restrictions were not evaluated. This result does not establish recipient suitability, upgrade value, or transferability.",
+      uncheckedRestrictions: "The screen checks required level, Retail native armor-family plausibility for ordinary body armor, and Retail recipient class-level weapon proficiency/access for supported modern weapon families. Native-family mismatch is a plausibility-screen result, not proof the Retail client technically forbids equipping a lower armor family. A weapon proficiency mismatch reports only a mismatch under the checked class-level rule. Positive results do not establish CanEquip. Weapon PASS does not establish specialization suitability, ability compatibility, weapon pairing, primary-stat suitability, or upgrade value. Item-specific allowed-class, race, faction, profession, unique/equip, and other restrictions were not evaluated. This result does not establish recipient suitability, upgrade value, transferability, demand, allocation, surplus, or disposition.",
       ...(candidateEvidence.captured ? { paging: { offset: candidateEvidence.offset!, limit: candidateEvidence.limit!, totalCount: candidateEvidence.totalCount!, truncated: candidateEvidence.truncated! } } : {}),
     };
     return { status: "FOUND", value: { data: value, provenance: {
@@ -605,7 +687,7 @@ export class DashboardReadModel {
       ...(candidateEvidence.snapshot ? { importedAt: candidateEvidence.snapshot.importedAt, snapshotId: candidateEvidence.snapshot.snapshotId } : {}),
       source: "latest stored Retail candidate-bearing exporter snapshot and latest stored recipient character snapshot",
       ...(derivedFrom.length > 0 ? { derivedFrom } : recipientSnapshot ? { derivedFrom: [String(recipientSnapshot.id)] } : {}),
-      warning: "This screen checks required level and Retail native armor-family plausibility for ordinary body armor only. Native-family mismatch is not proof that the Retail client technically forbids equipping a lower armor family. Positive results do not establish CanEquip; latest stored evidence may be historical and account membership is not established.",
+      warning: "This screen checks required level, Retail native armor-family plausibility for ordinary body armor, and recipient class-level weapon proficiency/access for supported modern weapon families. Weapon proficiency is not full CanEquip or specialization suitability; positive results only mean not ruled out by checked rules. Latest stored evidence may be historical and Battle.net account membership is not established.",
     } } };
   }
 
