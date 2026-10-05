@@ -92,6 +92,45 @@ test("LAST_SEEN section provenance is retained as historical, never current", ()
   } finally { store.close(); }
 });
 
+test("gear candidate read preserves per-character snapshot provenance, row state, captured-empty and missing sidecars", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const append = (raw: string, body: string) => raw.replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\n${body}\n\n[END]`);
+    const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+    const raw = append(retail("Evidence", "Cairne"), `State: partial; observed=${NOW - 20}\nContractVersion: 1\n${header}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t0\t0\t0\t4\t0\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN`);
+    store.importSnapshot(raw);
+    // Newer export lacks the optional sidecar; the latest captured sidecar remains explicitly historical.
+    store.importSnapshot(retail("Evidence", "Cairne").replace("Generated: 1800000000", `Generated: ${NOW - 10}`));
+    store.importSnapshot(retail("NoEvidence", "Cairne"));
+    const result = new DashboardReadModel(store, () => NOW).getGearCandidateEvidence({ version: "retail" });
+    assert.equal(result.provenance.state, "DERIVED");
+    const evidence = result.data?.characters.find((entry) => entry.identity.name === "Evidence")!;
+    assert.equal(evidence.captured, true);
+    assert.equal(evidence.identity.identityKey, "retail::cairne::evidence");
+    assert.equal(evidence.snapshot?.snapshotId, store.listSnapshots(evidence.identity.identityKey)[1]?.id);
+    assert.equal(evidence.snapshot?.freshness, "stale", "snapshot freshness is computed separately from the row evidence state");
+    assert.equal(evidence.snapshot?.candidateObservedAt, NOW - 20);
+    assert.equal(evidence.snapshot?.candidateFreshness, "recent", "sidecar observation age is computed independently of snapshot import timing");
+    assert.equal(evidence.sidecar?.rows[0]?.observationState, "LAST_SEEN");
+    assert.equal(evidence.sidecar?.observedAt, NOW - 20);
+    assert.deepEqual(evidence.sidecar?.rows[0]?.currentCharacterCanUse, { state: "KNOWN", value: false });
+    assert.deepEqual(evidence.sidecar?.rows[0]?.isBound, { state: "KNOWN", value: false });
+    assert.deepEqual(evidence.sidecar?.rows[0]?.boundToAccountUntilEquip, { state: "UNKNOWN" });
+    assert.deepEqual(evidence.sidecar?.rows[0]?.itemBindToAccount, { state: "KNOWN", value: true });
+    assert.deepEqual(evidence.sidecar?.rows[0]?.itemBindToAccountUntilEquip, { state: "KNOWN", value: false });
+    assert.deepEqual(evidence.sidecar?.rows[0]?.tooltipBindingRawValue, { state: "KNOWN", value: 9 });
+    const unavailable = result.data?.characters.find((entry) => entry.identity.name === "NoEvidence")!;
+    assert.equal(unavailable.captured, false);
+    assert.equal(unavailable.sidecar, undefined);
+    const empty = append(retail("EmptyEvidence", "Cairne"), `State: complete; observed=0\nContractVersion: 1\n${header}\nCandidates: None observed`);
+    store.importSnapshot(empty);
+    const emptyResult = new DashboardReadModel(store, () => NOW).getGearCandidateEvidence({ version: "retail" }).data?.characters.find((entry) => entry.identity.name === "EmptyEvidence");
+    assert.equal(emptyResult?.captured, true);
+    assert.deepEqual(emptyResult?.sidecar?.rows, []);
+    assert.equal(new DashboardReadModel(store, () => NOW).getGearCandidateEvidence({ version: "classic-era" }).provenance.state, "UNKNOWN");
+  } finally { store.close(); }
+});
+
 test("snapshot history is compact metadata and never leaks raw export text", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {

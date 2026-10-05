@@ -12,6 +12,9 @@ import type {
   CharacterSection,
   ContainerRecord,
   EquipmentSection,
+  GearCandidateEvidence,
+  GearCandidateRow,
+  GearCandidatesSection,
   GuildBankSection,
   GuildBankTab,
   InventoryItemRecord,
@@ -55,6 +58,7 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   TRAINERS: "trainer",
   TRAINER: "trainer",
   "ITEM METADATA": "itemMetadata",
+  "GEAR CANDIDATES": "gearCandidates",
 };
 
 function fail(message: string, context?: string): never {
@@ -673,6 +677,77 @@ function parseItemMetadata(lines: string[]): ItemMetadataSection {
   return { rows };
 }
 
+const GEAR_CANDIDATE_COLUMNS = ["candidateState", "locationType", "containerID", "slot", "itemID", "itemString", "itemGUID", "equipType", "currentItemLevel", "requiredLevel", "classID", "subclassID", "baseEquipLocation", "isBound", "boundToAccountUntilEquip", "itemBindToAccount", "itemBindToAccountUntilEquip", "tooltipBindingType", "tooltipBindingRawValue", "currentCharacterCanUse", "observationState"] as const;
+function candidateInteger(raw: string, column: string, line: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(raw)) fail(`Malformed [GEAR CANDIDATES] ${column}: expected a non-negative integer or "?"`, line);
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n)) fail(`Malformed [GEAR CANDIDATES] ${column}: value is out of range`, line);
+  return n;
+}
+function candidateNumber(raw: string, column: string, line: string): GearCandidateEvidence<number> {
+  return raw === "?" ? { state: "UNKNOWN" } : { state: "KNOWN", value: candidateInteger(raw, column, line) };
+}
+function candidateString(raw: string): GearCandidateEvidence<string> {
+  return raw === "?" ? { state: "UNKNOWN" } : { state: "KNOWN", value: fieldValue(raw)! };
+}
+function candidateBoolean(raw: string, column: string, line: string): GearCandidateEvidence<boolean> {
+  if (raw === "?") return { state: "UNKNOWN" };
+  if (raw === "yes") return { state: "KNOWN", value: true };
+  if (raw === "no") return { state: "KNOWN", value: false };
+  return fail(`Malformed [GEAR CANDIDATES] ${column}: expected "yes", "no" or "?"`, line);
+}
+
+/** Parses the authoritative Retail ContractVersion 1 tabular sidecar; rows are preserved in source order. */
+function parseGearCandidates(lines: string[]): GearCandidatesSection {
+  let i = 0;
+  const [stateLine, afterState] = takeLine(lines, i, "State: ", true); i = afterState;
+  const stateMatch = /^(complete|partial|unknown); observed=(\?|0|[1-9]\d*)$/.exec(stateLine);
+  if (!stateMatch) fail('Malformed [GEAR CANDIDATES] State: expected complete, partial or unknown followed by observed=<unix seconds or ?>', stateLine);
+  const completeness = stateMatch[1] as GearCandidatesSection["completeness"];
+  const observedRaw = stateMatch[2];
+  let observedAt: number | undefined;
+  if (observedRaw && observedRaw !== "?") observedAt = candidateInteger(observedRaw, "observed", stateLine);
+  const [versionRaw, afterVersion] = takeLine(lines, i, "ContractVersion: ", true); i = afterVersion;
+  if (versionRaw !== "1") fail(`Unsupported [GEAR CANDIDATES] ContractVersion "${versionRaw}" (supported: 1)`, versionRaw);
+  const [coverage, afterCoverage] = takeLine(lines, i, "CoverageNote: "); i = afterCoverage;
+  const header = lines[i];
+  const headerCols = header === undefined ? [] : splitFields(header);
+  if (headerCols.length !== GEAR_CANDIDATE_COLUMNS.length || headerCols.some((c, n) => c !== GEAR_CANDIDATE_COLUMNS[n])) {
+    fail(`[GEAR CANDIDATES] must start rows with the ContractVersion 1 column header`, header ?? "<end of section>");
+  }
+  i++;
+  const rows: GearCandidateRow[] = [];
+  if (lines[i] === "Candidates: None observed") i++;
+  for (; i < lines.length; i++) {
+    const line = lines[i]!;
+    const cols = splitFields(line);
+    if (cols.length !== GEAR_CANDIDATE_COLUMNS.length) fail(`Expected exactly ${GEAR_CANDIDATE_COLUMNS.length} columns for a [GEAR CANDIDATES] row, found ${cols.length}`, line);
+    const candidateState = cols[0];
+    if (candidateState !== "EQUIPPABLE" && candidateState !== "UNKNOWN") fail(`Malformed [GEAR CANDIDATES] candidateState "${candidateState}"`, line);
+    const locationType: GearCandidateEvidence<"CONTAINER_SLOT" | "BANK_SLOT" | "EQUIPMENT_SLOT"> = cols[1] === "?" ? { state: "UNKNOWN" } :
+      cols[1] === "CONTAINER_SLOT" || cols[1] === "BANK_SLOT" || cols[1] === "EQUIPMENT_SLOT"
+        ? { state: "KNOWN", value: cols[1] as "CONTAINER_SLOT" | "BANK_SLOT" | "EQUIPMENT_SLOT" }
+        : fail(`Malformed [GEAR CANDIDATES] locationType "${cols[1]}"`, line);
+    const observationState = cols[20];
+    if (observationState !== "OBSERVED" && observationState !== "LAST_SEEN") fail(`Malformed [GEAR CANDIDATES] observationState "${observationState}"`, line);
+    const slot = candidateNumber(cols[3]!, "slot", line);
+    const containerID = candidateNumber(cols[2]!, "containerID", line);
+    const tooltipRaw = candidateNumber(cols[18]!, "tooltipBindingRawValue", line);
+    rows.push({
+      candidateState, locationType, containerID, slot,
+      itemID: candidateNumber(cols[4]!, "itemID", line), itemString: candidateString(cols[5]!), itemGUID: candidateString(cols[6]!),
+      equipType: candidateNumber(cols[7]!, "equipType", line), currentItemLevel: candidateNumber(cols[8]!, "currentItemLevel", line),
+      requiredLevel: candidateNumber(cols[9]!, "requiredLevel", line), classID: candidateNumber(cols[10]!, "classID", line),
+      subclassID: candidateNumber(cols[11]!, "subclassID", line), baseEquipLocation: candidateString(cols[12]!),
+      isBound: candidateBoolean(cols[13]!, "isBound", line), boundToAccountUntilEquip: candidateBoolean(cols[14]!, "boundToAccountUntilEquip", line),
+      itemBindToAccount: candidateBoolean(cols[15]!, "itemBindToAccount", line), itemBindToAccountUntilEquip: candidateBoolean(cols[16]!, "itemBindToAccountUntilEquip", line),
+      tooltipBindingType: candidateNumber(cols[17]!, "tooltipBindingType", line), tooltipBindingRawValue: tooltipRaw,
+      currentCharacterCanUse: candidateBoolean(cols[19]!, "currentCharacterCanUse", line), observationState,
+    });
+  }
+  return { contractVersion: 1, completeness, ...(observedAt !== undefined ? { observedAt } : {}), ...(coverage !== undefined ? { coverageNote: fieldValue(coverage) } : {}), rows };
+}
+
 const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   character: parseCharacter,
   location: parseLocation,
@@ -685,6 +760,7 @@ const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   spells: parseSpells,
   trainer: parseTrainer,
   itemMetadata: parseItemMetadata,
+  gearCandidates: parseGearCandidates,
 };
 
 export function parseWowSyncExport(raw: string): ParsedSnapshot {
@@ -751,6 +827,9 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   if (result.guildBank && result.character?.clientFamily?.toLowerCase() !== "retail") {
     fail("[GUILD BANK] is only valid for a Retail export");
   }
+  if (result.gearCandidates && result.character?.clientFamily?.toLowerCase() !== "retail") {
+    fail("[GEAR CANDIDATES] is only valid for a Retail export");
+  }
 
   return {
     raw,
@@ -768,5 +847,6 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     trainer: result.trainer!,
     // Only present when the export carried the section, so a legacy export's parsed form is unchanged.
     ...(result.itemMetadata ? { itemMetadata: result.itemMetadata } : {}),
+    ...(result.gearCandidates ? { gearCandidates: result.gearCandidates } : {}),
   };
 }

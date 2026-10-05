@@ -174,6 +174,75 @@ test("rejects an export missing a required section", () => {
   });
 });
 
+const candidateHeader = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+const candidateLine = "EQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\\tvariant\t?\t0\t0\t0\t4\t0\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tOBSERVED";
+function addCandidateSection(raw: string, body: string): string {
+  return raw.replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\n${body}\n\n[END]`);
+}
+function candidateSection(state = "partial; observed=1700000001", version: string | null = "1", row = candidateLine): string {
+  return [
+    `State: ${state}`,
+    ...(version === null ? [] : [`ContractVersion: ${version}`]),
+    "CoverageNote: pending fields",
+    candidateHeader,
+    row,
+  ].join("\n");
+}
+
+test("parses Retail gear candidates with UNKNOWN, false, zero, optional GUID, binding facets and escaping intact", () => {
+  const raw = addCandidateSection(buildWowSyncExport({ character: { clientFamily: "Retail" } }), candidateSection());
+  const section = parseWowSyncExport(raw).gearCandidates!;
+  assert.equal(section.contractVersion, 1);
+  assert.equal(section.completeness, "partial");
+  assert.equal(section.observedAt, 1700000001);
+  assert.equal(section.rows.length, 1);
+  const row = section.rows[0]!;
+  assert.deepEqual(row.itemID, { state: "KNOWN", value: 123 });
+  assert.deepEqual(row.itemString, { state: "KNOWN", value: "item:123\tvariant" });
+  assert.deepEqual(row.itemGUID, { state: "UNKNOWN" });
+  assert.deepEqual(row.currentItemLevel, { state: "KNOWN", value: 0 });
+  assert.deepEqual(row.requiredLevel, { state: "KNOWN", value: 0 });
+  assert.deepEqual(row.classID, { state: "KNOWN", value: 4 });
+  assert.deepEqual(row.subclassID, { state: "KNOWN", value: 0 });
+  assert.deepEqual(row.isBound, { state: "KNOWN", value: false });
+  assert.deepEqual(row.boundToAccountUntilEquip, { state: "UNKNOWN" });
+  assert.deepEqual(row.itemBindToAccount, { state: "KNOWN", value: true });
+  assert.deepEqual(row.itemBindToAccountUntilEquip, { state: "KNOWN", value: false });
+  assert.deepEqual(row.tooltipBindingType, { state: "UNKNOWN" });
+  assert.deepEqual(row.tooltipBindingRawValue, { state: "KNOWN", value: 9 });
+  assert.deepEqual(row.currentCharacterCanUse, { state: "KNOWN", value: false });
+  const trueRow = parseWowSyncExport(addCandidateSection(buildWowSyncExport({ character: { clientFamily: "Retail" } }), candidateSection(undefined, "1", candidateLine.replace("\tno\tOBSERVED", "\tyes\tOBSERVED")))).gearCandidates!.rows[0]!;
+  assert.deepEqual(trueRow.currentCharacterCanUse, { state: "KNOWN", value: true });
+  const unknownRow = parseWowSyncExport(addCandidateSection(buildWowSyncExport({ character: { clientFamily: "Retail" } }), candidateSection(undefined, "1", candidateLine.replace("\tno\tOBSERVED", "\t?\tOBSERVED")))).gearCandidates!.rows[0]!;
+  assert.deepEqual(unknownRow.currentCharacterCanUse, { state: "UNKNOWN" });
+});
+
+test("gear candidates are optional, captured-empty is distinct, and candidate section is Retail-only", () => {
+  const legacy = parseWowSyncExport(buildWowSyncExport({ character: { clientFamily: "Retail" } }));
+  assert.equal(legacy.gearCandidates, undefined);
+  const empty = addCandidateSection(buildWowSyncExport({ character: { clientFamily: "Retail" } }), ["State: complete; observed=0", "ContractVersion: 1", candidateHeader, "Candidates: None observed"].join("\n"));
+  assert.deepEqual(parseWowSyncExport(empty).gearCandidates?.rows, []);
+  const unresolvedRow = candidateLine.replace("EQUIPPABLE\tCONTAINER_SLOT\t0\t1", "UNKNOWN\t?\t?\t?").replace("\tno\tOBSERVED", "\t?\tLAST_SEEN");
+  const unresolved = addCandidateSection(buildWowSyncExport({ character: { clientFamily: "Retail" } }), candidateSection("unknown; observed=?", "1", unresolvedRow));
+  const unresolvedCandidate = parseWowSyncExport(unresolved).gearCandidates!.rows[0]!;
+  assert.deepEqual(unresolvedCandidate.locationType, { state: "UNKNOWN" });
+  assert.deepEqual(unresolvedCandidate.containerID, { state: "UNKNOWN" });
+  assert.deepEqual(unresolvedCandidate.slot, { state: "UNKNOWN" });
+  assert.equal(unresolvedCandidate.candidateState, "UNKNOWN");
+  assert.equal(unresolvedCandidate.observationState, "LAST_SEEN");
+  const classic = addCandidateSection(buildWowSyncExport(), candidateSection());
+  assert.throws(() => parseWowSyncExport(classic), /only valid for a Retail export/);
+});
+
+test("gear candidate contract version, malformed rows and unrelated unknown sections fail clearly", () => {
+  const base = buildWowSyncExport({ character: { clientFamily: "Retail" } });
+  assert.throws(() => parseWowSyncExport(addCandidateSection(base, candidateSection(undefined, null))), /Expected a line starting with "ContractVersion:/);
+  assert.throws(() => parseWowSyncExport(addCandidateSection(base, candidateSection(undefined, "2"))), /Unsupported \[GEAR CANDIDATES\] ContractVersion/);
+  assert.throws(() => parseWowSyncExport(addCandidateSection(base, candidateSection(undefined, "1", candidateLine.replace("\tno\t?\tyes", "\tfalse\t?\tyes")))), /expected "yes", "no" or "\?"/);
+  const unknown = base.replace("\n\n[END]", "\n\n[UNRELATED FUTURE SECTION]\nvalue\n\n[END]");
+  assert.throws(() => parseWowSyncExport(unknown), /Unknown section "\[UNRELATED FUTURE SECTION\]"/);
+});
+
 test("rejects a row with more columns than the section defines", () => {
   const raw = buildWowSyncExport();
   const corrupted = raw.replace(

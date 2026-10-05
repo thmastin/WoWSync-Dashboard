@@ -224,6 +224,39 @@ export interface ItemMetadataSection {
   rows: ItemMetadataRow[];
 }
 
+/** A ContractVersion 1 gear-candidate field. The capture renderer writes `?` for UNKNOWN. */
+export type GearCandidateEvidence<T> = { state: "KNOWN"; value: T } | { state: "UNKNOWN" };
+export interface GearCandidateRow {
+  candidateState: "EQUIPPABLE" | "UNKNOWN";
+  locationType: GearCandidateEvidence<"CONTAINER_SLOT" | "BANK_SLOT" | "EQUIPMENT_SLOT">;
+  containerID: GearCandidateEvidence<number>;
+  slot: GearCandidateEvidence<number>;
+  itemID: GearCandidateEvidence<number>;
+  itemString: GearCandidateEvidence<string>;
+  itemGUID: GearCandidateEvidence<string>;
+  equipType: GearCandidateEvidence<number>;
+  currentItemLevel: GearCandidateEvidence<number>;
+  requiredLevel: GearCandidateEvidence<number>;
+  classID: GearCandidateEvidence<number>;
+  subclassID: GearCandidateEvidence<number>;
+  baseEquipLocation: GearCandidateEvidence<string>;
+  isBound: GearCandidateEvidence<boolean>;
+  boundToAccountUntilEquip: GearCandidateEvidence<boolean>;
+  itemBindToAccount: GearCandidateEvidence<boolean>;
+  itemBindToAccountUntilEquip: GearCandidateEvidence<boolean>;
+  tooltipBindingType: GearCandidateEvidence<number>;
+  tooltipBindingRawValue: GearCandidateEvidence<number>;
+  currentCharacterCanUse: GearCandidateEvidence<boolean>;
+  observationState: "OBSERVED" | "LAST_SEEN";
+}
+export interface GearCandidatesSection {
+  contractVersion: 1;
+  completeness: "complete" | "partial" | "unknown";
+  observedAt?: number;
+  coverageNote?: string;
+  rows: GearCandidateRow[];
+}
+
 /** One separately typed structured WoWSync SavedVariables observation. `partial`
  * describes coverage; it does not turn omitted identities into zero/false. */
 export interface CapturedCharacterDomain<T = Record<string, unknown>> {
@@ -270,6 +303,8 @@ export interface ParsedSnapshot {
   characterState?: CapturedCharacterState;
   /** Optional additive section; absent from every export made before item metadata existed. Never affects any observation section. */
   itemMetadata?: ItemMetadataSection;
+  /** Optional Retail-only sidecar. Its rows remain scoped to this snapshot and observed locations. */
+  gearCandidates?: GearCandidatesSection;
 }
 
 /** WoW version spaces. Data must never be aggregated across these. */

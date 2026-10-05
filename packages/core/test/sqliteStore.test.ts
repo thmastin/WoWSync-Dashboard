@@ -22,6 +22,26 @@ test("importing an export creates a character and a first snapshot", () => {
   }
 });
 
+test("gear candidates persist in snapshot JSON, duplicates are idempotent, and separate observations stay separate", () => {
+  const store = freshStore();
+  try {
+    const base = buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "RetailOne", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" } });
+    const section = "[GEAR CANDIDATES]\nState: complete; observed=1700000000\nContractVersion: 1\ncandidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t0\t100\t80\t4\t0\tINVTYPE_HEAD\tno\tno\t?\t?\t?\t?\tyes\tOBSERVED";
+    const firstRaw = base.replace("\n\n[END]", `\n\n${section}\n\n[END]`);
+    const first = store.importSnapshot(firstRaw);
+    assert.deepEqual(first.snapshot.parsed.gearCandidates?.rows[0]?.itemID, { state: "KNOWN", value: 123 });
+    assert.equal(store.importSnapshot(firstRaw).isDuplicate, true);
+    const secondRaw = buildWowSyncExport({ generatedAt: 1_700_000_001, character: { name: "RetailOne", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" } }).replace("\n\n[END]", `\n\n${section.replaceAll("1700000000", "1700000001")}\n\n[END]`);
+    const second = store.importSnapshot(secondRaw);
+    assert.notEqual(second.snapshot.id, first.snapshot.id);
+    assert.equal(store.listSnapshots(first.character.identityKey).length, 2);
+    const otherCharacter = store.importSnapshot(buildWowSyncExport({ character: { name: "RetailTwo", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" } }));
+    assert.equal(otherCharacter.snapshot.parsed.gearCandidates, undefined);
+    assert.equal(store.listCharacters("retail").length, 2);
+    assert.equal(store.listCharacters("classic-era").length, 0);
+  } finally { store.close(); }
+});
+
 test("a second import does not destroy the first snapshot, and produces a diff", () => {
   const store = freshStore();
   try {

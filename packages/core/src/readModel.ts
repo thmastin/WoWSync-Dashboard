@@ -6,7 +6,7 @@ import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResul
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
-import type { CapturedCharacterState, EquipmentSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
+import type { CapturedCharacterState, EquipmentSection, GearCandidatesSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
 import type { InventorySection, SpellEntry, TrainerService, TrainerCategorySnapshot } from "./types.ts";
 import type { SnapshotReadStore, StoredCharacterSummary, StoredSnapshot, VersionSummary } from "./store.ts";
 import { WOW_VERSIONS } from "./version.ts";
@@ -158,6 +158,19 @@ export interface AccountOverviewRead {
   storageCoverage: { charactersWithObservedBags: number; charactersWithLastSeenBags: number; charactersWithUnknownBags: number; charactersWithObservedBank: number; charactersWithLastSeenBank: number; charactersWithUnknownBank: number; sharedStorage: { warband: { state: "DERIVED" | "UNKNOWN"; ownerKey?: string; completeness?: "complete" | "partial"; observedAt?: number; freshness?: string; warning: string }; guilds: { coverageState: "PARTIAL" | "UNKNOWN"; owners: Array<{ state: "DERIVED" | "UNKNOWN"; ownerKey: string; guildClubId: string; guildName?: string; completeness?: "complete" | "partial"; observedAt?: number; freshness?: string; inaccessibleTabs?: number; unconfirmedTabs?: number }>; returnedCount: number; totalCount: number; truncated: boolean } } };
   currencies: { coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; scope: "account-wide"; items: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; quantity?: number | null; state?: string; knownCharacters?: number; unknownCharacters?: number; notListedCharacters?: number; listedWithoutQuantity?: number }>; returnedCount: number; totalCount: number; truncated: boolean } | { scope: "realm"; byRealm: Array<{ realm: string; coverage: { observedCharacters: number; lastSeenCharacters: number; unknownCharacters: number }; items: Array<{ currencyID: number; name: string | null; scope: "ACCOUNT" | "CHARACTER" | "UNKNOWN"; quantity?: number; knownCharacters: number; unknownCharacters: number; notListedCharacters: number; listedWithoutQuantity: number }>; returnedCount: number; totalCount: number; truncated: boolean }> };
 }
+export interface GearCandidateEvidenceRead {
+  version: "retail";
+  selection: "latest stored candidate evidence per character";
+  note: "Evidence is snapshot-scoped and may be historical; rows are not merged into account inventory.";
+  characters: Array<{
+    identity: { version: "retail"; identityKey: string; name: string; realm: string };
+    captured: boolean;
+    reason?: string;
+    snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown"; candidateObservedAt: number; candidateFreshness: "recent" | "stale" | "unknown" };
+    sidecar?: Omit<GearCandidatesSection, "rows"> & { rows: GearCandidatesSection["rows"] };
+  }>;
+  offset: number; limit: number; totalCount: number; truncated: boolean;
+}
 export interface CharacterCurrentState {
   identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string; class?: string; faction?: string; level?: number };
   provenance: ReadProvenance;
@@ -289,6 +302,36 @@ export class DashboardReadModel {
   listCharacters(query: { version: VersionOrUnknown; realm?: string }): StoredCharacterSummary[] {
     requireVersion(query.version);
     return this.store.listCharacters(query.version).filter((character) => !query.realm || character.realm === query.realm);
+  }
+
+  /** Snapshot-scoped Retail candidate evidence; this is not an inventory, allocation, or gear-policy projection. */
+  getGearCandidateEvidence(query: { version: VersionOrUnknown; offset?: number; limit?: number }): ReadValue<GearCandidateEvidenceRead> {
+    requireVersion(query.version);
+    if (query.version !== "retail") return { provenance: { state: "UNKNOWN", version: query.version, reason: "Gear Candidates ContractVersion 1 is Retail-only." } };
+    const characters: GearCandidateEvidenceRead["characters"] = this.store.listCharacters("retail").map((character) => {
+      const snapshots = this.store.listSnapshots(character.identityKey);
+      const snapshot = snapshots.find((entry) => entry.parsed.gearCandidates !== undefined);
+      if (!snapshot) return {
+        identity: { version: "retail", identityKey: character.identityKey, name: character.name, realm: character.realm },
+        captured: false,
+        reason: "No stored snapshot for this character contains [GEAR CANDIDATES].",
+      };
+      const observedAt = snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      const candidateObservedAt = snapshot.parsed.gearCandidates!.observedAt ?? observedAt;
+      return {
+        identity: { version: "retail", identityKey: character.identityKey, name: character.name, realm: character.realm },
+        captured: true,
+        snapshot: { snapshotId: snapshot.id, ...(snapshot.generatedAt !== undefined ? { generatedAt: snapshot.generatedAt } : {}), observedAt, importedAt: snapshot.importedAt, freshness: classifyFreshness(observedAt, this.now()), candidateObservedAt, candidateFreshness: classifyFreshness(candidateObservedAt, this.now()) },
+        sidecar: snapshot.parsed.gearCandidates!,
+      };
+    });
+    const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
+    const items = characters.slice(page.offset, page.offset + page.limit);
+    const latestObservedAt = characters.reduce<number | undefined>((max, item) => item.snapshot ? Math.max(max ?? 0, item.snapshot.observedAt) : max, undefined);
+    return {
+      data: { version: "retail", selection: "latest stored candidate evidence per character", note: "Evidence is snapshot-scoped and may be historical; rows are not merged into account inventory.", characters: items, offset: page.offset, limit: page.limit, totalCount: characters.length, truncated: page.offset + items.length < characters.length },
+      provenance: { state: "DERIVED", version: "retail", ...(latestObservedAt !== undefined ? { observedAt: latestObservedAt, freshness: classifyFreshness(latestObservedAt, this.now()) } : {}), source: "latest stored snapshot containing the Retail [GEAR CANDIDATES] sidecar per character", derivedFrom: characters.flatMap((item) => item.snapshot ? [String(item.snapshot.snapshotId)] : []), warning: "Latest stored candidate evidence is not necessarily current inventory; candidate rows are not merged across characters." },
+    };
   }
 
   getCharacterSummary(query: CharacterQuery): CharacterResolution<ReadValue<CharacterFacts>> {

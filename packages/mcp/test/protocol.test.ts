@@ -23,7 +23,7 @@ const recipeState = { formatVersion: 1, clientFamily: "Retail", professionRecipe
   }],
 } } };
 
-function retail(name: string, realm: string, professions = false, moneyCopper?: number, bankLastSeen = false, generatedAt = now, level = 90, equipmentItem = 1) {
+function retail(name: string, realm: string, professions = false, moneyCopper?: number, bankLastSeen = false, generatedAt = now, level = 90, equipmentItem = 1, gearCandidates = false) {
   const exported = buildWowSyncExport({
     generatedAt,
     character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", level, ...(moneyCopper !== undefined ? { moneyCopper } : {}) },
@@ -35,7 +35,9 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
     bags: { containers: [{ id: 0, capacity: 20, free: 18, items: [{ itemRef: "item:777", name: "Observed Bag Item", qty: 2 }, { itemRef: "item:4242::::::::90:253:::::::::", name: "Observed Full-String Item", qty: 3, bound: false }] }] },
     bank: { lastSeen: bankLastSeen, containers: [{ id: 1, capacity: 28, free: 27, items: [{ itemRef: "item:888", name: "Observed Bank Item", qty: 1 }] }] },
   });
-  return exported.replace(/\n\[END\]$/, "\n\n[ITEM METADATA]\nbaseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n777\t7\t5\t1\t11\tyes\n\n[END]");
+  const withMetadata = exported.replace(/\n\[END\]$/, "\n\n[ITEM METADATA]\nbaseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n777\t7\t5\t1\t11\tyes\n\n[END]");
+  const candidateHeader = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  return gearCandidates ? withMetadata.replace(/\n\[END\]$/, `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${candidateHeader}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t0\t0\t0\t4\t0\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN\n\n[END]`) : withMetadata;
 }
 
 function structured<T>(result: { isError?: boolean; structuredContent?: unknown }): T {
@@ -64,7 +66,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       },
       characterState: recipeState,
     });
-    writer.importSnapshot(retail("Virek", "Cairne", true, 500, true, now - 10, 90, 2), {
+    writer.importSnapshot(retail("Virek", "Cairne", true, 500, true, now - 10, 90, 2, true), {
       currencies: {
         observedAt: now - 10,
         data: { listRead: true, formatVersion: 1, currencies: Array.from({ length: 101 }, (_, index) => ({ currencyID: index + 1, name: `Currency ${index + 1}`, quantity: index + 1, isAccountWide: index === 0 })) },
@@ -110,6 +112,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_gear_candidate_evidence",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
@@ -129,6 +132,22 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
+
+    const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
+    assert.equal(candidateRead.provenance.state, "DERIVED");
+    assert.equal(candidateRead.provenance.version, "retail");
+    assert.match(candidateRead.provenance.warning ?? "", /not necessarily current inventory/);
+    const candidateVirek = candidateRead.data?.characters.find((entry) => entry.identity.name === "Virek" && entry.identity.name);
+    assert.equal(candidateVirek?.captured, true);
+    assert.equal(candidateVirek?.sidecar?.rows[0]?.observationState, "LAST_SEEN");
+    assert.equal(candidateVirek?.sidecar?.rows[0]?.currentCharacterCanUse.value, false);
+    const candidateZero = candidateRead.data?.characters.find((entry) => entry.identity.name === "Zero");
+    assert.equal(candidateZero?.captured, false, "missing sidecar is not an empty candidate list");
+    const unsupportedCandidates = structured<{ data?: unknown; provenance: { state: string; reason?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "classic-era" } }));
+    assert.equal(unsupportedCandidates.provenance.state, "UNKNOWN");
+    assert.match(unsupportedCandidates.provenance.reason ?? "", /Retail-only/);
+    assert.equal(unsupportedCandidates.data, undefined);
+    assert.equal((await client.callTool({ name: "get_gear_candidate_evidence", arguments: {} })).isError, true, "version is required");
 
     const listed = structured<{ version: string; totalCount: number; truncated: boolean }>(await client.callTool({ name: "list_characters", arguments: { version: "retail" } }));
     assert.equal(listed.version, "retail");
@@ -503,6 +522,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_gear_candidate_evidence",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
