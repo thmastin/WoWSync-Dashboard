@@ -1139,6 +1139,16 @@ function validSchemaEvidence(change, { declared } = {}) {
     && change.added.every((item) => item.type !== 'index' || typeof item.tbl_name === 'string');
 }
 
+function validUnchangedRecoveryEvidence(change) {
+  return isPlainRecord(change) && change.classification === 'NONE'
+    && Array.isArray(change.added) && change.added.length === 0
+    && Array.isArray(change.removed) && change.removed.length === 0
+    && Array.isArray(change.changed) && change.changed.length === 0
+    && Array.isArray(change.problems) && change.problems.every((problem) => typeof problem === 'string')
+    && isPlainRecord(change.userVersion) && Number.isSafeInteger(change.userVersion.before)
+    && change.userVersion.before >= 0 && change.userVersion.after === change.userVersion.before;
+}
+
 function validSchemaSuccessEvidence(record) {
   const change = record.schemaChange;
   if (!isPlainRecord(record.dataBefore) || !isPlainRecord(record.dataAfter)
@@ -1227,8 +1237,7 @@ function validatedRecoverySha(record) {
   if (operation === 'ROLLBACK_FAILURE' && record.requestedRef !== null) return null;
   const declared = record.declaredSchemaAdditions;
   if (recoveryAction === 'restore-previous-release-and-validate'
-    && Array.isArray(declared) && declared.length === 0
-    && validSchemaEvidence(schemaChange, { declared }) && schemaChange.classification === 'NONE'
+    && Array.isArray(declared) && validUnchangedRecoveryEvidence(schemaChange)
     && auditedSchemaChangeMatches(record.schemaBefore, record.schemaAfter, schemaChange, declared)
     && record.schemaChanged === false) return previousSha;
   const retained = record.schemaAdditionsRetained;
@@ -1538,10 +1547,9 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     if (preRecovery.schemaChanged === false) recoveryAfterEvidence = beforeEvidence;
     // A candidate that never ran cannot have changed the schema; otherwise the
     // classification is what was observed after the stop, or null (unknown).
-    const recoverySchema = preRecovery.schemaChanged === false ? {
-      classification: 'NONE', declarationsSatisfied: declarations.length === 0,
-      added: [], removed: [], changed: [], userVersion: { before: beforeEvidence?.userVersion, after: beforeEvidence?.userVersion }, problems: [],
-    } : preRecovery.schemaChanged;
+    const recoverySchema = preRecovery.schemaChanged === false
+      ? (beforeEvidence ? classifySchemaChange(beforeEvidence, beforeEvidence, declarations) : null)
+      : preRecovery.schemaChanged;
     schemaChange = recoverySchema;
     schemaChanged = recoverySchema ? recoverySchema.classification !== 'NONE' : null;
     const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true,

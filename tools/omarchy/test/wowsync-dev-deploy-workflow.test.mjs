@@ -808,6 +808,8 @@ test('D16 a candidate that fails to start before any schema change recovers thro
   assert.equal(outcome.state, 'RECOVERED', 'no schema change happened, so no acknowledgement is needed');
   assert.equal(outcome.schemaAdditionsRetained, undefined);
   assert.equal(await currentSha(f.paths.releases), f.shaA);
+  const noop = await deploy({ ref: 'fixture', expectedSha: f.shaA }, { paths: f.paths, ops: f.ops });
+  assert.equal(noop.state, 'NOOP', 'validated unchanged-schema recovery remains valid when its declared addition never appeared');
 });
 
 test('D17 an interrupted switch to the requested SHA is reported for review instead of a no-op', async (t) => {
