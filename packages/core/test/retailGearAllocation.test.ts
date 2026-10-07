@@ -89,6 +89,13 @@ test("empty-slot fills and item-level upgrades remain incomparable and yield an 
   assert.equal(result.assessments[2]?.comparison, "UPGRADE_BY_FILLING_EMPTY_SLOT");
 });
 
+test("multiple empty-slot fills report ambiguity, not a magnitude tie", () => {
+  const characters = ["A", "B"].map((name) => ({ identityKey: `retail::${name.toLowerCase()}::x`, name, realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: [obs(71, 5, { emptySlot: "11" }), obs(72, 5, { emptySlot: "11" }), obs(73, 5, { emptySlot: "11" })] }));
+  const result = assessRetailCandidate({ candidate: candidate(), exporterSnapshotId: 99, rowOrdinal: 1, characters });
+  assert.equal(result.recommendation, "AMBIGUOUS_SUPPORTED_EMPTY_SLOT_FILLS");
+  assert.ok(result.assessments.every((assessment) => assessment.comparison === "UPGRADE_BY_FILLING_EMPTY_SLOT"));
+});
+
 test("ordinary armor compares only its mapped single slot", () => {
   const row = candidate("INVTYPE_CHEST");
   const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: [obs(71, 5, { level: 100, complete: true })] }] });
