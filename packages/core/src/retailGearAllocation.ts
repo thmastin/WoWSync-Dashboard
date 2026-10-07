@@ -129,7 +129,7 @@ export function assessRetailCandidate(input: {
       let comparisonSlots: string[] | undefined;
       if (contradictory) reasons.push("Candidate evidence is unknown, historical, already equipped, or has contradictory item/equip-location fields; allocation analysis is withheld.");
       if (weapon) reasons.push("Weapon set comparison is UNKNOWN because main-hand/off-hand, two-hand, shield, and specialization weapon interactions are not modeled as a complete equipped set.");
-      if (!contradictory && !weapon && suitability === "POSSIBLE_BY_CHECKED_RULES" && eligibility === "ELIGIBLE" && retained.state === "QUALIFIED" && relevantSlots && itemLevel !== undefined) {
+      if (candidateValidity === "VALID_CANDIDATE" && !weapon && suitability === "POSSIBLE_BY_CHECKED_RULES" && eligibility === "ELIGIBLE" && retained.state === "QUALIFIED" && relevantSlots && itemLevel !== undefined) {
         const available = relevantSlots.map((s) => ({ slot: s, empty: retained.slots?.[s]?.empty === true, ilvl: retained.slots?.[s]?.itemLevel }));
         const empty = available.filter((x) => x.empty);
         if (empty.length > 0) {

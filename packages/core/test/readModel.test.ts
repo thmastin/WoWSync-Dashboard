@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { observation } from "./equipmentObservationFixtures.ts";
 
 const NOW = 1_800_000_000;
 function retail(name: string, realm: string, moneyCopper?: number) {
@@ -36,6 +37,35 @@ test("same-name realm matches are ambiguity, never a silent choice", () => {
     const result = new DashboardReadModel(store, () => NOW).getCharacterEquipment({ version: "retail", name: "Twin" });
     assert.equal(result.status, "AMBIGUOUS");
     if (result.status === "AMBIGUOUS") assert.deepEqual(result.candidates.map((entry) => entry.realm).sort(), ["Cairne", "Thrall"]);
+  } finally { store.close(); }
+});
+
+test("Retail candidate analysis integrates SQLite evidence, retained per-spec equipment, and provenance", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  const row = ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "500", "item:500", "?", "11", "120", "1", "4", "0", "INVTYPE_FINGER", "?", "?", "?", "?", "?", "?", "?", "OBSERVED"].join("\t");
+  const candidateExport = buildWowSyncExport({ generatedAt: NOW - 1, character: { name: "Exporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 1}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
+  try {
+    store.importSnapshot(candidateExport);
+    const identity = store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Arms", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } })).character.identityKey;
+    for (const name of ["Exporter", "Arms"]) for (const [index, specID] of [71, 72, 73].entries()) {
+      const observedAt = NOW - 10 + index;
+      const tuple = { observedAt, capture: index + 1, revision: 1 };
+      store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }), {
+        equipmentObservation: observation({ tuple, specID, slots: { "11": { itemID: 100, itemLevel: 100 }, "12": { itemID: 101, itemLevel: 105 } } }),
+      });
+    }
+    const exporter = store.listCharacters("retail").find((character) => character.name === "Exporter")!;
+    const sourceSnapshot = store.listSnapshots(exporter.identityKey).find((snapshot) => snapshot.parsed.gearCandidates !== undefined)!;
+    const result = new DashboardReadModel(store, () => NOW).analyzeRetailGearCandidate({ version: "retail", exporterIdentityKey: exporter.identityKey, snapshotId: sourceSnapshot.id, rowOrdinal: 1 });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") throw new Error("Expected candidate analysis");
+    assert.equal(result.value.candidate.validity, "VALID_CANDIDATE");
+    assert.equal(result.value.recommendation, "TIED_BEST_SUPPORTED_UPGRADE");
+    assert.ok(result.value.assessments.every((assessment) => assessment.comparison === "UPGRADE_BY_ITEM_LEVEL" && assessment.deltaItemLevel === 20));
+    assert.ok(result.value.assessments.every((assessment) => assessment.retained.state === "QUALIFIED" && assessment.retained.snapshotId > 0));
+    assert.ok(result.value.assessments.some((assessment) => assessment.character.identityKey === identity));
+    assert.ok(result.value.assessments.some((assessment) => assessment.character.name === "Exporter"));
   } finally { store.close(); }
 });
 

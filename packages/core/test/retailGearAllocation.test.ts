@@ -138,3 +138,14 @@ test("historical or contradictory candidate evidence cannot produce a recommenda
   assert.equal(result.recommendation, "UNKNOWN");
   assert.equal(result.assessments[0]?.comparison, "UNKNOWN");
 });
+
+test("unknown candidate location or item identity cannot produce a per-spec comparison", () => {
+  for (const [field, value] of [["locationType", { state: "UNKNOWN" }], ["itemID", { state: "UNKNOWN" }]] as const) {
+    const row = candidate();
+    (row as any)[field] = value;
+    const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: warriorObs() }] });
+    assert.equal(result.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE");
+    assert.ok(result.assessments.every((assessment) => assessment.comparison === "UNKNOWN"));
+    assert.equal(result.recommendation, "UNKNOWN");
+  }
+});
