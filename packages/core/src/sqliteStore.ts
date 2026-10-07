@@ -251,7 +251,6 @@ CREATE TABLE IF NOT EXISTS snapshot_equipment_observations (
   stored_at INTEGER NOT NULL,
   UNIQUE (character_id, observed_at, capture, revision)
 );
-CREATE INDEX IF NOT EXISTS idx_equipment_observations_character ON snapshot_equipment_observations(character_id);
 
 -- Explicit Demand (see demand.ts): the one new durable domain concept for Azeroth ERP Vertical Slice 1.
 -- Demand is USER INTENT, not a WoW observation: persistence represents CURRENT intent (mutable status/

@@ -185,3 +185,97 @@ test("Policy E: no sidecar accepted", () => {
   const result = evaluateEquipmentPolicy(canonical, undefined);
   assert.deepStrictEqual(result, { ok: true });
 });
+
+test("A12: omitted nil fields stay absent, never 0/false/empty", () => {
+  const input = {
+    envelope: {
+      observedAt: 100,
+      capture: 1,
+      revision: 1,
+      completeness: "complete",
+      data: { slots: {} },
+      specEquipmentObservation: {
+        contractVersion: 1,
+        clientFamily: "Retail",
+        roster: {
+          state: "OBSERVED",
+          specializations: [{ index: 1, specID: 253 }], // name, role, primaryStat, isUnlocked omitted
+        },
+        activeSpecBefore: { specID: 253 }, // name, role, primaryStat, isUnlocked omitted
+        activeSpecAfter: { specID: 254 }, // index omitted
+      },
+    },
+  };
+
+  const result = normalizeEquipmentObservation(input, "retail");
+  assert.strictEqual(result.ok, true);
+  if (result.ok) {
+    const sidecar = result.value.specEquipmentObservation as any;
+    const spec = sidecar.roster.specializations[0];
+    // Absent fields should not be added
+    assert.strictEqual(spec.name, undefined);
+    assert.strictEqual(spec.role, undefined);
+    assert.strictEqual(spec.primaryStat, undefined);
+    assert.strictEqual(spec.isUnlocked, undefined);
+    // activeSpecAfter.index should be absent when nil
+    assert.strictEqual(sidecar.activeSpecAfter.index, undefined);
+  }
+});
+
+test("A32: non-integer/non-finite/missing envelope tuple rejected", () => {
+  const testCases = [
+    { observedAt: "not-a-number", capture: 1, revision: 1, desc: "non-numeric observedAt" },
+    { observedAt: 1.5, capture: 1, revision: 1, desc: "non-integer observedAt" },
+    { observedAt: Infinity, capture: 1, revision: 1, desc: "infinite observedAt" },
+    { observedAt: 100, capture: NaN, revision: 1, desc: "NaN capture" },
+    { observedAt: 100, capture: 1, revision: -1, desc: "negative revision" },
+    { observedAt: 100, capture: undefined, revision: 1, desc: "missing capture" },
+  ];
+
+  for (const tc of testCases) {
+    const input = {
+      envelope: {
+        observedAt: tc.observedAt,
+        capture: tc.capture,
+        revision: tc.revision,
+        completeness: "complete",
+        data: { slots: {} },
+      },
+    };
+    const result = normalizeEquipmentObservation(input, "retail");
+    assert.strictEqual(result.ok, false, `Expected failure for: ${tc.desc}`);
+    if (!result.ok) {
+      assert.strictEqual(result.outcome, "invalid-or-unsupported");
+    }
+  }
+});
+
+test("Policy A: canonical only, no projection accepted", () => {
+  const canonical: CapturedEquipmentObservation = {
+    observedAt: 100,
+    capture: 1,
+    revision: 1,
+    completeness: "complete",
+    slots: {},
+    specEquipmentObservation: { contractVersion: 1, clientFamily: "Retail" },
+  };
+
+  const result = evaluateEquipmentPolicy(canonical, undefined);
+  assert.deepStrictEqual(result, { ok: true });
+});
+
+test("Policy D: projection without canonical rejected", () => {
+  const canonical: CapturedEquipmentObservation = {
+    observedAt: 100,
+    capture: 1,
+    revision: 1,
+    completeness: "complete",
+    slots: {},
+    // no specEquipmentObservation
+  };
+
+  const projection = { contractVersion: 1, clientFamily: "Retail" };
+
+  const result = evaluateEquipmentPolicy(canonical, projection);
+  assert.deepStrictEqual(result, { ok: false, outcome: "projection-without-canonical" });
+});
