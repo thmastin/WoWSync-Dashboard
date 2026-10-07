@@ -68,7 +68,12 @@ function simulatedHost(paths, faults, validateBuild) {
     deploymentToolIdentity: async () => ({ version: '3', entryPath: TOOL, releaseSha: await currentSha(paths.releases).catch(() => '0'.repeat(40)), entrySha256: 'a'.repeat(64) }),
     serviceHelper: async (operation) => {
       calls.push(operation);
-      if (operation === 'stop') { for (const unit of Object.values(units)) unit.active = false; return; }
+      if (operation === 'stop') {
+        const stopAttempt = calls.filter((item) => item === 'stop').length;
+        if (faults.stopFailsOn?.includes(stopAttempt)) throw new Error(`injected stop failure #${stopAttempt}`);
+        for (const unit of Object.values(units)) unit.active = false;
+        return;
+      }
       if (operation !== 'start') throw new Error(`unexpected helper operation ${operation}`);
       starts += 1;
       if (faults.startFailsOn?.includes(starts)) throw new Error(`injected start failure #${starts}`);
@@ -812,6 +817,21 @@ test('D16 a candidate that fails to start before any schema change recovers thro
   assert.equal(noop.state, 'NOOP', 'validated unchanged-schema recovery remains valid when its declared addition never appeared');
 });
 
+test('failed initial stop retries safely and validates the unchanged current release', async (t) => {
+  const f = await deployFixture(t);
+  f.faults.stopFailsOn = [1];
+  const outcome = await failure(deploy({ ref: 'feature', expectedSha: f.shaB }, { paths: f.paths, ops: f.ops }));
+  assert.equal(outcome.state, 'RECOVERED');
+  assert.equal(await currentSha(f.paths.releases), f.shaA, 'the candidate was never selected');
+  assert.deepEqual(f.host.calls, ['stop', 'stop', 'start']);
+  const failureAudit = (await f.audit()).findLast((record) => record.operation === 'PROMOTE_FAILURE');
+  assert.equal(failureAudit.recoveryAction, 'restore-previous-release-and-validate');
+  assert.equal(failureAudit.schemaChanged, false);
+  assert.deepEqual(failureAudit.schemaBefore, failureAudit.schemaAfter);
+  const noop = await deploy({ ref: 'fixture', expectedSha: f.shaA }, { paths: f.paths, ops: f.ops });
+  assert.equal(noop.state, 'NOOP', 'the validated same-SHA recovery is durable journal evidence');
+});
+
 test('D17 an interrupted switch to the requested SHA is reported for review instead of a no-op', async (t) => {
   const f = await deployFixture(t);
   await prepareRelease(f.shaB, 'refs/heads/feature', f.paths, async (stage) => { await mkdir(path.join(stage, 'node_modules')); });
@@ -1021,6 +1041,11 @@ test('malformed NOOP and contradictory switch SHA audit records fail closed in p
   await makeCase(t, { ...baseSuccess, schemaChange: { ...baseSuccess.schemaChange, added: [{ garbage: true }], userVersion: { before: 0, after: 99 } } });
   await makeCase(t, { ...baseSuccess, dataAfter: { integrityCheck: 'ok', userVersion: 99, schema: [] } });
   await makeCase(t, { ...baseSuccess, tool: { ...baseSuccess.tool, releaseSha: null } });
+  const malformedSnapshot = [{ type: 'table', name: 'observations', tbl_name: 'observations' }];
+  await makeCase(t, { ...baseSuccess,
+    dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: malformedSnapshot },
+    dataAfter: { integrityCheck: 'ok', userVersion: 0, schema: malformedSnapshot },
+  });
 });
 
 test('an unreadable same-SHA journal returns manual review before health checks', async (t) => {

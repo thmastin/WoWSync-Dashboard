@@ -1117,6 +1117,22 @@ function validSchemaItems(items) {
     && schemaSqlSha256(item.sql) === item.sqlSha256);
 }
 
+function validSchemaSnapshot(schema) {
+  if (!Array.isArray(schema)) return false;
+  const names = new Set();
+  for (const item of schema) {
+    if (!isPlainRecord(item) || !['table', 'index', 'view', 'trigger'].includes(item.type)
+      || typeof item.name !== 'string' || !item.name.length || /^sqlite_/.test(item.name)
+      || typeof item.tbl_name !== 'string' || !item.tbl_name.length
+      || typeof item.sql !== 'string' || !item.sql.length || names.has(item.name)) return false;
+    if ((item.type === 'table' || item.type === 'view') && item.tbl_name !== item.name) return false;
+    names.add(item.name);
+  }
+  const owners = new Set(schema.filter((item) => item.type === 'table' || item.type === 'view').map((item) => item.name));
+  if (schema.some((item) => ['index', 'trigger'].includes(item.type) && !owners.has(item.tbl_name))) return false;
+  return true;
+}
+
 function validSchemaEvidence(change, { declared } = {}) {
   if (!isPlainRecord(change) || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)
     || change.declarationsSatisfied !== true || !validSchemaItems(change.added)
@@ -1153,7 +1169,7 @@ function validSchemaSuccessEvidence(record) {
   const change = record.schemaChange;
   if (!isPlainRecord(record.dataBefore) || !isPlainRecord(record.dataAfter)
     || record.dataBefore.integrityCheck !== 'ok' || record.dataAfter.integrityCheck !== 'ok'
-    || !Array.isArray(record.dataBefore.schema) || !Array.isArray(record.dataAfter.schema)
+    || !validSchemaSnapshot(record.dataBefore.schema) || !validSchemaSnapshot(record.dataAfter.schema)
     || !Number.isSafeInteger(record.dataBefore.userVersion) || !Number.isSafeInteger(record.dataAfter.userVersion)
     || !Array.isArray(change?.declared) || typeof change.previousCodeCompatible !== 'boolean'
     || typeof record.schemaChanged !== 'boolean') return false;
@@ -1184,7 +1200,7 @@ function validSchemaSuccessEvidence(record) {
 function auditedSchemaChangeMatches(before, after, change, declared) {
   if (!isPlainRecord(before) || !isPlainRecord(after) || before.integrityCheck !== 'ok' || after.integrityCheck !== 'ok'
     || !Number.isSafeInteger(before.userVersion) || !Number.isSafeInteger(after.userVersion)
-    || !Array.isArray(before.schema) || !Array.isArray(after.schema)) return false;
+    || !validSchemaSnapshot(before.schema) || !validSchemaSnapshot(after.schema)) return false;
   let declarations;
   try {
     declarations = validateSchemaDeclarations(declared.map((value) => {
@@ -1535,7 +1551,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
         ...base, state: 'AUDIT_FAILED', runningSha: sha, manualIntervention: false,
       });
     }
-    const preRecovery = await stopCandidateThenInspectSchema({
+    let preRecovery = await stopCandidateThenInspectSchema({
       candidateMayHaveRun: candidateStarted,
       stop: () => ops.serviceHelper('stop'),
       inspectSchema: () => {
@@ -1544,6 +1560,21 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
         return beforeEvidence ? classifySchemaChange(beforeEvidence, after, declarations) : null;
       },
     });
+    if (!candidateStarted && !beforeEvidence) {
+      // The first stop failed before the routine had a stopped-database
+      // baseline. Retry the stop, then capture a stable current-schema
+      // snapshot. Since the symlink was never switched and the candidate was
+      // never started, the old release is the only code that could have run.
+      try {
+        await ops.serviceHelper('stop');
+        const currentEvidence = databaseEvidence(paths.database);
+        beforeEvidence = currentEvidence;
+        recoveryAfterEvidence = currentEvidence;
+        preRecovery = { stopResult: 'succeeded', schemaChanged: classifySchemaChange(currentEvidence, currentEvidence, declarations) };
+      } catch (error) {
+        preRecovery = { stopResult: `failed: ${error.message}`, schemaChanged: null };
+      }
+    }
     if (preRecovery.schemaChanged === false) recoveryAfterEvidence = beforeEvidence;
     // A candidate that never ran cannot have changed the schema; otherwise the
     // classification is what was observed after the stop, or null (unknown).
@@ -1560,7 +1591,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     try {
       recovery = await recoverFailedPromotion({
         schemaChanged, candidateStarted, schema: recoverySchema, declarations, previousCodeCompatible,
-        priorStopResult: candidateStarted ? preRecovery.stopResult : undefined,
+        priorStopResult: preRecovery.stopResult === 'not-needed' ? undefined : preRecovery.stopResult,
         stop: () => ops.serviceHelper('stop'),
         setPrevious: () => atomicSetCurrent(paths.releases, previousSha),
         startPrevious: () => ops.serviceHelper('start'),
