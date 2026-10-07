@@ -1013,6 +1013,20 @@ test('repeated legacy-bootstrap same-SHA deploys remain NOOP and record their au
   assert.deepEqual(f.host.calls, []);
 });
 
+test('a successful deployment with an extra CLI HTTP route remains valid NOOP provenance', async (t) => {
+  const f = await deployFixture(t);
+  const routes = [
+    { path: '/', status: 200 },
+    { path: '/api/versions', status: 200 },
+    deployTool.parseRoute('/api/feature-check=200'),
+  ];
+  const deployed = await deploy({ ref: 'feature', expectedSha: f.shaB, routes }, { paths: f.paths, ops: f.ops });
+  assert.equal(deployed.state, 'DEPLOYED');
+  assert.equal(deployed.record.http.length, 3);
+  const noop = await deploy({ ref: 'feature', expectedSha: f.shaB }, { paths: f.paths, ops: f.ops });
+  assert.equal(noop.state, 'NOOP');
+});
+
 test('malformed NOOP and contradictory switch SHA audit records fail closed in production deploy workflow', async (t) => {
   const makeCase = async (t, record) => {
     const f = await deployFixture(t);

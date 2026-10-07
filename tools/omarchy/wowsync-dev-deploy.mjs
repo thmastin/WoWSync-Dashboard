@@ -1087,11 +1087,20 @@ function validToolIdentity(tool, expectedReleaseSha) {
 }
 
 function validHttpEvidence(http) {
-  return Array.isArray(http) && http.length === DEFAULT_VALIDATION_ROUTES.length
-    && http.every((item, index) => isPlainRecord(item)
-      && item.path === DEFAULT_VALIDATION_ROUTES[index].path
-      && item.expected === DEFAULT_VALIDATION_ROUTES[index].status
-      && Number.isInteger(item.actual) && item.actual === DEFAULT_VALIDATION_ROUTES[index].status);
+  if (!Array.isArray(http) || http.length < DEFAULT_VALIDATION_ROUTES.length) return false;
+  for (let index = 0; index < DEFAULT_VALIDATION_ROUTES.length; index += 1) {
+    const item = http[index];
+    if (!isPlainRecord(item) || item.path !== DEFAULT_VALIDATION_ROUTES[index].path
+      || item.expected !== DEFAULT_VALIDATION_ROUTES[index].status || item.actual !== item.expected) return false;
+  }
+  return http.every((item) => {
+    if (!isPlainRecord(item) || !Number.isInteger(item.expected) || item.expected < 100 || item.expected > 599
+      || !Number.isInteger(item.actual) || item.actual !== item.expected) return false;
+    try {
+      const parsed = parseRoute(`${item.path}=${item.expected}`);
+      return parsed.path === item.path && parsed.status === item.expected;
+    } catch { return false; }
+  });
 }
 
 function validServiceEvidence(services, { fresh }) {
