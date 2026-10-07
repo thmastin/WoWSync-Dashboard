@@ -28,6 +28,8 @@ wowsync-dev-deploy deploy <branch-or-ref> <validated-sha>
 
 Report the result it prints. Do not run `wowsync-dev-deploy rollback`, or restart DEV services any other way, unless explicitly asked; the deploy command's own automatic recovery is the only routine rollback. `wowsync-dev-deploy status` is read-only and always fine. Details: `docs/OPERATIONS_RUNBOOK.md` ("Deploying to DEV").
 
+A release that adds a database table or index is refused by the plain command. Never infer schema declarations yourself: add `--expect-schema-add <declaration>` only when the user's instruction names that exact declaration or explicitly approves the exact `wowsync-dev-deploy prepare` schema plan that printed it, and add `--previous-code-compatible` only when the user explicitly says so — both are Tate decisions. Declarations apply to that one invocation; repeat them only on Tate's instruction. Ordinary deployments remain the single tool-mediated command above; never work around a refused schema change any other way. Details: `docs/OPERATIONS_RUNBOOK.md` ("Deploying an expected additive schema change").
+
 ## Current state and next milestone
 
 Read [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) for the concise accepted current state and

@@ -203,8 +203,11 @@ Journal warnings:    none
 Details:             /var/lib/wowsync-dev/deployments.jsonl (or --json)
 ```
 
-Deploying the SHA that is already running prints `DEV ALREADY AT <sha>` and changes nothing. To see
-what is deployed and whether it is healthy at any time (read-only):
+Deploying the SHA that is already running prints `DEV ALREADY AT <sha>` and changes nothing only
+when the audit journal proves that current SHA was validated (or the journal is an empty legacy
+journal and the current invocation records its structured health check). Unresolved or ambiguous
+history prints `DEV DEPLOY BLOCKED — REVIEW REQUIRED` before service-health checks. To see what is
+deployed and whether it is healthy at any time (read-only):
 
 ```bash
 wowsync-dev-deploy status
@@ -224,17 +227,26 @@ validated (see `AGENTS.md`).
    private network namespace, and `npm run build:web`; checks that the source still matches Git and
    that no dependency link escapes the release; then makes the release read-only. A failure
    discards the staging tree. An existing release is re-verified against Git and reused.
-4. If that SHA is already deployed, checks health and reports `DEV ALREADY AT` (no restart, no
-   backup).
-5. Otherwise records its intent, stops only Dashboard and MCP, takes an integrity-checked SQLite
+4. If that SHA is already deployed, authorizes a no-op only when the ordered audit journal proves
+   that this exact current SHA was validated by a successful promote, rollback, or structured
+   successful recovery. Then it checks health and reports `DEV ALREADY AT` (no restart, no backup).
+   An unresolved failure, ambiguous/unreadable journal, or unfinished switch reports review
+   required before service health can authorize anything (see below).
+5. Otherwise predicts the candidate's schema change (the **schema plan**): the running release's and
+   the candidate's own `SqliteSnapshotStore` each initialize a fresh disposable database under
+   `/home/wowsync-dev/deploy/staging/schema-plan-*`, which is removed afterwards; the real database is
+   never opened. A predicted change that is not exactly declared (see "Deploying an expected
+   additive schema change") stops the deployment here, before anything is stopped.
+6. Otherwise records its intent, stops only Dashboard and MCP, takes an integrity-checked SQLite
    online backup (which includes committed WAL data), atomically switches `releases/current`, starts
    Dashboard and MCP, waits for readiness plus a settle window, and verifies: both units are fresh
    invocations started from `releases/current` resolving to the new SHA, restart counters are zero,
-   the HTTP routes answer as expected, the database schema is unchanged, Herdr's process is
-   unchanged, and `wowsync-dev.target` is still active.
-6. Appends the full evidence to `/var/lib/wowsync-dev/deployments.jsonl` and prints the summary.
+   the HTTP routes answer as expected, the database schema is unchanged (or changed by exactly the
+   declared additions), Herdr's process is unchanged, and `wowsync-dev.target` is still active. This
+   check of the real database is authoritative; the plan in step 5 can only refuse a deployment.
+7. Appends the full evidence to `/var/lib/wowsync-dev/deployments.jsonl` and prints the summary.
 
-Steps 1–4 never touch the running services. Mutating commands hold
+Steps 1–5 never touch the running services. Mutating commands hold
 `/home/wowsync-dev/deploy/deploy.lock`; a second concurrent deployment reports
 `DEV DEPLOY NOT STARTED — another deployment is running` and exits.
 
@@ -242,9 +254,11 @@ Steps 1–4 never touch the running services. Mutating commands hold
 
 | First line | What happened | Running afterwards | Manual intervention |
 | --- | --- | --- | --- |
-| `DEV DEPLOY FAILED — DEV UNCHANGED` | Failed before any service was stopped (ref/SHA mismatch, build or test failure, DEV already unhealthy). | Previous release, untouched. | No — fix the cause and deploy again. |
-| `DEV DEPLOY FAILED — RECOVERED` | The new release failed validation with an unchanged schema; the previous release was restarted and validated. | Previous release. | No. The database is not restored: writes made while the new release ran remain, and the pre-deploy backup is kept. |
-| `DEV DEPLOY FAILED — DASHBOARD/MCP STOPPED` | The schema changed or could not be verified, so old code was not started against it. | Nothing (Dashboard/MCP stopped). | **Yes** — decide schema compatibility (see below). |
+| `DEV DEPLOY FAILED — DEV UNCHANGED` | Failed before any service was stopped (ref/SHA mismatch, build or test failure, DEV already unhealthy, a schema plan that is not exactly declared, or a schema plan that could not be computed). | Previous release, untouched. | No — fix the cause and deploy again. |
+| `DEV DEPLOY FAILED — RECOVERED` | The new release failed validation with an unchanged schema — or with exactly the declared additions and `--previous-code-compatible` (`Schema: additions retained: ...`); the previous release was restarted and validated. | Previous release. | No. The database is not restored: writes made while the new release ran remain, declared additions stay, and the pre-deploy backup is kept. |
+| `DEV DEPLOY FAILED — DASHBOARD/MCP STOPPED` | The schema changed in a way that was not declared, changed by declared additions without `--previous-code-compatible`, or could not be verified, so old code was not started against it. | Nothing (Dashboard/MCP stopped). | **Yes** — decide schema compatibility (see below). |
+| `DEV DEPLOY INTERRUPTED — REVIEW REQUIRED` | The requested SHA is already `current`, but the last release switch in the audit log never recorded a result (the tool or host stopped mid-switch). The tool will not call that a no-op. | Whatever is running; nothing was changed by this command. | **Yes** — check `status`, the audit log, and the named backup; then `rollback` to the previous release (which records a completed switch) or re-validate. |
+| `DEV DEPLOY BLOCKED — REVIEW REQUIRED` | The current SHA has no proven validated/resolved journal state. A failure with stopped review, missing recovery evidence, or an ambiguous journal remains unresolved even if services later become healthy. | Whatever is running; this command does not stop/start services, change `current`, or touch the database. | **Yes** — review status and the audit journal, then perform a validated deploy or rollback. |
 | `DEV RECOVERY FAILED` | Restoring the previous release also failed. | Unknown; the output names the last known release. | **Yes** — `wowsync-dev-deploy status`, the audit record, and the unit journals. |
 
 Exit status: `0` deployed or already deployed, `1` failed but DEV is untouched or recovered, `2`
@@ -255,12 +269,97 @@ Database restoration is never automatic. Code rollback is not database rollback:
 schema changes may make old code unsafe, and restoring a backup may discard observations captured
 after it. Both are explicit operator decisions.
 
+### Deploying an expected additive schema change
+
+A release that adds a table or index (the repository's additive `CREATE ... IF NOT EXISTS` schema
+evolution) cannot be deployed with the plain command: its schema plan shows the addition and
+`deploy` stops before touching DEV. Authorize it explicitly, for that one deployment only:
+
+1. Build the release and read its schema plan (DEV untouched):
+
+   ```bash
+   wowsync-dev-deploy prepare feature/your-branch FULL_VALIDATED_SHA
+   ```
+
+   ```text
+   Schema plan: additive (requires explicit approval)
+     table snapshot_equipment_observations  sql sha256 <64 hex>
+       --expect-schema-add table:snapshot_equipment_observations@<64 hex>
+   ```
+
+   `Schema plan: none` means no declaration is needed. `Schema plan: NON-ADDITIVE` (a removed or
+   changed object, a trigger or view, or a `user_version` change) cannot be declared; such a release
+   is refused.
+2. Review the printed SQL (`--json` shows it in full) against the reviewed code. Approval of the
+   exact plan or declaration is a Tate decision.
+3. Deploy with the exact declaration(s), copied from the plan:
+
+   ```bash
+   wowsync-dev-deploy deploy feature/your-branch FULL_VALIDATED_SHA \
+     --expect-schema-add table:snapshot_equipment_observations@<64 hex> \
+     [--previous-code-compatible]
+   ```
+
+Declaration syntax is exactly `table:<name>@<sha256>` or `index:<name>@<sha256>`: lowercase name
+`[a-z][a-z0-9_]{0,62}` not beginning with `sqlite`, and the SHA-256 of the object's exact SQL text
+as returned by SQLite's `sqlite_schema.sql` (no whitespace folding; whitespace inside quoted SQL can
+change meaning). `--expect-schema-add` repeats for several
+objects; duplicates, wildcards, and any other form are usage errors (exit 64). Both options are
+accepted only by `deploy` and apply only to that invocation; nothing is stored except the audit
+record. A new index must belong to an existing table or to a table declared in the same command.
+SQLite's implied objects (`sqlite_autoindex_*` from a `UNIQUE`/`PRIMARY KEY` constraint,
+`sqlite_sequence`) are never declared: the table's SQL hash already binds them.
+
+What is compared:
+
+- **Before stopping anything:** the schema plan must add exactly the declared objects with the
+  declared hashes, and nothing else may differ. Otherwise `DEV DEPLOY FAILED — DEV UNCHANGED`.
+- **After the candidate starts (authoritative):** the real database's schema before and after must
+  differ only by exactly the declared objects with the declared hashes, with `user_version`
+  unchanged. Anything else is treated as an undeclared change: Dashboard/MCP are stopped for review.
+- A success prints `Schema: ADDED (declared) <names>`; the audit record keeps the declarations, the
+  observed additions with their SQL and hashes, and the post-start schema.
+
+`--previous-code-compatible` is an explicit operator/Tate statement that the previous release runs
+correctly against the database with the declared additions. It is valid only with at least one
+declaration. If the candidate then fails validation and the real database changed by exactly the
+declared additions, the previous release is restarted and validated while the additions stay in the
+database (`DEV DEPLOY FAILED — RECOVERED`, `Schema: additions retained: ...`); the database is not
+restored. It never authorizes an undeclared, changed, or unreadable schema; those still stop
+Dashboard/MCP for review. Without it, a failure after a declared addition also stops for review.
+
+Rollback takes no declarations. Rolling back from a release with a declared addition to an older
+release normally works unchanged: older code does not alter the added table, so the schema before
+and after the rollback is identical. Use `rollback`, not `deploy`, to go back: `deploy` of an older
+release plans the newer table as removed and refuses it.
+
+The deploy tool that runs is the one in the *currently deployed* release. A tool change therefore
+takes effect only after it has itself been deployed; until a release containing it is current, the
+older tool's rules apply. The additive-schema tool feature must first be deployed in a tool-only
+release. Slice A's immutable `1832aba` tree contains the older deploy tool, so deploying that SHA
+after the tool-only release would temporarily restore the older tool and remove both additive-schema
+authorization and the unresolved-review NOOP guard. Do not deploy `1832aba` as the final current
+release. Before Slice A deployment, integrate the reviewed deploy-tool changes and Slice A into one
+release tree, then review and deploy that combined SHA. This integration is a required gate; the
+tool-only release itself does not authorize Slice A or a schema declaration.
+
+The deployment audit journal is a structured operational record, not a tamper-proof log. The
+no-op evaluator checks the record shapes, SHA relationships, tool identity fields, service state,
+HTTP results, and recovery evidence before using a record as validation provenance. It still
+assumes the host's normal ownership boundary for the journal and deployment account.
+
+Recorded example (Slice A, `1832aba`): the plan adds exactly `table:snapshot_equipment_observations`.
+A disposable compatibility proof showed that `be0c370` reads, imports, and serves recipient screens
+against that database unchanged, with one caveat: `node:sqlite` enforces foreign keys, so `be0c370`'s
+character deletion fails (atomically, without corruption) for a character that already has
+equipment observation rows. With that caveat, `--previous-code-compatible` is approved for Slice A.
+
 ### Troubleshooting operations (only when explicitly asked)
 
 ```bash
 wowsync-dev-deploy rollback PREVIOUS_FULL_SHA     # switch back to a retained release
 wowsync-dev-deploy backup some-label              # take a consistent SQLite backup now
-wowsync-dev-deploy prepare BRANCH FULL_SHA        # build/verify a release only; DEV untouched
+wowsync-dev-deploy prepare BRANCH FULL_SHA        # build/verify a release and print its schema plan; DEV untouched
 ```
 
 `rollback` uses the same backup, validation, and automatic-recovery path as `deploy`. If a deployed
@@ -361,7 +460,14 @@ HTTP replaced by a simulated DEV host. They cover the routine deploy path end to
 reuse, no-op, SHA mismatch, build failure, automatic recovery, failed recovery, schema-change
 stop, Herdr isolation, lock contention, concise and JSON output, status) plus the underlying
 backup, schema, pointer, readiness, fresh-invocation, helper, sudoers, launcher, and installer
-checks.
+checks. The expected-additive-schema cases (D01–D35) cover the declaration parser, the schema
+classifier, the pre-stop plan (including a real `/usr/bin/node` run of a small release's
+`sqliteStore.ts` against disposable databases), declared deployments and their recovery, rollback
+after an addition, and the interrupted-deployment guard; the workflow tests simulate the
+application's schema initialization so they never depend on application code.
+
+Run them with plain `node --test` (as above). Under `unshare --map-root-user` the installer test
+"refuses unprivileged execution" fails as an environment artifact: mapped root defeats its premise.
 
 ### History
 
