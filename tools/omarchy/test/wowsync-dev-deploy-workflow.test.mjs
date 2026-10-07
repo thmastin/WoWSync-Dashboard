@@ -65,6 +65,7 @@ function simulatedHost(paths, faults, validateBuild) {
   const runningSha = async () => path.basename(await realpath(paths.current));
   const write = (sql) => { const db = new DatabaseSync(paths.database); try { db.exec(sql); } finally { db.close(); } };
   const ops = {
+    deploymentToolIdentity: async () => ({ version: '3', entryPath: TOOL, releaseSha: await currentSha(paths.releases).catch(() => '0'.repeat(40)), entrySha256: 'a'.repeat(64) }),
     serviceHelper: async (operation) => {
       calls.push(operation);
       if (operation === 'stop') { for (const unit of Object.values(units)) unit.active = false; return; }
@@ -843,17 +844,27 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
   const f = await deployFixture(t);
   const { determineNoopReviewState } = deployTool;
   const at = '2026-10-07T12:00:00.000Z';
-  const tool = (releaseSha = null) => ({ version: '3', entryPath: TOOL, releaseSha, entrySha256: 'a'.repeat(64) });
+  const tool = (releaseSha = f.shaA) => ({ version: '3', entryPath: TOOL, releaseSha, entrySha256: 'a'.repeat(64) });
   const healthy = (fresh = true) => ({ target: { ActiveState: 'active', SubState: 'active' }, units: {
     [DASHBOARD]: { ActiveState: 'active', SubState: 'running', Result: 'success', MainPID: 123, NRestarts: 0, ...(fresh ? { InvocationID: '1'.repeat(32) } : {}) },
     [MCP]: { ActiveState: 'active', SubState: 'running', Result: 'success', MainPID: 124, NRestarts: 0, ...(fresh ? { InvocationID: '2'.repeat(32) } : {}) },
   } });
   const http = [{ path: '/', expected: 200, actual: 200 }];
+  const noneEvidence = () => ({ classification: 'NONE', declarationsSatisfied: true,
+    added: [], removed: [], changed: [], userVersion: { before: 0, after: 0 }, problems: [], declared: [], previousCodeCompatible: false });
+  const additiveEvidence = () => {
+    const sql = 'CREATE TABLE added_evidence(id INTEGER PRIMARY KEY)';
+    const sqlSha256 = deployTool.schemaSqlSha256(sql);
+    const item = { type: 'table', name: 'added_evidence', tbl_name: 'added_evidence', sql, sqlSha256 };
+    return { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: true, added: [item], removed: [], changed: [],
+      userVersion: { before: 0, after: 0 }, problems: [], declared: [`table:${item.name}@${sqlSha256}`], previousCodeCompatible: true };
+  };
   const success = (operation, sha = f.shaA) => ({
     schemaVersion: 2, at,
     operation, requestedSha: sha, requestedRef: operation === 'PROMOTE_SUCCESS' ? 'refs/heads/feature' : null,
     previousSha: f.shaB, candidateSha: sha, deployedSha: sha, validation: 'passed',
-    schemaChanged: false, schemaChange: { classification: 'NONE', declarationsSatisfied: true },
+    schemaChanged: false, schemaChange: noneEvidence(),
+    dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: [] }, dataAfter: { integrityCheck: 'ok', userVersion: 0, schema: [] },
     services: healthy(), http, tool: tool(f.shaB),
   });
   const failureRecord = (operation = 'PROMOTE_FAILURE') => ({
@@ -869,17 +880,24 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
     noopAuthorization: { state: authorization, selectedSha: f.shaA },
     services: healthy(false), http, tool: tool(),
   });
-  const provenRestore = (operation = 'PROMOTE_FAILURE', retained = false) => ({
+  const provenRestore = (operation = 'PROMOTE_FAILURE', retained = false) => {
+    const additive = additiveEvidence();
+    const before = { integrityCheck: 'ok', userVersion: 0, schema: [] };
+    const after = { integrityCheck: 'ok', userVersion: 0, schema: retained ? additive.added : [] };
+    return ({
     schemaVersion: 2, at,
     operation, requestedSha: f.shaB, requestedRef: operation === 'PROMOTE_FAILURE' ? 'refs/heads/feature' : null,
     previousSha: f.shaA, candidateSha: f.shaB, selectedSha: f.shaA, recoveryResult: 'validated',
     recoveryAction: retained ? 'restore-previous-release-retaining-declared-additions' : 'restore-previous-release-and-validate',
     schemaChange: retained
-      ? { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: true }
-      : { classification: 'NONE', declarationsSatisfied: true },
+      ? (() => { const { declared, previousCodeCompatible, ...evidence } = additive; return evidence; })()
+      : (() => { const { declared, previousCodeCompatible, ...evidence } = noneEvidence(); return evidence; })(),
+    declaredSchemaAdditions: retained ? additive.declared : [], schemaBefore: before, schemaAfter: after,
     schemaChanged: retained, ...(retained ? { previousCodeCompatible: true } : {}),
     tool: tool(f.shaA), restored: { services: healthy(), http },
+    ...(retained ? { schemaAdditionsRetained: additive.added.map(({ type, name }) => ({ type, name })) } : {}),
   });
+  };
   const journal = (...records) => `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
   const state = (...records) => determineNoopReviewState(journal(...records), f.shaA);
 
@@ -921,16 +939,21 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
   assert.equal(state(failureRecord()).state, 'UNRESOLVED', 'F14 missing recovery evidence fails closed');
   assert.equal(state(provenRestore('PROMOTE_FAILURE', true)).state, 'VALIDATED', 'retained-additive recovery requires and accepts structured compatibility evidence');
   assert.equal(state({ ...provenRestore('PROMOTE_FAILURE', true), schemaChange: { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: false, previousCodeCompatible: true } }).state, 'UNRESOLVED');
+  assert.equal(state({ ...provenRestore(), schemaChange: { classification: 'NONE' } }).state, 'UNRESOLVED', 'incomplete unchanged-schema recovery evidence fails closed');
+  assert.equal(state({ ...provenRestore('PROMOTE_FAILURE', true), declaredSchemaAdditions: [] }).state, 'UNRESOLVED', 'recovery declarations must bind to retained object hashes');
   assert.equal(state({ ...failed, recoveryResult: 'validated', recoveryAction: 'restore-previous-release-and-validate', schemaChange: { classification: 'NONE' }, schemaChanged: false, previousCodeCompatible: true }).state, 'UNRESOLVED', 'F11/F12 flags cannot substitute for restored validation evidence');
   assert.equal(state({ ...failed, ...provenRestore(), selectedSha: f.shaB }).state, 'UNRESOLVED', 'recovery selected SHA must equal previous SHA');
   assert.equal(state({ ...failed, ...provenRestore(), previousSha: f.shaB, selectedSha: f.shaB }).state, 'UNRESOLVED', 'recovery evidence copied from another previous SHA cannot select current');
   assert.equal(state({ ...failed, ...provenRestore(), recoveryAction: 'restore-previous-release-retaining-declared-additions' }).state, 'UNRESOLVED', 'recovery action must match schema evidence');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), candidateSha: f.shaB }).state, 'UNRESOLVED', 'requested/candidate/deployed SHA contradiction fails closed');
+  assert.equal(state({ ...success('PROMOTE_SUCCESS'), schemaChange: { ...noneEvidence(), added: [{ garbage: true }], userVersion: { before: 0, after: 99 } } }).state, 'UNRESOLVED', 'malformed schema evidence cannot validate a selected SHA');
   assert.equal(state({ ...success('ROLLBACK_SUCCESS'), requestedSha: f.shaB }).state, 'UNRESOLVED', 'rollback requested/deployed SHA contradiction fails closed');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), tool: tool(f.shaA) }).state, 'UNRESOLVED', 'switch tool release must match the selected previous release');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), services: { ...healthy(), units: { ...healthy().units, [DASHBOARD]: { ...healthy().units[DASHBOARD], MainPID: '123' } } } }).state, 'UNRESOLVED', 'string PID fails closed');
+  assert.equal(state({ ...success('PROMOTE_SUCCESS'), services: { ...healthy(), units: { ...healthy().units, [MCP]: { ...healthy().units[MCP], MainPID: 123 } } } }).state, 'UNRESOLVED', 'same PID cannot identify two distinct services');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), http: [{ path: '/', expected: '200', actual: '200' }] }).state, 'UNRESOLVED', 'string HTTP statuses fail closed');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), tool: undefined }).state, 'UNRESOLVED', 'missing tool identity fails closed');
+  assert.equal(state({ ...success('PROMOTE_SUCCESS'), tool: tool(null) }).state, 'UNRESOLVED', 'unknown tool release identity cannot authorize a switch');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), requestedSha: { toString: f.shaA } }).state, 'UNRESOLVED', 'non-string SHA values are not coerced');
   assert.equal(determineNoopReviewState(JSON.stringify({ operation: { toString: 'PROMOTE_SUCCESS' } }), f.shaA).state, 'UNRESOLVED', 'non-string journal operation is harmless and unresolved');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), services: { ...healthy(), units: { ...healthy().units, [MCP]: { ...healthy().units[MCP], InvocationID: undefined } } } }).state, 'UNRESOLVED', 'missing invocation identity fails closed');
@@ -982,16 +1005,20 @@ test('malformed NOOP and contradictory switch SHA audit records fail closed in p
     schemaVersion: 2, at: '2026-10-07T12:00:00.000Z',
     operation: 'PROMOTE_SUCCESS', requestedSha: shaA, requestedRef: 'refs/heads/fixture', previousSha: shaB,
     candidateSha: shaA, deployedSha: shaA, schemaChanged: false,
-    schemaChange: { classification: 'NONE', declarationsSatisfied: true }, validation: 'passed',
+    schemaChange: { classification: 'NONE', declarationsSatisfied: true, added: [], removed: [], changed: [], userVersion: { before: 0, after: 0 }, problems: [], declared: [], previousCodeCompatible: false }, validation: 'passed',
+    dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: [] }, dataAfter: { integrityCheck: 'ok', userVersion: 0, schema: [] },
     services: { target: { ActiveState: 'active', SubState: 'active' }, units },
     http: [{ path: '/', expected: 200, actual: 200 }],
-    tool: { version: '3', entryPath: TOOL, releaseSha: null, entrySha256: 'a'.repeat(64) },
+    tool: { version: '3', entryPath: TOOL, releaseSha: shaB, entrySha256: 'a'.repeat(64) },
   };
   await makeCase(t, {
     schemaVersion: 2, at: '2026-10-07T12:00:00.000Z', operation: 'PROMOTE_NOOP', requestedSha: shaA, candidateSha: shaA, deployedSha: shaA,
     previousSha: shaA, validation: 'passed', noopAuthorization: { state: 'LEGACY_EMPTY', selectedSha: shaA },
   });
   await makeCase(t, { ...baseSuccess, requestedSha: shaB, candidateSha: shaB, deployedSha: shaA });
+  await makeCase(t, { ...baseSuccess, schemaChange: { ...baseSuccess.schemaChange, added: [{ garbage: true }], userVersion: { before: 0, after: 99 } } });
+  await makeCase(t, { ...baseSuccess, dataAfter: { integrityCheck: 'ok', userVersion: 99, schema: [] } });
+  await makeCase(t, { ...baseSuccess, tool: { ...baseSuccess.tool, releaseSha: null } });
 });
 
 test('an unreadable same-SHA journal returns manual review before health checks', async (t) => {

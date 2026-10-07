@@ -915,6 +915,12 @@ async function deploymentToolIdentity(paths = PATHS) {
   return { version: '3', entryPath, releaseSha, entrySha256: await sha256File(entryPath) };
 }
 
+async function toolIdentity(paths, ops) {
+  return typeof ops.deploymentToolIdentity === 'function'
+    ? ops.deploymentToolIdentity(paths)
+    : deploymentToolIdentity(paths);
+}
+
 export async function collectJournalWarnings(since, paths = PATHS, reader = readJournalWarnings) {
   try { return { ok: true, output: await reader(since, paths) }; }
   catch (error) { return { ok: false, error: error.message }; }
@@ -1014,7 +1020,7 @@ async function planCandidateSchema(previousSha, sha, declarations, { paths, ops 
 // without touching DEV, e.g. to create the first release on a rebuilt host.
 // Also prints the candidate's schema plan and any copy-ready declarations.
 export async function prepare({ ref, expectedSha }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'PREPARE', expectedSha, sha: null, ref: null, previousSha: null };
   let releaseState;
   try {
@@ -1077,8 +1083,7 @@ function isPlainRecord(value) {
 function validToolIdentity(tool, expectedReleaseSha) {
   if (!isPlainRecord(tool) || tool.version !== '3' || typeof tool.entryPath !== 'string'
     || !path.isAbsolute(tool.entryPath) || !isSha256(tool.entrySha256)) return false;
-  if (tool.releaseSha !== null && !isFullSha(tool.releaseSha)) return false;
-  return tool.releaseSha === null || tool.releaseSha === expectedReleaseSha;
+  return isFullSha(tool.releaseSha) && tool.releaseSha === expectedReleaseSha;
 }
 
 function validHttpEvidence(http) {
@@ -1100,15 +1105,96 @@ function validServiceEvidence(services, { fresh }) {
     if (fresh && (typeof state.InvocationID !== 'string' || !/^[0-9a-f]{32}$/.test(state.InvocationID))) return false;
     if (!fresh && Object.hasOwn(state, 'InvocationID')) return false;
   }
-  return true;
+  return services.units[APP_SERVICE_UNITS[0]].MainPID !== services.units[APP_SERVICE_UNITS[1]].MainPID;
+}
+
+function validSchemaItems(items) {
+  return Array.isArray(items) && items.every((item) => isPlainRecord(item)
+    && ['table', 'index'].includes(item.type)
+    && typeof item.name === 'string' && /^[a-z][a-z0-9_]{0,62}$/.test(item.name) && !/^sqlite/i.test(item.name)
+    && typeof item.tbl_name === 'string' && item.tbl_name.length > 0
+    && typeof item.sql === 'string' && isSha256(item.sqlSha256)
+    && schemaSqlSha256(item.sql) === item.sqlSha256);
+}
+
+function validSchemaEvidence(change, { declared } = {}) {
+  if (!isPlainRecord(change) || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)
+    || change.declarationsSatisfied !== true || !validSchemaItems(change.added)
+    || !Array.isArray(change.removed) || change.removed.length !== 0
+    || !Array.isArray(change.changed) || change.changed.length !== 0
+    || !Array.isArray(change.problems) || change.problems.length !== 0
+    || !isPlainRecord(change.userVersion) || !Number.isSafeInteger(change.userVersion.before)
+    || change.userVersion.before < 0 || !Number.isSafeInteger(change.userVersion.after)
+    || change.userVersion.after !== change.userVersion.before) return false;
+  if (change.classification === 'NONE') return change.added.length === 0 && (!declared || declared.length === 0);
+  if (!change.added.length || !Array.isArray(declared)) return false;
+  let parsed;
+  try { parsed = validateSchemaDeclarations(declared.map((value) => {
+    const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+    if (!match) throw new Error('invalid declaration');
+    return { type: match[1], name: match[2], sqlSha256: match[3] };
+  })); } catch { return false; }
+  const expected = change.added.map((item) => `${item.type}:${item.name}@${item.sqlSha256}`).sort();
+  return expected.length === parsed.length && expected.join('\n') === declared.slice().sort().join('\n')
+    && change.added.every((item) => item.type !== 'index' || typeof item.tbl_name === 'string');
 }
 
 function validSchemaSuccessEvidence(record) {
   const change = record.schemaChange;
-  if (!isPlainRecord(change) || change.declarationsSatisfied !== true
-    || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)) return false;
-  return typeof record.schemaChanged === 'boolean'
+  if (!isPlainRecord(record.dataBefore) || !isPlainRecord(record.dataAfter)
+    || record.dataBefore.integrityCheck !== 'ok' || record.dataAfter.integrityCheck !== 'ok'
+    || !Array.isArray(record.dataBefore.schema) || !Array.isArray(record.dataAfter.schema)
+    || !Number.isSafeInteger(record.dataBefore.userVersion) || !Number.isSafeInteger(record.dataAfter.userVersion)
+    || !Array.isArray(change?.declared) || typeof change.previousCodeCompatible !== 'boolean'
+    || typeof record.schemaChanged !== 'boolean') return false;
+  let declarations;
+  try {
+    declarations = validateSchemaDeclarations(change.declared.map((value) => {
+      const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+      if (!match) throw new Error('invalid declaration');
+      return { type: match[1], name: match[2], sqlSha256: match[3] };
+    }));
+  } catch { return false; }
+  const observed = classifySchemaChange(
+    { integrityCheck: 'ok', userVersion: record.dataBefore.userVersion, schema: record.dataBefore.schema },
+    { integrityCheck: 'ok', userVersion: record.dataAfter.userVersion, schema: record.dataAfter.schema },
+    declarations,
+  );
+  return validSchemaEvidence(change, { declared: change.declared })
+    && observed.classification === change.classification
+    && observed.declarationsSatisfied === change.declarationsSatisfied
+    && JSON.stringify(observed.added) === JSON.stringify(change.added)
+    && JSON.stringify(observed.removed) === JSON.stringify(change.removed)
+    && JSON.stringify(observed.changed) === JSON.stringify(change.changed)
+    && JSON.stringify(observed.userVersion) === JSON.stringify(change.userVersion)
+    && JSON.stringify(observed.problems) === JSON.stringify(change.problems)
     && record.schemaChanged === (change.classification === 'DECLARED_ADDITIVE');
+}
+
+function auditedSchemaChangeMatches(before, after, change, declared) {
+  if (!isPlainRecord(before) || !isPlainRecord(after) || before.integrityCheck !== 'ok' || after.integrityCheck !== 'ok'
+    || !Number.isSafeInteger(before.userVersion) || !Number.isSafeInteger(after.userVersion)
+    || !Array.isArray(before.schema) || !Array.isArray(after.schema)) return false;
+  let declarations;
+  try {
+    declarations = validateSchemaDeclarations(declared.map((value) => {
+      const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+      if (!match) throw new Error('invalid declaration');
+      return { type: match[1], name: match[2], sqlSha256: match[3] };
+    }));
+  } catch { return false; }
+  const observed = classifySchemaChange(
+    { integrityCheck: before.integrityCheck, userVersion: before.userVersion, schema: before.schema },
+    { integrityCheck: after.integrityCheck, userVersion: after.userVersion, schema: after.schema },
+    declarations,
+  );
+  return observed.classification === change.classification
+    && observed.declarationsSatisfied === change.declarationsSatisfied
+    && JSON.stringify(observed.added) === JSON.stringify(change.added)
+    && JSON.stringify(observed.removed) === JSON.stringify(change.removed)
+    && JSON.stringify(observed.changed) === JSON.stringify(change.changed)
+    && JSON.stringify(observed.userVersion) === JSON.stringify(change.userVersion)
+    && JSON.stringify(observed.problems) === JSON.stringify(change.problems);
 }
 
 function validatedSwitchSha(record) {
@@ -1139,13 +1225,24 @@ function validatedRecoverySha(record) {
   if (operation === 'PROMOTE_FAILURE' && !(typeof record.requestedRef === 'string'
     && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))) return null;
   if (operation === 'ROLLBACK_FAILURE' && record.requestedRef !== null) return null;
+  const declared = record.declaredSchemaAdditions;
   if (recoveryAction === 'restore-previous-release-and-validate'
-    && schemaChange.classification === 'NONE' && record.schemaChanged === false) return previousSha;
+    && Array.isArray(declared) && declared.length === 0
+    && validSchemaEvidence(schemaChange, { declared }) && schemaChange.classification === 'NONE'
+    && auditedSchemaChangeMatches(record.schemaBefore, record.schemaAfter, schemaChange, declared)
+    && record.schemaChanged === false) return previousSha;
+  const retained = record.schemaAdditionsRetained;
+  const retainedNames = Array.isArray(retained) && retained.every((item) => isPlainRecord(item)
+    && ['table', 'index'].includes(item.type) && typeof item.name === 'string')
+    ? retained.map((item) => `${item.type}:${item.name}`).sort() : null;
+  const actualNames = validSchemaItems(schemaChange.added)
+    ? schemaChange.added.map((item) => `${item.type}:${item.name}`).sort() : null;
   if (recoveryAction === 'restore-previous-release-retaining-declared-additions'
+    && Array.isArray(declared) && retainedNames && retainedNames.join('\n') === actualNames?.join('\n')
+    && validSchemaEvidence(schemaChange, { declared })
+    && auditedSchemaChangeMatches(record.schemaBefore, record.schemaAfter, schemaChange, declared)
     && schemaChange.classification === 'DECLARED_ADDITIVE'
-    && schemaChange.declarationsSatisfied === true
-    && (schemaChange.previousCodeCompatible === true || record.previousCodeCompatible === true)
-    && record.schemaChanged === true) return previousSha;
+    && record.previousCodeCompatible === true && record.schemaChanged === true) return previousSha;
   return null;
 }
 
@@ -1260,7 +1357,7 @@ async function interruptedSwitch(context, tool, paths) {
 // the immutable release when needed, recognises an already-deployed SHA, and
 // otherwise switches releases with backup, validation, and automatic recovery.
 export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROUTES, schemaDeclarations = [], previousCodeCompatible = false }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'PROMOTE', expectedSha, sha: null, ref: null, previousSha: null };
   let releaseState;
   let declarations;
@@ -1318,7 +1415,7 @@ export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROU
 // Explicit troubleshooting operation: switch back to a retained release using
 // the same backup, validation, and recovery path as deploy.
 export async function rollback({ sha, routes = DEFAULT_VALIDATION_ROUTES }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'ROLLBACK', sha, ref: null, previousSha: null };
   try {
     validateSha(sha);
@@ -1366,6 +1463,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
   let schemaChange = null;
   let candidateStarted = false;
   let candidateValidated = false;
+  let recoveryAfterEvidence = null;
   try {
     await ops.serviceHelper('stop');
     beforeEvidence = databaseEvidence(paths.database);
@@ -1407,7 +1505,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
       release: releaseState,
       at: iso(),
       backup: { path: backupPath, sha256: backupSha256, integrityCheck: 'ok', data: backupEvidence },
-      dataBefore: { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, demand: beforeEvidence.demand },
+      dataBefore: { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, schema: beforeEvidence.schema, demand: beforeEvidence.demand },
       dataAfter: { integrityCheck: afterEvidence.integrityCheck, userVersion: afterEvidence.userVersion, schemaSha256: afterEvidence.schemaSha256, demand: afterEvidence.demand, schema: afterEvidence.schema },
       schemaChanged,
       schemaChange: { ...schemaChange, declared: declarations.map(formatSchemaDeclaration), previousCodeCompatible },
@@ -1433,15 +1531,23 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
       stop: () => ops.serviceHelper('stop'),
       inspectSchema: () => {
         const after = databaseEvidence(paths.database);
+        recoveryAfterEvidence = after;
         return beforeEvidence ? classifySchemaChange(beforeEvidence, after, declarations) : null;
       },
     });
+    if (preRecovery.schemaChanged === false) recoveryAfterEvidence = beforeEvidence;
     // A candidate that never ran cannot have changed the schema; otherwise the
     // classification is what was observed after the stop, or null (unknown).
-    const recoverySchema = preRecovery.schemaChanged === false ? { classification: 'NONE', declarationsSatisfied: declarations.length === 0, added: [], removed: [], changed: [], problems: [] } : preRecovery.schemaChanged;
+    const recoverySchema = preRecovery.schemaChanged === false ? {
+      classification: 'NONE', declarationsSatisfied: declarations.length === 0,
+      added: [], removed: [], changed: [], userVersion: { before: beforeEvidence?.userVersion, after: beforeEvidence?.userVersion }, problems: [],
+    } : preRecovery.schemaChanged;
     schemaChange = recoverySchema;
     schemaChanged = recoverySchema ? recoverySchema.classification !== 'NONE' : null;
-    const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true };
+    const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true,
+      declaredSchemaAdditions: declarations.map(formatSchemaDeclaration), previousCodeCompatible,
+      schemaBefore: beforeEvidence ? { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schema: beforeEvidence.schema } : null,
+      schemaAfter: recoveryAfterEvidence ? { integrityCheck: recoveryAfterEvidence.integrityCheck, userVersion: recoveryAfterEvidence.userVersion, schema: recoveryAfterEvidence.schema } : null };
     let recovery;
     try {
       recovery = await recoverFailedPromotion({
@@ -1492,7 +1598,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
 }
 
 async function backupOnly(label, routes, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(label ?? '')) throw new Error('Backup label must be 1-48 lowercase letters, digits, or hyphens.');
   const at = iso();
   const services = {};

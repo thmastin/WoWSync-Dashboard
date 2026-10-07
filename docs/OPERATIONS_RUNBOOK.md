@@ -301,8 +301,9 @@ evolution) cannot be deployed with the plain command: its schema plan shows the 
    ```
 
 Declaration syntax is exactly `table:<name>@<sha256>` or `index:<name>@<sha256>`: lowercase name
-`[a-z][a-z0-9_]{0,62}` not beginning with `sqlite`, and the SHA-256 of the object's normalized SQL
-(whitespace runs collapsed, as stored in `sqlite_master`). `--expect-schema-add` repeats for several
+`[a-z][a-z0-9_]{0,62}` not beginning with `sqlite`, and the SHA-256 of the object's exact SQL text
+as returned by SQLite's `sqlite_schema.sql` (no whitespace folding; whitespace inside quoted SQL can
+change meaning). `--expect-schema-add` repeats for several
 objects; duplicates, wildcards, and any other form are usage errors (exit 64). Both options are
 accepted only by `deploy` and apply only to that invocation; nothing is stored except the audit
 record. A new index must belong to an existing table or to a table declared in the same command.
