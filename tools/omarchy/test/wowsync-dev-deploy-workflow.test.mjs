@@ -2,6 +2,7 @@
 // real immutable releases, and real SQLite files, with systemd/sudo/HTTP
 // replaced by a simulated DEV host.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -871,7 +872,12 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
     [DASHBOARD]: { ActiveState: 'active', SubState: 'running', Result: 'success', MainPID: 123, NRestarts: 0, ...(fresh ? { InvocationID: '1'.repeat(32) } : {}) },
     [MCP]: { ActiveState: 'active', SubState: 'running', Result: 'success', MainPID: 124, NRestarts: 0, ...(fresh ? { InvocationID: '2'.repeat(32) } : {}) },
   } });
-  const http = [{ path: '/', expected: 200, actual: 200 }];
+  const http = [
+    { path: '/', expected: 200, actual: 200 },
+    { path: '/api/versions', expected: 200, actual: 200 },
+  ];
+  const schemaSnapshot = (schema = []) => ({ integrityCheck: 'ok', userVersion: 0, schema,
+    schemaSha256: createHash('sha256').update(JSON.stringify({ userVersion: 0, schema })).digest('hex') });
   const noneEvidence = () => ({ classification: 'NONE', declarationsSatisfied: true,
     added: [], removed: [], changed: [], userVersion: { before: 0, after: 0 }, problems: [], declared: [], previousCodeCompatible: false });
   const additiveEvidence = () => {
@@ -886,7 +892,7 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
     operation, requestedSha: sha, requestedRef: operation === 'PROMOTE_SUCCESS' ? 'refs/heads/feature' : null,
     previousSha: f.shaB, candidateSha: sha, deployedSha: sha, validation: 'passed',
     schemaChanged: false, schemaChange: noneEvidence(),
-    dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: [] }, dataAfter: { integrityCheck: 'ok', userVersion: 0, schema: [] },
+    dataBefore: schemaSnapshot(), dataAfter: schemaSnapshot(),
     services: healthy(), http, tool: tool(f.shaB),
   });
   const failureRecord = (operation = 'PROMOTE_FAILURE') => ({
@@ -904,8 +910,8 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
   });
   const provenRestore = (operation = 'PROMOTE_FAILURE', retained = false) => {
     const additive = additiveEvidence();
-    const before = { integrityCheck: 'ok', userVersion: 0, schema: [] };
-    const after = { integrityCheck: 'ok', userVersion: 0, schema: retained ? additive.added : [] };
+    const before = schemaSnapshot();
+    const after = schemaSnapshot(retained ? additive.added : []);
     return ({
     schemaVersion: 2, at,
     operation, requestedSha: f.shaB, requestedRef: operation === 'PROMOTE_FAILURE' ? 'refs/heads/feature' : null,
@@ -963,6 +969,7 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
   assert.equal(state({ ...provenRestore('PROMOTE_FAILURE', true), schemaChange: { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: false, previousCodeCompatible: true } }).state, 'UNRESOLVED');
   assert.equal(state({ ...provenRestore(), schemaChange: { classification: 'NONE' } }).state, 'UNRESOLVED', 'incomplete unchanged-schema recovery evidence fails closed');
   assert.equal(state({ ...provenRestore('PROMOTE_FAILURE', true), declaredSchemaAdditions: [] }).state, 'UNRESOLVED', 'recovery declarations must bind to retained object hashes');
+  assert.equal(state({ ...provenRestore(), schemaAfter: { ...provenRestore().schemaAfter, schemaSha256: 'f'.repeat(64) } }).state, 'UNRESOLVED', 'recovery snapshot aggregate hash must match its schema');
   assert.equal(state({ ...failed, recoveryResult: 'validated', recoveryAction: 'restore-previous-release-and-validate', schemaChange: { classification: 'NONE' }, schemaChanged: false, previousCodeCompatible: true }).state, 'UNRESOLVED', 'F11/F12 flags cannot substitute for restored validation evidence');
   assert.equal(state({ ...failed, ...provenRestore(), selectedSha: f.shaB }).state, 'UNRESOLVED', 'recovery selected SHA must equal previous SHA');
   assert.equal(state({ ...failed, ...provenRestore(), previousSha: f.shaB, selectedSha: f.shaB }).state, 'UNRESOLVED', 'recovery evidence copied from another previous SHA cannot select current');
@@ -974,6 +981,9 @@ test('F01-F14 same-SHA no-op requires ordered structured validation provenance',
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), services: { ...healthy(), units: { ...healthy().units, [DASHBOARD]: { ...healthy().units[DASHBOARD], MainPID: '123' } } } }).state, 'UNRESOLVED', 'string PID fails closed');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), services: { ...healthy(), units: { ...healthy().units, [MCP]: { ...healthy().units[MCP], MainPID: 123 } } } }).state, 'UNRESOLVED', 'same PID cannot identify two distinct services');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), http: [{ path: '/', expected: '200', actual: '200' }] }).state, 'UNRESOLVED', 'string HTTP statuses fail closed');
+  assert.equal(state({ ...success('PROMOTE_SUCCESS'), http: [
+    { path: '/', expected: 599, actual: 599 }, { path: '/api/versions', expected: 200, actual: 200 },
+  ] }).state, 'UNRESOLVED', 'matching but unexpected HTTP status cannot validate a release');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), tool: undefined }).state, 'UNRESOLVED', 'missing tool identity fails closed');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), tool: tool(null) }).state, 'UNRESOLVED', 'unknown tool release identity cannot authorize a switch');
   assert.equal(state({ ...success('PROMOTE_SUCCESS'), requestedSha: { toString: f.shaA } }).state, 'UNRESOLVED', 'non-string SHA values are not coerced');
@@ -1028,9 +1038,13 @@ test('malformed NOOP and contradictory switch SHA audit records fail closed in p
     operation: 'PROMOTE_SUCCESS', requestedSha: shaA, requestedRef: 'refs/heads/fixture', previousSha: shaB,
     candidateSha: shaA, deployedSha: shaA, schemaChanged: false,
     schemaChange: { classification: 'NONE', declarationsSatisfied: true, added: [], removed: [], changed: [], userVersion: { before: 0, after: 0 }, problems: [], declared: [], previousCodeCompatible: false }, validation: 'passed',
-    dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: [] }, dataAfter: { integrityCheck: 'ok', userVersion: 0, schema: [] },
+    dataBefore: (() => { const schema = []; return { integrityCheck: 'ok', userVersion: 0, schema, schemaSha256: createHash('sha256').update(JSON.stringify({ userVersion: 0, schema })).digest('hex') }; })(),
+    dataAfter: (() => { const schema = []; return { integrityCheck: 'ok', userVersion: 0, schema, schemaSha256: createHash('sha256').update(JSON.stringify({ userVersion: 0, schema })).digest('hex') }; })(),
     services: { target: { ActiveState: 'active', SubState: 'active' }, units },
-    http: [{ path: '/', expected: 200, actual: 200 }],
+    http: [
+      { path: '/', expected: 200, actual: 200 },
+      { path: '/api/versions', expected: 200, actual: 200 },
+    ],
     tool: { version: '3', entryPath: TOOL, releaseSha: shaB, entrySha256: 'a'.repeat(64) },
   };
   await makeCase(t, {
@@ -1041,6 +1055,10 @@ test('malformed NOOP and contradictory switch SHA audit records fail closed in p
   await makeCase(t, { ...baseSuccess, schemaChange: { ...baseSuccess.schemaChange, added: [{ garbage: true }], userVersion: { before: 0, after: 99 } } });
   await makeCase(t, { ...baseSuccess, dataAfter: { integrityCheck: 'ok', userVersion: 99, schema: [] } });
   await makeCase(t, { ...baseSuccess, tool: { ...baseSuccess.tool, releaseSha: null } });
+  const withoutHash = { ...baseSuccess.dataBefore };
+  delete withoutHash.schemaSha256;
+  await makeCase(t, { ...baseSuccess, dataBefore: withoutHash });
+  await makeCase(t, { ...baseSuccess, dataAfter: { ...baseSuccess.dataAfter, schemaSha256: 'f'.repeat(64) } });
   const malformedSnapshot = [{ type: 'table', name: 'observations', tbl_name: 'observations' }];
   await makeCase(t, { ...baseSuccess,
     dataBefore: { integrityCheck: 'ok', userVersion: 0, schema: malformedSnapshot },

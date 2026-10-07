@@ -1087,10 +1087,11 @@ function validToolIdentity(tool, expectedReleaseSha) {
 }
 
 function validHttpEvidence(http) {
-  return Array.isArray(http) && http.length > 0 && http.every((item) => isPlainRecord(item)
-    && typeof item.path === 'string' && item.path.startsWith('/')
-    && Number.isInteger(item.expected) && item.expected >= 100 && item.expected <= 599
-    && Number.isInteger(item.actual) && item.actual === item.expected);
+  return Array.isArray(http) && http.length === DEFAULT_VALIDATION_ROUTES.length
+    && http.every((item, index) => isPlainRecord(item)
+      && item.path === DEFAULT_VALIDATION_ROUTES[index].path
+      && item.expected === DEFAULT_VALIDATION_ROUTES[index].status
+      && Number.isInteger(item.actual) && item.actual === DEFAULT_VALIDATION_ROUTES[index].status);
 }
 
 function validServiceEvidence(services, { fresh }) {
@@ -1133,6 +1134,13 @@ function validSchemaSnapshot(schema) {
   return true;
 }
 
+function validSchemaSnapshotEvidence(evidence) {
+  return isPlainRecord(evidence) && evidence.integrityCheck === 'ok'
+    && Number.isSafeInteger(evidence.userVersion) && evidence.userVersion >= 0
+    && validSchemaSnapshot(evidence.schema) && isSha256(evidence.schemaSha256)
+    && createHash('sha256').update(JSON.stringify({ userVersion: evidence.userVersion, schema: evidence.schema })).digest('hex') === evidence.schemaSha256;
+}
+
 function validSchemaEvidence(change, { declared } = {}) {
   if (!isPlainRecord(change) || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)
     || change.declarationsSatisfied !== true || !validSchemaItems(change.added)
@@ -1167,10 +1175,7 @@ function validUnchangedRecoveryEvidence(change) {
 
 function validSchemaSuccessEvidence(record) {
   const change = record.schemaChange;
-  if (!isPlainRecord(record.dataBefore) || !isPlainRecord(record.dataAfter)
-    || record.dataBefore.integrityCheck !== 'ok' || record.dataAfter.integrityCheck !== 'ok'
-    || !validSchemaSnapshot(record.dataBefore.schema) || !validSchemaSnapshot(record.dataAfter.schema)
-    || !Number.isSafeInteger(record.dataBefore.userVersion) || !Number.isSafeInteger(record.dataAfter.userVersion)
+  if (!validSchemaSnapshotEvidence(record.dataBefore) || !validSchemaSnapshotEvidence(record.dataAfter)
     || !Array.isArray(change?.declared) || typeof change.previousCodeCompatible !== 'boolean'
     || typeof record.schemaChanged !== 'boolean') return false;
   let declarations;
@@ -1198,9 +1203,7 @@ function validSchemaSuccessEvidence(record) {
 }
 
 function auditedSchemaChangeMatches(before, after, change, declared) {
-  if (!isPlainRecord(before) || !isPlainRecord(after) || before.integrityCheck !== 'ok' || after.integrityCheck !== 'ok'
-    || !Number.isSafeInteger(before.userVersion) || !Number.isSafeInteger(after.userVersion)
-    || !validSchemaSnapshot(before.schema) || !validSchemaSnapshot(after.schema)) return false;
+  if (!validSchemaSnapshotEvidence(before) || !validSchemaSnapshotEvidence(after)) return false;
   let declarations;
   try {
     declarations = validateSchemaDeclarations(declared.map((value) => {
@@ -1585,8 +1588,8 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     schemaChanged = recoverySchema ? recoverySchema.classification !== 'NONE' : null;
     const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true,
       declaredSchemaAdditions: declarations.map(formatSchemaDeclaration), previousCodeCompatible,
-      schemaBefore: beforeEvidence ? { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schema: beforeEvidence.schema } : null,
-      schemaAfter: recoveryAfterEvidence ? { integrityCheck: recoveryAfterEvidence.integrityCheck, userVersion: recoveryAfterEvidence.userVersion, schema: recoveryAfterEvidence.schema } : null };
+      schemaBefore: beforeEvidence ? { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, schema: beforeEvidence.schema } : null,
+      schemaAfter: recoveryAfterEvidence ? { integrityCheck: recoveryAfterEvidence.integrityCheck, userVersion: recoveryAfterEvidence.userVersion, schemaSha256: recoveryAfterEvidence.schemaSha256, schema: recoveryAfterEvidence.schema } : null };
     let recovery;
     try {
       recovery = await recoverFailedPromotion({
