@@ -3,6 +3,8 @@
 This is the fixed onboarding entry point for WoWSync Dashboard and Azeroth ERP. Read this first;
 it routes you to the right document for whatever you're trying to do.
 
+For the Retail gear-allocation capability, start with [`RETAIL_GEAR_ALLOCATION.md`](RETAIL_GEAR_ALLOCATION.md).
+
 ## What WoWSync is, in plain language
 
 WoWSync Dashboard is a local-first tool that turns a World of Warcraft addon's text export into

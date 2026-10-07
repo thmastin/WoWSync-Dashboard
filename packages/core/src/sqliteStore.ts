@@ -80,6 +80,7 @@ import type {
   SnapshotReadStore,
   SnapshotStore,
   StoredCharacterSummary,
+  StoredEquipmentObservation,
   StoredSnapshot,
   VersionSummary,
 } from "./store.ts";
@@ -522,6 +523,7 @@ const READ_ONLY_REQUIRED_TABLES = [
   "shared_owner_clears",
   "snapshot_currency_sections",
   "snapshot_currencies",
+  "snapshot_equipment_observations",
   "item_metadata_evidence",
   "demands",
 ] as const;
@@ -570,6 +572,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
       allCharacters: this.db.prepare("SELECT * FROM characters ORDER BY version, name"),
       snapshotsForCharacter: this.db.prepare(
         `SELECT * FROM snapshots WHERE character_id = ? ORDER BY ${SNAPSHOTS_NEWEST_FIRST_SQL}`,
+      ),
+      equipmentObservationsForCharacter: this.db.prepare(
+        "SELECT snapshot_id, observed_at, capture, revision, completeness, evidence_json FROM snapshot_equipment_observations WHERE character_id = ? ORDER BY observed_at DESC, capture DESC, revision DESC",
       ),
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
       updateParsedSnapshot: this.db.prepare("UPDATE snapshots SET parsed_json = ? WHERE id = ?"),
@@ -1422,6 +1427,15 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return rows.map(toStoredSnapshot);
   }
 
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[] {
+    const row = one<CharacterRow>(this.stmts.findCharacterByKey, identityKey);
+    if (!row || row.version !== "retail") return [];
+    return many<{ snapshot_id: number; observed_at: number; capture: number; revision: number; completeness: "complete" | "partial"; evidence_json: string }>(this.stmts.equipmentObservationsForCharacter, row.id).map((entry) => ({
+      snapshotId: entry.snapshot_id, observedAt: entry.observed_at, capture: entry.capture, revision: entry.revision,
+      completeness: entry.completeness, evidence: JSON.parse(entry.evidence_json) as Record<string, unknown>,
+    }));
+  }
+
   getSnapshot(id: number): StoredSnapshot | undefined {
     const row = one<SnapshotRow>(this.stmts.snapshotById, id);
     return row ? toStoredSnapshot(row) : undefined;
@@ -1586,6 +1600,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   }
   listSnapshots(identityKey: string): StoredSnapshot[] {
     return this.store.listSnapshots(identityKey);
+  }
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[] {
+    return this.store.listEquipmentObservations(identityKey);
   }
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts {
     return this.store.buildAccountFacts(version, now);

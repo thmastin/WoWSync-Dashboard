@@ -25,6 +25,7 @@ import { formatAbsoluteTime } from "../format.ts";
 import type { AccountAllocationReview, AllocationReviewRead, ExplicitDemand, VersionOrUnknown } from "../types.ts";
 import { useAsync } from "../useAsync.ts";
 import ErrorNotice from "./ErrorNotice.tsx";
+import GearAllocationPanel from "./GearAllocationPanel.tsx";
 
 const PAGE_SIZE = 50;
 
@@ -644,6 +645,7 @@ export default function AllocationTab({ activeVersion, refreshTick }: { activeVe
 
   const failed = review.state.status === "error" ? review.state.error : demands.state.status === "error" ? demands.state.error : undefined;
   return (
+    <>
     <AllocationBody
       version={activeVersion}
       status={failed !== undefined ? "error" : review.state.status === "ready" ? "ready" : "loading"}
@@ -656,5 +658,7 @@ export default function AllocationTab({ activeVersion, refreshTick }: { activeVe
       focusedItemId={focusedItemId}
       handlers={handlers}
     />
+    {activeVersion === "retail" && <GearAllocationPanel version={activeVersion} refreshTick={refreshTick} />}
+    </>
   );
 }

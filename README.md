@@ -26,6 +26,13 @@ the rest of this README if you're navigating the docs rather than just running t
   injects code, simulates input, or takes any gameplay action. The addon
   captures state; this app only reads what the addon already exported.
 
+- **Retail gear allocation:** the Retail Allocation tab includes a Gear allocation panel for
+  captured candidates. Select a snapshot row to see per-character/spec eligibility, retained
+  equipment provenance, item-level comparison, and explicit UNKNOWN/tie results. The read-only
+  MCP tool `analyze_retail_gear_candidate` exposes the same deterministic facts to connected
+  assistants. See [`docs/RETAIL_GEAR_ALLOCATION.md`](docs/RETAIL_GEAR_ALLOCATION.md) for the
+  evidence contract and decision limits.
+
 ## Supported WoW versions
 
 Four completely isolated data spaces, selected by a version tab in the UI:

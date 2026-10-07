@@ -18,6 +18,15 @@ import type {
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
 
+export interface GearCandidateEvidenceApi {
+  data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
+  provenance: { state: string; warning?: string };
+}
+export interface GearAllocationApi {
+  status: string;
+  value?: { recommendation: string; candidate: { itemID?: number; itemLevel?: number; baseEquipLocation?: string; validity: string }; assessments: Array<{ character: { identityKey: string; name: string; realm: string }; spec: { specID: number; name: string; role: string }; eligibility: string; suitability: string; primaryStatSuitability: string; comparison: string; deltaItemLevel?: number; reasons: string[]; currentSnapshotObservation: { state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; latestStoredObservation: { relationship: string; state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; retained: { state: "QUALIFIED"; snapshotId: number; observedAt: number; capture: number; revision: number } | { state: "UNKNOWN"; reason: string } }>; excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }>; limitations: string[] };
+}
+
 /**
  * What went wrong, in terms a caller can act on:
  * - "network": no HTTP response at all (server stopped, connection refused/reset, offline).
@@ -303,6 +312,15 @@ export function fetchAllocationReview(version: VersionOrUnknown, params: Allocat
   if (q) search.set("q", q);
   const qs = search.toString();
   return request<AllocationReviewRead>(`/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? `?${qs}` : ""}`, undefined, { signal, validate: isAllocationReviewRead });
+}
+
+export function fetchGearCandidateEvidence(version: VersionOrUnknown, signal?: AbortSignal): Promise<GearCandidateEvidenceApi> {
+  return request(`/api/versions/${encodeURIComponent(version)}/gear-candidates`, undefined, { signal, validate: (body) => isRecord(body) && isRecord(body.provenance) });
+}
+
+export function fetchGearAllocation(version: VersionOrUnknown, ref: { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }, signal?: AbortSignal): Promise<GearAllocationApi> {
+  const qs = new URLSearchParams({ exporterIdentityKey: ref.exporterIdentityKey, snapshotId: String(ref.snapshotId), rowOrdinal: String(ref.rowOrdinal) });
+  return request(`/api/versions/${encodeURIComponent(version)}/gear-allocation?${qs}`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
 }
 
 /** Every demand for a version, any status (the removed-target history and conflict lookups read this). */

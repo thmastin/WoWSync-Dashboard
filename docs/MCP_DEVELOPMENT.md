@@ -2,8 +2,9 @@
 
 Status: Phase 6 complete; Secure MCP Tunnel and the personal ChatGPT MCP App
 were live-validated on 2026-09-28. No public Dashboard/MCP endpoint, MCP OAuth,
-or Dashboard UI integration exists or is intended for this path. The separate
-Ask My Account feature is unchanged.
+or Dashboard UI integration exists or is intended for this path. Ask My Account
+may consume the deterministic Retail gear allocation tool result; it remains an
+explainer and is not authoritative for equipment selection or ranking.
 
 The current **DEV** tunnel runtime is on Omarchy. The root-managed
 `wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
@@ -118,6 +119,8 @@ imports may update the database.
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. Slice 3 (shipped and live-validated): every result carries `confirmedItemStringIdentity`/`potentialItemStringIdentity` and `confirmedBinding`/`potentialBinding`; a `BASE_ITEM_AGGREGATION_UNPROVEN` result (confirmed item-string variants or a bare `item:<id>`) has no `allocated`/`confirmedDeficit`/`confirmedSurplus`; confirmed bound/binding-unknown rows withhold `SEND_HELLOMAGS`. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §24 and the live-validation record. |
 | `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. Slice 3 (shipped and live-validated): `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the REQUIRES_REVIEW group; unallocated entries add the four identity/binding facets (still evidence only), and `unallocatedItemStringIdentityCounts` covers the whole unallocated list. `itemNames` maps each base item ID on the returned demanded page to its name observed in account-owned evidence (presentation only; never inside an allocation result; no key when no name was observed). The Dashboard-only unallocated search `q` is not an MCP input (the strict schema rejects it). See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23–§25. |
+| `get_gear_candidate_evidence` | Return snapshot-scoped Retail candidate evidence. Use its identity key, snapshot ID, and one-based row ordinal to select a row. |
+| `analyze_retail_gear_candidate` | Deterministically screen a selected Retail candidate against known Retail characters and retained qualifying per-spec equipment. Returns comparison provenance, ties, and UNKNOWN reasons; no transferability/disposition. See [`RETAIL_GEAR_ALLOCATION.md`](RETAIL_GEAR_ALLOCATION.md). |
 
 This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
 as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total

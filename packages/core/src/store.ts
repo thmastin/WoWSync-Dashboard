@@ -35,6 +35,16 @@ export interface StoredSnapshot {
   parsed: ParsedSnapshot;
 }
 
+/** Append-only canonical Retail equipment observations, including their arriving snapshot provenance. */
+export interface StoredEquipmentObservation {
+  snapshotId: number;
+  observedAt: number;
+  capture: number;
+  revision: number;
+  completeness: "complete" | "partial";
+  evidence: Record<string, unknown>;
+}
+
 export interface VersionSummary {
   version: VersionOrUnknown;
   characterCount: number;
@@ -186,6 +196,7 @@ export interface SnapshotReadStore {
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   listSnapshots(identityKey: string): StoredSnapshot[];
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[];
   /** Deterministic account-level facts for one explicit version space. */
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
   /**

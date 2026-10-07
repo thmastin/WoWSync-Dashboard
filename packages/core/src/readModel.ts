@@ -16,6 +16,7 @@ import type { StorageLocation, InventoryAggregateEntry } from "./accountFacts.ts
 import { classifyFreshness } from "./freshness.ts";
 import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
+import { assessRetailCandidate } from "./retailGearAllocation.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -574,6 +575,26 @@ export class DashboardReadModel {
       data: { version: "retail", selection: "latest stored candidate evidence per character", note: "Evidence is snapshot-scoped and may be historical; rows are not merged into account inventory.", characters: items, offset: page.offset, limit: page.limit, totalCount: characters.length, truncated: page.offset + items.length < characters.length },
       provenance: { state: "DERIVED", version: "retail", ...(latestObservedAt !== undefined ? { observedAt: latestObservedAt, freshness: classifyFreshness(latestObservedAt, this.now()) } : {}), source: "latest stored snapshot containing the Retail [GEAR CANDIDATES] sidecar per character", derivedFrom: characters.flatMap((item) => item.snapshot ? [String(item.snapshot.snapshotId)] : []), warning: "Latest stored candidate evidence is not necessarily current inventory; candidate rows are not merged across characters." },
     };
+  }
+
+  /** Analyze one snapshot-scoped candidate row using deterministic Retail rules. */
+  analyzeRetailGearCandidate(query: { version: VersionOrUnknown; exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }) {
+    requireVersion(query.version);
+    if (query.version !== "retail") return { status: "UNKNOWN" as const, reason: "Gear allocation rules are Retail-only." };
+    if (!Number.isSafeInteger(query.snapshotId) || query.snapshotId <= 0 || !Number.isSafeInteger(query.rowOrdinal) || query.rowOrdinal <= 0) return { status: "INVALID_REFERENCE" as const, reason: "A positive source snapshot ID and one-based row ordinal are required." };
+    const exporter = this.store.listCharacters("retail").find((c) => c.identityKey === query.exporterIdentityKey);
+    if (!exporter) return { status: "EXPORTER_NOT_FOUND" as const };
+    const snapshot = this.store.listSnapshots(exporter.identityKey).find((s) => s.id === query.snapshotId);
+    const section = snapshot?.parsed.gearCandidates;
+    if (!section) return { status: "CANDIDATE_EVIDENCE_NOT_FOUND" as const, reason: "The selected source snapshot does not contain Retail [GEAR CANDIDATES] evidence." };
+    const candidate = section.rows[query.rowOrdinal - 1];
+    if (!candidate) return { status: "CANDIDATE_ROW_NOT_FOUND" as const };
+    const characters = this.store.listCharacters("retail").map((c) => {
+      const latest = this.store.listSnapshots(c.identityKey)[0];
+      const state = latest?.parsed.character;
+      return { identityKey: c.identityKey, name: c.name, realm: c.realm, class: state?.class, level: state?.level, characterState: state?.status.state ?? "UNKNOWN", latestSnapshotId: latest?.id, observations: this.store.listEquipmentObservations(c.identityKey) };
+    });
+    return { status: "FOUND" as const, value: assessRetailCandidate({ candidate, exporterSnapshotId: snapshot.id, rowOrdinal: query.rowOrdinal, candidateObservedAt: section.observedAt, characters }) };
   }
 
   /** Retail required-level and native armor-family plausibility screen; passing is not an equipability or suitability claim. */

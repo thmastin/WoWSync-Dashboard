@@ -98,6 +98,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
+      "analyze_retail_gear_candidate",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
@@ -134,7 +135,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
 
-    const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
+    const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string; identityKey: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
     assert.equal(candidateRead.provenance.state, "DERIVED");
     assert.equal(candidateRead.provenance.version, "retail");
     assert.match(candidateRead.provenance.warning ?? "", /not necessarily current inventory/);
@@ -144,6 +145,10 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(candidateVirek?.sidecar?.rows[0]?.currentCharacterCanUse.value, false);
     const candidateZero = candidateRead.data?.characters.find((entry) => entry.identity.name === "Zero");
     assert.equal(candidateZero?.captured, false, "missing sidecar is not an empty candidate list");
+    const candidateAllocation = structured<{ status: string; value?: { recommendation: string; candidate: { validity: string }; assessments: unknown[] } }>(await client.callTool({ name: "analyze_retail_gear_candidate", arguments: { version: "retail", exporterIdentityKey: candidateVirek!.identity.identityKey, snapshotId: candidateVirek!.snapshot!.snapshotId, rowOrdinal: 1 } }));
+    assert.equal(candidateAllocation.status, "FOUND");
+    assert.equal(candidateAllocation.value?.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE", "LAST_SEEN candidate evidence cannot be recommended as a current candidate");
+    assert.equal(candidateAllocation.value?.recommendation, "UNKNOWN");
     const unsupportedCandidates = structured<{ data?: unknown; provenance: { state: string; reason?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "classic-era" } }));
     assert.equal(unsupportedCandidates.provenance.state, "UNKNOWN");
     assert.match(unsupportedCandidates.provenance.reason ?? "", /Retail-only/);
@@ -552,6 +557,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     assert.equal(toolListResponse.error, undefined, JSON.stringify(toolListResponse.error));
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
+      "analyze_retail_gear_candidate",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",

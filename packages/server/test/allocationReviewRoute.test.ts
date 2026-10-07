@@ -101,6 +101,19 @@ test("allocation-review rejects invalid paging and query input with 400 and a st
   });
 });
 
+test("gear allocation read routes are bounded references and never claim missing candidate rows", async () => {
+  await withServer([ACCOUNT], async (call) => {
+    const evidence = await call("GET", "/api/versions/retail/gear-candidates");
+    assert.equal(evidence.status, 200);
+    assert.equal(evidence.body.provenance.state, "DERIVED");
+    const invalid = await call("GET", "/api/versions/retail/gear-allocation?exporterIdentityKey=retail%3A%3Acairne%3A%3Aanchor&snapshotId=1&rowOrdinal=1");
+    assert.equal(invalid.status, 200);
+    assert.equal(invalid.body.status, "CANDIDATE_EVIDENCE_NOT_FOUND");
+    assert.equal((await call("GET", "/api/versions/retail/gear-allocation")).status, 400);
+    assert.equal((await call("GET", "/api/versions/classic-era/gear-allocation?exporterIdentityKey=x&snapshotId=1&rowOrdinal=1")).body.status, "UNKNOWN");
+  });
+});
+
 test("round trip: no target -> set target -> demanded -> edit -> arithmetic updates -> remove -> no target again, with no surplus semantics left", async () => {
   await withServer([ACCOUNT], async (call) => {
     let review = await call("GET", REVIEW);
