@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -556,14 +556,56 @@ test('D22 malformed declarations are usage errors (exit 64) and never reach DEV'
 });
 
 test('one SQL normalization and hash are shared by evidence, plan, declarations and classification', async (t) => {
-  assert.equal(normalizeSchemaSql('CREATE  TABLE\n  x (\n a INT )'), 'CREATE TABLE x ( a INT )');
+  assert.equal(normalizeSchemaSql('CREATE  TABLE\n  x (\n a INT )'), 'CREATE  TABLE\n  x (\n a INT )');
   assert.equal(normalizeSchemaSql(null), null);
-  assert.equal(hash('CREATE TABLE x(a)'), hash('CREATE   TABLE\nx(a)'));
+  assert.notEqual(hash('CREATE TABLE x(a)'), hash('CREATE   TABLE\nx(a)'), 'format-only differences conservatively produce distinct hashes');
   const { after } = await evidenceAfter(t, [], ['CREATE TABLE x(\n  a INT\n)']);
   const item = after.schema.find((object) => object.name === 'x');
-  assert.equal(item.sql, 'CREATE TABLE x( a INT )');
+  assert.equal(item.sql, 'CREATE TABLE x(\n  a INT\n)');
   const change = classifySchemaChange({ ...after, schema: [] }, after, []);
   assert.equal(change.added[0].sqlSha256, hash(item.sql));
+});
+
+test('schema SQL hashing preserves whitespace in every quoted SQLite token', async (t) => {
+  const cases = [
+    ["CREATE TABLE t(v TEXT DEFAULT 'a  b')", "CREATE TABLE t(v TEXT DEFAULT 'a b')"],
+    ['CREATE TABLE t("a  b" TEXT)', 'CREATE TABLE t("a b" TEXT)'],
+    ['CREATE TABLE t([a  b] TEXT)', 'CREATE TABLE t([a b] TEXT)'],
+    ['CREATE TABLE t(`a  b` TEXT)', 'CREATE TABLE t(`a b` TEXT)'],
+    ["CREATE TABLE t(v TEXT DEFAULT 'a''  b')", "CREATE TABLE t(v TEXT DEFAULT 'a'' b')"],
+  ];
+  for (const [beforeSql, afterSql] of cases) {
+    const { before, after } = await evidenceAfter(t, [beforeSql], ['DROP TABLE t', afterSql]);
+    const prior = before.schema.find((item) => item.name === 't');
+    const next = after.schema.find((item) => item.name === 't');
+    assert.notEqual(hash(prior.sql), hash(next.sql), `${beforeSql} vs ${afterSql}`);
+    const change = classifySchemaChange(before, after, []);
+    assert.equal(change.classification, 'UNDECLARED', `${beforeSql} vs ${afterSql}`);
+    assert.deepEqual(change.changed.map((entry) => entry.before.name), ['t']);
+  }
+});
+
+test('disposable planning detects quoted schema semantics changed only by whitespace', async (t) => {
+  const root = await tempDir(t);
+  const previousRelease = path.join(root, 'previous');
+  const candidateRelease = path.join(root, 'candidate');
+  const stagingDir = path.join(root, 'staging');
+  await mkdir(previousRelease);
+  await mkdir(candidateRelease);
+  const result = await predictSchemaChange({
+    previousRelease, candidateRelease, stagingDir,
+    runStore: async (release, dbFile) => {
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(dbFile);
+      db.exec(path.basename(release) === 'previous'
+        ? "CREATE TABLE t(v TEXT DEFAULT 'a  b')"
+        : "CREATE TABLE t(v TEXT DEFAULT 'a b')");
+      db.close();
+    },
+  });
+  assert.equal(result.state, 'NON_ADDITIVE');
+  assert.deepEqual(result.changed.map((item) => item.before.name), ['t']);
+  assert.deepEqual(await readdir(stagingDir), [], 'disposable planning database is cleaned');
 });
 
 test('D14 the evidence filter hides only exact sqlite_ internals: autoindex and sequence are excluded, sqliteXfoo is visible', async (t) => {

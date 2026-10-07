@@ -203,8 +203,11 @@ Journal warnings:    none
 Details:             /var/lib/wowsync-dev/deployments.jsonl (or --json)
 ```
 
-Deploying the SHA that is already running prints `DEV ALREADY AT <sha>` and changes nothing. To see
-what is deployed and whether it is healthy at any time (read-only):
+Deploying the SHA that is already running prints `DEV ALREADY AT <sha>` and changes nothing only
+when the audit journal proves that current SHA was validated (or the journal is an empty legacy
+journal and the current invocation records its structured health check). Unresolved or ambiguous
+history prints `DEV DEPLOY BLOCKED — REVIEW REQUIRED` before service-health checks. To see what is
+deployed and whether it is healthy at any time (read-only):
 
 ```bash
 wowsync-dev-deploy status
@@ -331,7 +334,18 @@ release plans the newer table as removed and refuses it.
 
 The deploy tool that runs is the one in the *currently deployed* release. A tool change therefore
 takes effect only after it has itself been deployed; until a release containing it is current, the
-older tool's rules apply.
+older tool's rules apply. The additive-schema tool feature must first be deployed in a tool-only
+release. Slice A's immutable `1832aba` tree contains the older deploy tool, so deploying that SHA
+after the tool-only release would temporarily restore the older tool and remove both additive-schema
+authorization and the unresolved-review NOOP guard. Do not deploy `1832aba` as the final current
+release. Before Slice A deployment, integrate the reviewed deploy-tool changes and Slice A into one
+release tree, then review and deploy that combined SHA. This integration is a required gate; the
+tool-only release itself does not authorize Slice A or a schema declaration.
+
+The deployment audit journal is a structured operational record, not a tamper-proof log. The
+no-op evaluator checks the record shapes, SHA relationships, tool identity fields, service state,
+HTTP results, and recovery evidence before using a record as validation provenance. It still
+assumes the host's normal ownership boundary for the journal and deployment account.
 
 Recorded example (Slice A, `1832aba`): the plan adds exactly `table:snapshot_equipment_observations`.
 A disposable compatibility proof showed that `be0c370` reads, imports, and serves recipient screens

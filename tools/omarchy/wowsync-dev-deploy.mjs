@@ -309,7 +309,10 @@ const USER_SCHEMA_OBJECTS = "name NOT GLOB 'sqlite_*'";
 // The one SQL normalization and hash used by databaseEvidence, the schema
 // planner, schema declarations, and the post-start classifier.
 export function normalizeSchemaSql(sql) {
-  return sql?.replace(/\s+/g, ' ').trim() ?? null;
+  // sqlite_schema.sql is already SQLite's canonical stored statement. Preserve
+  // it byte-for-byte: whitespace inside any quoted token can be semantic.
+  // Formatting-only differences may conservatively fail closed as schema changes.
+  return typeof sql === 'string' ? sql : null;
 }
 
 export function schemaSqlSha256(sql) {
@@ -1040,7 +1043,10 @@ const SWITCH_OPERATION = /^(PROMOTE|ROLLBACK)_(INTENT|SUCCESS|FAILURE)$/;
 export async function lastSwitchRecord(auditPath) {
   let text;
   try { text = await readFile(auditPath, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  catch (error) {
+    if (error.code === 'ENOENT') return null;
+    return { operation: 'UNREADABLE_JOURNAL', unreadable: true, error: error.message };
+  }
   const lines = text.split('\n').filter((line) => line.trim());
   let last = null;
   for (let index = 0; index < lines.length; index += 1) {
@@ -1050,46 +1056,122 @@ export async function lastSwitchRecord(auditPath) {
       if (index === lines.length - 1) return { operation: 'UNREADABLE_FINAL_RECORD', torn: true };
       continue;
     }
-    if (SWITCH_OPERATION.test(record?.operation ?? '')) last = record;
+    if (typeof record?.operation === 'string' && SWITCH_OPERATION.test(record.operation)) last = record;
   }
   return last;
 }
 
-function validationEvidencePassed(services, http) {
-  const units = services?.units;
-  return Boolean(units?.['wowsync-dev-dashboard.service']?.ActiveState === 'active'
-    && units?.['wowsync-dev-dashboard.service']?.Result === 'success'
-    && units?.['wowsync-dev-dashboard.service']?.MainPID > 0
-    && units?.['wowsync-dev-mcp-tunnel.service']?.ActiveState === 'active'
-    && units?.['wowsync-dev-mcp-tunnel.service']?.Result === 'success'
-    && units?.['wowsync-dev-mcp-tunnel.service']?.MainPID > 0
-    && Array.isArray(http) && http.length > 0
-    && http.every((item) => item && item.expected === item.actual));
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const APP_SERVICE_UNITS = ['wowsync-dev-dashboard.service', 'wowsync-dev-mcp-tunnel.service'];
+const isFullSha = (value) => typeof value === 'string' && FULL_SHA.test(value);
+const isSha256 = (value) => typeof value === 'string' && SHA256.test(value);
+const isOperation = (value, pattern) => typeof value === 'string' && pattern.test(value);
+const isAuditTime = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value))
+  && new Date(value).toISOString() === value;
+
+function isPlainRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validToolIdentity(tool, expectedReleaseSha) {
+  if (!isPlainRecord(tool) || tool.version !== '3' || typeof tool.entryPath !== 'string'
+    || !path.isAbsolute(tool.entryPath) || !isSha256(tool.entrySha256)) return false;
+  if (tool.releaseSha !== null && !isFullSha(tool.releaseSha)) return false;
+  return tool.releaseSha === null || tool.releaseSha === expectedReleaseSha;
+}
+
+function validHttpEvidence(http) {
+  return Array.isArray(http) && http.length > 0 && http.every((item) => isPlainRecord(item)
+    && typeof item.path === 'string' && item.path.startsWith('/')
+    && Number.isInteger(item.expected) && item.expected >= 100 && item.expected <= 599
+    && Number.isInteger(item.actual) && item.actual === item.expected);
+}
+
+function validServiceEvidence(services, { fresh }) {
+  if (!isPlainRecord(services) || !isPlainRecord(services.units) || !isPlainRecord(services.target)
+    || services.target.ActiveState !== 'active' || services.target.SubState !== 'active') return false;
+  for (const unit of APP_SERVICE_UNITS) {
+    const state = services.units[unit];
+    if (!isPlainRecord(state) || state.ActiveState !== 'active' || state.SubState !== 'running'
+      || state.Result !== 'success' || !Number.isSafeInteger(state.MainPID) || state.MainPID <= 0
+      || !Number.isSafeInteger(state.NRestarts) || state.NRestarts < 0
+      || (fresh && state.NRestarts !== 0)) return false;
+    if (fresh && (typeof state.InvocationID !== 'string' || !/^[0-9a-f]{32}$/.test(state.InvocationID))) return false;
+    if (!fresh && Object.hasOwn(state, 'InvocationID')) return false;
+  }
+  return true;
+}
+
+function validSchemaSuccessEvidence(record) {
+  const change = record.schemaChange;
+  if (!isPlainRecord(change) || change.declarationsSatisfied !== true
+    || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)) return false;
+  return typeof record.schemaChanged === 'boolean'
+    && record.schemaChanged === (change.classification === 'DECLARED_ADDITIVE');
 }
 
 function validatedSwitchSha(record) {
-  const selectedSha = record?.deployedSha;
-  if (!/^[0-9a-f]{40}$/.test(selectedSha ?? '') || record.validation !== 'passed'
-    || !validationEvidencePassed(record.services, record.http)) return null;
-  return selectedSha;
+  const { operation, requestedSha, candidateSha, deployedSha, previousSha } = record ?? {};
+  if (!['PROMOTE_SUCCESS', 'ROLLBACK_SUCCESS'].includes(operation)
+    || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha) || requestedSha !== candidateSha || candidateSha !== deployedSha
+    || !isFullSha(previousSha) || previousSha === deployedSha
+    || record.validation !== 'passed' || !validSchemaSuccessEvidence(record)
+    || !validServiceEvidence(record.services, { fresh: true }) || !validHttpEvidence(record.http)
+    || !validToolIdentity(record.tool, previousSha)) return null;
+  if (operation === 'PROMOTE_SUCCESS' && !(typeof record.requestedRef === 'string'
+    && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))) return null;
+  if (operation === 'ROLLBACK_SUCCESS' && record.requestedRef !== null) return null;
+  return deployedSha;
 }
 
 function validatedRecoverySha(record) {
-  const { previousSha, recoveryAction, recoveryResult, restored, schemaChange, selectedSha } = record ?? {};
-  if (!/^[0-9a-f]{40}$/.test(previousSha ?? '') || selectedSha !== previousSha
-    || recoveryResult !== 'validated' || !validationEvidencePassed(restored?.services, restored?.http)) return null;
+  const { operation, requestedSha, candidateSha, previousSha, recoveryAction, recoveryResult,
+    restored, schemaChange, selectedSha } = record ?? {};
+  if (!['PROMOTE_FAILURE', 'ROLLBACK_FAILURE'].includes(operation)
+    || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha) || requestedSha !== candidateSha
+    || !isFullSha(previousSha) || previousSha === candidateSha || selectedSha !== previousSha
+    || recoveryResult !== 'validated' || !isPlainRecord(schemaChange)
+    || !validServiceEvidence(restored?.services, { fresh: true }) || !validHttpEvidence(restored?.http)
+    || !validToolIdentity(record.tool, previousSha)) return null;
+  if (operation === 'PROMOTE_FAILURE' && !(typeof record.requestedRef === 'string'
+    && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))) return null;
+  if (operation === 'ROLLBACK_FAILURE' && record.requestedRef !== null) return null;
   if (recoveryAction === 'restore-previous-release-and-validate'
-    && schemaChange?.classification === 'NONE') return previousSha;
+    && schemaChange.classification === 'NONE' && record.schemaChanged === false) return previousSha;
   if (recoveryAction === 'restore-previous-release-retaining-declared-additions'
-    && schemaChange?.classification === 'DECLARED_ADDITIVE'
-    && schemaChange?.declarationsSatisfied === true
-    && (schemaChange?.previousCodeCompatible === true || record?.previousCodeCompatible === true)) return previousSha;
+    && schemaChange.classification === 'DECLARED_ADDITIVE'
+    && schemaChange.declarationsSatisfied === true
+    && (schemaChange.previousCodeCompatible === true || record.previousCodeCompatible === true)
+    && record.schemaChanged === true) return previousSha;
   return null;
+}
+
+function validatedNoopSha(record, { allowLegacyBootstrap, priorValidatedSha }) {
+  const { requestedSha, candidateSha, deployedSha, previousSha, noopAuthorization } = record ?? {};
+  if (record?.operation !== 'PROMOTE_NOOP' || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha)
+    || requestedSha !== candidateSha || candidateSha !== deployedSha || deployedSha !== previousSha
+    || !(typeof record.requestedRef === 'string'
+      && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))
+    || record.validation !== 'passed' || !isPlainRecord(noopAuthorization)
+    || noopAuthorization.selectedSha !== deployedSha
+    || !validServiceEvidence(record.services, { fresh: false }) || !validHttpEvidence(record.http)
+    || !validToolIdentity(record.tool, deployedSha)) return null;
+  if (!['LEGACY_EMPTY', 'VALIDATED'].includes(noopAuthorization.state)) return null;
+  if (noopAuthorization.state === 'LEGACY_EMPTY'
+    && (!allowLegacyBootstrap || noopAuthorization.selectedSha !== deployedSha)) return null;
+  if (noopAuthorization.state === 'VALIDATED'
+    && (priorValidatedSha !== deployedSha || noopAuthorization.selectedSha !== deployedSha)) return null;
+  return deployedSha;
 }
 
 // A nonempty journal authorizes a no-op only when its latest switch outcome
 // proves that this exact release was selected and validated.
 export function determineNoopReviewState(text, currentSha) {
+  if (typeof text !== 'string') return { state: 'UNRESOLVED', reason: 'journal content is not text' };
   if (!text) return { state: 'LEGACY_EMPTY' };
   const lines = text.split('\n').filter((line) => line.trim());
   if (!lines.length) return { state: 'LEGACY_EMPTY' };
@@ -1100,24 +1182,36 @@ export function determineNoopReviewState(text, currentSha) {
     try { record = JSON.parse(lines[index]); }
     catch { return { state: 'UNRESOLVED', reason: index === lines.length - 1 ? 'unreadable journal tail' : 'unreadable journal record' }; }
     const operation = record?.operation;
-    if (/^(PROMOTE|ROLLBACK)_INTENT$/.test(operation ?? '')) {
+    if (!isPlainRecord(record) || typeof operation !== 'string') {
+      return { state: 'UNRESOLVED', reason: 'journal record has no valid operation name' };
+    }
+    if (isOperation(operation, /^(PROMOTE|ROLLBACK)_INTENT$/)) {
       selectedSha = null;
       unresolved = { state: 'INTERRUPTED', operation };
-    } else if (/^(PROMOTE|ROLLBACK)_SUCCESS$/.test(operation ?? '')) {
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_SUCCESS$/)) {
       const sha = validatedSwitchSha(record);
       selectedSha = sha;
       unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'success lacks structured validation evidence' };
-    } else if (/^(PROMOTE|ROLLBACK)_FAILURE$/.test(operation ?? '')) {
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_FAILURE$/)) {
       const sha = validatedRecoverySha(record);
       selectedSha = sha;
       unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'failure recovery is not proven validated' };
-    } else if (/^(PROMOTE|ROLLBACK)_(INTERRUPTED_REVIEW_REQUIRED|UNRESOLVED_REVIEW_REQUIRED)$/.test(operation ?? '')) {
+    } else if (operation === 'PROMOTE_NOOP') {
+      const priorValidatedSha = unresolved ? null : selectedSha;
+      const sha = validatedNoopSha(record, { allowLegacyBootstrap: index === 0, priorValidatedSha });
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'no-op authorization evidence is missing or invalid' };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_(INTERRUPTED_REVIEW_REQUIRED|UNRESOLVED_REVIEW_REQUIRED)$/)) {
       selectedSha = null;
       unresolved = { state: operation.includes('INTERRUPTED') ? 'INTERRUPTED' : 'UNRESOLVED', operation };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_/)
+      && !['PROMOTE_COMMAND_FAILURE', 'ROLLBACK_COMMAND_FAILURE'].includes(operation)) {
+      selectedSha = null;
+      unresolved = { state: 'UNRESOLVED', operation, reason: 'unexpected release operation in audit journal' };
     }
   }
   if (unresolved) return unresolved;
-  if (selectedSha !== currentSha) return { state: 'UNRESOLVED', reason: 'journal does not validate the current release', selectedSha };
+  if (!isFullSha(currentSha) || selectedSha !== currentSha) return { state: 'UNRESOLVED', reason: 'journal does not validate the current release', selectedSha };
   return { state: 'VALIDATED', selectedSha };
 }
 
@@ -1132,7 +1226,7 @@ async function noopJournalState(auditPath, currentSha) {
 }
 
 async function findSwitchBackups(record, paths) {
-  if (!record?.at || !record.previousSha || !record.candidateSha) return [];
+  if (typeof record?.at !== 'string' || !isFullSha(record.previousSha) || !isFullSha(record.candidateSha)) return [];
   const prefix = `${record.at.replaceAll(':', '').replaceAll('-', '')}-`;
   const suffix = `-${record.previousSha}-to-${record.candidateSha}.sqlite`;
   const names = await readdir(paths.backups).catch(() => []);
@@ -1141,20 +1235,22 @@ async function findSwitchBackups(record, paths) {
 
 async function interruptedSwitch(context, tool, paths) {
   const record = await lastSwitchRecord(paths.audit);
-  if (!record || !(record.torn || /_INTENT$/.test(record.operation))) return null;
-  const backups = record.torn ? [] : await findSwitchBackups(record, paths);
+  if (!record || !(record.torn || record.unreadable || /_INTENT$/.test(record.operation))) return null;
+  const backups = record.torn || record.unreadable ? [] : await findSwitchBackups(record, paths);
   const outcome = {
-    state: 'INTERRUPTED_REVIEW_REQUIRED', kind: context.kind, requestedSha: context.sha, requestedRef: context.ref,
+    state: record.unreadable ? 'UNRESOLVED_REVIEW_REQUIRED' : 'INTERRUPTED_REVIEW_REQUIRED', kind: context.kind, requestedSha: context.sha, requestedRef: context.ref,
     lastKnownSha: context.previousSha, manualIntervention: true,
-    interrupted: record.torn ? { operation: record.operation } : { operation: record.operation, at: record.at, previousSha: record.previousSha, candidateSha: record.candidateSha },
+    interrupted: record.torn || record.unreadable ? { operation: record.operation } : { operation: record.operation, at: record.at, previousSha: record.previousSha, candidateSha: record.candidateSha },
     backupPaths: backups,
-    cause: record.torn
-      ? 'The deployment audit journal ends with an unreadable record; the last release switch may have been interrupted.'
+    cause: record.unreadable
+      ? `The deployment audit journal cannot be read (${record.error}); release-switch provenance is unknown.`
+      : record.torn
+        ? 'The deployment audit journal ends with an unreadable record; the last release switch may have been interrupted.'
       : `The last release switch (${record.operation} ${record.previousSha} -> ${record.candidateSha} at ${record.at}) never recorded a result; releases/current already names ${context.sha}, but that switch was not validated.`,
     auditPath: paths.audit,
   };
   await appendAudit({
-    schemaVersion: 2, operation: `${context.kind}_INTERRUPTED_REVIEW_REQUIRED`, tool, requestedSha: context.sha, requestedRef: context.ref,
+    schemaVersion: 2, operation: `${context.kind}_${record.unreadable ? 'UNRESOLVED' : 'INTERRUPTED'}_REVIEW_REQUIRED`, tool, requestedSha: context.sha, requestedRef: context.ref,
     previousSha: context.previousSha, candidateSha: context.sha, interrupted: outcome.interrupted, backupPaths: backups, at: iso(),
   }, paths).catch(() => {});
   return new DeployError(outcome.cause, outcome);
@@ -1201,6 +1297,7 @@ export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROU
       const record = {
         schemaVersion: 2, operation: 'PROMOTE_NOOP', tool, requestedSha: context.sha, requestedRef: context.ref,
         previousSha: context.previousSha, candidateSha: context.sha, deployedSha: context.sha, at: iso(), services, http, validation: 'passed',
+        noopAuthorization: { state: reviewState.state, selectedSha: reviewState.selectedSha ?? context.sha },
       };
       await appendAudit(record, paths);
       return { state: 'NOOP', record, auditPath: paths.audit };
