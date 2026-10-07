@@ -1055,6 +1055,82 @@ export async function lastSwitchRecord(auditPath) {
   return last;
 }
 
+function validationEvidencePassed(services, http) {
+  const units = services?.units;
+  return Boolean(units?.['wowsync-dev-dashboard.service']?.ActiveState === 'active'
+    && units?.['wowsync-dev-dashboard.service']?.Result === 'success'
+    && units?.['wowsync-dev-dashboard.service']?.MainPID > 0
+    && units?.['wowsync-dev-mcp-tunnel.service']?.ActiveState === 'active'
+    && units?.['wowsync-dev-mcp-tunnel.service']?.Result === 'success'
+    && units?.['wowsync-dev-mcp-tunnel.service']?.MainPID > 0
+    && Array.isArray(http) && http.length > 0
+    && http.every((item) => item && item.expected === item.actual));
+}
+
+function validatedSwitchSha(record) {
+  const selectedSha = record?.deployedSha;
+  if (!/^[0-9a-f]{40}$/.test(selectedSha ?? '') || record.validation !== 'passed'
+    || !validationEvidencePassed(record.services, record.http)) return null;
+  return selectedSha;
+}
+
+function validatedRecoverySha(record) {
+  const { previousSha, recoveryAction, recoveryResult, restored, schemaChange, selectedSha } = record ?? {};
+  if (!/^[0-9a-f]{40}$/.test(previousSha ?? '') || selectedSha !== previousSha
+    || recoveryResult !== 'validated' || !validationEvidencePassed(restored?.services, restored?.http)) return null;
+  if (recoveryAction === 'restore-previous-release-and-validate'
+    && schemaChange?.classification === 'NONE') return previousSha;
+  if (recoveryAction === 'restore-previous-release-retaining-declared-additions'
+    && schemaChange?.classification === 'DECLARED_ADDITIVE'
+    && schemaChange?.declarationsSatisfied === true
+    && (schemaChange?.previousCodeCompatible === true || record?.previousCodeCompatible === true)) return previousSha;
+  return null;
+}
+
+// A nonempty journal authorizes a no-op only when its latest switch outcome
+// proves that this exact release was selected and validated.
+export function determineNoopReviewState(text, currentSha) {
+  if (!text) return { state: 'LEGACY_EMPTY' };
+  const lines = text.split('\n').filter((line) => line.trim());
+  if (!lines.length) return { state: 'LEGACY_EMPTY' };
+  let selectedSha = null;
+  let unresolved = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    let record;
+    try { record = JSON.parse(lines[index]); }
+    catch { return { state: 'UNRESOLVED', reason: index === lines.length - 1 ? 'unreadable journal tail' : 'unreadable journal record' }; }
+    const operation = record?.operation;
+    if (/^(PROMOTE|ROLLBACK)_INTENT$/.test(operation ?? '')) {
+      selectedSha = null;
+      unresolved = { state: 'INTERRUPTED', operation };
+    } else if (/^(PROMOTE|ROLLBACK)_SUCCESS$/.test(operation ?? '')) {
+      const sha = validatedSwitchSha(record);
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'success lacks structured validation evidence' };
+    } else if (/^(PROMOTE|ROLLBACK)_FAILURE$/.test(operation ?? '')) {
+      const sha = validatedRecoverySha(record);
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'failure recovery is not proven validated' };
+    } else if (/^(PROMOTE|ROLLBACK)_(INTERRUPTED_REVIEW_REQUIRED|UNRESOLVED_REVIEW_REQUIRED)$/.test(operation ?? '')) {
+      selectedSha = null;
+      unresolved = { state: operation.includes('INTERRUPTED') ? 'INTERRUPTED' : 'UNRESOLVED', operation };
+    }
+  }
+  if (unresolved) return unresolved;
+  if (selectedSha !== currentSha) return { state: 'UNRESOLVED', reason: 'journal does not validate the current release', selectedSha };
+  return { state: 'VALIDATED', selectedSha };
+}
+
+async function noopJournalState(auditPath, currentSha) {
+  let text;
+  try { text = await readFile(auditPath, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { state: 'LEGACY_EMPTY' };
+    return { state: 'UNRESOLVED', reason: `journal unreadable: ${error.message}` };
+  }
+  return determineNoopReviewState(text, currentSha);
+}
+
 async function findSwitchBackups(record, paths) {
   if (!record?.at || !record.previousSha || !record.candidateSha) return [];
   const prefix = `${record.at.replaceAll(':', '').replaceAll('-', '')}-`;
@@ -1109,6 +1185,16 @@ export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROU
     if (context.sha === context.previousSha) {
       const interrupted = await interruptedSwitch(context, tool, paths);
       if (interrupted) throw interrupted;
+      const reviewState = await noopJournalState(paths.audit, context.sha);
+      if (!['VALIDATED', 'LEGACY_EMPTY'].includes(reviewState.state)) {
+        const outcome = {
+          state: reviewState.state === 'INTERRUPTED' ? 'INTERRUPTED_REVIEW_REQUIRED' : 'UNRESOLVED_REVIEW_REQUIRED',
+          kind: 'PROMOTE', requestedSha: context.sha, requestedRef: context.ref, lastKnownSha: context.previousSha,
+          manualIntervention: true, reviewState, cause: 'DEV deploy blocked: the selected release has unresolved review-required deployment history.', auditPath: paths.audit,
+        };
+        await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_UNRESOLVED_REVIEW_REQUIRED', tool, requestedSha: context.sha, requestedRef: context.ref, selectedSha: context.sha, reviewState, at: iso() }, paths).catch(() => {});
+        throw new DeployError(outcome.cause, outcome);
+      }
       if (declarations.length) throw new Error(`${context.sha} is already deployed; --expect-schema-add does not apply to a no-op deployment.`);
       const services = await assertApplicationServices(context.sha, { paths, ops });
       const http = await validateHttp(routes, paths.baseUrl, ops.fetch);
@@ -1295,7 +1381,7 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     const retained = recovery.retainedAdditions ?? [];
     try {
       await appendAudit({
-        ...failure, schemaChanged, schemaChange, recoveryResult: 'validated', recoveryAction: recovery.action, restored: recovery.validation,
+        ...failure, schemaChanged, schemaChange, recoveryResult: 'validated', recoveryAction: recovery.action, selectedSha: previousSha, restored: recovery.validation,
         ...(retained.length ? { schemaAdditionsRetained: retained, previousCodeCompatible: true } : {}), at: iso(),
       }, paths);
     }
@@ -1485,6 +1571,15 @@ export function formatResult(result) {
       manual(true);
       line('Cause', result.cause);
       line('Next', `wowsync-dev-deploy status; review ${result.auditPath}; then rollback to the previous release or re-validate`);
+      break;
+    case 'UNRESOLVED_REVIEW_REQUIRED':
+      lines.push('DEV DEPLOY BLOCKED — REVIEW REQUIRED');
+      line('Requested', result.requestedSha);
+      line('Selected release', result.lastKnownSha ?? 'unknown');
+      line('Reason', result.reviewState?.reason ?? result.reviewState?.operation ?? 'deployment history is unresolved');
+      manual(true);
+      line('Cause', result.cause);
+      line('Next', `wowsync-dev-deploy status; review ${result.auditPath}; then perform a validated deploy or rollback`);
       break;
     case 'RECOVERY_FAILED':
       lines.push('DEV RECOVERY FAILED');

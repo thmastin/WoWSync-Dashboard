@@ -796,6 +796,58 @@ test('D17 an interrupted switch to the requested SHA is reported for review inst
   assert.equal(torn.state, 'INTERRUPTED_REVIEW_REQUIRED', 'a torn final journal line is treated as an interruption');
 });
 
+test('F01-F14 same-SHA no-op requires ordered structured validation provenance', async (t) => {
+  const f = await deployFixture(t);
+  const { determineNoopReviewState } = deployTool;
+  const healthy = { units: {
+    [DASHBOARD]: { ActiveState: 'active', Result: 'success', MainPID: 123 },
+    [MCP]: { ActiveState: 'active', Result: 'success', MainPID: 124 },
+  } };
+  const http = [{ path: '/', expected: 200, actual: 200 }];
+  const success = (operation, sha = f.shaA) => ({ operation, deployedSha: sha, validation: 'passed', services: healthy, http });
+  const failureRecord = (operation = 'PROMOTE_FAILURE') => ({ operation, previousSha: f.shaA, candidateSha: f.shaB, recoveryResult: 'stopped-review-required', recoveryAction: 'stop-review-required' });
+  const provenRestore = (operation = 'PROMOTE_FAILURE', retained = false) => ({
+    operation, previousSha: f.shaA, candidateSha: f.shaB, selectedSha: f.shaA, recoveryResult: 'validated',
+    recoveryAction: retained ? 'restore-previous-release-retaining-declared-additions' : 'restore-previous-release-and-validate',
+    schemaChange: retained
+      ? { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: true, previousCodeCompatible: true }
+      : { classification: 'NONE', declarationsSatisfied: true, previousCodeCompatible: false },
+    restored: { services: healthy, http },
+  });
+  const journal = (...records) => `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
+  const state = (...records) => determineNoopReviewState(journal(...records), f.shaA);
+
+  const failed = failureRecord();
+  await deployTool.prepareRelease(f.shaB, 'refs/heads/feature', f.paths, async (stage) => { await mkdir(path.join(stage, 'node_modules')); });
+  await atomicSetCurrent(f.paths.releases, f.shaB);
+  f.faults.unhealthySha = f.shaB;
+  await writeFile(f.paths.audit, journal(failed));
+  let output = '';
+  const code = await runCli(['deploy', 'feature', f.shaB], { paths: f.paths, ops: f.ops, write: (value) => { output = value; } });
+  assert.equal(code, 2, 'F01 unresolved failure remains manual review');
+  assert.match(output, /^DEV DEPLOY BLOCKED — REVIEW REQUIRED/);
+  assert.equal(await currentSha(f.paths.releases), f.shaB);
+  assert.deepEqual(f.host.calls, [], 'no service action is taken to settle provenance');
+  assert.equal((await f.audit()).at(-1).operation, 'PROMOTE_UNRESOLVED_REVIEW_REQUIRED');
+  assert.ok(!(await f.audit()).some((record) => record.operation === 'PROMOTE_NOOP'));
+
+  assert.equal(state(failureRecord('ROLLBACK_FAILURE')).state, 'UNRESOLVED', 'F02 rollback failure remains unresolved');
+  assert.equal(state(provenRestore()).state, 'VALIDATED', 'F03 unchanged-schema recovery validates previous SHA');
+  assert.equal(state(failed, success('PROMOTE_SUCCESS')).state, 'VALIDATED', 'F04 later promote resolves failure');
+  assert.equal(state(failed, success('ROLLBACK_SUCCESS')).state, 'VALIDATED', 'F05 later rollback resolves failure');
+  assert.equal(state({ operation: 'PROMOTE_INTENT' }).state, 'INTERRUPTED', 'F06 intent is unresolved');
+  assert.equal(state({ operation: 'ROLLBACK_INTERRUPTED_REVIEW_REQUIRED' }).state, 'INTERRUPTED', 'F07 explicit interrupted marker persists');
+  assert.equal(determineNoopReviewState('{"operation":"PROMOTE_SUCCESS"}\n{"operation":', f.shaA).state, 'UNRESOLVED', 'F08 torn tail fails closed');
+  assert.equal(state(success('PROMOTE_SUCCESS')).state, 'VALIDATED', 'F09 successful promote validates');
+  assert.equal(state(success('ROLLBACK_SUCCESS')).state, 'VALIDATED', 'F10 successful rollback validates');
+  assert.equal(state(failed, success('PROMOTE_SUCCESS', f.shaB)).state, 'UNRESOLVED', 'F13 later success for a different SHA does not authorize current');
+  assert.equal(state(failed, success('PROMOTE_SUCCESS')).state, 'VALIDATED', 'F13 later success for current SHA authorizes');
+  assert.equal(state(failureRecord()).state, 'UNRESOLVED', 'F14 missing recovery evidence fails closed');
+  assert.equal(state(provenRestore('PROMOTE_FAILURE', true)).state, 'VALIDATED', 'retained-additive recovery requires and accepts structured compatibility evidence');
+  assert.equal(state({ ...provenRestore('PROMOTE_FAILURE', true), schemaChange: { classification: 'DECLARED_ADDITIVE', declarationsSatisfied: false, previousCodeCompatible: true } }).state, 'UNRESOLVED');
+  assert.equal(state({ ...failed, recoveryResult: 'validated', recoveryAction: 'restore-previous-release-and-validate', schemaChange: { classification: 'NONE' }, schemaChanged: false, previousCodeCompatible: true }).state, 'UNRESOLVED', 'F11/F12 flags cannot substitute for restored validation evidence');
+});
+
 test('D18 multiple exact declarations (a new table and an index on it) deploy', async (t) => {
   const f = await deployFixture(t);
   const indexSql = 'CREATE INDEX extra_evidence_note ON extra_evidence(note)';

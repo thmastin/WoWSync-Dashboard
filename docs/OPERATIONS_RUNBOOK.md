@@ -224,10 +224,11 @@ validated (see `AGENTS.md`).
    private network namespace, and `npm run build:web`; checks that the source still matches Git and
    that no dependency link escapes the release; then makes the release read-only. A failure
    discards the staging tree. An existing release is re-verified against Git and reused.
-4. If that SHA is already deployed, checks health and reports `DEV ALREADY AT` (no restart, no
-   backup) — unless the audit log's last release switch is an intent with no recorded result (or
-   its last line is unreadable), which reports `DEV DEPLOY INTERRUPTED — REVIEW REQUIRED` instead
-   (see below).
+4. If that SHA is already deployed, authorizes a no-op only when the ordered audit journal proves
+   that this exact current SHA was validated by a successful promote, rollback, or structured
+   successful recovery. Then it checks health and reports `DEV ALREADY AT` (no restart, no backup).
+   An unresolved failure, ambiguous/unreadable journal, or unfinished switch reports review
+   required before service health can authorize anything (see below).
 5. Otherwise predicts the candidate's schema change (the **schema plan**): the running release's and
    the candidate's own `SqliteSnapshotStore` each initialize a fresh disposable database under
    `/home/wowsync-dev/deploy/staging/schema-plan-*`, which is removed afterwards; the real database is
@@ -254,6 +255,7 @@ Steps 1–5 never touch the running services. Mutating commands hold
 | `DEV DEPLOY FAILED — RECOVERED` | The new release failed validation with an unchanged schema — or with exactly the declared additions and `--previous-code-compatible` (`Schema: additions retained: ...`); the previous release was restarted and validated. | Previous release. | No. The database is not restored: writes made while the new release ran remain, declared additions stay, and the pre-deploy backup is kept. |
 | `DEV DEPLOY FAILED — DASHBOARD/MCP STOPPED` | The schema changed in a way that was not declared, changed by declared additions without `--previous-code-compatible`, or could not be verified, so old code was not started against it. | Nothing (Dashboard/MCP stopped). | **Yes** — decide schema compatibility (see below). |
 | `DEV DEPLOY INTERRUPTED — REVIEW REQUIRED` | The requested SHA is already `current`, but the last release switch in the audit log never recorded a result (the tool or host stopped mid-switch). The tool will not call that a no-op. | Whatever is running; nothing was changed by this command. | **Yes** — check `status`, the audit log, and the named backup; then `rollback` to the previous release (which records a completed switch) or re-validate. |
+| `DEV DEPLOY BLOCKED — REVIEW REQUIRED` | The current SHA has no proven validated/resolved journal state. A failure with stopped review, missing recovery evidence, or an ambiguous journal remains unresolved even if services later become healthy. | Whatever is running; this command does not stop/start services, change `current`, or touch the database. | **Yes** — review status and the audit journal, then perform a validated deploy or rollback. |
 | `DEV RECOVERY FAILED` | Restoring the previous release also failed. | Unknown; the output names the last known release. | **Yes** — `wowsync-dev-deploy status`, the audit record, and the unit journals. |
 
 Exit status: `0` deployed or already deployed, `1` failed but DEV is untouched or recovered, `2`
