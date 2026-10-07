@@ -291,8 +291,9 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     // It never changes how the text is parsed; the store validates it and reports what it did in result.currencies.
     const currencies: unknown = req.body?.currencies;
     const characterState: unknown = req.body?.characterState;
+    const equipmentObservation: unknown = req.body?.equipmentObservation;
     try {
-      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }) });
+      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }), ...(equipmentObservation == null ? {} : { equipmentObservation }) });
       res.json({
         result: {
           ...result,

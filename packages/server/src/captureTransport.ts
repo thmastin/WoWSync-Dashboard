@@ -11,6 +11,7 @@ export interface CaptureEnvelope {
   text: string;
   currencies?: unknown;
   characterState?: unknown;
+  equipmentObservation?: unknown;
 }
 
 export interface CaptureTransportOptions {
@@ -26,8 +27,10 @@ export interface CaptureTransportOptions {
 function digest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
-function payloadDigest(target: string, text: string, currencies: unknown, characterState?: unknown): string {
-  const tuple = characterState === undefined ? [target, text, currencies ?? null] : [target, text, currencies ?? null, characterState];
+function payloadDigest(target: string, text: string, currencies: unknown, characterState?: unknown, equipmentObservation?: unknown): string {
+  const tuple = equipmentObservation === undefined
+    ? (characterState === undefined ? [target, text, currencies ?? null] : [target, text, currencies ?? null, characterState])
+    : [target, text, currencies ?? null, characterState ?? null, equipmentObservation];
   return createHash("sha256").update(JSON.stringify(tuple), "utf8").digest("hex");
 }
 
@@ -96,29 +99,29 @@ export function createCaptureTransport(options: CaptureTransportOptions) {
       let capture: unknown;
       try { capture = JSON.parse(readFileSync(file, "utf8")); }
       catch { throw new ImportPostError(`Invalid capture outbox entry ${file}; it is retained for inspection.`, "refused"); }
-      if (!isCapture(capture) || capture.target !== options.target || digest(capture.text) !== capture.sha256 || payloadDigest(capture.target, capture.text, capture.currencies, capture.characterState) !== capture.payloadSha256) {
+      if (!isCapture(capture) || capture.target !== options.target || digest(capture.text) !== capture.sha256 || payloadDigest(capture.target, capture.text, capture.currencies, capture.characterState, capture.equipmentObservation) !== capture.payloadSha256) {
         throw new ImportPostError(`Capture outbox entry ${file} failed its identity, target, or digest check; it is retained.`, "refused");
       }
       await deliver(file, capture);
     }
   }
 
-  async function send(text: string, currencies?: unknown, characterState?: unknown): Promise<CaptureEnvelope> {
+  async function send(text: string, currencies?: unknown, characterState?: unknown, equipmentObservation?: unknown): Promise<CaptureEnvelope> {
     const sha256 = digest(text);
-    const payloadSha256 = payloadDigest(options.target, text, currencies, characterState);
+    const payloadSha256 = payloadDigest(options.target, text, currencies, characterState, equipmentObservation);
     const alreadyAcknowledged = acknowledged.get(payloadSha256);
     if (alreadyAcknowledged) return alreadyAcknowledged;
     let capture: CaptureEnvelope | undefined;
     for (const name of readdirSync(directory).filter((entry) => entry.endsWith(".json")).sort()) {
       try {
         const candidate = JSON.parse(readFileSync(path.join(directory, name), "utf8")) as CaptureEnvelope;
-        if (candidate.target === options.target && candidate.sha256 === sha256 && candidate.payloadSha256 === payloadSha256 && candidate.text === text && JSON.stringify(candidate.currencies ?? null) === JSON.stringify(currencies ?? null) && JSON.stringify(candidate.characterState ?? null) === JSON.stringify(characterState ?? null)) {
+        if (candidate.target === options.target && candidate.sha256 === sha256 && candidate.payloadSha256 === payloadSha256 && candidate.text === text && JSON.stringify(candidate.currencies ?? null) === JSON.stringify(currencies ?? null) && JSON.stringify(candidate.characterState ?? null) === JSON.stringify(characterState ?? null) && JSON.stringify(candidate.equipmentObservation ?? null) === JSON.stringify(equipmentObservation ?? null)) {
           capture = candidate;
           break;
         }
       } catch { /* flush() reports malformed entries without deleting them. */ }
     }
-    capture ??= { captureId: randomUUID(), target: options.target, sha256, payloadSha256, text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }) };
+    capture ??= { captureId: randomUUID(), target: options.target, sha256, payloadSha256, text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }), ...(equipmentObservation === undefined ? {} : { equipmentObservation }) };
     const file = path.join(directory, `${capture.captureId}.json`);
     try { readFileSync(file); }
     catch { stage(directory, capture); }

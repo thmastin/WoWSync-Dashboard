@@ -20,6 +20,12 @@ import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
 import {
+  canonicalJson,
+  evaluateEquipmentPolicy,
+  normalizeEquipmentObservation,
+  type EquipmentNormalizationOutcome,
+} from "./equipmentObservation.ts";
+import {
   ITEM_FACETS,
   ITEM_METADATA_SOURCES,
   buildItemMetadataViews,
@@ -229,6 +235,23 @@ CREATE TABLE IF NOT EXISTS snapshot_currencies (
   PRIMARY KEY (snapshot_id, currency_id)
 );
 CREATE INDEX IF NOT EXISTS idx_snapshot_currencies_character ON snapshot_currencies(character_id, currency_id);
+
+-- Retail equipment-envelope observations (GearExport sections.equipment, optionally with
+-- specEquipmentObservation). Append-only evidence: identity is the character-scoped
+-- canonical tuple, NOT the snapshot row. snapshot_id records the row the evidence arrived with.
+CREATE TABLE IF NOT EXISTS snapshot_equipment_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+  observed_at INTEGER NOT NULL,
+  capture INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+  evidence_json TEXT NOT NULL,
+  stored_at INTEGER NOT NULL,
+  UNIQUE (character_id, observed_at, capture, revision)
+);
+CREATE INDEX IF NOT EXISTS idx_equipment_observations_character ON snapshot_equipment_observations(character_id);
 
 -- Explicit Demand (see demand.ts): the one new durable domain concept for Azeroth ERP Vertical Slice 1.
 -- Demand is USER INTENT, not a WoW observation: persistence represents CURRENT intent (mutable status/
@@ -628,6 +651,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
       currenciesForSnapshot: this.db.prepare("SELECT * FROM snapshot_currencies WHERE snapshot_id = ? ORDER BY list_order, currency_id"),
       deleteCurrenciesForCharacter: this.db.prepare("DELETE FROM snapshot_currencies WHERE character_id = ?"),
       deleteCurrencySectionsForCharacter: this.db.prepare("DELETE FROM snapshot_currency_sections WHERE character_id = ?"),
+      equipmentObservationForTuple: this.db.prepare(
+        "SELECT completeness, evidence_json FROM snapshot_equipment_observations WHERE character_id = ? AND observed_at = ? AND capture = ? AND revision = ?",
+      ),
+      insertEquipmentObservation: this.db.prepare(
+        "INSERT INTO snapshot_equipment_observations (character_id, snapshot_id, observed_at, capture, revision, completeness, evidence_json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ),
+      deleteEquipmentObservationsForCharacter: this.db.prepare("DELETE FROM snapshot_equipment_observations WHERE character_id = ?"),
       insertDemand: this.db.prepare(
         `INSERT INTO demands (stable_id, game_version, demand_type, base_item_id, required_quantity, purpose, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
@@ -725,6 +755,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
             }
             characterStateOutcome = normalizedCharacterState ? "recorded" : "invalid-or-unsupported";
           }
+          const equipmentObservation =
+            extras.equipmentObservation === undefined ? undefined : this.recordEquipmentObservation(characterRow.id, existing.id, version, extras.equipmentObservation, now);
           const duplicateSnapshot = toStoredSnapshot(existing);
           return {
             character: this.summarize(characterRow.id)!,
@@ -737,6 +769,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             sharedStorage: [],
             ...(currencies ? { currencies } : {}),
             ...(characterStateOutcome ? { characterState: characterStateOutcome } : {}),
+            ...(equipmentObservation ? { equipmentObservation } : {}),
           };
         }
       } else {
@@ -824,6 +857,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const currencies =
         extras.currencies === undefined ? undefined : this.recordCurrencies(characterRow.id, newId, version, extras.currencies, now, false);
 
+      // The structured equipment observation (if the bridge sent one) joins this snapshot in the same transaction.
+      const equipmentObservation =
+        extras.equipmentObservation === undefined ? undefined : this.recordEquipmentObservation(characterRow.id, newId, version, extras.equipmentObservation, now);
+
       return {
         character: this.summarize(characterRow.id)!,
         snapshot,
@@ -834,6 +871,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isLatest,
         sharedStorage,
         ...(currencies ? { currencies } : {}),
+        ...(equipmentObservation ? { equipmentObservation } : {}),
         ...(extras.characterState !== undefined ? { characterState: normalizedCharacterState ? "recorded" : "invalid-or-unsupported" } : {}),
       };
     });
@@ -917,6 +955,72 @@ export class SqliteSnapshotStore implements SnapshotStore {
       carried: carriedReason !== undefined,
       ...(carriedReason ? { carriedReason } : {}),
     };
+  }
+
+  /** Attaches a validated equipment observation to one snapshot. Never alters the snapshot; a bad observation is a skip, not an error. */
+  private recordEquipmentObservation(
+    characterId: number,
+    snapshotId: number,
+    version: VersionOrUnknown,
+    input: unknown,
+    now: number
+  ): ImportResult["equipmentObservation"] {
+    // Step 1: Normalize and validate envelope structure
+    const normalized = normalizeEquipmentObservation(input, version);
+    if (!normalized.ok) {
+      return normalized.outcome as EquipmentNormalizationOutcome;
+    }
+
+    const observation = normalized.value;
+    const projection = (input as Record<string, unknown> | undefined)?.projection;
+
+    // Step 2: Evaluate policy A-E
+    const policyResult = evaluateEquipmentPolicy(observation, projection);
+    if (!policyResult.ok) {
+      return policyResult.outcome;
+    }
+
+    // Step 3: Check for existing observation with the same tuple
+    const existing = one<{ completeness: string; evidence_json: string }>(
+      this.stmts.equipmentObservationForTuple,
+      characterId,
+      observation.observedAt,
+      observation.capture,
+      observation.revision
+    );
+
+    // Step 4: Build evidence JSON (canonical, key-sorted)
+    const evidenceValue = {
+      slots: observation.slots,
+      ...(observation.reason !== undefined ? { reason: observation.reason } : {}),
+      ...(observation.source !== undefined ? { source: observation.source } : {}),
+      ...(observation.changedAt !== undefined ? { changedAt: observation.changedAt } : {}),
+      ...(observation.specEquipmentObservation !== undefined ? { specEquipmentObservation: observation.specEquipmentObservation } : {}),
+    };
+    const evidenceJson = canonicalJson(evidenceValue);
+
+    if (existing) {
+      // Check if evidence is identical
+      if (existing.completeness === observation.completeness && existing.evidence_json === evidenceJson) {
+        return "already-recorded";
+      }
+      // Different evidence for the same tuple: conflict
+      return "conflict";
+    }
+
+    // Step 5: Insert new row
+    this.stmts.insertEquipmentObservation.run(
+      characterId,
+      snapshotId,
+      observation.observedAt,
+      observation.capture,
+      observation.revision,
+      observation.completeness,
+      evidenceJson,
+      now
+    );
+
+    return "recorded";
   }
 
   private resolveCurrencies(row: CharacterRow): CharacterCurrencies {
@@ -1222,6 +1326,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return this.inTransaction(() => {
       this.stmts.deleteCurrenciesForCharacter.run(row.id);
       this.stmts.deleteCurrencySectionsForCharacter.run(row.id);
+      this.stmts.deleteEquipmentObservationsForCharacter.run(row.id);
       const snapshotsDeleted = Number(this.stmts.deleteSnapshotsForCharacter.run(row.id).changes);
       this.stmts.deleteCharacterById.run(row.id);
       return {

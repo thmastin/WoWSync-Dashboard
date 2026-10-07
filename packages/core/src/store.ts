@@ -114,6 +114,11 @@ export interface ImportResult {
    */
   currencies?: CurrencyImportOutcome;
   characterState?: "recorded" | "invalid-or-unsupported";
+  /**
+   * Retail equipment observation import outcome (see equipmentObservation.ts). Absent when none was sent.
+   * Possible outcomes follow the existing characterState pattern.
+   */
+  equipmentObservation?: "recorded" | "already-recorded" | "conflict" | "projection-mismatch" | "projection-without-canonical" | "invalid-or-unsupported";
 }
 
 /** Optional structured data that travels with an export's text (never parsed from it). */
@@ -122,6 +127,8 @@ export interface ImportExtras {
   currencies?: unknown;
   /** Retail structured character-state sidecar; normalized and version-gated by the store. */
   characterState?: unknown;
+  /** Retail canonical sections.equipment evidence plus the latestExport projection, as plain JSON; validated, version-gated and policy-checked by the store. */
+  equipmentObservation?: unknown;
 }
 
 /** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */

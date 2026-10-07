@@ -192,7 +192,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     }
 
     const text = chosen.text!;
-    const structuredSha256 = sidecarPayloadHash({ currencies: chosen.currencies, characterState: chosen.characterState });
+    const structuredSha256 = sidecarPayloadHash({ currencies: chosen.currencies, characterState: chosen.characterState, equipmentObservation: chosen.equipmentObservation });
     const summary = describeExport(text);
     const problems = consistencyProblems(chosen, summary, { character: summary.name ?? chosen.name ?? "" });
     if (problems.length > 0) return stop(`Not sent: the newest saved export is not consistent.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
@@ -221,14 +221,14 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     out(`  Sending ${summary.bytes} text bytes plus structured SavedVariables state (SHA-256 ${summary.sha256}) to ${deps.captureTransport ? `${config.origin}/api/captures` : importEndpoint(config.origin)} ...`);
     try {
       if (deps.captureTransport) {
-        const capture = await deps.captureTransport.send(text, chosen.currencies, chosen.characterState);
+        const capture = await deps.captureTransport.send(text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
         deps.status?.({ type: "acknowledgement", at: new Date().toISOString(), file: config.file, product, captureId: capture.captureId, character: summary.name, realm: summary.realm, version: summary.version });
         out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
         lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
         sendFailures = 0;
         return finish(0);
       }
-      const result = await postImport(deps, config.origin, text, chosen.currencies, chosen.characterState);
+      const result = await postImport(deps, config.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
       for (const line of describeImportResult(result, summary.sha256)) out(`  ${line}`);
       lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
       sendFailures = 0;

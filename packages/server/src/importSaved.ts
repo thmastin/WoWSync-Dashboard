@@ -209,6 +209,8 @@ export interface SavedExport {
   currencyObservedAt?: number;
   /** Independently persisted structured character domains; reputation carries separate character/account sections. */
   characterState?: unknown;
+  /** Retail equipment observation (sections.equipment + latestExport projection), as plain JSON. Absent when not available. */
+  equipmentObservation?: unknown;
 }
 
 /**
@@ -269,6 +271,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const sections = luaGet(record, "sections");
     const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
+    const equipment = luaGet(sections, "equipment");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
     const professionRecipes = luaGet(sections, "professionRecipes");
@@ -287,6 +290,16 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           } } : {}),
         }
       : undefined;
+    const equipmentObservation = (isLuaTable(equipment) || luaGet(latest, "specEquipmentObservation") !== undefined)
+      ? {
+          envelope: isLuaTable(equipment)
+            ? {
+                ...(luaToPlain(equipment) as any),
+              }
+            : undefined,
+          projection: luaGet(latest, "specEquipmentObservation"),
+        }
+      : undefined;
     out.push({
       name: typeof name === "string" ? name : undefined,
       realm: typeof realm === "string" ? realm : undefined,
@@ -295,6 +308,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       ...(isLuaTable(currencies) ? { currencies: luaToPlain(currencies) } : {}),
       ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
       ...(characterState ? { characterState } : {}),
+      ...(equipmentObservation && (equipmentObservation.envelope || equipmentObservation.projection) ? { equipmentObservation } : {}),
     });
   }
   return out.sort(
@@ -591,14 +605,14 @@ export const importEndpoint = (origin: string): string => `${origin}/api/import`
  * send, shared by `import:saved` and `watch:saved`: neither has any import logic of its own. Throws {@link ImportPostError}
  * (a BridgeError) with the reason; nothing has been imported when it does.
  */
-export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown): Promise<any> {
+export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown, equipmentObservation?: unknown): Promise<any> {
   let response: Response;
   try {
     response = await deps.fetch(importEndpoint(origin), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // `currencies` (the record's structured section) rides along only when the record has one; the text is untouched.
-      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }) }),
+      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }), ...(equipmentObservation === undefined ? {} : { equipmentObservation }) }),
       signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
     });
   } catch (err) {

@@ -35,6 +35,7 @@ interface CaptureEnvelope {
   text: string;
   currencies?: unknown;
   characterState?: unknown;
+  equipmentObservation?: unknown;
 }
 
 function jsonError(res: Response, status: number, error: string, code: string) {
@@ -47,8 +48,10 @@ function validSecret(expected: string, provided: string | undefined): boolean {
   const b = Buffer.from(provided.slice(7));
   return a.length === b.length && timingSafeEqual(a, b);
 }
-function payloadDigest(target: string, text: string, currencies: unknown, characterState?: unknown): string {
-  const tuple = characterState === undefined ? [target, text, currencies ?? null] : [target, text, currencies ?? null, characterState];
+function payloadDigest(target: string, text: string, currencies: unknown, characterState?: unknown, equipmentObservation?: unknown): string {
+  const tuple = equipmentObservation === undefined
+    ? (characterState === undefined ? [target, text, currencies ?? null] : [target, text, currencies ?? null, characterState])
+    : [target, text, currencies ?? null, characterState ?? null, equipmentObservation];
   return createHash("sha256").update(JSON.stringify(tuple), "utf8").digest("hex");
 }
 
@@ -93,7 +96,7 @@ export function captureReceiver(app: Express, store: SnapshotStore, options: Cap
     if (typeof body.sha256 !== "string" || !HASH.test(body.sha256)) return jsonError(res, 400, "A SHA-256 digest is required.", "INVALID_CAPTURE_HASH");
     const actual = createHash("sha256").update(body.text, "utf8").digest("hex");
     if (actual !== body.sha256.toLowerCase()) return jsonError(res, 422, "Capture digest does not match its text.", "CAPTURE_HASH_MISMATCH");
-    if (typeof body.payloadSha256 !== "string" || !HASH.test(body.payloadSha256) || payloadDigest(body.target ?? "", body.text, body.currencies, body.characterState) !== body.payloadSha256.toLowerCase()) return jsonError(res, 422, "Capture payload digest does not match its immutable fields.", "CAPTURE_PAYLOAD_HASH_MISMATCH");
+    if (typeof body.payloadSha256 !== "string" || !HASH.test(body.payloadSha256) || payloadDigest(body.target ?? "", body.text, body.currencies, body.characterState, body.equipmentObservation) !== body.payloadSha256.toLowerCase()) return jsonError(res, 422, "Capture payload digest does not match its immutable fields.", "CAPTURE_PAYLOAD_HASH_MISMATCH");
 
     const captureId = body.captureId.toLowerCase();
     if (body.target !== options.target) return jsonError(res, 409, `Capture is routed to ${body.target ?? "an unspecified target"}, but this receiver is ${options.target}.`, "CAPTURE_TARGET_MISMATCH");
@@ -116,11 +119,11 @@ export function captureReceiver(app: Express, store: SnapshotStore, options: Cap
         const staged = path.join(dir, `${captureId}.staging.json`);
         if (existsSync(staged)) {
           const saved = JSON.parse(readFileSync(staged, "utf8")) as CaptureEnvelope;
-          if (saved.sha256 !== actual || saved.payloadSha256 !== body.payloadSha256 || saved.text !== body.text || saved.target !== options.target || JSON.stringify(saved.currencies ?? null) !== JSON.stringify(body.currencies ?? null) || JSON.stringify(saved.characterState ?? null) !== JSON.stringify(body.characterState ?? null)) throw new Error("Capture ID conflicts with its durable staged payload.");
+          if (saved.sha256 !== actual || saved.payloadSha256 !== body.payloadSha256 || saved.text !== body.text || saved.target !== options.target || JSON.stringify(saved.currencies ?? null) !== JSON.stringify(body.currencies ?? null) || JSON.stringify(saved.characterState ?? null) !== JSON.stringify(body.characterState ?? null) || JSON.stringify(saved.equipmentObservation ?? null) !== JSON.stringify(body.equipmentObservation ?? null)) throw new Error("Capture ID conflicts with its durable staged payload.");
         } else {
           durableWrite(staged, JSON.stringify({ ...body, captureId, sha256: actual }));
         }
-        const result = store.importSnapshot(body.text!, { ...(body.currencies === undefined ? {} : { currencies: body.currencies }), ...(body.characterState === undefined ? {} : { characterState: body.characterState }) });
+        const result = store.importSnapshot(body.text!, { ...(body.currencies === undefined ? {} : { currencies: body.currencies }), ...(body.characterState === undefined ? {} : { characterState: body.characterState }), ...(body.equipmentObservation === undefined ? {} : { equipmentObservation: body.equipmentObservation }) });
         const receipt = { captureId, sha256: actual, payloadSha256, acceptedAt: new Date().toISOString(), result: { isDuplicate: result.isDuplicate, identityKey: result.character.identityKey, snapshotId: result.snapshot.id } };
         durableWrite(receiptPath, JSON.stringify(receipt));
         unlinkSync(staged);
