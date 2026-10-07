@@ -1,7 +1,9 @@
 /**
  * Retail equipment observation (GearExport sections.equipment): normalization, validation,
- * canonical JSON generation, and policy-A-E acceptance/rejection. The envelope is the
- * canonical truth; the specEquipmentObservation is the Retail-only projection (sidecar).
+ * canonical JSON generation, and policy-A-E acceptance/rejection. The envelope, including its
+ * specEquipmentObservation sidecar, is the canonical evidence; latestExport.specEquipmentObservation
+ * is only GearExport's projection of that sidecar, used as corroboration and never as a source.
+ * Structural checks only: whether an observation can qualify as a spec baseline is decided by readers.
  * This module is pure: neither storage nor bridge details.
  */
 
@@ -47,6 +49,10 @@ export function normalizeEquipmentObservation(
   const plain = input as Record<string, unknown>;
   const envelope = plain.envelope;
 
+  if (envelope === undefined && plain.projection !== undefined) {
+    // Policy D: a latestExport projection with no canonical equipment envelope at all is never stored.
+    return { ok: false, outcome: "projection-without-canonical" };
+  }
   if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope)) {
     return { ok: false, outcome: "invalid-or-unsupported" };
   }
@@ -113,10 +119,9 @@ export function normalizeEquipmentObservation(
     if (
       sc.contractVersion !== 1 ||
       sc.clientFamily !== "Retail" ||
-      (sc.equipmentObservation !== undefined &&
-        (typeof sc.equipmentObservation !== "object" ||
-          sc.equipmentObservation === null ||
-          Array.isArray(sc.equipmentObservation)))
+      typeof sc.equipmentObservation !== "object" ||
+      sc.equipmentObservation === null ||
+      Array.isArray(sc.equipmentObservation)
     ) {
       return { ok: false, outcome: "invalid-or-unsupported" };
     }

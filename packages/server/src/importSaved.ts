@@ -239,6 +239,40 @@ export function readSavedExports(filePath: string): SavedExport[] {
   return parseSavedExports(source, filePath);
 }
 
+/**
+ * The fields of GearExport's canonical `sections.equipment` envelope that travel to the Dashboard. The equipment
+ * observation identity is (observedAt, capture, revision); `lastAttemptAt`/`lastAttemptError` are mutable attempt
+ * diagnostics GearExport adds to an unchanged envelope, so they are deliberately not carried.
+ */
+const EQUIPMENT_ENVELOPE_FIELDS = ["observedAt", "capture", "revision", "completeness", "reason", "source", "changedAt", "data", "specEquipmentObservation"] as const;
+
+/** True only for an export whose own text says it is Retail (the same rule the store applies); anything unreadable is not. */
+function isRetailExportText(text: string): boolean {
+  try {
+    return detectVersion(parseWowSyncExport(text).character) === "retail";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The Retail equipment observation as plain JSON: the canonical envelope subset plus GearExport's latestExport
+ * projection of the spec sidecar, carried only as corroboration. The store validates both and decides; nothing is
+ * judged here. Undefined when the record has neither.
+ */
+function readEquipmentObservation(equipment: LuaValue | undefined, projection: LuaValue | undefined): { envelope?: Record<string, unknown>; projection?: unknown } | undefined {
+  const envelope: Record<string, unknown> = {};
+  if (isLuaTable(equipment)) {
+    for (const field of EQUIPMENT_ENVELOPE_FIELDS) {
+      const value = luaGet(equipment, field);
+      if (value !== undefined) envelope[field] = luaToPlain(value);
+    }
+  }
+  const hasEnvelope = isLuaTable(equipment);
+  if (!hasEnvelope && projection === undefined) return undefined;
+  return { ...(hasEnvelope ? { envelope } : {}), ...(projection === undefined ? {} : { projection: luaToPlain(projection) }) };
+}
+
 /** The pure half of {@link readSavedExports}: the file's text (already read) to its saved character records. `filePath` is for messages only. */
 export function parseSavedExports(source: string, filePath: string): SavedExport[] {
   let variables: Record<string, LuaValue>;
@@ -290,16 +324,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           } } : {}),
         }
       : undefined;
-    const equipmentObservation = (isLuaTable(equipment) || luaGet(latest, "specEquipmentObservation") !== undefined)
-      ? {
-          envelope: isLuaTable(equipment)
-            ? {
-                ...(luaToPlain(equipment) as any),
-              }
-            : undefined,
-          projection: luaGet(latest, "specEquipmentObservation"),
-        }
-      : undefined;
+    const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
     out.push({
       name: typeof name === "string" ? name : undefined,
       realm: typeof realm === "string" ? realm : undefined,
@@ -308,7 +333,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       ...(isLuaTable(currencies) ? { currencies: luaToPlain(currencies) } : {}),
       ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
       ...(characterState ? { characterState } : {}),
-      ...(equipmentObservation && (equipmentObservation.envelope || equipmentObservation.projection) ? { equipmentObservation } : {}),
+      ...(equipmentObservation ? { equipmentObservation } : {}),
     });
   }
   return out.sort(
@@ -646,7 +671,9 @@ export function describeImportResult(result: any, sentSha256: string): string[] 
     result.isDuplicate
       ? result.currencies?.outcome === "attached"
         ? "Result: ALREADY IMPORTED (duplicate): the snapshot is unchanged; its currencies section was attached."
-        : "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing."
+        : result.equipmentObservation === "recorded"
+          ? "Result: ALREADY IMPORTED (duplicate): the snapshot is unchanged; a new equipment observation was recorded."
+          : "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing."
       : "Result: imported as a new snapshot.",
     `  character:     ${result.character?.identityKey ?? "?"}`,
     `  snapshot id:   ${result.snapshot.id}${result.isLatest === undefined ? "" : result.isLatest ? " (now the character's latest)" : " (older than the character's latest)"}`,
@@ -673,6 +700,7 @@ export function describeImportResult(result: any, sentSha256: string): string[] 
         (c.carried ? ` - LAST_SEEN (${c.carriedReason ?? "carried"})` : ""),
     );
   }
+  if (typeof result.equipmentObservation === "string") lines.push(`  equipment observation: ${result.equipmentObservation}`);
   return lines;
 }
 
@@ -717,7 +745,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) stderr.push(`warning: ${target.warning}`);
     out(`Sending to ${importEndpoint(target.origin)} ...`);
-    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState), summary.sha256));
+    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation), summary.sha256));
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
     if (err instanceof BridgeError) {

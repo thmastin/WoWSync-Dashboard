@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore, type SnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
+import { observation } from "../../core/test/equipmentObservationFixtures.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${fixtures}${path}`, "utf8");
@@ -229,5 +230,23 @@ test("array/object query values are rejected like any other invalid limit/now (l
       assert.match((await json(res)).error, /now/);
     }
     assert.equal((await fetch(`${base}/api/account-context?now=1790000000`)).status, 200);
+  });
+});
+
+test("A16 POST /api/import forwards equipmentObservation to the store, which validates it (the route trusts nothing)", async () => {
+  await withApp(async (base) => {
+    const text = read("retail/ezaller-1789477879.wowsync.txt");
+    const send = (equipmentObservation: unknown) =>
+      fetch(`${base}/api/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, equipmentObservation }) });
+    const first = await json(await send(observation({ projection: true })));
+    assert.equal(first.result.equipmentObservation, "recorded");
+    assert.equal(first.result.isDuplicate, false);
+    const again = await json(await send(observation({ projection: true })));
+    assert.equal(again.result.equipmentObservation, "already-recorded");
+    assert.equal(again.result.isDuplicate, true);
+    const garbage = await json(await send({ envelope: { observedAt: "soon" } }));
+    assert.equal(garbage.result.equipmentObservation, "invalid-or-unsupported", "a bad observation is reported, never a failed import");
+    const absent = await json(await send(null));
+    assert.equal(absent.result.equipmentObservation, undefined, "null is treated as absent, like the other sidecars");
   });
 });

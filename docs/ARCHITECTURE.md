@@ -755,7 +755,8 @@ receiver endpoint; design and decisions are in [DESKTOP_COMPANION_FEASIBILITY.md
 GearExport.lua ──stat every 2s──▶ stable? (size+mtime unchanged 3s) ──read once──▶ parseSavedExports (core data-only reader)
    ──▶ newest latestExport by generatedAt ──▶ describeExport + consistencyProblems ──▶ (generatedAt, sha256) already sent? skip
    ──▶ local: postImport({text}) ──▶ POST /api/import
-   └── remote: durable outbox {captureId,target,sha256,payloadSha256,text} ──▶ loopback receiver listener:4175 /api/captures (Bearer token)
+   └── remote: durable outbox {captureId,target,sha256,payloadSha256,text,currencies?,characterState?,equipmentObservation?}
+       ──▶ loopback receiver listener:4175 /api/captures (Bearer token)
        ──▶ durable staging ──▶ existing parse/import transaction ──▶ durable receipt ──▶ ACK ──▶ remove outbox entry
 ```
 
@@ -811,6 +812,43 @@ resolution: two different exports can share it) and never via a UNIQUE index (an
 existing database may already contain duplicates, which would make the index fail
 at startup). Rows already duplicated by older versions are left untouched.
 
+## Retail equipment observations (append-only)
+
+GearExport (from `7958c56`) persists each Retail equipment capture as the canonical `sections.equipment` envelope
+(`data.slots`, `observedAt`, `capture`, `revision`, `completeness`, `reason?`, `source`, `changedAt`) and may attach a
+`specEquipmentObservation` sidecar (`contractVersion` 1, `clientFamily` "Retail", `atomicity` "NOT_CLAIMED", `readiness`, `classID?`,
+`roster`, `activeSpecBefore`, `activeSpecAfter`, `stability`, and an `equipmentObservation` link tuple). `latestExport.specEquipmentObservation`
+is only GearExport's projection of that sidecar. None of this is in the WOWSYNC v1 text.
+
+- **Transport.** `ImportExtras.equipmentObservation = { envelope, projection? }`. `readSavedExports` builds it for records whose own
+  export text is Retail: the envelope subset above (never S.Attempt's mutable `lastAttemptAt`/`lastAttemptError`) plus the projection.
+  `/api/import`, `postImport`, the watcher (its structured-state hash includes it, so an observation-only change with identical text is
+  re-sent) and the capture sender/receiver pass it through untouched. Nothing outside core validates or interprets it.
+- **Validation (core, `equipmentObservation.ts`).** Structural only: the export is Retail; `observedAt`/`capture`/`revision` are safe
+  integers >= 0; `completeness` is `complete` | `partial`; `data.slots` normalizes to WoW slot-number keys `"1"`..`"19"` (luaToPlain gives
+  a 0-based array for a gapless Lua table, index *i* = slot *i*+1, and a string-keyed object for a gapped one); a sidecar, when present,
+  is an object with `contractVersion` 1, `clientFamily` "Retail" and an object link. Readiness, stability, completeness, link-vs-envelope
+  agreement and active spec are **not** judged here: partial, UNSTABLE, NOT_READY, UNKNOWN, link-mismatched and sidecar-less envelopes are
+  stored as evidence, and whether one can serve as a per-spec baseline is a reader's decision.
+- **Canonical vs projection (fail closed).** Compared by recursively key-sorted JSON. A: canonical sidecar, no projection — accept.
+  B: equivalent projection — accept. C: projection differs — `projection-mismatch`, nothing stored. D: projection without a canonical
+  sidecar (or without any envelope) — `projection-without-canonical`, nothing stored. E: valid envelope, no sidecar either side — accept.
+  None of these fails the snapshot import itself.
+- **Storage.** `snapshot_equipment_observations`, one row per observation, `UNIQUE (character_id, observed_at, capture, revision)`;
+  `snapshot_id` records the snapshot row the evidence arrived with (several observations may share one — the same text can carry a
+  Beast Mastery and later a Marksmanship capture) and is not its identity. `evidence_json` is canonical JSON of the normalized slots,
+  `reason?`, `source?`, `changedAt?` and the sidecar; the equipment rows come from the envelope, never from the parsed text. Rows are
+  written inside `importSnapshot` on both the new-snapshot and the duplicate-text branch, are never merged into `parsed_json` or
+  `characterState`, never carried forward and never marked LAST_SEEN.
+- **Outcomes** (`ImportResult.equipmentObservation`): `recorded`; `already-recorded` (same tuple, same completeness and evidence);
+  `conflict` (same tuple, different evidence: the first row is kept, nothing is written, the import still succeeds);
+  `projection-mismatch`; `projection-without-canonical`; `invalid-or-unsupported`. The bridge prints it.
+- **Schema change.** Additive `CREATE TABLE IF NOT EXISTS` (DB migration: yes; no backfill; existing rows, text dedupe and
+  `characterState` merge are unchanged). `deleteCharacter` deletes a character's observation rows explicitly.
+- **Capture digest.** Without the field the payload digest is exactly the previous one, so queued and older captures keep validating;
+  with it the digest is `[target, text, currencies ?? null, characterState ?? null, equipmentObservation]`. A new sender facing an old
+  receiver fails the digest, so **deploy the receiver/server before the sender**.
+
 ## Freshness-aware totals
 
 `GoldFacts`/`PlaytimeFacts` (version-wide and per `RealmGroup`) gained
@@ -842,7 +880,7 @@ server's own `CHARACTER_NOT_FOUND` 404 as "already gone".
 ## Deleting a character
 
 `SnapshotStore.deleteCharacter(identityKey)` removes one character and all
-of its snapshots in a single `BEGIN IMMEDIATE` … `COMMIT` transaction
+of its snapshots (and its currency and equipment-observation rows) in a single `BEGIN IMMEDIATE` … `COMMIT` transaction
 (children first: the `snapshots.character_id` foreign key is declared but
 SQLite does not enforce it unless `PRAGMA foreign_keys` is on, so the
 delete is explicit rather than relying on cascade). A failure part-way rolls

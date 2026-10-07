@@ -4,6 +4,7 @@ import { mergeCharacterState, normalizeCharacterStateSidecar } from "../src/char
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { observation } from "./equipmentObservationFixtures.ts";
 
 const ts = 1_800_000_000;
 const domain = (data: Record<string, unknown>, completeness: "complete" | "partial" = "complete") => ({
@@ -222,4 +223,29 @@ test("known-by-account includes explicit learned=true only and the professions r
     assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.completeness, "partial");
     assert.deepEqual(store.buildAccountFacts("classic-era", ts).professions.knownRecipes, []);
   } finally { store.close(); }
+});
+
+test("A27 characterState merge and LAST_SEEN carry-forward are identical whether or not equipment observations ride along", () => {
+  const combat = (specID: number) => ({ formatVersion: 1, clientFamily: "Retail", combatSpecialization: domain({ activeSpec: { specID, classID: 3 } }) });
+  const run = (withObservation: boolean) => {
+    const store = new SqliteSnapshotStore(":memory:");
+    try {
+      const extra = (n: number) => (withObservation ? { equipmentObservation: observation({ tuple: { observedAt: ts + n, capture: n, revision: 1 }, specID: 253 }) } : {});
+      const text = (at: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Virek", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" } });
+      const outcomes = [
+        store.importSnapshot(text(ts), { characterState: combat(253), ...extra(1) }).characterState,
+        store.importSnapshot(text(ts), { characterState: combat(254), ...extra(2) }).characterState,
+        store.importSnapshot(text(ts + 100), extra(3)).characterState,
+        store.importSnapshot(text(ts + 200), { characterState: combat(255) }).characterState,
+      ];
+      return { outcomes, states: store.listSnapshots("retail::cairne::virek").map((s) => s.parsed.characterState) };
+    } finally {
+      store.close();
+    }
+  };
+  const plain = run(false);
+  const observed = run(true);
+  assert.deepEqual(observed, plain);
+  assert.equal(plain.states.some((state) => state?.combatSpecialization?.status.state === "LAST_SEEN"), true, "the existing carry-forward still happens");
+  assert.equal(JSON.stringify(observed.states).includes("equipmentObservation"), false);
 });

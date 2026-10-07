@@ -13,7 +13,8 @@ import { createApp } from "../src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { createWatcher, nodeFs, runWatchSaved, selectNewestExport, type RunDeps, type WatchConfig, type WatchDeps, type WatchFs } from "../src/watchSaved.ts";
 import { discoverWatchTargets, watchTargetLabel } from "../src/importSaved.ts";
-import { exportFor, record, savedVariables } from "./savedVariablesFixtures.ts";
+import { exportFor, record, savedVariables, toLua } from "./savedVariablesFixtures.ts";
+import { VIREK_TUPLE, envelope, sidecar, type EnvelopeOptions } from "../../core/test/equipmentObservationFixtures.ts";
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -823,4 +824,55 @@ test("runWatchSaved with --wow-dir install root watches every product file", asy
   assert.match(all(d.out), /Watching 2 SavedVariables files/);
   assert.match(all(d.out), /_retail_/);
   assert.match(all(d.out), /_classic_era_/);
+});
+
+// --- Slice A: Retail canonical equipment observations through the watcher ----------------------------------
+
+const equipmentRecord = (options: EnvelopeOptions = {}) =>
+  record("Virek", 1_791_375_100, { equipment: toLua(envelope({ lastAttempt: true, ...options })), specProjection: toLua(sidecar(options.tuple ?? VIREK_TUPLE, options)) });
+
+test("A14 watch:saved delivers the canonical equipment observation with the exact text", async () => {
+  const saved = equipmentRecord();
+  const h = harness(VIREK_SV, ok(saved.text!));
+  await h.w.tick();
+  h.fs.set(FILE, savedVariables([saved]));
+  await h.settle();
+  assert.equal(h.calls.length, 1);
+  const body = JSON.parse(h.calls[0].body!);
+  assert.equal(body.text, saved.text);
+  assert.deepEqual(body.equipmentObservation, { envelope: envelope(), projection: sidecar() });
+});
+
+test("A15 the watcher re-delivers when only the equipment observation changes and the text is identical", async () => {
+  const bm = equipmentRecord();
+  const h = harness(VIREK_SV, ok(bm.text!));
+  await h.w.tick();
+  h.fs.set(FILE, savedVariables([bm]));
+  await h.settle();
+  h.fs.set(FILE, savedVariables([bm]) + " ");
+  await h.settle();
+  assert.equal(h.calls.length, 1, "an unchanged observation is not re-sent");
+  const mm = equipmentRecord({ tuple: { observedAt: 1791375400, capture: 3, revision: 220 }, specID: 254 });
+  assert.equal(mm.text, bm.text);
+  h.fs.set(FILE, savedVariables([mm]));
+  await h.settle();
+  assert.equal(h.calls.length, 2, "an observation-only change is not swallowed by text deduplication");
+  assert.equal(JSON.parse(h.calls[1].body!).equipmentObservation.envelope.specEquipmentObservation.activeSpecBefore.specID, 254);
+  assert.match(all(h.out), /Same text with changed structured SavedVariables state/);
+});
+
+test("A14 A17 --capture-target stages and sends the equipment observation inside the capture envelope", async () => {
+  const saved = equipmentRecord();
+  const file = realFile(savedVariables([saved]));
+  const spool = join(root, `outbox-${counter++}`);
+  mkdirSync(spool);
+  let sent: any;
+  const d = runDeps(nodeFs, (call) => {
+    sent = JSON.parse(call.body!);
+    return json(200, { target: "DEV", receipt: { captureId: sent.captureId, sha256: sent.sha256, payloadSha256: sent.payloadSha256 } });
+  }, { WOWSYNC_CAPTURE_TOKEN: "x".repeat(40) });
+  assert.equal(await run(["--file", file, "--once", "--url", "https://receiver.example", "--capture-target", "DEV", "--spool-dir", spool], d), 0);
+  assert.deepEqual(sent.equipmentObservation, { envelope: envelope(), projection: sidecar() });
+  const expected = createHash("sha256").update(JSON.stringify(["DEV", saved.text, null, null, sent.equipmentObservation])).digest("hex");
+  assert.equal(sent.payloadSha256, expected, "the digest covers the observation");
 });

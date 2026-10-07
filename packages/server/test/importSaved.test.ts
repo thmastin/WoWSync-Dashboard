@@ -13,7 +13,10 @@ import { createApp } from "../src/app.ts";
 import { BridgeError, findSavedVariablesFiles, readSavedExports, runImportSaved, selectExport, type Deps } from "../src/importSaved.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { warband } from "../../core/test/sharedStorageBuilders.ts";
-import { exportFor, record, savedVariables } from "./savedVariablesFixtures.ts";
+import { exportFor, record, savedVariables, toLua } from "./savedVariablesFixtures.ts";
+import { DatabaseSync } from "node:sqlite";
+import { VIREK_TUPLE, envelope, sidecar, type EnvelopeOptions } from "../../core/test/equipmentObservationFixtures.ts";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 
 // Fixtures (WoW-style SavedVariables text) live in savedVariablesFixtures.ts, shared with watchSaved.test.ts.
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -577,4 +580,108 @@ test("END TO END: a refusal by the real server and an absent server both leave t
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
   }
+});
+
+// --- Slice A: Retail canonical equipment observations through the bridge -----------------------------------
+
+const MM_TUPLE = { observedAt: 1791375400, capture: 3, revision: 220 };
+/** Virek with GearExport 7958c56's canonical sections.equipment (incl. S.Attempt diagnostics) and its latestExport projection. */
+const virekWithEquipment = (options: EnvelopeOptions = {}, projection: unknown = sidecar(options.tuple ?? VIREK_TUPLE, options)) =>
+  record("Virek", 1_791_375_100, { equipment: toLua(envelope({ lastAttempt: true, ...options })), ...(projection === undefined ? {} : { specProjection: toLua(projection) }) });
+
+/** A real server over a file-backed store, plus a raw connection to read the observation table. */
+async function withObservedServer(run: (base: string, rows: () => Array<Record<string, any>>) => Promise<void>) {
+  const folder = mkdtempSync(join(tmpdir(), "wowsync-bridge-equipment-"));
+  const path = join(folder, "test.sqlite");
+  const store = new SqliteSnapshotStore(path);
+  const raw = new DatabaseSync(path);
+  const server = await listenOnce(createApp(store, 0, undefined, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+  try {
+    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, () => raw.prepare("SELECT * FROM snapshot_equipment_observations ORDER BY id").all() as Array<Record<string, any>>);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    raw.close();
+    store.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+test("A13 readSavedExports carries the canonical sections.equipment subset plus the latestExport projection for a Retail record", () => {
+  const saved = virekWithEquipment();
+  const [read] = readSavedExports(svFile(savedVariables([saved])));
+  assert.equal(read.text, saved.text, "the text export is untouched");
+  const carried = read.equipmentObservation as { envelope: Record<string, unknown>; projection: unknown };
+  assert.deepEqual(carried, { envelope: envelope(), projection: sidecar() }, "exact 7958c56 fields, as plain JSON");
+  assert.deepEqual(carried.envelope.observedAt, 1791375064);
+  assert.equal((carried.envelope.specEquipmentObservation as any).roster.specializations[2].isUnlocked, false);
+});
+
+test("A41 the bridge never transports S.Attempt's lastAttemptAt / lastAttemptError", () => {
+  const [read] = readSavedExports(svFile(savedVariables([virekWithEquipment()])));
+  const env = (read.equipmentObservation as any).envelope;
+  assert.equal("lastAttemptAt" in env, false);
+  assert.equal("lastAttemptError" in env, false);
+  assert.doesNotMatch(JSON.stringify(read.equipmentObservation), /lastAttempt/);
+});
+
+test("A13 the bridge carries a projection-only record (for the server to refuse), omits the field when there is neither, and never for a non-Retail export", () => {
+  const projectionOnly = record("Virek", 1_791_375_100, { specProjection: toLua(sidecar()) });
+  assert.deepEqual(readSavedExports(svFile(savedVariables([projectionOnly])))[0].equipmentObservation, { projection: sidecar() });
+  assert.equal(readSavedExports(svFile(savedVariables([VIREK])))[0].equipmentObservation, undefined);
+  const classicText = buildWowSyncExport({ generatedAt: 1_791_375_100, character: { name: "Bromrik", realm: "Cairne", clientVersion: "1.15.7" } });
+  const classic = { guid: "Player-1-BROMRIK", name: "Bromrik", realm: "Cairne", text: classicText, generatedAt: 1_791_375_100, equipment: toLua(envelope()) };
+  assert.equal(readSavedExports(svFile(savedVariables([classic])))[0].equipmentObservation, undefined, "the Retail gate uses the export's own ClientFamily");
+});
+
+test("A13 import:saved POSTs the evidence with the exact text and reports the server's equipment outcome", async () => {
+  const saved = virekWithEquipment();
+  const file = svFile(savedVariables([saved]));
+  const d = deps(() => importedOk({ equipmentObservation: "recorded" }, saved.text));
+  const result = await runImportSaved(["--character", "Virek", "--file", file], d);
+  assert.equal(result.exitCode, 0, all(result));
+  const sent = JSON.parse(d.calls[0].body!);
+  assert.deepEqual(Object.keys(sent), ["text", "equipmentObservation"]);
+  assert.equal(sent.text, saved.text);
+  assert.deepEqual(sent.equipmentObservation, { envelope: envelope(), projection: sidecar() });
+  assert.match(all(result), /equipment observation: recorded/);
+});
+
+test("A13 A07-A10 A24 END TO END: the bridge records the canonical observation; a re-run is already-recorded; a spec swap with the same text is a second row", async () => {
+  const bm = virekWithEquipment();
+  const file = svFile(savedVariables([bm]));
+  await withObservedServer(async (base, rows) => {
+    const first = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.equal(first.exitCode, 0, all(first));
+    assert.match(all(first), /equipment observation: recorded/);
+    const [row] = rows();
+    assert.deepEqual([row.observed_at, row.capture, row.revision, row.completeness], [1791375064, 29, 220, "complete"]);
+    assert.doesNotMatch(row.evidence_json, /lastAttempt|generatedAt/);
+
+    const again = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.match(all(again), /Result: ALREADY IMPORTED \(duplicate\): the Dashboard changed nothing/);
+    assert.match(all(again), /equipment observation: already-recorded/);
+    assert.equal(rows().length, 1);
+
+    // GearExport re-captured equipment as Marksmanship; latestExport.text is byte-identical.
+    const mm = virekWithEquipment({ tuple: MM_TUPLE, specID: 254 });
+    assert.equal(mm.text, bm.text);
+    writeFileSync(file, savedVariables([mm]));
+    const swapped = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.match(all(swapped), /ALREADY IMPORTED \(duplicate\): the snapshot is unchanged; a new equipment observation was recorded/);
+    const both = rows();
+    assert.equal(both.length, 2);
+    assert.equal(both[0].snapshot_id, both[1].snapshot_id);
+    assert.deepEqual(both.map((r) => JSON.parse(r.evidence_json).specEquipmentObservation.activeSpecBefore.specID), [253, 254]);
+  });
+});
+
+test("A05 END TO END: a latestExport projection that disagrees with the canonical sidecar stores no observation", async () => {
+  const file = svFile(savedVariables([virekWithEquipment({}, sidecar(VIREK_TUPLE, { specID: 255 }))]));
+  await withObservedServer(async (base, rows) => {
+    const result = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.equal(result.exitCode, 0, all(result));
+    assert.match(all(result), /Result: imported as a new snapshot/);
+    assert.match(all(result), /equipment observation: projection-mismatch/);
+    assert.equal(rows().length, 0);
+  });
 });

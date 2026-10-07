@@ -15,6 +15,10 @@ export interface SavedRecord {
   /** Raw Lua for `sections.currencies`, used only by bridge tests. */
   currencies?: string;
   professionRecipes?: string;
+  /** Raw Lua for the canonical `sections.equipment` envelope (see equipmentLua). */
+  equipment?: string;
+  /** Raw Lua for GearExport's `latestExport.specEquipmentObservation` projection. */
+  specProjection?: string;
 }
 
 export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: number | null; legacy?: string } = {}): string {
@@ -28,8 +32,14 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     lines.push("},", '["sections"] = {');
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
     if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);
+    if (r.equipment !== undefined) lines.push(`["equipment"] = ${r.equipment},`);
     lines.push("},", '["visits"] = {', "},");
-    if (r.text !== undefined) lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`, `["text"] = ${q(r.text)},`, "},");
+    if (r.text !== undefined || r.specProjection !== undefined) {
+      lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`);
+      if (r.text !== undefined) lines.push(`["text"] = ${q(r.text)},`);
+      if (r.specProjection !== undefined) lines.push(`["specEquipmentObservation"] = ${r.specProjection},`);
+      lines.push("},");
+    }
     lines.push("},");
   }
   lines.push("},", "}", "");
@@ -43,3 +53,16 @@ export const record = (name: string, generated: number, over: Partial<SavedRecor
   const { spec, ...rest } = over;
   return { guid: `Player-1168-${name.toUpperCase().padEnd(8, "0")}`, name, realm: spec?.realm ?? "Cairne", text: exportFor(name, generated, spec), generatedAt: generated, ...rest };
 };
+
+/**
+ * Plain JSON as WoW-style Lua: string keys as ["key"], integer-string keys (equipment slots) and array positions as
+ * numeric [n] keys, so the bridge's luaToPlain sees exactly what GearExport persists.
+ */
+export function toLua(value: unknown): string {
+  if (value === null || value === undefined) return "nil";
+  if (typeof value === "string") return q(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return `{\r\n${value.map((v, i) => `[${i + 1}] = ${toLua(v)},`).join("\r\n")}\r\n}`;
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined);
+  return `{\r\n${entries.map(([k, v]) => `[${/^[1-9][0-9]*$/.test(k) ? k : q(k)}] = ${toLua(v)},`).join("\r\n")}\r\n}`;
+}
