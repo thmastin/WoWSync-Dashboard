@@ -203,3 +203,14 @@ test("known body-armor subclasses cannot be treated as suitable jewelry", () => 
   assert.ok(result.assessments.every((assessment) => assessment.comparison === "UNKNOWN"));
   assert.equal(result.recommendation, "UNKNOWN");
 });
+
+test("known body-armor subclasses cannot be treated as neck jewelry", () => {
+  const row = candidate("INVTYPE_NECK");
+  row.classID = { state: "KNOWN", value: 4 };
+  row.subclassID = { state: "KNOWN", value: 4 };
+  row.equipType = { state: "KNOWN", value: 2 };
+  const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: warriorObs() }] });
+  assert.equal(result.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE");
+  assert.ok(result.assessments.every((assessment) => assessment.comparison === "UNKNOWN"));
+  assert.equal(result.recommendation, "UNKNOWN");
+});
