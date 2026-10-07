@@ -81,6 +81,14 @@ test("an explicitly empty observed ring slot is a fill result, never an ilvl-zer
   assert.deepEqual(arms.comparisonSlots, ["11"]);
 });
 
+test("empty-slot fills and item-level upgrades remain incomparable and yield an explicit ambiguity", () => {
+  const observations = [obs(71, 5, { emptySlot: "11" }), obs(72, 5), obs(73, 5)];
+  const result = assessRetailCandidate({ candidate: candidate(), exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations }] });
+  assert.equal(result.recommendation, "AMBIGUOUS_SUPPORTED_UPGRADE_TYPES");
+  assert.deepEqual(result.assessments.slice(0, 2).map((assessment) => assessment.comparison), ["UPGRADE_BY_ITEM_LEVEL", "UPGRADE_BY_ITEM_LEVEL"]);
+  assert.equal(result.assessments[2]?.comparison, "UPGRADE_BY_FILLING_EMPTY_SLOT");
+});
+
 test("ordinary armor compares only its mapped single slot", () => {
   const row = candidate("INVTYPE_CHEST");
   const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: [obs(71, 5, { level: 100, complete: true })] }] });
@@ -120,6 +128,25 @@ test("stable deterministic ordering and equal supported upgrades report ambiguit
   assert.equal(result.recommendation, "TIED_BEST_SUPPORTED_UPGRADE");
   assert.deepEqual([...new Set(result.assessments.map((a) => a.character.name))], ["Ada", "Zed"]);
   assert.deepEqual(result.assessments.map((a) => `${a.character.name}:${a.spec.specID}`), ["Ada:71", "Ada:72", "Ada:73", "Zed:71", "Zed:72", "Zed:73"]);
+});
+
+test("item-level upgrade ranking prioritizes maximum delta before stable identity and ties only at that maximum", () => {
+  const specsAtLevel = (level: number) => warriorObs().map((row) => {
+    const specID = (row.evidence.specEquipmentObservation as any).activeSpecBefore.specID as number;
+    const result = obs(specID, 5, { level });
+    ((result.evidence.slots as Record<string, { itemLevel: number }>) ["12"]!).itemLevel = level;
+    return result;
+  });
+  const characters = [
+    { identityKey: "retail::alpha::x", name: "Alpha", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: specsAtLevel(115) },
+    { identityKey: "retail::beta::x", name: "Beta", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: specsAtLevel(90) },
+    { identityKey: "retail::zulu::x", name: "Zulu", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: specsAtLevel(90) },
+  ];
+  const result = assessRetailCandidate({ candidate: candidate(), exporterSnapshotId: 99, rowOrdinal: 1, characters });
+  const upgrades = result.assessments.filter((assessment) => assessment.comparison === "UPGRADE_BY_ITEM_LEVEL");
+  assert.deepEqual(upgrades.slice(0, 6).map((assessment) => [assessment.character.name, assessment.deltaItemLevel]), [["Beta", 30], ["Beta", 30], ["Beta", 30], ["Zulu", 30], ["Zulu", 30], ["Zulu", 30]]);
+  assert.equal(result.recommendation, "TIED_BEST_SUPPORTED_UPGRADE");
+  assert.ok(upgrades.slice(6).every((assessment) => assessment.deltaItemLevel === 5));
 });
 
 test("weapon class proficiency is not silently claimed as spec suitability; only checked weapon classes proceed", () => {

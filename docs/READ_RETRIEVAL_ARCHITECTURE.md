@@ -2,8 +2,9 @@
 
 Status: Phase 6 complete and live-validated (2026-09-28). The provider-neutral
 core is consumed by a dedicated stdio MCP adapter, connected to ChatGPT through
-OpenAI Secure MCP Tunnel. This does not change the existing Ask My Account
-provider path or make the Dashboard HTTP server public. See
+OpenAI Secure MCP Tunnel. A selected deterministic Retail gear result can also be
+attached to an in-app Ask My Account request for explanation; the general provider
+path remains private. See
 [`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for operations and acceptance
 evidence.
 
@@ -11,9 +12,11 @@ evidence.
 
 `DashboardReadModel` is a narrowly scoped, deterministic read surface over the
 `SnapshotReadStore` interface. It is intentionally not an HTTP wrapper, SQL query
-surface, filesystem browser, or provider adapter. The current external
-consumer is `packages/mcp`; Dashboard UI and Ask My Account could adopt this
-provider-neutral core later. The core imports no LLM-provider-specific code.
+surface, filesystem browser, or provider adapter. The current external consumer
+is `packages/mcp`. Dashboard allocation routes and the optional Retail gear
+context for Ask My Account also call specific deterministic read operations. The
+model does not call tools or make gear decisions. The core imports no
+LLM-provider-specific code.
 
 Every stateful character/account operation requires an explicit recognized
 WoW version. Character lookup is constrained to that version and returns an

@@ -794,6 +794,13 @@ h1, h2, h3 {
 .ask-textarea {
   margin-top: 12px;
 }
+.ask-gear-candidate {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
 .ask-answer {
   margin-top: 16px;
   padding-top: 14px;

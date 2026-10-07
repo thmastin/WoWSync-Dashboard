@@ -8,6 +8,7 @@ import express, { type Express } from "express";
 import {
   VERSION_LABELS,
   WOW_VERSIONS,
+  DashboardReadModel,
   SharedStorageIntegrityError,
   WowSyncParseError,
   diffSnapshots,
@@ -154,9 +155,8 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   });
 
   // "Ask My Account" (POC). Every request is independent - no conversation
-  // history is kept or persisted. The ONLY data that leaves this machine is
-  // the system prompt, the current AccountContext JSON, and the user's
-  // question, sent once to the configured LLM provider. The API key never
+  // history is kept or persisted. The account context, user's question, and
+  // any explicitly selected deterministic gear result are sent once to the provider. The API key never
   // reaches the browser; it's read from the server's own environment.
   //
   // The context is retrieved via an actual HTTP call to this server's own
@@ -171,6 +171,22 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     }
     if (question.length > MAX_QUESTION_LENGTH) {
       return res.status(400).json({ error: `Question is too long (max ${MAX_QUESTION_LENGTH} characters).` });
+    }
+
+    let gearAllocation: unknown;
+    let gearAllocationRecommendation: string | undefined;
+    const gearCandidate = req.body?.gearCandidate;
+    if (gearCandidate !== undefined) {
+      if (!gearCandidate || typeof gearCandidate !== "object" || Array.isArray(gearCandidate)
+        || typeof gearCandidate.exporterIdentityKey !== "string" || gearCandidate.exporterIdentityKey.length === 0 || gearCandidate.exporterIdentityKey.length > 500
+        || !Number.isSafeInteger(gearCandidate.snapshotId) || gearCandidate.snapshotId <= 0
+        || !Number.isSafeInteger(gearCandidate.rowOrdinal) || gearCandidate.rowOrdinal <= 0) {
+        return res.status(400).json({ error: "gearCandidate must contain an exporter identity key, positive snapshot ID, and positive one-based row ordinal." });
+      }
+      const resolution = new DashboardReadModel(store).analyzeRetailGearCandidate({ version: "retail", exporterIdentityKey: gearCandidate.exporterIdentityKey, snapshotId: gearCandidate.snapshotId, rowOrdinal: gearCandidate.rowOrdinal });
+      if (resolution.status !== "FOUND") return res.status(400).json({ error: "The selected Retail gear candidate reference is no longer available.", code: resolution.status });
+      gearAllocation = resolution.value;
+      gearAllocationRecommendation = resolution.value.recommendation;
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
@@ -193,7 +209,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
 
     const model = process.env.WOWSYNC_LLM_MODEL?.trim() || DEFAULT_MODEL;
     try {
-      const result = await askOpenAI(question, context, { apiKey, model });
+      const result = await askOpenAI(question, context, { apiKey, model, gearAllocation });
       const contextSummary = {
         characterCount: Object.values(context.versions).reduce((sum, v) => sum + v.characters.length, 0),
         versions: Object.keys(context.versions),
@@ -203,6 +219,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
         model: result.model,
         contextGeneratedAt: result.contextGeneratedAt,
         contextSummary,
+        ...(gearAllocationRecommendation ? { gearAllocationRecommendation } : {}),
         usage: result.usage,
       });
     } catch (err) {

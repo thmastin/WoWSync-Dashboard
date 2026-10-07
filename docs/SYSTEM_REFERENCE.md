@@ -96,24 +96,27 @@ Windows-capture flow (see [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md)).
 This is the clarification most worth internalizing before changing either path.
 
 ```
-Pipeline A (Dashboard UI + Ask My Account):
+Pipeline A (Dashboard UI + Ask My Account account facts):
   SQLite -> AccountFacts -> AccountContext -> LlmContext -> Dashboard UI + Ask My Account
   (server routes: GET /api/versions/:version/account-facts, GET /api/account-context)
 
-Pipeline B (MCP / ChatGPT, plus one narrow Dashboard route):
+Pipeline B (MCP / ChatGPT and deterministic Dashboard reads):
   SQLite -> DashboardReadModel -> MCP tools -> ChatGPT
   SQLite -> DashboardReadModel.getAllocationReview -> GET /api/versions/:version/allocation-review
          -> Dashboard Allocation tab (#/retail/allocation)
+  SQLite -> DashboardReadModel.analyzeRetailGearCandidate -> Gear Allocation panel / optional Ask context
 ```
 
 - **Pipeline A** is what renders every page of the Dashboard web UI except the Allocation tab, and
-  what Ask My Account uses. `POST /api/ask` fetches its own `GET /api/account-context` over a real
-  HTTP self-call (not a second in-process code path) and projects fresh every time — there is no
-  caching layer.
+  provides Ask My Account's general account facts. `POST /api/ask` fetches its own
+  `GET /api/account-context` over a real HTTP self-call (not a second in-process code path) and
+  projects fresh every time — there is no caching layer. If the user selects a Retail candidate,
+  Ask also receives the deterministic gear result from Pipeline B for explanation only.
 - **Pipeline B** is what every MCP tool reads from. `DashboardReadModel`
-  (`packages/core/src/readModel.ts`) has two consumers: `packages/mcp/src/server.ts` (every MCP
-  tool), and `packages/server/src/demandRoutes.ts`, which serves only
-  `getAllocationReview` to the Dashboard's Allocation tab. That route constructs a
+  (`packages/core/src/readModel.ts`) is consumed by `packages/mcp/src/server.ts` and
+  `packages/server/src/demandRoutes.ts`, which serves deterministic allocation and gear reads to
+  the Dashboard. The optional Ask gear context is also resolved by this read model. Each route
+  constructs a
   `DashboardReadModel` over the server's `SnapshotStore` (a `SnapshotStore` is a
   `SnapshotReadStore`), validates paging/search, and returns the read model's `ReadValue`
   (data + provenance) unchanged — it recomputes no allocation. The Dashboard does not go through MCP.
@@ -260,8 +263,10 @@ plus unallocated account-owned holdings, independently paged).
 
 ## Ask My Account / `LlmContext`, briefly
 
-Ask My Account's data source is `AccountContext`/`LlmContext` (Pipeline A), never
-`DashboardReadModel`. The system prompt has been revised in direct response to real past LLM
+Ask My Account's general data source is `AccountContext`/`LlmContext` (Pipeline A). When a Retail
+candidate is explicitly selected, the server adds `DashboardReadModel.analyzeRetailGearCandidate`
+output as a separate deterministic fact block; language-model reasoning remains explanatory only.
+The system prompt has been revised in direct response to real past LLM
 failures — cross-contaminated inventory fabrication across characters, and misreading copper as
 gold — and is load-bearing context for anyone touching that prompt: changes to it should be
 evaluated against those specific failure modes, not just against new ones.

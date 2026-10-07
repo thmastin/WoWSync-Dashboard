@@ -576,14 +576,16 @@ once at startup). Without a key configured, the button still exists and
 still opens, but asking a question returns a clear "OPENAI_API_KEY is not
 configured" error rather than crashing or silently doing nothing.
 
-**Exact data boundary.** Each request sends exactly three things to the
-configured LLM provider, once, over HTTPS:
+**Exact data boundary.** Each request sends these items to the configured
+LLM provider once, over HTTPS:
 
 1. A fixed system prompt (`packages/server/src/systemPrompt.ts`) defining
    the assistant's role and grounding rules.
 2. The current `GET /api/account-context` document — the same JSON the
-   Developer export's Copy/Download buttons produce. Nothing more.
+   Developer export's Copy/Download buttons produce.
 3. Your question, verbatim.
+4. If you select a Retail candidate in Ask My Account, its server-computed
+   deterministic gear allocation result. With no selection, this item is omitted.
 
 Never sent: filesystem paths, the SQLite file or its location, the
 OpenAI/any API key, machine or OS info, environment variables other than
@@ -597,6 +599,11 @@ makes a real HTTP call to its own `GET /api/account-context` — the exact
 same code path the Developer export uses — rather than recomputing facts
 a second way. If that call fails, the whole request fails with an error;
 it never silently answers from a stale or partial context.
+
+When a candidate is selected, the same request resolves its exporter identity,
+snapshot ID, and row ordinal through `DashboardReadModel.analyzeRetailGearCandidate`.
+The LLM receives that structured result only to explain it; eligibility, retained
+equipment, comparison, and ranking remain deterministic server facts.
 
 **Conversation model.** Fully stateless. Each question is answered
 independently with a fresh copy of the current account context; nothing
@@ -619,7 +626,7 @@ the database, not in the browser), and there's no multi-turn memory.
   the question.
 
 **What this Ask My Account feature is not.** No autonomous agent, no
-tool/function calling in this route, no MCP in this route, no memory, no RAG/vector DB, no scheduled or background jobs, no
+general tool/function-calling loop, no MCP in this route, no memory, no RAG/vector DB, no scheduled or background jobs, no
 WoW API access, no addon write-back, no gameplay automation. It answers
 one question with one provider call and stops.
 

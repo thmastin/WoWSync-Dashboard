@@ -514,6 +514,7 @@ export interface AskAccountResponse {
   model: string;
   contextGeneratedAt: number;
   contextSummary: { characterCount: number; versions: string[] };
+  gearAllocationRecommendation?: string;
   usage?: AskAccountUsage;
 }
 

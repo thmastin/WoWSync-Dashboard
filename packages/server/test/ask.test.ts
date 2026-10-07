@@ -11,7 +11,9 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { SqliteSnapshotStore, type SnapshotStore } from "@wowsync-dashboard/core";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { createApp } from "../src/app.ts";
+import { observation } from "../../core/test/equipmentObservationFixtures.ts";
 
 type MockResponder = (body: unknown) => { status: number; rawBody: string };
 
@@ -59,10 +61,11 @@ function openAiSuccess(answer: string) {
 
 async function withAppAndMockProvider(
   opts: { store?: SnapshotStore; respond?: MockResponder; apiKey?: string | null; model?: string },
-  run: (ctx: { baseUrl: string; wasProviderCalled: () => boolean; logs: string[] }) => Promise<void>,
+  run: (ctx: { baseUrl: string; wasProviderCalled: () => boolean; lastProviderRequest: () => unknown; logs: string[] }) => Promise<void>,
 ) {
   const store = opts.store ?? new SqliteSnapshotStore(":memory:");
-  const mock = await startMockOpenAI(opts.respond ?? openAiSuccess("A default test answer."));
+  let lastProviderRequest: unknown;
+  const mock = await startMockOpenAI((body) => { lastProviderRequest = body; return (opts.respond ?? openAiSuccess("A default test answer."))(body); });
 
   const savedEnv = { OPENAI_API_KEY: process.env.OPENAI_API_KEY, OPENAI_BASE_URL: process.env.OPENAI_BASE_URL, WOWSYNC_LLM_MODEL: process.env.WOWSYNC_LLM_MODEL };
   if (opts.apiKey === null) delete process.env.OPENAI_API_KEY;
@@ -89,7 +92,7 @@ async function withAppAndMockProvider(
   });
 
   try {
-    await run({ baseUrl: `http://127.0.0.1:${appPort}`, wasProviderCalled: mock.wasCalled, logs });
+    await run({ baseUrl: `http://127.0.0.1:${appPort}`, wasProviderCalled: mock.wasCalled, lastProviderRequest: () => lastProviderRequest, logs });
   } finally {
     console.error = originalConsoleError;
     await new Promise((r) => appServer.close(() => r(undefined)));
@@ -104,11 +107,11 @@ async function withAppAndMockProvider(
   }
 }
 
-async function ask(baseUrl: string, question: unknown) {
+async function ask(baseUrl: string, question: unknown, gearCandidate?: { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }) {
   const res = await fetch(`${baseUrl}/api/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...(gearCandidate ? { gearCandidate } : {}) }),
   });
   const body = await res.json();
   return { status: res.status, body };
@@ -128,6 +131,30 @@ test("a valid question returns a successful answer with the expected response sh
     assert.deepEqual(body.contextSummary.versions, ["classic-era", "tbc-anniversary", "retail", "forever"]);
     assert.equal(body.usage.totalTokens, 1290);
   });
+});
+
+test("Ask My Account passes a server-computed structured gear result to the provider when a candidate is selected", async () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const generatedAt = 1_800_000_000;
+  const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  const row = ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "500", "item:500", "?", "11", "120", "1", "4", "0", "INVTYPE_FINGER", "?", "?", "?", "?", "?", "?", "?", "OBSERVED"].join("\t");
+  const raw = buildWowSyncExport({ generatedAt, character: { name: "GearOwner", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${generatedAt}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
+  store.importSnapshot(raw);
+  const owner = store.listCharacters("retail")[0]!;
+  const snapshot = store.listSnapshots(owner.identityKey).find((entry) => entry.parsed.gearCandidates !== undefined)!;
+  try {
+    await withAppAndMockProvider({ store }, async ({ baseUrl, lastProviderRequest }) => {
+      const result = await ask(baseUrl, "Explain this recommendation", { exporterIdentityKey: owner.identityKey, snapshotId: snapshot.id, rowOrdinal: 1 });
+      assert.equal(result.status, 200);
+      assert.equal(result.body.gearAllocationRecommendation, "UNKNOWN");
+      const providerBody = lastProviderRequest() as { messages: Array<{ role: string; content: string }> };
+      const userMessage = providerBody.messages.find((message) => message.role === "user")!.content;
+      assert.match(userMessage, /DETERMINISTIC RETAIL GEAR ALLOCATION RESULT/);
+      assert.match(userMessage, /"ruleset":"retail-midnight-12\.1\.5-conservative-v1"/);
+      assert.match(userMessage, /"validity":"VALID_CANDIDATE"/);
+      assert.match(userMessage, /"recommendation":"UNKNOWN"/);
+    });
+  } finally { store.close(); }
 });
 
 // --- Empty / oversized question ---

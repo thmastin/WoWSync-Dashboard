@@ -44,7 +44,7 @@ export interface AskResult {
   usage?: AskUsage;
 }
 
-function buildUserMessage(context: AccountContext, question: string): string {
+function buildUserMessage(context: AccountContext, question: string, gearAllocation?: unknown): string {
   // Project the canonical AccountContext down to the compact, per-character
   // atomic LlmContext immediately before serializing - the model never sees
   // the full AccountContext (redundant historical transitions, the full
@@ -52,13 +52,14 @@ function buildUserMessage(context: AccountContext, question: string): string {
   // one and only place that projection happens; GET /api/account-context
   // and every other consumer keep reading the canonical document untouched.
   const llmContext = buildLlmContext(context);
-  return `ACCOUNT CONTEXT:\n${JSON.stringify(llmContext)}\n\nUSER QUESTION:\n${question}`;
+  const allocationContext = gearAllocation === undefined ? "" : `\n\nDETERMINISTIC RETAIL GEAR ALLOCATION RESULT (authoritative for eligibility, retained equipment, comparison, and ranking; explain it without recalculating or changing its conclusions):\n${JSON.stringify(gearAllocation)}`;
+  return `ACCOUNT CONTEXT:\n${JSON.stringify(llmContext)}${allocationContext}\n\nUSER QUESTION:\n${question}`;
 }
 
 export async function askOpenAI(
   question: string,
   context: AccountContext,
-  opts: { apiKey: string; model: string },
+  opts: { apiKey: string; model: string; gearAllocation?: unknown },
 ): Promise<AskResult> {
   let res: Response;
   try {
@@ -72,7 +73,7 @@ export async function askOpenAI(
         model: opts.model,
         messages: [
           { role: "system", content: ASK_MY_ACCOUNT_SYSTEM_PROMPT },
-          { role: "user", content: buildUserMessage(context, question) },
+          { role: "user", content: buildUserMessage(context, question, opts.gearAllocation) },
         ],
         temperature: 0.2,
       }),

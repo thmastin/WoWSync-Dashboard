@@ -26,6 +26,7 @@ export interface GearAllocationApi {
   status: string;
   value?: { recommendation: string; candidate: { itemID?: number; itemLevel?: number; baseEquipLocation?: string; validity: string }; assessments: Array<{ character: { identityKey: string; name: string; realm: string }; spec: { specID: number; name: string; role: string }; eligibility: string; suitability: string; primaryStatSuitability: string; comparison: string; deltaItemLevel?: number; reasons: string[]; currentSnapshotObservation: { state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; latestStoredObservation: { relationship: string; state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; retained: { state: "QUALIFIED"; snapshotId: number; observedAt: number; capture: number; revision: number } | { state: "UNKNOWN"; reason: string } }>; excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }>; limitations: string[] };
 }
+export interface GearCandidateRef { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }
 
 /**
  * What went wrong, in terms a caller can act on:
@@ -201,13 +202,15 @@ export function fetchAccountContext(signal?: AbortSignal) {
 /**
  * "Ask My Account" (POC): sends a single question to the server, which
  * retrieves the same canonical account context (above) and forwards it,
- * the question, and a system prompt to a configured LLM provider. Each
- * call is independent - no conversation history is kept on either side.
+ * the question, and a system prompt to a configured LLM provider. A caller
+ * may attach a selected Retail gear-candidate reference for server-side
+ * deterministic analysis. Each call is independent - no conversation history
+ * is kept on either side.
  */
-export function askAccount(question: string) {
+export function askAccount(question: string, gearCandidate?: GearCandidateRef) {
   return request<AskAccountResponse>(
     "/api/ask",
-    { method: "POST", body: JSON.stringify({ question }) },
+    { method: "POST", body: JSON.stringify({ question, ...(gearCandidate ? { gearCandidate } : {}) }) },
     { validate: (body) => isRecord(body) && typeof body.answer === "string" },
   );
 }
