@@ -34,6 +34,15 @@ import {
   validateSha,
   validateStartedRelease,
   waitForReadiness,
+  classifySchemaChange,
+  normalizeSchemaSql,
+  parseArgs,
+  parseSchemaDeclaration,
+  predictSchemaChange,
+  runCli,
+  schemaPlanRejection,
+  schemaSqlSha256,
+  validateSchemaDeclarations,
 } from '../wowsync-dev-deploy.mjs';
 
 async function tempDir(t) {
@@ -473,4 +482,221 @@ test('audit records always carry schema version and are append-only JSONL', asyn
 test('journal warning collection failure is diagnostic data, not a deployment failure', async () => {
   const diagnostic = await collectJournalWarnings('2026-10-04T00:00:00Z', {}, async () => { throw new Error('journal unavailable'); });
   assert.deepEqual(diagnostic, { ok: false, error: 'journal unavailable' });
+});
+
+
+// --- Expected additive schema changes: parser, classifier, recovery, planner ---
+
+const SHA = 'a'.repeat(40);
+const TABLE_SQL = 'CREATE TABLE extra_evidence(id INTEGER PRIMARY KEY, note TEXT)';
+const hash = (sql) => schemaSqlSha256(sql);
+const declaration = (type, name, sql) => `${type}:${name}@${hash(sql)}`;
+
+async function evidenceAfter(t, setupSql, changeSql = []) {
+  const root = await tempDir(t);
+  const dbPath = path.join(root, 'schema.sqlite');
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  for (const sql of setupSql) db.exec(sql);
+  const before = databaseEvidence(dbPath);
+  for (const sql of changeSql) db.exec(sql);
+  const after = databaseEvidence(dbPath);
+  db.close();
+  return { before, after };
+}
+
+test('D11 D19 D20 D21 D33 schema declarations parse only the exact table/index@sha256 form', () => {
+  const good = declaration('table', 'extra_evidence', TABLE_SQL);
+  assert.deepEqual(parseSchemaDeclaration(good), { type: 'table', name: 'extra_evidence', sqlSha256: hash(TABLE_SQL) });
+  const rejected = [
+    `trigger:extra@${hash(TABLE_SQL)}`, `view:extra@${hash(TABLE_SQL)}`, // D11 D12
+    `table:Extra@${hash(TABLE_SQL)}`, `table:1extra@${hash(TABLE_SQL)}`, `table:${'a'.repeat(64)}@${hash(TABLE_SQL)}`, // D20
+    `table:extra@${hash(TABLE_SQL).slice(1)}`, `table:extra@${hash(TABLE_SQL).toUpperCase()}`, 'table:extra', 'extra', '',
+    `table:*@${hash(TABLE_SQL)}`, `table:obs%@${hash(TABLE_SQL)}`, `index:.*@${hash(TABLE_SQL)}`, `table:extra_*@${hash(TABLE_SQL)}`, // D21
+    `table:extra @${hash(TABLE_SQL)}`, `table:extra@${hash(TABLE_SQL)} `,
+  ];
+  for (const value of rejected) assert.throws(() => parseSchemaDeclaration(value), /Invalid --expect-schema-add/, value);
+  assert.throws(() => validateSchemaDeclarations([parseSchemaDeclaration(good), parseSchemaDeclaration(good)]), /Duplicate/); // D19
+  assert.throws(() => validateSchemaDeclarations([parseSchemaDeclaration(good), parseSchemaDeclaration(declaration('index', 'extra_evidence', TABLE_SQL))]), /share one namespace/);
+  assert.throws(() => parseArgs(['deploy', 'main', SHA, '--expect-schema-add', good, '--expect-schema-add', good]), /Duplicate/);
+  assert.throws(() => parseArgs(['deploy', 'main', SHA, '--expect-schema-add']), /Invalid --expect-schema-add/);
+  assert.throws(() => parseArgs(['deploy', 'main', SHA, '--previous-code-compatible']), /requires at least one --expect-schema-add/); // D33
+  assert.throws(() => parseArgs(['deploy', 'main', SHA, '--expect-schema-add', good, '--previous-code-compatible', '--previous-code-compatible']), /more than once/);
+});
+
+test('D14 SQLite-internal names can never be declared', () => {
+  for (const name of ['sqlite_autoindex_extra_1', 'sqlite_sequence', 'sqlitefoo', 'sqlite_stat1']) {
+    assert.throws(() => parseSchemaDeclaration(`table:${name}@${hash(TABLE_SQL)}`), /SQLite-internal/, name);
+  }
+});
+
+test('D22 without the new flags every command parses exactly as before; the flags are deploy-only', () => {
+  const good = declaration('table', 'extra_evidence', TABLE_SQL);
+  const plain = parseArgs(['deploy', 'main', SHA]);
+  assert.deepEqual(plain.schemaDeclarations, []);
+  assert.equal(plain.previousCodeCompatible, false);
+  assert.deepEqual(Object.keys(plain).sort(), ['command', 'expectedSha', 'json', 'previousCodeCompatible', 'ref', 'routes', 'schemaDeclarations']);
+  assert.deepEqual(parseArgs(['prepare', 'main', SHA]), { command: 'prepare', ref: 'refs/heads/main', expectedSha: SHA, routes: plain.routes, json: false });
+  assert.deepEqual(parseArgs(['status', '--json']), { command: 'status', json: true });
+  for (const argv of [['status'], ['prepare', 'main', SHA], ['rollback', SHA], ['backup', 'label']]) {
+    assert.throws(() => parseArgs([...argv, '--expect-schema-add', good]), /accepted only by deploy/, argv.join(' '));
+    assert.throws(() => parseArgs([...argv, '--previous-code-compatible']), /accepted only by deploy/, argv.join(' '));
+  }
+  const declared = parseArgs(['deploy', 'main', SHA, '--expect-schema-add', good, '--previous-code-compatible', '--json']);
+  assert.deepEqual(declared.schemaDeclarations, [{ type: 'table', name: 'extra_evidence', sqlSha256: hash(TABLE_SQL) }]);
+  assert.equal(declared.previousCodeCompatible, true);
+});
+
+test('D22 malformed declarations are usage errors (exit 64) and never reach DEV', async () => {
+  let error = '';
+  const code = await runCli(['deploy', 'main', SHA, '--expect-schema-add', 'table:*@x'], { ops: {}, write: () => assert.fail('no result expected'), writeError: (text) => { error = text; } });
+  assert.equal(code, 64);
+  assert.match(error, /Invalid --expect-schema-add/);
+  assert.match(error, /--expect-schema-add table:<name>@<sha256>/);
+});
+
+test('one SQL normalization and hash are shared by evidence, plan, declarations and classification', async (t) => {
+  assert.equal(normalizeSchemaSql('CREATE  TABLE\n  x (\n a INT )'), 'CREATE TABLE x ( a INT )');
+  assert.equal(normalizeSchemaSql(null), null);
+  assert.equal(hash('CREATE TABLE x(a)'), hash('CREATE   TABLE\nx(a)'));
+  const { after } = await evidenceAfter(t, [], ['CREATE TABLE x(\n  a INT\n)']);
+  const item = after.schema.find((object) => object.name === 'x');
+  assert.equal(item.sql, 'CREATE TABLE x( a INT )');
+  const change = classifySchemaChange({ ...after, schema: [] }, after, []);
+  assert.equal(change.added[0].sqlSha256, hash(item.sql));
+});
+
+test('D14 the evidence filter hides only exact sqlite_ internals: autoindex and sequence are excluded, sqliteXfoo is visible', async (t) => {
+  const { before, after } = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER PRIMARY KEY AUTOINCREMENT)'], [
+    'CREATE TABLE extra_evidence(id INTEGER PRIMARY KEY, a INT, b INT, UNIQUE (a, b))',
+    'CREATE TABLE sqliteXfoo(id INTEGER)',
+  ]);
+  const names = after.schema.map((item) => item.name);
+  assert.ok(!names.some((name) => name.startsWith('sqlite_')), names.join(','));
+  assert.ok(names.includes('sqliteXfoo'), 'a user object is no longer hidden by the LIKE wildcard');
+  assert.ok(Object.keys(after.counts).includes('sqliteXfoo'));
+  const change = classifySchemaChange(before, after, []);
+  assert.deepEqual(change.added.map((item) => item.name).sort(), ['extra_evidence', 'sqliteXfoo'], 'the autoindex is implied, not an added object');
+  assert.equal(change.classification, 'UNDECLARED');
+});
+
+test('D07 D08 D13 the classifier reports changed, removed, retyped and user_version differences as UNDECLARED', async (t) => {
+  const changed = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], ['DROP TABLE base', 'CREATE TABLE base(id INTEGER, extra TEXT)']);
+  assert.equal(classifySchemaChange(changed.before, changed.after).classification, 'UNDECLARED');
+  assert.deepEqual(classifySchemaChange(changed.before, changed.after).changed.map((item) => item.before.name), ['base']);
+  const removed = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)', 'CREATE TABLE gone(id INTEGER)'], ['DROP TABLE gone']);
+  assert.deepEqual(classifySchemaChange(removed.before, removed.after).removed.map((item) => item.name), ['gone']);
+  const retyped = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)', 'CREATE TABLE thing(id INTEGER)'], ['DROP TABLE thing', 'CREATE VIEW thing AS SELECT id FROM base']);
+  assert.equal(classifySchemaChange(retyped.before, retyped.after).classification, 'UNDECLARED');
+  const version = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], ['PRAGMA user_version = 3']);
+  const change = classifySchemaChange(version.before, version.after);
+  assert.equal(change.classification, 'UNDECLARED');
+  assert.match(change.problems.join(), /user_version changed 0 -> 3/);
+  const none = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], ["INSERT INTO base VALUES (1)"]);
+  assert.equal(classifySchemaChange(none.before, none.after).classification, 'NONE', 'data writes are not schema changes');
+});
+
+test('the classifier accepts exact declarations only; an index must belong to an existing or declared table', async (t) => {
+  const indexSql = 'CREATE INDEX extra_evidence_note ON extra_evidence(note)';
+  const { before, after } = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], [TABLE_SQL, indexSql]);
+  const both = [parseSchemaDeclaration(declaration('table', 'extra_evidence', TABLE_SQL)), parseSchemaDeclaration(declaration('index', 'extra_evidence_note', indexSql))];
+  assert.equal(classifySchemaChange(before, after, both).classification, 'DECLARED_ADDITIVE');
+  assert.equal(classifySchemaChange(before, after, [both[0]]).classification, 'UNDECLARED', 'undeclared index');
+  const onlyIndex = classifySchemaChange(before, after, [both[1]]);
+  assert.equal(onlyIndex.classification, 'UNDECLARED');
+  assert.match(onlyIndex.problems.join(), /extra_evidence was added but not declared/);
+  const wrongHash = classifySchemaChange(before, after, [{ ...both[0], sqlSha256: hash('CREATE TABLE extra_evidence(id INTEGER)') }, both[1]]);
+  assert.match(wrongHash.problems.join(), /does not match the declared/);
+  const indexOnly = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)', TABLE_SQL], [indexSql]);
+  assert.equal(classifySchemaChange(indexOnly.before, indexOnly.after, [both[1]]).classification, 'DECLARED_ADDITIVE', 'index on a pre-existing table');
+  const newTableIndex = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], [TABLE_SQL, indexSql]);
+  const missingTableDeclaration = classifySchemaChange(newTableIndex.before, { ...newTableIndex.after, schema: newTableIndex.after.schema.filter((item) => item.name !== 'extra_evidence') }, [both[1]]);
+  assert.match(missingTableDeclaration.problems.join(), /neither pre-existing nor a declared new table/);
+  assert.equal(classifySchemaChange(null, after, both).classification, 'UNKNOWN');
+  assert.equal(classifySchemaChange(before, { ...after, integrityCheck: 'bad' }, both).classification, 'UNKNOWN');
+});
+
+test('D34 recovery permits previous code only for NONE, or for exactly the declared additions with the acknowledgement', async (t) => {
+  const { before, after } = await evidenceAfter(t, ['CREATE TABLE base(id INTEGER)'], [TABLE_SQL]);
+  const declared = [parseSchemaDeclaration(declaration('table', 'extra_evidence', TABLE_SQL))];
+  const exact = classifySchemaChange(before, after, declared);
+  const none = classifySchemaChange(before, before, []);
+  assert.equal(recoveryPolicy({ schema: none }).action, 'restore-previous-release-and-validate');
+  assert.deepEqual(recoveryPolicy({ schema: exact, declarations: declared, previousCodeCompatible: true }), {
+    action: 'restore-previous-release-retaining-declared-additions', mayStartPreviousCode: true, retainedAdditions: [{ type: 'table', name: 'extra_evidence' }],
+  });
+  assert.equal(recoveryPolicy({ schema: exact, declarations: declared, previousCodeCompatible: false }).mayStartPreviousCode, false, 'no acknowledgement');
+  assert.equal(recoveryPolicy({ schema: null, declarations: declared, previousCodeCompatible: true, candidateStarted: true }).mayStartPreviousCode, false, 'UNKNOWN never permits previous code');
+  assert.equal(recoveryPolicy({ schema: { classification: 'UNKNOWN' }, declarations: declared, previousCodeCompatible: true }).mayStartPreviousCode, false);
+  const undeclared = classifySchemaChange(before, after, []);
+  assert.equal(recoveryPolicy({ schema: undeclared, declarations: declared, previousCodeCompatible: true }).mayStartPreviousCode, false, 'the acknowledgement never widens a mismatch');
+  const forged = { ...exact, declarationsSatisfied: false };
+  assert.equal(recoveryPolicy({ schema: forged, declarations: declared, previousCodeCompatible: true }).mayStartPreviousCode, false);
+  assert.equal(recoveryPolicy({ schema: exact, declarations: [], previousCodeCompatible: true }).mayStartPreviousCode, false);
+  const events = [];
+  const recovered = await recoverFailedPromotion({
+    schema: exact, declarations: declared, previousCodeCompatible: true, candidateStarted: true, priorStopResult: 'succeeded',
+    stop: async () => events.push('stop'), setPrevious: async () => events.push('previous'), startPrevious: async () => events.push('start'), validatePrevious: async () => 'ok',
+  });
+  assert.equal(recovered.state, 'validated');
+  assert.deepEqual(recovered.retainedAdditions, [{ type: 'table', name: 'extra_evidence' }]);
+  assert.deepEqual(events, ['previous', 'start']);
+});
+
+test('schema plan rejection rules: NONE needs no declarations, ADDITIVE needs exact ones, NON-ADDITIVE is never declarable', () => {
+  assert.equal(schemaPlanRejection({ state: 'NONE' }, []), null);
+  assert.match(schemaPlanRejection({ state: 'NONE' }, [{ type: 'table', name: 'x', sqlSha256: hash('x') }]), /No schema change is predicted/);
+  assert.match(schemaPlanRejection({ state: 'ADDITIVE', added: [{ declaration: 'table:x@abc' }] }, []), /--expect-schema-add table:x@abc/);
+  assert.match(schemaPlanRejection({ state: 'ADDITIVE', added: [], declarationsMatch: false, declarationProblems: ['nope'] }, [{ type: 'table', name: 'x', sqlSha256: hash('x') }]), /do not match the candidate plan: nope/);
+  assert.equal(schemaPlanRejection({ state: 'ADDITIVE', added: [], declarationsMatch: true }, [{ type: 'table', name: 'x', sqlSha256: hash('x') }]), null);
+  assert.match(schemaPlanRejection({ state: 'NON_ADDITIVE', problems: ['table base was removed'], added: [] }, [{ type: 'table', name: 'x', sqlSha256: hash('x') }]), /NON-ADDITIVE \(table base was removed\); declarations cannot authorize it/);
+});
+
+// A tiny release tree whose packages/core/src/sqliteStore.ts is real
+// TypeScript, executed by the real planner through /usr/bin/node.
+async function fakeRelease(root, name, body) {
+  const release = path.join(root, name);
+  await mkdir(path.join(release, 'packages', 'core', 'src'), { recursive: true });
+  await writeFile(path.join(release, 'packages', 'core', 'src', 'sqliteStore.ts'), `import { DatabaseSync } from "node:sqlite";
+const SCHEMA: string = \`${body}\`;
+export class SqliteSnapshotStore {
+  private db: DatabaseSync;
+  constructor(file: string) {
+    this.db = new DatabaseSync(file);
+    this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec(SCHEMA);
+  }
+  close(): void { this.db.close(); }
+}
+`);
+  return release;
+}
+
+test('D31 the real planner runs each release store against disposable databases under staging and removes them', async (t) => {
+  const root = await tempDir(t);
+  const staging = path.join(root, 'staging');
+  const previous = await fakeRelease(root, 'previous', 'CREATE TABLE IF NOT EXISTS base(id INTEGER PRIMARY KEY AUTOINCREMENT);');
+  const candidate = await fakeRelease(root, 'candidate', `CREATE TABLE IF NOT EXISTS base(id INTEGER PRIMARY KEY AUTOINCREMENT);\n${TABLE_SQL.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')};`);
+  const plan = await predictSchemaChange({ previousRelease: previous, candidateRelease: candidate, stagingDir: staging });
+  assert.equal(plan.state, 'ADDITIVE');
+  assert.deepEqual(plan.added.map((item) => item.declaration), [declaration('table', 'extra_evidence', TABLE_SQL)]);
+  assert.equal(plan.declarationsMatch, false, 'an additive plan is not matched by an empty declaration set');
+  const matched = await predictSchemaChange({ previousRelease: previous, candidateRelease: candidate, stagingDir: staging, declarations: [parseSchemaDeclaration(declaration('table', 'extra_evidence', TABLE_SQL))] });
+  assert.equal(matched.declarationsMatch, true);
+  const { readdir } = await import('node:fs/promises');
+  assert.deepEqual(await readdir(staging), [], 'disposable plan databases removed');
+  const same = await predictSchemaChange({ previousRelease: previous, candidateRelease: previous, stagingDir: staging });
+  assert.equal(same.state, 'NONE');
+});
+
+test('D31 D32 a failing release store makes the plan throw and still removes its disposable files', async (t) => {
+  const root = await tempDir(t);
+  const staging = path.join(root, 'staging');
+  const previous = await fakeRelease(root, 'previous', 'CREATE TABLE IF NOT EXISTS base(id INTEGER);');
+  const broken = await fakeRelease(root, 'broken', 'CREATE TABLE IF NOT EXISTS base(id INTEGER); THIS IS NOT SQL;');
+  await assert.rejects(predictSchemaChange({ previousRelease: previous, candidateRelease: broken, stagingDir: staging }), /failed/);
+  const { readdir } = await import('node:fs/promises');
+  assert.deepEqual(await readdir(staging), []);
+  await assert.rejects(predictSchemaChange({ previousRelease: previous, candidateRelease: path.join(root, 'missing'), stagingDir: staging }), /failed/);
+  assert.deepEqual(await readdir(staging), []);
 });
