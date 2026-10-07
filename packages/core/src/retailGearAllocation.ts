@@ -81,6 +81,7 @@ export function assessRetailCandidate(input: {
   const armorBodyLocation = ["INVTYPE_HEAD","INVTYPE_SHOULDER","INVTYPE_CHEST","INVTYPE_ROBE","INVTYPE_WAIST","INVTYPE_LEGS","INVTYPE_FEET","INVTYPE_WRIST","INVTYPE_HAND"].includes(loc ?? "");
   const armor = armorBodyLocation && classID === 4 && subclass !== undefined ? ARMOR_SUBCLASS[subclass] : undefined;
   const weapon = classID === 2;
+  const jewelryLocation = loc === "INVTYPE_FINGER" || loc === "INVTYPE_TRINKET";
   const slotNames: Record<string, string[]> = {
     INVTYPE_HEAD: ["1"], INVTYPE_NECK: ["2"], INVTYPE_SHOULDER: ["3"], INVTYPE_CHEST: ["5"], INVTYPE_ROBE: ["5"], INVTYPE_WAIST: ["6"], INVTYPE_LEGS: ["7"], INVTYPE_FEET: ["8"], INVTYPE_WRIST: ["9"], INVTYPE_HAND: ["10"], INVTYPE_CLOAK: ["15"], INVTYPE_FINGER: ["11", "12"], INVTYPE_TRINKET: ["13", "14"], INVTYPE_WEAPON: ["16", "17"], INVTYPE_WEAPONMAINHAND: ["16"], INVTYPE_WEAPONOFFHAND: ["17"], INVTYPE_2HWEAPON: ["16", "17"], INVTYPE_SHIELD: ["17"], INVTYPE_HOLDABLE: ["17"], INVTYPE_RANGED: ["18"], INVTYPE_RANGEDRIGHT: ["18"], INVTYPE_THROWN: ["18"], INVTYPE_RELIC: ["18"],
   };
@@ -88,7 +89,8 @@ export function assessRetailCandidate(input: {
   const expectedLocation: Record<number, string> = { 1:"INVTYPE_HEAD",2:"INVTYPE_NECK",3:"INVTYPE_SHOULDER",4:"INVTYPE_BODY",5:"INVTYPE_CHEST",6:"INVTYPE_WAIST",7:"INVTYPE_LEGS",8:"INVTYPE_FEET",9:"INVTYPE_WRIST",10:"INVTYPE_HAND",11:"INVTYPE_FINGER",12:"INVTYPE_TRINKET",13:"INVTYPE_WEAPON",14:"INVTYPE_SHIELD",15:"INVTYPE_RANGED",16:"INVTYPE_CLOAK",17:"INVTYPE_2HWEAPON",20:"INVTYPE_ROBE",21:"INVTYPE_WEAPONMAINHAND",22:"INVTYPE_WEAPONOFFHAND",23:"INVTYPE_HOLDABLE",26:"INVTYPE_RANGEDRIGHT",28:"INVTYPE_RELIC" };
   const typeLocation = equipType === undefined ? undefined : expectedLocation[equipType];
   const weaponLocation = ["INVTYPE_WEAPON","INVTYPE_WEAPONMAINHAND","INVTYPE_WEAPONOFFHAND","INVTYPE_2HWEAPON","INVTYPE_RANGED","INVTYPE_RANGEDRIGHT","INVTYPE_THROWN","INVTYPE_RELIC"].includes(loc ?? "");
-  const contradictory = (typeLocation !== undefined && loc !== undefined && typeLocation !== loc) || (classID === 2 && !weaponLocation) || (classID === 4 && weaponLocation) || (input.candidate.locationType.state === "KNOWN" && input.candidate.locationType.value === "EQUIPMENT_SLOT") || input.candidate.candidateState !== "EQUIPPABLE" || input.candidate.observationState !== "OBSERVED";
+  const unsupportedKnownEquipType = input.candidate.equipType.state === "KNOWN" && typeLocation === undefined;
+  const contradictory = unsupportedKnownEquipType || (typeLocation !== undefined && loc !== undefined && typeLocation !== loc) || (classID === 2 && !weaponLocation) || (classID === 4 && weaponLocation) || (classID === 4 && jewelryLocation && subclass !== undefined && subclass !== 0) || (input.candidate.locationType.state === "KNOWN" && input.candidate.locationType.value === "EQUIPMENT_SLOT") || input.candidate.candidateState !== "EQUIPPABLE" || input.candidate.observationState !== "OBSERVED";
   const candidateValidity = contradictory || input.candidate.locationType.state !== "KNOWN" || !["CONTAINER_SLOT", "BANK_SLOT"].includes(input.candidate.locationType.value) || !evidence(input.candidate.itemID) ? "UNKNOWN_OR_NOT_ALLOCATABLE" : "VALID_CANDIDATE";
   const assessments: RetailGearSpecAssessment[] = [];
   const excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }> = [];

@@ -149,3 +149,23 @@ test("unknown candidate location or item identity cannot produce a per-spec comp
     assert.equal(result.recommendation, "UNKNOWN");
   }
 });
+
+test("unsupported known equip types cannot borrow a valid base location for comparison", () => {
+  for (const equipType of [0, 999]) {
+    const row = candidate();
+    row.equipType = { state: "KNOWN", value: equipType };
+    const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: warriorObs() }] });
+    assert.equal(result.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE");
+    assert.ok(result.assessments.every((assessment) => assessment.comparison === "UNKNOWN"));
+    assert.equal(result.recommendation, "UNKNOWN");
+  }
+});
+
+test("known body-armor subclasses cannot be treated as suitable jewelry", () => {
+  const row = candidate();
+  row.subclassID = { state: "KNOWN", value: 4 };
+  const result = assessRetailCandidate({ candidate: row, exporterSnapshotId: 99, rowOrdinal: 1, characters: [{ identityKey: "retail::a::x", name: "A", realm: "X", class: "Warrior", level: 80, characterState: "OBSERVED", observations: warriorObs() }] });
+  assert.equal(result.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE");
+  assert.ok(result.assessments.every((assessment) => assessment.comparison === "UNKNOWN"));
+  assert.equal(result.recommendation, "UNKNOWN");
+});
