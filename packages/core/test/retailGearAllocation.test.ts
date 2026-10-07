@@ -137,6 +137,17 @@ test("stable deterministic ordering and equal supported upgrades report ambiguit
   assert.deepEqual(result.assessments.map((a) => `${a.character.name}:${a.spec.specID}`), ["Ada:71", "Ada:72", "Ada:73", "Zed:71", "Zed:72", "Zed:73"]);
 });
 
+test("recognized uppercase WoW class tokens are normalized while unknown classes stay excluded", () => {
+  const result = assessRetailCandidate({ candidate: candidate(), exporterSnapshotId: 99, rowOrdinal: 1, characters: [
+    { identityKey: "retail::token::x", name: "Token", realm: "X", class: "WARRIOR", level: 80, characterState: "OBSERVED", observations: warriorObs() },
+    { identityKey: "retail::unknown::x", name: "Unknown", realm: "X", class: "WIZARD", level: 80, characterState: "OBSERVED", observations: [] },
+  ] });
+  assert.equal(result.assessments.length, 3);
+  assert.ok(result.assessments.every((assessment) => assessment.character.name === "Token"));
+  assert.deepEqual(result.excludedRecipients.map((recipient) => recipient.name), ["Unknown"]);
+  assert.match(result.excludedRecipients[0]!.reason, /Class WIZARD is not in this Retail ruleset/);
+});
+
 test("item-level upgrade ranking prioritizes maximum delta before stable identity and ties only at that maximum", () => {
   const specsAtLevel = (level: number) => warriorObs().map((row) => {
     const specID = (row.evidence.specEquipmentObservation as any).activeSpecBefore.specID as number;

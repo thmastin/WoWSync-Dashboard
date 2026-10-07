@@ -18,6 +18,8 @@ const SPECS: Record<string, Array<{ id: number; name: string; role: "TANK" | "HE
   Warlock: [{ id: 265, name: "Affliction", role: "DAMAGER" }, { id: 266, name: "Demonology", role: "DAMAGER" }, { id: 267, name: "Destruction", role: "DAMAGER" }],
   Warrior: [{ id: 71, name: "Arms", role: "DAMAGER" }, { id: 72, name: "Fury", role: "DAMAGER" }, { id: 73, name: "Protection", role: "TANK" }],
 };
+const RETAIL_CLASS_BY_KEY: Readonly<Record<string, string>> = Object.fromEntries(Object.keys(SPECS).map((name) => [name.replace(/\s+/g, "").toUpperCase(), name]));
+const normalizeRetailClass = (raw: string | undefined): string | undefined => raw ? RETAIL_CLASS_BY_KEY[raw.trim().replace(/\s+/g, "").toUpperCase()] : undefined;
 
 const ARMOR: Record<string, string> = { "Death Knight": "PLATE", Paladin: "PLATE", Warrior: "PLATE", Hunter: "MAIL", Shaman: "MAIL", Evoker: "MAIL", "Demon Hunter": "LEATHER", Druid: "LEATHER", Monk: "LEATHER", Rogue: "LEATHER", Mage: "CLOTH", Priest: "CLOTH", Warlock: "CLOTH" };
 const ARMOR_SUBCLASS: Record<number, string> = { 1: "CLOTH", 2: "LEATHER", 3: "MAIL", 4: "PLATE" };
@@ -95,17 +97,18 @@ export function assessRetailCandidate(input: {
   const assessments: RetailGearSpecAssessment[] = [];
   const excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }> = [];
   for (const character of input.characters) {
-    if (character.characterState !== "OBSERVED" || !character.class || !SPECS[character.class]) {
+    const className = normalizeRetailClass(character.class);
+    if (character.characterState !== "OBSERVED" || !className || !SPECS[className]) {
       excludedRecipients.push({ identityKey: character.identityKey, name: character.name, realm: character.realm, reason: character.characterState !== "OBSERVED" ? `Latest character class/level section is ${character.characterState}; recipient eligibility is UNKNOWN.` : !character.class ? "No observed class is available; recipient specialization cannot be determined." : `Class ${character.class} is not in this Retail ruleset; suitability is UNKNOWN.` });
       continue;
     }
-    for (const spec of SPECS[character.class]!) {
+    for (const spec of SPECS[className]!) {
       const reasons: string[] = [];
       const eligibility = req === undefined || character.level === undefined ? "UNKNOWN" : character.level < req ? "INELIGIBLE" : "ELIGIBLE";
       if (eligibility === "INELIGIBLE") reasons.push(`Observed level ${character.level} is below candidate required level ${req}.`);
       else if (eligibility === "UNKNOWN") reasons.push("Observed character level or candidate required level is unavailable.");
       let suitability: RetailGearSpecAssessment["suitability"] = "UNKNOWN";
-      if (armor && ARMOR[character.class] !== armor) { suitability = "UNKNOWN"; reasons.push(`Candidate ${armor} armor differs from this class's native ${ARMOR[character.class]} family. This plausibility mismatch does not prove the client forbids equipping lower armor families; technical suitability remains UNKNOWN.`); }
+      if (armor && ARMOR[className] !== armor) { suitability = "UNKNOWN"; reasons.push(`Candidate ${armor} armor differs from this class's native ${ARMOR[className]} family. This plausibility mismatch does not prove the client forbids equipping lower armor families; technical suitability remains UNKNOWN.`); }
       else if (weapon) { suitability = "UNKNOWN"; reasons.push("Weapon subclass proficiency and spec weapon suitability are not asserted by this conservative allocation ruleset."); }
       else if (loc === "INVTYPE_SHIELD" || loc === "INVTYPE_HOLDABLE") reasons.push("Off-hand shield/holdable compatibility and weapon-pair interactions are not asserted by this ruleset.");
       else if (classID !== 4) reasons.push("Only known Retail armor and jewelry candidates are handled; item class is unsupported or UNKNOWN.");

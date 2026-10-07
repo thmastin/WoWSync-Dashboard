@@ -40,18 +40,18 @@ test("same-name realm matches are ambiguity, never a silent choice", () => {
   } finally { store.close(); }
 });
 
-test("Retail candidate analysis integrates SQLite evidence, retained per-spec equipment, and provenance", () => {
+test("Retail candidate analysis integrates SQLite evidence, uppercase WoW class tokens, per-spec equipment, and provenance", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
   const row = ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "500", "item:500", "?", "11", "120", "1", "4", "0", "INVTYPE_FINGER", "?", "?", "?", "?", "?", "?", "?", "OBSERVED"].join("\t");
-  const candidateExport = buildWowSyncExport({ generatedAt: NOW - 1, character: { name: "Exporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 1}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
+  const candidateExport = buildWowSyncExport({ generatedAt: NOW - 1, character: { name: "Exporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 1}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
   try {
     store.importSnapshot(candidateExport);
-    const identity = store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Arms", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } })).character.identityKey;
+    const identity = store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Arms", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } })).character.identityKey;
     for (const name of ["Exporter", "Arms"]) for (const [index, specID] of [71, 72, 73].entries()) {
       const observedAt = NOW - 10 + index;
       const tuple = { observedAt, capture: index + 1, revision: 1 };
-      store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "Warrior", level: 90 } }), {
+      store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } }), {
         equipmentObservation: observation({ tuple, specID, slots: { "11": { itemID: 100, itemLevel: 100 }, "12": { itemID: 101, itemLevel: 105 } } }),
       });
     }
