@@ -1,21 +1,19 @@
 # Current WoWSync state
 
-**Latest feature-branch checkpoint (2026-10-09):** project revision history is append-only and
+**Latest feature-branch checkpoint (2026-10-09):** independent Omarchy ERP validation has been integrated into the Windows branch. The combined harness checks Core, MCP, server, web, typechecks, production build, browser acceptance, migration compatibility, and Forever allocation contracts. The workbench now projects observation-backed work-order progress without causal attribution. Project revision history is append-only and
 transactional. Create, edit, and status changes commit a revision event atomically with the project;
 work-order status edits now include stable task IDs and from/to states, while the workbench can
 record player-authored instructions, assignee, planned source, and intended destination. These are
 plan fields only, not evidence of access, ownership, or transfer. REST and MCP share the event payload;
 REST/MCP and the Projects & Work Orders page expose the latest 50 entries with total/truncation
-metadata, while AccountContext schema 8 includes current revision and event count. Status and
+metadata, while AccountContext schema 9 includes current revision, event count, and compact work-order reconciliation counts. Each work order distinguishes player-recorded completion, current linked resource coverage/shortfall, observed changes with unknown cause, mixed evidence, and stale/unknown evidence. Status and
 completion-note changes remain player-entered Dashboard intent. History does not claim a game action
 or infer causality. Exact Retail recipe learned-state rows can now satisfy a single recipe-knowledge
 need; partial catalogs, missing entries, historical data, other versions, current skill, unlocks,
 reagents, and craftability retain explicit uncertainty. The full validation command passes: core
-785/785, MCP 2/2, server 246 pass + 2
-skipped, web 289/289; TypeScript checks and production build pass (524.67 kB JavaScript bundle
-advisory). Focused independent review found and resolved status-transition display and separator
-issues. Work-order readiness now projects explicit dependencies and linked needs through the same read model, flags changed linked observations for review even after a player-marked completion, and exposes manual status controls for planned/in-progress/waiting. It is tested for unknown/stale/shortfall and manual review. Still no browser, persistent DEV, live-game, or production
-validation. Current HEAD and report are recorded in the latest durable truth checkpoint.
+787/787, MCP 3/3, server 246 pass + 2
+skipped, web 290/290; TypeScript checks and production build pass (525.60 kB JavaScript bundle
+advisory). The independent Omarchy acceptance branch is integrated. Focused independent review found no blocking findings. Work-order readiness and progress use the same evidence-aware read model; two synthetic Playwright scenarios cover the Retail allocation flow and project -> resource need -> linked manual work order in a temporary environment. These do not represent live account or production browser validation. No live-game planning session was performed. Current HEAD and report are recorded in the latest durable truth checkpoint.
 
 **Previous feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
 `feature/forever-gear-observation` extends the shared core with version-scoped persistent projects,

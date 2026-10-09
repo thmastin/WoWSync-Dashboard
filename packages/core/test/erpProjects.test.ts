@@ -433,6 +433,52 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
   } finally { store.close(); }
 });
 
+test("work-order progress separates player completion, observed state, changed evidence, and unresolved data", () => {
+  const options = (generatedAt: number, quantity: number) => ({ generatedAt, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport(options(1_700_000_000, 8)));
+    const planned = { ...project(imported.character.identityKey), workOrders: [{ ...project(imported.character.identityKey).workOrders[0]!, status: "IN_PROGRESS" as const }] };
+    const current = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(current.recordedStatus, "IN_PROGRESS");
+    assert.equal(current.completionRecorded, false);
+    assert.equal(current.linkedNeedState, "ALL_CURRENTLY_MET");
+    assert.equal(current.observationChange, "UNKNOWN", "one capture establishes current stock but no before/after change");
+    assert.equal(current.reconciliation, "CURRENT_LINKED_NEEDS_MET", "resource condition does not claim that the gather task happened");
+
+    store.importSnapshot(buildWowSyncExport(options(1_700_000_100, 7)));
+    const changed = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_110).workOrderProgress[0]!;
+    assert.equal(changed.observationChange, "CHANGED");
+    assert.equal(changed.reconciliation, "OBSERVATION_CHANGED_CAUSE_UNKNOWN");
+    assert.match(changed.reason, /does not establish whether this work order caused the change/);
+
+    const completed = { ...planned, workOrders: planned.workOrders.map((order) => ({ ...order, status: "COMPLETED" as const, completionNote: "Player recorded manual completion." })) };
+    const declared = evaluateErpProject(completed, (key) => store.listSnapshots(key), [completed], 1_700_000_110).workOrderProgress[0]!;
+    assert.equal(declared.completionRecorded, true);
+    assert.equal(declared.reconciliation, "PLAYER_RECORDED_COMPLETE", "manual completion remains separate from the observed resource change");
+
+    store.importSnapshot(buildWowSyncExport(options(1_700_000_200, 3)));
+    const currentShortfall = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_210).workOrderProgress[0]!;
+    assert.equal(currentShortfall.linkedNeedState, "CURRENT_SHORTFALL");
+    assert.equal(currentShortfall.observationChange, "CHANGED");
+    assert.equal(currentShortfall.reconciliation, "CURRENT_LINKED_NEEDS_UNMET", "the current shortfall takes precedence while change provenance stays separately visible");
+    assert.deepEqual(currentShortfall.shortfallNeedIds, ["need_stone"]);
+
+    const missingStore = new SqliteSnapshotStore(":memory:");
+    try {
+      const missing = missingStore.importSnapshot(buildWowSyncExport(options(1_700_000_000, 0)));
+      const shortPlan = { ...project(missing.character.identityKey), workOrders: [{ ...project(missing.character.identityKey).workOrders[0]!, status: "COMPLETED" as const, completionNote: "Player says complete." }] };
+      const conflict = evaluateErpProject(shortPlan, (key) => missingStore.listSnapshots(key), [shortPlan], 1_700_000_010).workOrderProgress[0]!;
+      assert.equal(conflict.linkedNeedState, "CURRENT_SHORTFALL");
+      assert.equal(conflict.reconciliation, "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL");
+      assert.match(conflict.reason, /does not prove the task failed or identify the cause/);
+      const stale = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_000 + 4 * 86400).workOrderProgress[0]!;
+      assert.equal(stale.linkedNeedState, "STALE_OR_UNKNOWN");
+      assert.equal(stale.reconciliation, "INSUFFICIENT_EVIDENCE");
+    } finally { missingStore.close(); }
+  } finally { store.close(); }
+});
+
 test("validation rejects cross-version character references, unsupported assumptions, and unrecorded completion", () => {
   const { store, identityKey } = seedStore();
   try {

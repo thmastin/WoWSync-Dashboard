@@ -47,7 +47,7 @@ import type { ErpProjectView } from "./erpProjects.ts";
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "8";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "9";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -141,7 +141,7 @@ export interface AccountContext {
   currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
   /** Player-authored ERP intent, separate from observed facts; evidence is summarized by the planning read model. */
-  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; needStates: Record<string, number> }> };
+  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; needStates: Record<string, number> }> };
 }
 
 export interface AccountContextInput {
@@ -259,6 +259,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
       stableId: p.stableId, version: p.version, title: p.title, status: p.status, priority: p.priority, revision: p.revision, historyEventCount: p.historyEventCount, updatedAt: p.updatedAt,
       needsCount: p.needs.length,
       workOrderCounts: Object.fromEntries([...new Set(p.workOrders.map((w) => w.status))].sort().map((status) => [status, p.workOrders.filter((w) => w.status === status).length])),
+      workOrderProgressStates: Object.fromEntries([...new Set(p.workOrderProgress.map((w) => w.reconciliation))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.reconciliation === state).length])),
       needStates: Object.fromEntries([...new Set(p.needEvidence.map((n) => n.state))].sort().map((state) => [state, p.needEvidence.filter((n) => n.state === state).length])),
     })) },
   };

@@ -30,6 +30,9 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.equal(created.body.project.needEvidence[0].state, "UNKNOWN", "unobserved bank prevents claiming a complete shortfall");
     assert.equal(created.body.project.needEvidence[0].observedQuantity, 3);
     assert.equal(created.body.project.reservationReview[0].state, "WITHIN_OBSERVED_SUPPLY");
+    assert.equal(created.body.project.workOrderProgress[0].recordedStatus, "PLANNED");
+    assert.equal(created.body.project.workOrderProgress[0].linkedNeedState, "STALE_OR_UNKNOWN");
+    assert.equal(created.body.project.workOrderProgress[0].reconciliation, "INSUFFICIENT_EVIDENCE");
     assert.deepEqual(created.body.project.history.map((event: any) => [event.revision, event.kind]), [[1, "CREATED"]]);
     const listed = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.equal(listed.body.projects[0].stableId, created.body.project.stableId);
@@ -38,6 +41,7 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.equal(context.body.planning.projects[0].version, "classic-era");
     assert.equal(context.body.planning.projects[0].revision, 1);
     assert.equal(context.body.planning.projects[0].historyEventCount, 1);
+    assert.deepEqual(context.body.planning.projects[0].workOrderProgressStates, { INSUFFICIENT_EVIDENCE: 1 }, "AccountContext summarizes the same reconciliation state exposed by REST");
     assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, []);
   });
 });

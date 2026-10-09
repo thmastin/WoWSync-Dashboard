@@ -462,6 +462,7 @@ export interface ErpProjectView extends ErpProject {
   readonly historyTruncated: boolean;
   readonly needEvidence: readonly ErpNeedEvidence[];
   readonly workOrderReadiness: readonly ErpWorkOrderReadiness[];
+  readonly workOrderProgress: readonly ErpWorkOrderProgress[];
   readonly reservationReview: readonly { reservationId: string; state: "WITHIN_OBSERVED_SUPPLY" | "EXCEEDS_OBSERVED_SUPPLY" | "SUPPLY_UNKNOWN"; reservedQuantity: number; observedQuantity?: number; reason: string }[];
 }
 
@@ -469,6 +470,20 @@ export interface ErpWorkOrderReadiness {
   readonly workOrderId: string;
   readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
   readonly blockingWorkOrderIds: readonly string[];
+  readonly unresolvedNeedIds: readonly string[];
+  readonly changedNeedIds: readonly string[];
+  readonly reason: string;
+}
+
+export interface ErpWorkOrderProgress {
+  readonly workOrderId: string;
+  readonly recordedStatus: ErpWorkOrderStatus;
+  readonly completionRecorded: boolean;
+  readonly linkedNeedState: "NO_LINKED_NEEDS" | "ALL_CURRENTLY_MET" | "CURRENT_SHORTFALL" | "MIXED_CURRENT_EVIDENCE" | "STALE_OR_UNKNOWN";
+  readonly observationChange: "CHANGED" | "UNCHANGED" | "UNKNOWN";
+  readonly reconciliation: "PLAYER_RECORDED_COMPLETE" | "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL" | "CURRENT_LINKED_NEEDS_MET" | "CURRENT_LINKED_NEEDS_UNMET" | "MIXED_LINKED_EVIDENCE" | "OBSERVATION_CHANGED_CAUSE_UNKNOWN" | "INSUFFICIENT_EVIDENCE" | "NO_LINKED_NEEDS";
+  readonly coveredNeedIds: readonly string[];
+  readonly shortfallNeedIds: readonly string[];
   readonly unresolvedNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly reason: string;
@@ -525,6 +540,47 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const actionLimit = order.kind === "TRANSFER" ? " An observed source location does not establish access or a transfer route." : order.kind === "EQUIP" ? " These resource checks do not establish equip eligibility or upgrade value." : order.kind === "CRAFT" ? " Learned recipe state and listed materials do not establish current skill, unlocks, or craftability." : " This is not an execution command or proof that all game prerequisites are met.";
     return { ...base, state: "READY_FOR_PLAYER_REVIEW", reason: `No incomplete plan dependency or linked resource-evidence blocker is recorded.${actionLimit}` };
   });
+  const workOrderProgress: ErpWorkOrderProgress[] = project.workOrders.map((order) => {
+    const linked = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
+    const current = linked.filter((evidence) => evidence.freshness === "recent");
+    const coveredNeedIds = current.filter((evidence) => evidence.state === "COVERED_BY_OBSERVED").map((evidence) => evidence.needId);
+    const shortfallNeedIds = current.filter((evidence) => evidence.state === "SHORTFALL_OBSERVED").map((evidence) => evidence.needId);
+    const unresolvedNeedIds = linked.filter((evidence) => evidence.freshness !== "recent" || (evidence.state !== "COVERED_BY_OBSERVED" && evidence.state !== "SHORTFALL_OBSERVED")).map((evidence) => evidence.needId);
+    const changedNeedIds = linked.filter((evidence) => evidence.observationChange?.state === "CHANGED").map((evidence) => evidence.needId);
+    const comparedNeedIds = linked.filter((evidence) => evidence.observationChange?.state === "UNCHANGED").map((evidence) => evidence.needId);
+    const observationChange: ErpWorkOrderProgress["observationChange"] = changedNeedIds.length ? "CHANGED" : linked.length > 0 && comparedNeedIds.length === linked.length ? "UNCHANGED" : "UNKNOWN";
+    const linkedNeedState: ErpWorkOrderProgress["linkedNeedState"] = !linked.length ? "NO_LINKED_NEEDS"
+      : unresolvedNeedIds.length ? "STALE_OR_UNKNOWN"
+      : coveredNeedIds.length && shortfallNeedIds.length ? "MIXED_CURRENT_EVIDENCE"
+      : shortfallNeedIds.length ? "CURRENT_SHORTFALL"
+      : "ALL_CURRENTLY_MET";
+    let reconciliation: ErpWorkOrderProgress["reconciliation"];
+    if (order.status === "COMPLETED" && shortfallNeedIds.length) reconciliation = "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL";
+    else if (order.status === "COMPLETED") reconciliation = "PLAYER_RECORDED_COMPLETE";
+    else if (!linked.length) reconciliation = "NO_LINKED_NEEDS";
+    else if (linkedNeedState === "MIXED_CURRENT_EVIDENCE") reconciliation = "MIXED_LINKED_EVIDENCE";
+    else if (linkedNeedState === "STALE_OR_UNKNOWN") reconciliation = "INSUFFICIENT_EVIDENCE";
+    else if (linkedNeedState === "CURRENT_SHORTFALL") reconciliation = "CURRENT_LINKED_NEEDS_UNMET";
+    else if (observationChange === "CHANGED") reconciliation = "OBSERVATION_CHANGED_CAUSE_UNKNOWN";
+    else if (linkedNeedState === "ALL_CURRENTLY_MET") reconciliation = "CURRENT_LINKED_NEEDS_MET";
+    else reconciliation = "INSUFFICIENT_EVIDENCE";
+    const reason = reconciliation === "PLAYER_RECORDED_COMPLETE"
+      ? "The player marked this work order complete in the saved plan. Linked resource evidence is reported separately and does not verify which action occurred."
+      : reconciliation === "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL"
+        ? `The player marked this work order complete, but current linked needs still show a shortfall: ${shortfallNeedIds.join(", ")}. Review these records; this does not prove the task failed or identify the cause.`
+        : reconciliation === "CURRENT_LINKED_NEEDS_MET"
+          ? `Current linked resource requirements are covered by recent observations: ${coveredNeedIds.join(", ")}. This establishes current resource state only, not completion or the action that produced it.`
+          : reconciliation === "CURRENT_LINKED_NEEDS_UNMET"
+            ? `Recent linked observations show resource shortfalls: ${shortfallNeedIds.join(", ")}. Review the plan; no missing or unobserved quantity is treated as zero.`
+            : reconciliation === "MIXED_LINKED_EVIDENCE"
+              ? `Recent linked observations are mixed: covered needs ${coveredNeedIds.join(", ")}; shortfall needs ${shortfallNeedIds.join(", ")}. No single completion conclusion is supported.`
+              : reconciliation === "OBSERVATION_CHANGED_CAUSE_UNKNOWN"
+                ? `Comparable linked resource observations changed for ${changedNeedIds.join(", ")}. The export does not establish whether this work order caused the change or whether its action occurred.`
+                  : reconciliation === "NO_LINKED_NEEDS"
+                    ? "No resource requirements are linked to this work order, so import evidence cannot assess its outcome."
+                    : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, changedNeedIds, reason };
+  });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {
     const ownNeed = project.needs.find((n) => n.stableId === reservation.needId)!;
@@ -539,5 +595,5 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       : totalReserved <= supply.observedQuantity ? "WITHIN_OBSERVED_SUPPLY" : "EXCEEDS_OBSERVED_SUPPLY";
     reservationReview.push({ reservationId: reservation.stableId, state, reservedQuantity: totalReserved, ...(supply.observedQuantity !== undefined ? { observedQuantity: supply.observedQuantity } : {}), reason: ambiguousItemScope ? `Reservations for base item ${needItemId(ownNeed)} and exact item variants overlap, but their quantities cannot be reconciled safely.` : state === "WITHIN_OBSERVED_SUPPLY" ? `Explicit reservations total ${totalReserved}; the selected source has ${supply.observedQuantity} observed at ${supply.freshness} freshness. Intent does not establish access or transferability.` : state === "EXCEEDS_OBSERVED_SUPPLY" ? `Reservations total ${totalReserved}, exceeding ${supply.observedQuantity} observed. Replanning is needed; no inventory is changed.` : `Supply for ${ownNeed.label} at the selected source is UNKNOWN; the reservation is intent, not possession.` });
   }
-  return { ...project, needEvidence, workOrderReadiness, reservationReview };
+  return { ...project, needEvidence, workOrderReadiness, workOrderProgress, reservationReview };
 }

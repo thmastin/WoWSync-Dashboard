@@ -84,3 +84,74 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] set, edit, and remove a stock target, then 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual work order, then show resource evidence without claiming completion", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-project-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    store.importSnapshot(renderExport({
+      name: "Project Fixture",
+      realm: "Cairne",
+      generated: now,
+      bags: observedSection([row(ITEM_ID, 40, { name: "Mycobloom" })], now),
+      bank: observedSection([], now),
+      warband: warbandSection("OBSERVED", [], now),
+      guild: guildSection("gclub-project-fixture", [], now),
+    }));
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
+    const createForm = page.locator("form.erp-create-form");
+    await createForm.getByLabel("Project title").fill("Provision the crafter");
+    await createForm.getByLabel("Objective").fill("Record a resource-backed manual step.");
+    await createForm.getByRole("button", { name: "Create project" }).click();
+    const projectCard = page.locator(".erp-project-card").filter({ hasText: "Provision the crafter" });
+    await projectCard.waitFor();
+
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const needForm = projectCard.locator("form.erp-inline-form");
+    await needForm.getByLabel("Kind").selectOption("ITEM_ID");
+    await needForm.getByLabel("Resource key").fill(String(ITEM_ID));
+    await needForm.getByLabel("Label").fill("Mycobloom");
+    await needForm.getByLabel("Quantity").fill("20");
+    await needForm.getByLabel("Source character or shared owner").selectOption({ label: "Project Fixture — Cairne" });
+    await needForm.getByRole("button", { name: "Add requirement" }).click();
+    const needEvidence = projectCard.locator(".erp-need-list li").first();
+    await needEvidence.waitFor();
+    const needEvidenceText = await needEvidence.innerText();
+    assert.match(needEvidenceText, /Covered by observed supply/, needEvidenceText);
+
+    await needForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const orderForm = projectCard.locator("form.erp-inline-form");
+    await orderForm.getByLabel("Action", { exact: true }).fill("Manually inspect the stored supply");
+    await orderForm.getByLabel("Action type").selectOption("INVESTIGATE");
+    await orderForm.getByLabel("Linked resource needs").selectOption({ label: "Mycobloom" });
+    await orderForm.getByRole("button", { name: "Add work order" }).click();
+    const order = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Manually inspect the stored supply" });
+    await order.waitFor();
+    const progressText = await order.innerText();
+    assert.match(progressText, /Linked resource needs currently covered/, progressText);
+    assert.match(progressText, /not completion or the action that produced it/, progressText);
+    assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

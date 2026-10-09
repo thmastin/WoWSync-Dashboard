@@ -713,7 +713,7 @@ version-scoped project intent, resource needs, reservations, manual work orders,
 revision events. Detailed semantics and validation are implemented in
 `packages/core/src/erpProjects.ts`; persistence uses additive `erp_projects` and
 `erp_project_events` tables with optimistic revision checks and atomic event writes. AccountContext
-schema 8 carries a compact revision/history summary, while REST, read-only MCP, and the Projects &
+schema 9 carries a compact revision/history and work-order reconciliation summary, while REST, read-only MCP, and the Projects &
 Work Orders tab use the same core projection. The projection includes manual work-order readiness
 from explicit dependencies and linked resource needs. Current observed shortfalls, stale/unknown
 evidence, and incomplete prerequisites are distinguished from a manual-review state. A fresh linked

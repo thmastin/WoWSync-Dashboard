@@ -646,11 +646,16 @@ test("A38 the Retail recipient screen answers identically whether or not exporte
   const recipientText = buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Virek", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", level: 90 } });
   const screen = (withObservation: boolean) => {
     const store = new SqliteSnapshotStore(":memory:");
+    const wallClock = Date.now;
     try {
+      // Imported-at timestamps are incidental to this contract comparison. Keep
+      // the fixture deterministic even when the two stores straddle a second.
+      Date.now = () => NOW * 1000;
       store.importSnapshot(exporterText, withObservation ? { equipmentObservation: observation({ tuple: { observedAt: NOW - 30, capture: 1, revision: 1 } }) } : {});
       store.importSnapshot(recipientText, withObservation ? { equipmentObservation: observation({ tuple: { observedAt: NOW - 5, capture: 2, revision: 1 }, specID: 255 }) } : {});
       return new DashboardReadModel(store, () => NOW).getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Virek", recipientRealm: "Cairne", offset: 0, limit: 10 });
     } finally {
+      Date.now = wallClock;
       store.close();
     }
   };
