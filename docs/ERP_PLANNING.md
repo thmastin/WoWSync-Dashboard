@@ -9,6 +9,7 @@ This feature adds persistent player intent to the existing import/read-model arc
 - SQLite stores one version-scoped project document in `erp_projects`, with an optimistic revision number. Schema changes are additive.
 - Writable Dashboard/import initialization creates `erp_projects` and `erp_project_events`; as with other required tables, a legacy database opened directly by the read-only MCP consumer fails closed until the normal writable initialization path has created the additive schema.
 - Every successful create/update writes an atomic append-only revision event in `erp_project_events`. It records changed field names and status transitions, not full prior project text or inferred game outcomes. REST/UI expose the 50 most recent events and an explicit total/truncation flag; the backing ledger retains the full event sequence. AccountContext schema 8 carries project revision and event count.
+- Work-order readiness is a read-time projection shared by REST, MCP, and UI. It checks only explicit dependencies and linked needs: current linked shortfalls block; historical, stale, incomplete, unsupported, or missing evidence waits; otherwise it says “no recorded plan blockers; review manually.” Completed dependencies are player-recorded intent, not independently verified game outcomes. Readiness never executes an action or implies access, eligibility, upgrade value, or craftability.
 - `ErpResourceNeed`, `ErpReservation`, and `ErpWorkOrder` represent intent. They are not observations or proof of possession. A need chooses exactly one explicit character source or, for Retail only, one shared storage owner key.
 - `GET/POST /api/versions/:version/erp/projects`, `PUT /api/versions/:version/erp/projects/:id`, and `PATCH .../:id/status` serve the Dashboard. The core validates supported versions, explicit character identities, dependency graphs, quantities, and required completion notes.
 - MCP exposes a read-only, version-scoped `get_erp_projects` page (10 by default, at most 20) through the existing read-only store. It returns page totals/truncation; each project exposes up to 50 recent revision events. Mutations remain in the local Dashboard UI/API.
@@ -29,6 +30,8 @@ Reservations are explicit planning claims, never inventory mutations. Active res
 Work orders are manual steps. A player-entered note is required to mark a work order or project complete. Inventory changes never auto-complete tasks.
 
 Project history records saved intent changes, including resource needs, reservations, work orders, title/objective, priority, and status. Observation deltas remain a separate evidence view, explicitly non-causal. History never asserts that a described player action happened in game.
+
+When adding a manual work order, the player can link resource needs and prerequisite work orders. A readiness projection makes those recorded relationships visible and conservatively gates the workbench wording; it is not an automatic scheduler or game-action authorization.
 
 ## User workflow
 

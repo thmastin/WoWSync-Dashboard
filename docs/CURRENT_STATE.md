@@ -8,10 +8,10 @@ completion-note changes remain player-entered Dashboard intent. History does not
 or infer causality. Exact Retail recipe learned-state rows can now satisfy a single recipe-knowledge
 need; partial catalogs, missing entries, historical data, other versions, current skill, unlocks,
 reagents, and craftability retain explicit uncertainty. The full validation command passes: core
-784/784, MCP 2/2, server 245 pass + 2
-skipped, web 287/287; TypeScript checks and production build pass (520.07 kB JavaScript bundle
+785/785, MCP 2/2, server 245 pass + 2
+skipped, web 288/288; TypeScript checks and production build pass (521.72 kB JavaScript bundle
 advisory). Focused independent review found and resolved status-transition display and separator
-issues. Still no browser, persistent DEV, live-game, or production
+issues. Work-order readiness now projects explicit dependencies and linked needs through the same read model and is tested for unknown/stale/shortfall and manual review. Still no browser, persistent DEV, live-game, or production
 validation. Current HEAD and report are recorded in the latest durable truth checkpoint.
 
 **Previous feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**

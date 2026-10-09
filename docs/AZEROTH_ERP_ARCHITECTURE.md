@@ -714,7 +714,9 @@ revision events. Detailed semantics and validation are implemented in
 `packages/core/src/erpProjects.ts`; persistence uses additive `erp_projects` and
 `erp_project_events` tables with optimistic revision checks and atomic event writes. AccountContext
 schema 8 carries a compact revision/history summary, while REST, read-only MCP, and the Projects &
-Work Orders tab use the same core projection.
+Work Orders tab use the same core projection. The projection includes manual work-order readiness
+from explicit dependencies and linked resource needs. Current observed shortfalls, stale/unknown
+evidence, and incomplete prerequisites are distinguished from a manual-review state.
 
 This branch supports evidence checks for exact itemString, declared base item ID, gold copper,
 exact-name profession skill, and explicitly character-scoped Retail currency IDs. Retail item needs
@@ -732,6 +734,7 @@ this layer moves or uses game resources.
 
 This is feature-branch development, not a main-branch or persistent-DEV capability. It has automated
 coverage but no browser, DEV, game, or production validation. The broader ERP roadmap remains open
-for recipes/crafting feasibility, non-Retail currency and shared-storage evidence, account/access
-scope, procurement economics, persistent observation-reconciliation events, and evidence-based
-completion reconciliation.
+for crafting feasibility, non-Retail currency and shared-storage evidence, account/access scope,
+procurement economics, persistent observation-reconciliation events, and evidence-based completion
+reconciliation. Exact Retail learned-recipe evidence is supported as a planning need; it does not
+establish current craftability, and other versions remain unsupported for recipe-state projection.

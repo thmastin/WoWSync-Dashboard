@@ -383,6 +383,39 @@ test("project read model bounds recent history while reporting the full durable 
   } finally { store.close(); }
 });
 
+test("work order readiness respects recorded dependencies, evidence freshness, and manual action limits", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const plan: ErpProject = {
+      ...project(identityKey), reservations: [],
+      needs: [
+        { stableId: "gold_need", kind: "GOLD_COPPER", resourceKey: "copper", label: "Trainer gold", requiredQuantity: 7000, sourceIdentityKey: identityKey },
+        { stableId: "unknown_need", kind: "ITEM_REF", resourceKey: "item:999", label: "Unknown item", requiredQuantity: 1 },
+        { stableId: "covered_need", kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed gold", requiredQuantity: 100, sourceIdentityKey: identityKey },
+      ],
+      workOrders: [
+        { stableId: "prereq", kind: "INVESTIGATE", status: "PLANNED", title: "Check the trainer", resourceNeedIds: [], dependsOn: [] },
+        { stableId: "blocked", kind: "CRAFT", status: "PLANNED", title: "Craft after training", resourceNeedIds: ["covered_need"], dependsOn: ["prereq"] },
+        { stableId: "short", kind: "PURCHASE", status: "PLANNED", title: "Buy after saving", resourceNeedIds: ["gold_need"], dependsOn: [] },
+        { stableId: "unknown", kind: "TRANSFER", status: "PLANNED", title: "Move the unknown item", resourceNeedIds: ["unknown_need"], dependsOn: [] },
+        { stableId: "review", kind: "TRANSFER", status: "PLANNED", title: "Review source transfer", resourceNeedIds: ["covered_need"], dependsOn: [] },
+      ],
+    };
+    const read = (p: ErpProject, now = 1_700_000_020) => evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now);
+    const initial = read(plan);
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "blocked")?.state, "BLOCKED_BY_DEPENDENCY");
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "short")?.state, "OBSERVED_RESOURCE_SHORTFALL");
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "unknown")?.state, "WAITING_FOR_EVIDENCE");
+    const review = initial.workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(review.state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(review.reason, /does not establish access or a transfer route/);
+    const completedDependency: ErpProject = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "prereq" ? { ...order, status: "COMPLETED", completionNote: "Player recorded completion." } : order) };
+    assert.equal(read(completedDependency).workOrderReadiness.find((entry) => entry.workOrderId === "blocked")?.state, "READY_FOR_PLAYER_REVIEW");
+    assert.equal(read(plan, 1_900_000_000).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "WAITING_FOR_EVIDENCE", "stale observed supply is not marked ready");
+    assert.equal(read({ ...plan, status: "PAUSED" }).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "PROJECT_NOT_ACTIVE");
+  } finally { store.close(); }
+});
+
 test("validation rejects cross-version character references, unsupported assumptions, and unrecorded completion", () => {
   const { store, identityKey } = seedStore();
   try {
