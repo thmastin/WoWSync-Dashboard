@@ -41,6 +41,10 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
   return gearCandidates ? withMetadata.replace(/\n\[END\]$/, `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${candidateHeader}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t1\t0\t0\t4\t4\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN\n\n[END]`) : withMetadata;
 }
 
+function retailItemQuantity(name: string, realm: string, quantity: number, generatedAt: number, itemID = 777) {
+  return buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933" }, bags: { containers: [{ id: 0, capacity: 20, items: quantity ? [{ itemRef: `item:${itemID}`, name: "Observed Bag Item", qty: quantity }] : [] }] }, bank: { containers: [] } });
+}
+
 function forever(name: string, realm: string, surname?: string, surnameSource?: string) {
   const generatedAt = now - 15;
   const text = buildWowSyncExport({ generatedAt, character: { name, surname, surnameSource, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
@@ -96,9 +100,19 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const otherRealmCharacter = writer.listCharacters("retail").find((character) => character.name === "Virek" && character.realm === "Thrall");
     assert.ok(currencyCharacter);
     assert.ok(otherRealmCharacter);
+    const transferAt = Math.floor(Date.now() / 1000);
+    writer.importSnapshot(retailItemQuantity("Transfer Source", "Cairne", 3, transferAt - 10, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Destination", "Thrall", 0, transferAt - 10, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Source", "Cairne", 2, transferAt, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Destination", "Thrall", 1, transferAt, 779));
+    const transferSource = writer.listCharacters("retail").find((character) => character.name === "Transfer Source");
+    const transferDestination = writer.listCharacters("retail").find((character) => character.name === "Transfer Destination");
+    assert.ok(transferSource);
+    assert.ok(transferDestination);
     writer.createErpProject({ version: "retail", title: "Currency reservation protocol fixture", needs: [{ stableId: "currency_4", kind: "CURRENCY", resourceKey: "4", label: "Currency 4", requiredQuantity: 4, sourceIdentityKey: currencyCharacter.identityKey }] });
     writer.createErpProject({ version: "retail", title: "Same-version source screen protocol fixture", needs: [{ stableId: "source_need", kind: "ITEM_REF", resourceKey: "item:777", label: "Observed Bag Item", requiredQuantity: 1, destinationIdentityKey: otherRealmCharacter.identityKey }, { stableId: "recipe_check", kind: "RECIPE", resourceKey: "1229853", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: currencyCharacter.identityKey }], workOrders: [{ stableId: "craft_check", kind: "CRAFT", status: "PLANNED", title: "Craft on assigned character", resourceNeedIds: ["recipe_check"], dependsOn: [], assignedIdentityKey: otherRealmCharacter.identityKey }] });
-    let ownerPlan = writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }], workOrders: [{ stableId: "manual_retrieve", kind: "TRANSFER", status: "PLANNED", title: "Review storage access manually", resourceNeedIds: ["warband_leather"], dependsOn: [] }] });
+    writer.createErpProject({ version: "retail", title: "Transfer observation protocol fixture", needs: [{ stableId: "transfer_need", kind: "ITEM_REF", resourceKey: "item:779", label: "Observed Bag Item", requiredQuantity: 1, sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }], workOrders: [{ stableId: "transfer_check", kind: "TRANSFER", status: "PLANNED", title: "Review paired source and destination evidence", resourceNeedIds: ["transfer_need"], dependsOn: [], sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }] });
+    let ownerPlan = writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }], workOrders: [{ stableId: "manual_retrieve", kind: "TRANSFER", status: "PLANNED", title: "Review storage access manually", resourceNeedIds: ["warband_leather"], dependsOn: [], sourceIdentityKey: transferSource.identityKey }] });
     ownerPlan = writer.updateErpProject({ ...ownerPlan, workOrders: ownerPlan.workOrders.map((order) => ({ ...order, status: "WAITING_FOR_EVIDENCE" })) }, ownerPlan.revision)!;
   } finally {
     writer.close();
@@ -158,7 +172,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
     const emptyErpProjects = structured<{ version: string; projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: unknown[]; totalCount: number; returnedCount: number; truncated: boolean } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
     assert.deepEqual(emptyErpProjects, { version: "forever", projects: [], returnedCount: 0, totalCount: 0, truncated: false, resourceCommitments: { items: [], totalCount: 0, returnedCount: 0, truncated: false, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0 } }, "MCP exposes planning and the shared core commitment view through the bounded read-only contract");
-    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[]; workOrderStatusChanges?: Array<{ workOrderId: string; title: string; fromStatus?: string; toStatus: string }> }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }>; resourceSourceScreens: Array<{ candidateCount: number; candidatesTruncated: boolean; candidates: Array<{ sourceIdentityKey: string; observedQuantity?: number; transferability: string; access: string; accountMembership: string }> }>; workOrderReadiness: Array<{ state: string; capabilityChecks?: Array<{ needId: string; kind: string; state: string; evidenceSourceIdentityKey?: string; assignedIdentityKey?: string }> }>; workOrderProgress: Array<{ workOrderId: string; linkedNeedState: string; observationChange: string; reconciliation: string }> }>; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: Array<{ resourceKey: string; kind: string; sourceScope: string; observedQuantity?: number; sourceOwnerKey?: string }>; totalCount: number; returnedCount: number; truncated: boolean } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
+    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[]; workOrderStatusChanges?: Array<{ workOrderId: string; title: string; fromStatus?: string; toStatus: string }> }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }>; resourceSourceScreens: Array<{ candidateCount: number; candidatesTruncated: boolean; candidates: Array<{ sourceIdentityKey: string; observedQuantity?: number; transferability: string; access: string; accountMembership: string }> }>; workOrderReadiness: Array<{ state: string; capabilityChecks?: Array<{ needId: string; kind: string; state: string; evidenceSourceIdentityKey?: string; assignedIdentityKey?: string }> }>; workOrderProgress: Array<{ workOrderId: string; linkedNeedState: string; observationChange: string; reconciliation: string; transferObservationReviews?: Array<{ state: string; interpretation: string; resourceKey: string; source: { identityKey?: string; state: string; comparisons: Array<{ section: string; previousQuantity: number; currentQuantity: number; delta: number }> }; destination: { identityKey?: string; state: string; comparisons: Array<{ section: string; previousQuantity: number; currentQuantity: number; delta: number }> }; reason: string }> }> }>; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: Array<{ resourceKey: string; kind: string; sourceScope: string; observedQuantity?: number; sourceOwnerKey?: string }>; totalCount: number; returnedCount: number; truncated: boolean } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
     const currencyPlan = retailErpProjects.projects.find((entry) => entry.title === "Currency reservation protocol fixture");
     assert.equal(currencyPlan?.needEvidence[0]?.state, "UNKNOWN", "MCP preserves the currency section's LAST_SEEN provenance instead of presenting it as current");
     assert.equal(currencyPlan?.needEvidence[0]?.potentialQuantity, 3);
@@ -172,7 +186,12 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(sharedOwnerPlan?.needEvidence[0]?.sourceOwnerKey, "retail::warband::local");
     assert.deepEqual(sharedOwnerPlan?.history.map((event) => [event.revision, event.kind]), [[2, "UPDATED"], [1, "CREATED"]], "MCP exposes the same project audit timeline as REST through the read-only contract");
     assert.deepEqual(sharedOwnerPlan?.history[0]?.workOrderStatusChanges, [{ workOrderId: "manual_retrieve", title: "Review storage access manually", fromStatus: "PLANNED", toStatus: "WAITING_FOR_EVIDENCE" }]);
-    assert.deepEqual(sharedOwnerPlan?.workOrderProgress[0], { workOrderId: "manual_retrieve", recordedStatus: "WAITING_FOR_EVIDENCE", completionRecorded: false, linkedNeedState: "STALE_OR_UNKNOWN", observationChange: "UNKNOWN", reconciliation: "INSUFFICIENT_EVIDENCE", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: ["warband_leather"], allocationConflictNeedIds: [], changedNeedIds: [], reason: "Linked resource evidence is stale, incomplete, unsupported, or unknown for: warband_leather. Refresh or clarify evidence before drawing an outcome." });
+    const sharedOwnerProgress = sharedOwnerPlan?.workOrderProgress[0];
+    assert.deepEqual(sharedOwnerProgress && (({ transferObservationReviews: _transferReviews, ...base }) => base)(sharedOwnerProgress), { workOrderId: "manual_retrieve", recordedStatus: "WAITING_FOR_EVIDENCE", completionRecorded: false, linkedNeedState: "STALE_OR_UNKNOWN", observationChange: "UNKNOWN", reconciliation: "INSUFFICIENT_EVIDENCE", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: ["warband_leather"], allocationConflictNeedIds: [], changedNeedIds: [], reason: "Linked resource evidence is stale, incomplete, unsupported, or unknown for: warband_leather. Refresh or clarify evidence before drawing an outcome." });
+    assert.equal(sharedOwnerProgress?.transferObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "a character source cannot override a need scoped to a shared owner");
+    assert.equal(sharedOwnerProgress?.transferObservationReviews?.[0]?.source.identityKey, undefined);
+    assert.deepEqual(sharedOwnerProgress?.transferObservationReviews?.[0]?.source.comparisons, []);
+    assert.match(sharedOwnerProgress?.transferObservationReviews?.[0]?.reason ?? "", /shared-storage owner conflicts.*character source/);
     const sourceScreenPlan = retailErpProjects.projects.find((entry) => entry.title === "Same-version source screen protocol fixture");
     assert.equal(sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.sourceIdentityKey, "retail::cairne::virek");
     assert.equal(sourceScreenPlan?.resourceSourceScreens[0]?.candidateCount, 2, "both matching same-version characters are retained as possible sources");
@@ -180,12 +199,23 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual([sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.transferability, sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.access, sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.accountMembership], ["UNKNOWN", "UNKNOWN", "UNKNOWN"], "MCP source screening never turns same-version roster co-location into a transfer assertion");
     assert.equal(sourceScreenPlan?.workOrderReadiness[0]?.state, "WAITING_FOR_EVIDENCE");
     assert.deepEqual(sourceScreenPlan?.workOrderReadiness[0]?.capabilityChecks?.map((check) => [check.kind, check.state, check.evidenceSourceIdentityKey, check.assignedIdentityKey]), [["RECIPE", "SOURCE_DIFFERS_FROM_ASSIGNEE", "retail::cairne::virek", "retail::thrall::virek"]], "MCP identifies a recipe observation from a different character without borrowing it for the assigned crafter");
-    assert.equal(retailErpProjects.resourceCommitments.totalCount, 4, "MCP exposes the same version-scoped core commitment view as REST");
+    const transferPlan = retailErpProjects.projects.find((entry) => entry.title === "Transfer observation protocol fixture");
+    const transferReview = transferPlan?.workOrderProgress.find((entry) => entry.workOrderId === "transfer_check")?.transferObservationReviews?.[0];
+    assert.equal(transferReview?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(transferReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(transferReview?.source.identityKey, "retail::cairne::transfer source");
+    assert.equal(transferReview?.destination.identityKey, "retail::thrall::transfer destination");
+    const transferSourceBag = transferReview?.source.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    const transferDestinationBag = transferReview?.destination.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    assert.deepEqual(transferSourceBag && [transferSourceBag.previousQuantity, transferSourceBag.currentQuantity, transferSourceBag.delta], [3, 2, -1]);
+    assert.deepEqual(transferDestinationBag && [transferDestinationBag.previousQuantity, transferDestinationBag.currentQuantity, transferDestinationBag.delta], [0, 1, 1]);
+    assert.match(transferReview?.reason ?? "", /do not establish that the changes are related or that a transfer occurred/);
+    assert.equal(retailErpProjects.resourceCommitments.totalCount, 5, "MCP exposes the same version-scoped core commitment view as REST");
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.kind === "CURRENCY" && line.resourceKey === "4" && line.sourceScope === "CHARACTER"));
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.resourceKey === "item:2318::::::::85:253:::::::::" && line.sourceScope === "SHARED_OWNER" && line.sourceOwnerKey === "retail::warband::local"));
     assert.equal(retailErpProjects.truncated, false);
     const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
-    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 3, true], "MCP callers can bound ERP project results without losing the total count");
+    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 4, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
     assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
@@ -288,7 +318,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
 
     const listed = structured<{ version: string; totalCount: number; truncated: boolean }>(await client.callTool({ name: "list_characters", arguments: { version: "retail" } }));
     assert.equal(listed.version, "retail");
-    assert.equal(listed.totalCount, 4);
+    assert.equal(listed.totalCount, 6);
     assert.equal(listed.truncated, false);
 
     const summary = structured<{ status: string; value?: { provenance: { state: string; version: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
@@ -363,7 +393,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(detailedCurrencies.data?.aggregationScope, "account-wide");
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.scope, "ACCOUNT");
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.account?.quantity, 0, "an observed account-wide zero is preserved and not summed with other characters");
-    assert.equal(detailedCurrencies.data?.currencies.items[0]?.characterTotalCount, 4);
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.characterTotalCount, 6);
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.charactersTruncated, true);
     assert.equal(detailedCurrencies.provenance.state, "DERIVED");
     const realmCurrencyWithoutRealm = await client.callTool({ name: "get_account_currencies", arguments: { version: "classic-era" } });
@@ -375,7 +405,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok((accountChanges.data?.totalCount ?? 0) > 0);
     assert.equal(accountChanges.data?.items.length, 1);
     assert.equal(accountChanges.data?.items[0]?.realm, "Cairne");
-    assert.equal(accountChanges.data?.truncated, false);
+    assert.equal(accountChanges.data?.truncated, true, "additional paired-transfer fixture changes remain visible through the existing bounded account-change contract");
     assert.equal(accountOverview.data?.currencies.truncated, true);
     const eraOverview = structured<{ data?: { version: string; aggregationScope: string; gold: Array<{ realm: string; gold: { totalKnownCopper?: number } }>; playtime: Array<{ realm: string; playtime: { totalKnownPlayedSeconds?: number } }>; currencies: { scope: string; byRealm?: Array<{ realm: string; coverage: { unknownCharacters: number } }> } } }>(await client.callTool({ name: "get_account_overview", arguments: { version: "classic-era" } }));
     assert.equal(eraOverview.data?.version, "classic-era");

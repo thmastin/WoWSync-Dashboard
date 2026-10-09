@@ -97,11 +97,29 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     store.importSnapshot(renderExport({
       name: "Project Fixture",
       realm: "Cairne",
+      generated: now - 100,
+      bags: observedSection([row(ITEM_ID, 39, { name: "Mycobloom" })], now - 100),
+      bank: observedSection([], now - 100),
+      warband: warbandSection("OBSERVED", [], now - 100),
+      guild: guildSection("gclub-project-fixture", [], now - 100),
+    }));
+    store.importSnapshot(renderExport({
+      name: "Project Fixture",
+      realm: "Cairne",
       generated: now,
       bags: observedSection([row(ITEM_ID, 40, { name: "Mycobloom" })], now),
       bank: observedSection([], now),
       warband: warbandSection("OBSERVED", [], now),
       guild: guildSection("gclub-project-fixture", [], now),
+    }));
+    store.importSnapshot(renderExport({
+      name: "Other Potential Holder",
+      realm: "Thrall",
+      generated: now - 100,
+      bags: observedSection([row(ITEM_ID, 3, { name: "Mycobloom" })], now - 100),
+      bank: observedSection([], now - 100),
+      warband: warbandSection("OBSERVED", [], now - 100),
+      guild: guildSection("gclub-other-holder", [], now - 100),
     }));
     store.importSnapshot(renderExport({
       name: "Other Potential Holder",
@@ -158,7 +176,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(needEvidenceText, /item:940101/);
     assert.match(needEvidenceText, /Base-item search groups these exact variants/);
     assert.match(needEvidenceText, /Account membership, access, and transferability: UNKNOWN/);
-    const possibleSource = needEvidence.locator("li").filter({ hasText: "Other Potential Holder" });
+    const possibleSource = needEvidence.locator("li").filter({ hasText: "Thrall" });
     await possibleSource.getByRole("button", { name: "Create source verification task" }).first().click();
     const verifySourceOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Verify possible source for Mycobloom" });
     await verifySourceOrder.waitFor();
@@ -167,7 +185,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(verificationText, /Account membership, source access, recipient access, and a valid transfer route are UNKNOWN/);
     assert.match(verificationText, /does not authorize or perform a transfer/);
     await possibleSource.getByText("Source verification work order already exists for this need.").waitFor();
-    await needEvidence.getByRole("button", { name: "Set planned source" }).first().click();
+    await possibleSource.getByRole("button", { name: "Set planned source" }).first().click();
     await needEvidence.getByText(/Recorded as the planned source/).waitFor();
     needEvidenceText = await needEvidence.innerText();
     assert.match(needEvidenceText, /Observed shortfall/, needEvidenceText);
@@ -189,6 +207,32 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(commitmentText, /Freshness:/);
 
     await needForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const transferForm = projectCard.locator("form.erp-inline-form");
+    await transferForm.getByLabel("Action type").selectOption("TRANSFER");
+    await transferForm.getByLabel("Action", { exact: true }).fill("Review paired source and recipient observations");
+    await transferForm.getByLabel("Planned source character").selectOption({ label: "Other Potential Holder — Thrall" });
+    await transferForm.getByLabel("Intended destination character").selectOption({ label: "Project Fixture — Cairne" });
+    await transferForm.getByLabel("Linked resource needs").selectOption({ label: "Mycobloom" });
+    await transferForm.getByRole("button", { name: "Add work order" }).click();
+    const savedPlan = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
+    const savedNeed = savedPlan.needs.find((entry) => entry.label === "Mycobloom");
+    const savedTransferOrder = savedPlan.workOrders.find((entry) => entry.title === "Review paired source and recipient observations");
+    assert.equal(savedTransferOrder.sourceIdentityKey, savedNeed.sourceIdentityKey, "transfer source intent matches the linked need source");
+    assert.equal(savedTransferOrder.destinationIdentityKey, savedNeed.destinationIdentityKey, "transfer destination intent matches the linked need recipient");
+    const transferOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review paired source and recipient observations" });
+    await transferOrder.waitFor();
+    await transferOrder.getByText("Compare planned source and destination observations (relationship unknown)").click();
+    const transferReview = await transferOrder.innerText();
+    assert.match(transferReview, /BOTH SIDES CHANGED/);
+    assert.match(transferReview, /Source — Other Potential Holder — Thrall: recent comparable quantity change/);
+    assert.match(transferReview, /bags: 3 → 2 \(-1\)/);
+    assert.match(transferReview, /Destination — Project Fixture — Cairne: recent comparable quantity change/);
+    assert.match(transferReview, /bags: 39 → 40 \(\+1\)/);
+    assert.match(transferReview, /do not establish that the changes are related or that a transfer occurred/);
+    assert.match(transferReview, /does not establish account membership, ownership, access, transferability/);
+
+    await transferForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const orderForm = projectCard.locator("form.erp-inline-form");
     await orderForm.getByLabel("Action", { exact: true }).fill("Manually inspect the stored supply");

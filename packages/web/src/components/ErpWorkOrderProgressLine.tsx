@@ -12,7 +12,22 @@ const LABELS: Record<ErpWorkOrderProgress["reconciliation"], string> = {
   RESOURCE_ALLOCATION_REQUIRES_REVIEW: "Resource allocation requires review",
 };
 
-export function ErpWorkOrderProgressLine({ progress }: { progress?: ErpWorkOrderProgress }) {
+export function ErpWorkOrderProgressLine({ progress, characterName }: { progress?: ErpWorkOrderProgress; characterName?: (identityKey?: string) => string }) {
   if (!progress) return <p className="erp-readiness">Progress reconciliation is unknown; no assessment is available.</p>;
-  return <p className={`erp-readiness erp-progress-${progress.reconciliation.toLowerCase()}`}><strong>{LABELS[progress.reconciliation]}:</strong> {progress.reason}</p>;
+  const name = characterName ?? ((identityKey?: string) => identityKey ?? "Unspecified character");
+  const reviews = progress.transferObservationReviews ?? [];
+  return <div className={`erp-readiness erp-progress-${progress.reconciliation.toLowerCase()}`}><p><strong>{LABELS[progress.reconciliation]}:</strong> {progress.reason}</p>{reviews.length > 0 && <details className="erp-transfer-observation-review"><summary>Compare planned source and destination observations (relationship unknown)</summary><ul>{reviews.map((review) => <li key={review.needId}>
+    <strong>{review.kind} {review.resourceKey} · {review.state.replaceAll("_", " ")}</strong>
+    <p>Source — {name(review.source.identityKey)}: {sideDescription(review.source)}</p>
+    <p>Destination — {name(review.destination.identityKey)}: {sideDescription(review.destination)}</p>
+    <p>{review.reason} The comparison does not establish account membership, ownership, access, transferability, or that the planned action caused either change.</p>
+  </li>)}</ul></details>}</div>;
+}
+
+function sideDescription(side: NonNullable<ErpWorkOrderProgress["transferObservationReviews"]>[number]["source"]): string {
+  const changes = side.comparisons.map((comparison) => `${comparison.section}: ${comparison.previousQuantity} → ${comparison.currentQuantity} (${comparison.delta > 0 ? "+" : ""}${comparison.delta})`).join("; ");
+  const state = side.state === "COMPARABLE_CHANGED" ? "recent comparable quantity change"
+    : side.state === "COMPARABLE_UNCHANGED" ? "no change in recent comparable observations"
+    : "comparison UNKNOWN";
+  return `${state} · ${side.freshness} freshness${side.observedAt ? ` · evidence ${new Date(side.observedAt * 1000).toLocaleString()}` : ""}${changes ? ` · ${changes}` : ""}. ${side.reason}`;
 }

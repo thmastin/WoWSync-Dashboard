@@ -583,6 +583,57 @@ test("work-order progress separates player completion, observed state, changed e
   } finally { store.close(); }
 });
 
+test("transfer reconciliation compares explicitly planned source and destination changes without claiming causality", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_100_000;
+  const capture = (name: string, realm: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt,
+    character: { name, realm, clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] },
+    bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Sender", "Realm A", 2, baseAt)).character.identityKey;
+    const destination = store.importSnapshot(capture("Receiver", "Realm A", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Sender", "Realm A", 1, baseAt + 100));
+    store.importSnapshot(capture("Receiver", "Realm A", 1, baseAt + 100));
+    const need = { stableId: "mail_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source, destinationIdentityKey: destination };
+    const order = { stableId: "mail_step", kind: "TRANSFER" as const, status: "WAITING_FOR_EVIDENCE" as const, title: "Review item movement", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: destination };
+    const plan = { ...project(source), needs: [need], reservations: [], workOrders: [order] };
+    const read = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110);
+    const review = read.workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    const sourceBagChange = review?.source.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    const destinationBagChange = review?.destination.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    assert.deepEqual(sourceBagChange && [sourceBagChange.previousQuantity, sourceBagChange.currentQuantity, sourceBagChange.delta], [2, 1, -1]);
+    assert.deepEqual(destinationBagChange && [destinationBagChange.previousQuantity, destinationBagChange.currentQuantity, destinationBagChange.delta], [0, 1, 1]);
+    assert.equal(sourceBagChange?.previousObservedAt, baseAt);
+    assert.equal(destinationBagChange?.currentObservedAt, baseAt + 100);
+    assert.match(review?.reason ?? "", /do not establish that the changes are related or that a transfer occurred/);
+    const broadIdPlan = { ...plan, needs: [{ ...need, kind: "ITEM_ID" as const, resourceKey: "159" }] };
+    const broadIdReview = evaluateErpProject(broadIdPlan, (key) => store.listSnapshots(key), [broadIdPlan], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.match(broadIdReview?.reason ?? "", /group all observed itemString variants.*do not prove the same exact variant changed/);
+    assert.equal(evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "stale pairs do not produce a paired change conclusion");
+    const conflicting = { ...plan, workOrders: [{ ...order, sourceIdentityKey: destination }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "order source intent conflicting with its need is surfaced rather than silently reconciled");
+  } finally { store.close(); }
+});
+
+test("shared-owner transfer need cannot be overridden by a character source on the work order", () => {
+  const { store, identityKey } = seedRetailCurrency();
+  try {
+    const need = { stableId: "warband_item", kind: "ITEM_REF" as const, resourceKey: "item:159:variant-a", label: "Exact item", requiredQuantity: 1, sourceOwnerKey: ownerKey(warbandOwner()) };
+    const order = { stableId: "retrieve", kind: "TRANSFER" as const, status: "PLANNED" as const, title: "Review shared storage manually", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), version: "retail", needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.equal(review?.state, "IDENTITY_CONFLICT");
+    assert.equal(review?.source.identityKey, undefined, "the work-order character is not substituted for the owner source");
+    assert.deepEqual(review?.source.comparisons, [], "no character deltas are presented as shared-owner deltas");
+    assert.match(review?.reason ?? "", /shared-storage owner conflicts.*character source/);
+  } finally { store.close(); }
+});
+
 test("progress preserves evidence-quality and shortfall precedence over ambiguous linked item scopes", () => {
   const makePlan = (identityKey: string): ErpProject => {
     const needs: ErpProject["needs"] = [

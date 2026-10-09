@@ -3,6 +3,7 @@ import type { AccountCurrencies } from "./wowCurrencies.ts";
 import { parseOwnerKey, type SharedStorageProjection } from "./sharedStorage.ts";
 import type { WowVersion } from "./types.ts";
 import { snapshotObservedAt } from "./chronology.ts";
+import type { Freshness } from "./freshness.ts";
 
 export const ERP_PROJECT_STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"] as const;
 export type ErpProjectStatus = typeof ERP_PROJECT_STATUSES[number];
@@ -718,7 +719,84 @@ export interface ErpWorkOrderProgress {
   readonly unresolvedNeedIds: readonly string[];
   readonly allocationConflictNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
+  readonly transferObservationReviews?: readonly ErpTransferObservationReview[];
   readonly reason: string;
+}
+
+export interface ErpTransferSideObservation {
+  readonly identityKey?: string;
+  readonly state: "COMPARABLE_CHANGED" | "COMPARABLE_UNCHANGED" | "UNKNOWN";
+  readonly observedAt?: number;
+  readonly freshness: Freshness;
+  readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly reason: string;
+}
+
+export interface ErpTransferObservationReview {
+  readonly needId: string;
+  readonly kind: "ITEM_ID" | "ITEM_REF";
+  readonly resourceKey: string;
+  readonly source: ErpTransferSideObservation;
+  readonly destination: ErpTransferSideObservation;
+  readonly state: "BOTH_SIDES_CHANGED" | "SOURCE_ONLY_CHANGED" | "DESTINATION_ONLY_CHANGED" | "NO_COMPARABLE_CHANGE" | "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT";
+  readonly interpretation: "CAUSE_UNKNOWN";
+  readonly reason: string;
+}
+
+function transferSideObservation(need: ErpResourceNeed, identityKey: string | undefined, project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies): ErpTransferSideObservation {
+  if (!identityKey) return { state: "UNKNOWN", freshness: "unknown", comparisons: [], reason: "No explicit source/destination character is recorded." };
+  if (!identityKey.startsWith(`${project.version}::`)) return { identityKey, state: "UNKNOWN", freshness: "unknown", comparisons: [], reason: "The planned character identity does not match the project's version; no cross-version observation is used." };
+  const evidence = assessErpNeed({ ...need, sourceIdentityKey: identityKey, sourceOwnerKey: undefined }, snapshotsFor(identityKey), now, currencies, project.version);
+  const comparisons = evidence.observationChange?.comparisons ?? [];
+  const freshness = evidence.freshness;
+  const state = freshness !== "recent" || evidence.observationChange?.state === "UNKNOWN" ? "UNKNOWN" as const
+    : evidence.observationChange?.state === "CHANGED" ? "COMPARABLE_CHANGED" as const : "COMPARABLE_UNCHANGED" as const;
+  return {
+    identityKey, state, freshness, ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), comparisons,
+    reason: state === "COMPARABLE_CHANGED" ? "A recent comparable observation changed this resource scope; cause is unknown."
+      : state === "COMPARABLE_UNCHANGED" ? "Recent comparable observations show no quantity change in this resource scope."
+      : evidence.reason,
+  };
+}
+
+function transferObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies): ErpTransferObservationReview[] {
+  if (order.kind !== "TRANSFER") return [];
+  return order.resourceNeedIds.flatMap((needId) => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const sharedOwnerSourceConflict = Boolean(need.sourceOwnerKey && order.sourceIdentityKey);
+    const sourceConflict = Boolean(order.sourceIdentityKey && need.sourceIdentityKey && order.sourceIdentityKey !== need.sourceIdentityKey);
+    const destinationConflict = Boolean(order.destinationIdentityKey && need.destinationIdentityKey && order.destinationIdentityKey !== need.destinationIdentityKey);
+    const sourceIdentityKey = order.sourceIdentityKey ?? need.sourceIdentityKey;
+    const destinationIdentityKey = order.destinationIdentityKey ?? need.destinationIdentityKey;
+    // A character named on a transfer task cannot replace an explicitly shared-storage owner
+    // recorded on the need. Keep the mismatch visible and never query that character as source.
+    const source = need.sourceOwnerKey
+      ? { state: "UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], reason: sharedOwnerSourceConflict
+        ? "The linked need names a shared-storage owner, while the work order names a character source. These scopes conflict; no character inventory was compared as the owner source."
+        : "The linked need names a shared-storage owner. Shared-owner observations cannot be paired as a character inventory source." }
+      : transferSideObservation(need, sourceIdentityKey, project, snapshotsFor, now, currencies);
+    const destination = transferSideObservation(need, destinationIdentityKey, project, snapshotsFor, now, currencies);
+    const changedSource = source.state === "COMPARABLE_CHANGED";
+    const changedDestination = destination.state === "COMPARABLE_CHANGED";
+    const identityConflict = sharedOwnerSourceConflict || sourceConflict || destinationConflict || Boolean(sourceIdentityKey && destinationIdentityKey && sourceIdentityKey === destinationIdentityKey);
+    const state: ErpTransferObservationReview["state"] = identityConflict ? "IDENTITY_CONFLICT"
+      : source.state === "UNKNOWN" || destination.state === "UNKNOWN" ? "EVIDENCE_UNKNOWN"
+      : changedSource && changedDestination ? "BOTH_SIDES_CHANGED"
+      : changedSource ? "SOURCE_ONLY_CHANGED"
+      : changedDestination ? "DESTINATION_ONLY_CHANGED"
+      : "NO_COMPARABLE_CHANGE";
+    const identityScopeLimit = need.kind === "ITEM_ID" ? "These deltas group all observed itemString variants under the declared base item ID; they do not prove the same exact variant changed. " : "The resource scope is the exact declared itemString. ";
+    const reason = identityScopeLimit + (state === "IDENTITY_CONFLICT" ? sharedOwnerSourceConflict
+      ? "The resource need's shared-storage owner conflicts with the work order's character source. Clarify the source scope; character inventory deltas were not used as shared-owner evidence."
+      : "The work order and linked need disagree on source/destination, or both sides resolve to the same character; clarify the plan before interpreting observations."
+      : state === "EVIDENCE_UNKNOWN" ? "A source or destination identity, recent observation, or comparable complete item scope is missing. No movement conclusion is supported."
+      : state === "BOTH_SIDES_CHANGED" ? "Both explicitly named characters have recent comparable changes for this resource scope. The observations do not establish that the changes are related or that a transfer occurred."
+      : state === "SOURCE_ONLY_CHANGED" ? "Only the explicitly named source changed in comparable evidence. Disappearance does not establish transfer, consumption, sale, or cause."
+      : state === "DESTINATION_ONLY_CHANGED" ? "Only the explicitly named destination changed in comparable evidence. Appearance does not establish transfer, ownership, or cause."
+      : "Recent comparable observations show no quantity change for this resource scope; this does not prove that no unobserved action occurred.");
+    return [{ needId, kind: need.kind, resourceKey: need.resourceKey, source, destination, state, interpretation: "CAUSE_UNKNOWN" as const, reason }];
+  });
 }
 
 function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvidence, allProjects: readonly ErpProject[], version: WowVersion): ErpNeedEvidence {
@@ -923,7 +1001,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       : reconciliation === "RESOURCE_ALLOCATION_REQUIRES_REVIEW"
         ? `Recent covered linked needs share or ambiguously identify observed source quantities for: ${allocationConflictNeedIds.join(", ")}. Their combined independent availability is not established. Reservations record player intent; they do not lock inventory or prove possession.`
         : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, reason };
+    const transferReviews = transferObservationReviews(project, order, snapshotsFor, now, currencies);
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

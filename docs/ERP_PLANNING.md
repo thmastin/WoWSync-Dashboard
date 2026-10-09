@@ -40,6 +40,8 @@ Project history records saved intent changes, including resource needs, reservat
 
 When adding a manual work order, the player can link resource needs and prerequisite work orders. A readiness projection makes those recorded relationships visible and conservatively gates the workbench wording; it is not an automatic scheduler or game-action authorization.
 
+For a `TRANSFER` work order with an item need and explicit character source and destination, progress can compare each character's adjacent, recent, complete observations for the declared item scope. The result reports only which side's observation changed, with section quantities, timestamps, and freshness; it is always `CAUSE_UNKNOWN` and does not establish a transfer, ownership, access, or account membership. A broad base-item (`ITEM_ID`) comparison may include different variants and calls that out explicitly. If the need selects a shared-storage owner, a work-order character source cannot override that scope: the paired review is an identity/scope conflict and does not compare that character's inventory as owner evidence. Without an explicit character pair or comparable evidence, the result remains UNKNOWN. REST, MCP, and the UI read the same projection.
+
 Manual work-order authoring also accepts player-entered instructions and explicit source, destination, and assignee character identities. These fields document intent and expected context only; they do not establish account membership, possession, accessibility, or transferability. Project history records task status transitions by stable work-order ID, rendering old events without the optional transition detail remains supported, and the UI labels these as saved plan status. No action is dispatched to the game.
 
 ## User workflow

@@ -50,6 +50,31 @@ test("project REST persists explicit plans and returns evidence from the shared 
   });
 });
 
+test("REST and AccountContext expose paired transfer observations while preserving unknown causality", async () => {
+  await withServer(async (call, store) => {
+    const currentAt = Math.floor(Date.now() / 1000);
+    const capture = (name: string, quantity: number, generatedAt: number) => buildWowSyncExport({ generatedAt, character: { name, realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: "item:159", name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
+    store.importSnapshot(capture("Sender", 2, currentAt - 10));
+    store.importSnapshot(capture("Receiver", 0, currentAt - 10));
+    store.importSnapshot(capture("Sender", 1, currentAt));
+    store.importSnapshot(capture("Receiver", 1, currentAt));
+    const source = store.listCharacters("classic-era").find((character) => character.name === "Sender")!;
+    const destination = store.listCharacters("classic-era").find((character) => character.name === "Receiver")!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review paired item observations", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source.identityKey, destinationIdentityKey: destination.identityKey }], workOrders: [{ stableId: "move", kind: "TRANSFER", status: "WAITING_FOR_EVIDENCE", title: "Review item movement", sourceIdentityKey: source.identityKey, destinationIdentityKey: destination.identityKey, resourceNeedIds: ["stone"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    const review = created.body.project.workOrderProgress[0].transferObservationReviews[0];
+    assert.equal(review.state, "BOTH_SIDES_CHANGED");
+    assert.equal(review.interpretation, "CAUSE_UNKNOWN");
+    const sourceBagChange = review.source.comparisons.find((comparison: any) => comparison.section === "bags" && comparison.delta !== 0);
+    assert.deepEqual(sourceBagChange && [sourceBagChange.previousQuantity, sourceBagChange.currentQuantity, sourceBagChange.delta], [2, 1, -1]);
+    assert.match(review.reason, /do not establish that the changes are related or that a transfer occurred/);
+    const listed = await call("GET", "/api/versions/classic-era/erp/projects");
+    assert.deepEqual(listed.body.projects[0].workOrderProgress[0].transferObservationReviews, created.body.project.workOrderProgress[0].transferObservationReviews);
+    const context = await call("GET", "/api/account-context");
+    assert.deepEqual(context.body.planning.projects[0].workOrderProgressStates, { OBSERVATION_CHANGED_CAUSE_UNKNOWN: 1 });
+  });
+});
+
 test("manual supply readiness is summarized by AccountContext from the REST planning projection", async () => {
   await withServer(async (call, store) => {
     const generatedAt = Math.floor(Date.now() / 1000) + 1;
