@@ -37,6 +37,9 @@ test("work-order readiness uses qualified player-facing language and preserves a
   } }));
   assert.match(closedWithHistoricalBlocker, /Work order is closed/);
   assert.doesNotMatch(closedWithHistoricalBlocker, /Assigned character requirement not met/);
+  const unspecifiedCraft = renderToStaticMarkup(React.createElement(ErpWorkOrderReadinessLine, { readiness: { ...ready, state: "WAITING_FOR_EVIDENCE", reason: "No exact profession or recipe requirement is linked to this crafting step. Material needs alone do not establish that the assigned character can craft the intended result." } }));
+  assert.match(unspecifiedCraft, /Waiting for current evidence/);
+  assert.match(unspecifiedCraft, /Material needs alone do not establish/);
   const reservationConflict = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { workOrderId: "craft", recordedStatus: "IN_PROGRESS", completionRecorded: false, linkedNeedState: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", observationChange: "UNKNOWN", reconciliation: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: [], allocationConflictNeedIds: ["ore"], changedNeedIds: [], reason: "Current reservations overlap this resource need; intent does not prove locked stock." } }));
   assert.match(reservationConflict, /Resource allocation requires review/);
   assert.match(reservationConflict, /intent does not prove locked stock/);

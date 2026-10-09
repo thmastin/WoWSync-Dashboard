@@ -86,8 +86,12 @@ test("CRAFT readiness checks only the assigned character and preserves missing p
     assert.equal(readiness.state, "WAITING_FOR_EVIDENCE");
     assert.deepEqual(readiness.capabilityChecks.map((check: any) => [check.state, check.assignedIdentityKey, check.evidenceSourceIdentityKey, check.freshness]), [["EVIDENCE_UNKNOWN", character.identityKey, character.identityKey, "stale"]]);
     assert.equal(readiness.linkedNeeds[0].sourceIdentityKey, character.identityKey, "the order's capability view uses only its assigned character's observation");
+    const unspecified = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Unspecified craft plan", workOrders: [{ stableId: "craft-unspecified", kind: "CRAFT", status: "PLANNED", title: "Craft without recorded prerequisites", assignedIdentityKey: character.identityKey, resourceNeedIds: [], dependsOn: [] }] });
+    assert.equal(unspecified.status, 201);
+    assert.equal(unspecified.body.project.workOrderReadiness[0].state, "WAITING_FOR_EVIDENCE");
+    assert.match(unspecified.body.project.workOrderReadiness[0].reason, /No exact profession or recipe requirement is linked/);
     const context = await call("GET", "/api/account-context");
-    assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { WAITING_FOR_EVIDENCE: 1 });
+    assert.equal(context.body.planning.projects.filter((entry: any) => entry.workOrderReadinessStates.WAITING_FOR_EVIDENCE === 1).length, 2);
   });
 });
 

@@ -36,6 +36,8 @@ Work orders are manual steps. The player can record PLANNED, IN_PROGRESS, or WAI
 
 For CRAFT work orders, linked `PROFESSION` and `RECIPE` needs are checked directly against the assigned character's own same-version snapshots, independently of the material need's supply source. The capability result carries its own source identity, freshness, timestamp, and section provenance. A recent observed skill or learned recipe on a different character never satisfies the assigned crafter's check. Missing assignment, missing/stale/unknown assigned-character evidence, and an observed unmet threshold remain distinct. A matching skill/recipe fact is only a prerequisite signal: it does not prove specialization, unlock conditions, reagents, or current craftability. Other linked material needs retain their separate source and reservation scopes.
 
+An active `CRAFT` step with no linked profession or recipe requirement remains `WAITING_FOR_EVIDENCE`, even when its listed materials are observed. Link the exact known prerequisite need to screen that fact; material coverage alone is not craft readiness. Existing reservation conflicts remain visible before this missing-prerequisite result.
+
 Project history records saved intent changes, including resource needs, reservations, work orders, title/objective, priority, and status. Observation deltas remain a separate evidence view, explicitly non-causal. History never asserts that a described player action happened in game.
 
 When adding a manual work order, the player can link resource needs and prerequisite work orders. A readiness projection makes those recorded relationships visible and conservatively gates the workbench wording; it is not an automatic scheduler or game-action authorization.

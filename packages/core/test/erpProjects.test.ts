@@ -356,6 +356,19 @@ test("CRAFT readiness binds recipe and profession evidence to the assigned chara
   const otherCrafterFixture = seedRetailRecipes([{ recipeID: 3001, learned: false, learnedState: "OBSERVED_FALSE" }], { characterName: "Other Crafter" });
   const professionFixture = seedStore({ professions: { entries: [{ name: "Leatherworking", skill: 100, maxSkill: 150 }] } });
   try {
+    const unspecifiedCraft: ErpProject = { ...project(recipeFixture.identityKey), workOrders: [{ stableId: "unspecified", kind: "CRAFT", status: "PLANNED", title: "Unspecified craft", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: recipeFixture.identityKey }] };
+    const unspecifiedReadiness = evaluateErpProject(unspecifiedCraft, (key) => recipeFixture.store.listSnapshots(key), [unspecifiedCraft], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(unspecifiedReadiness.state, "WAITING_FOR_EVIDENCE", "a material-free or otherwise unspecified craft does not appear ready without an exact profession or recipe requirement");
+    assert.match(unspecifiedReadiness.reason, /No exact profession or recipe requirement is linked/);
+    const materialsOnlyFixture = seedStore();
+    try {
+      const materialsOnlyCharacter = materialsOnlyFixture.store.listCharacters("classic-era")[0]!;
+      const materialsOnlyCraft: ErpProject = { ...project(materialsOnlyCharacter.identityKey), needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: materialsOnlyCharacter.identityKey }], reservations: [], workOrders: [{ stableId: "materials-only", kind: "CRAFT", status: "PLANNED", title: "Craft with materials only", resourceNeedIds: ["stone"], dependsOn: [], assignedIdentityKey: materialsOnlyCharacter.identityKey }] };
+      const materialsOnlyReadiness = evaluateErpProject(materialsOnlyCraft, (key) => materialsOnlyFixture.store.listSnapshots(key), [materialsOnlyCraft], 1_700_000_020).workOrderReadiness[0]!;
+      assert.equal(materialsOnlyReadiness.linkedNeeds?.[0]?.state, "COVERED_BY_OBSERVED", "the fixture has enough observed material");
+      assert.equal(materialsOnlyReadiness.state, "WAITING_FOR_EVIDENCE", "material coverage alone does not establish an observed profession or recipe prerequisite");
+    } finally { materialsOnlyFixture.store.close(); }
+
     const other = otherCrafterFixture.store.listCharacters("retail")[0]!;
     const recipeNeed = { stableId: "recipe", kind: "RECIPE" as const, resourceKey: "3001", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: recipeFixture.identityKey };
     const recipeProject: ErpProject = { ...project(recipeFixture.identityKey), version: "retail", needs: [recipeNeed], reservations: [], workOrders: [{ stableId: "craft", kind: "CRAFT", status: "PLANNED", title: "Craft recipe", resourceNeedIds: ["recipe"], dependsOn: [], assignedIdentityKey: other.identityKey }] };
@@ -445,7 +458,7 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
       ],
       workOrders: [
         { stableId: "prereq", kind: "INVESTIGATE", status: "PLANNED", title: "Check the trainer", resourceNeedIds: [], dependsOn: [] },
-        { stableId: "blocked", kind: "CRAFT", status: "PLANNED", title: "Craft after training", resourceNeedIds: ["covered_need"], dependsOn: ["prereq"] },
+        { stableId: "blocked", kind: "OTHER", status: "PLANNED", title: "Continue after investigation", resourceNeedIds: ["covered_need"], dependsOn: ["prereq"] },
         { stableId: "short", kind: "PURCHASE", status: "PLANNED", title: "Buy after saving", resourceNeedIds: ["gold_need"], dependsOn: [] },
         { stableId: "unknown", kind: "TRANSFER", status: "PLANNED", title: "Move the unknown item", resourceNeedIds: ["unknown_need"], dependsOn: [] },
         { stableId: "review", kind: "TRANSFER", status: "PLANNED", title: "Review source transfer", resourceNeedIds: ["covered_need"], dependsOn: [] },
@@ -484,7 +497,7 @@ test("work order readiness aggregates linked needs and treats saved reservations
   const { store, identityKey } = seedStore();
   try {
     const targetNeed = { stableId: "target_need", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone for craft", requiredQuantity: 3, sourceIdentityKey: identityKey };
-    const current: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "craft_step", kind: "CRAFT", status: "PLANNED", title: "Prepare craft", resourceNeedIds: [targetNeed.stableId], dependsOn: [] }] };
+    const current: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "craft_step", kind: "OTHER", status: "PLANNED", title: "Review observed resource allocation", resourceNeedIds: [targetNeed.stableId], dependsOn: [] }] };
     const competitorNeed = { ...targetNeed, stableId: "competing_need", label: "Stone for another project" };
     const competing: ErpProject = { ...project(identityKey), stableId: "competing_project", needs: [competitorNeed], reservations: [{ stableId: "competing_hold", needId: competitorNeed.stableId, sourceIdentityKey: identityKey, quantity: 3, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
     const read = (plans: ErpProject[]) => evaluateErpProject(current, (key) => store.listSnapshots(key), plans, 1_700_000_010).workOrderReadiness[0]!;
