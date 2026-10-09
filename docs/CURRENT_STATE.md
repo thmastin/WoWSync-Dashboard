@@ -1,19 +1,6 @@
 # Current WoWSync state
 
-**Latest feature-branch checkpoint (2026-10-09):** independent Omarchy ERP validation has been integrated into the Windows branch. The combined harness checks Core, MCP, server, web, typechecks, production build, browser acceptance, migration compatibility, and Forever allocation contracts. The workbench now projects observation-backed work-order progress without causal attribution. Project revision history is append-only and
-transactional. Create, edit, and status changes commit a revision event atomically with the project;
-work-order status edits now include stable task IDs and from/to states, while the workbench can
-record player-authored instructions, assignee, planned source, and intended destination. These are
-plan fields only, not evidence of access, ownership, or transfer. REST and MCP share the event payload;
-REST/MCP and the Projects & Work Orders page expose the latest 50 entries with total/truncation
-metadata, while AccountContext schema 9 includes current revision, event count, and compact work-order reconciliation counts. Each work order distinguishes player-recorded completion, current linked resource coverage/shortfall, observed changes with unknown cause, mixed evidence, and stale/unknown evidence. Status and
-completion-note changes remain player-entered Dashboard intent. History does not claim a game action
-or infer causality. Exact Retail recipe learned-state rows can now satisfy a single recipe-knowledge
-need; partial catalogs, missing entries, historical data, other versions, current skill, unlocks,
-reagents, and craftability retain explicit uncertainty. The full validation command passes: core
-787/787, MCP 3/3, server 246 pass + 2
-skipped, web 290/290; TypeScript checks and production build pass (525.60 kB JavaScript bundle
-advisory). The independent Omarchy acceptance branch is integrated. Focused independent review found no blocking findings. Work-order readiness and progress use the same evidence-aware read model; two synthetic Playwright scenarios cover the Retail allocation flow and project -> resource need -> linked manual work order in a temporary environment. These do not represent live account or production browser validation. No live-game planning session was performed. Current HEAD and report are recorded in the latest durable truth checkpoint.
+**Latest feature-branch checkpoint (2026-10-09):** Omarchy deterministic ERP acceptance is integrated. Work-order progress and readiness share evidence rules for dependencies, current source quantities, repeated linked needs, active reservations, and confirmed manual item-supply gaps. Gather/Purchase tasks surface only for recent, complete item shortfalls; prices and routes remain unverified. Progress preserves stale/unknown and shortfall precedence, while AccountContext schema 10 summarizes readiness and reconciliation states. Full validation passed: core 791, MCP 3, server 248 passed + 2 platform skips, web 291, typechecks, production build, and 2 synthetic browser acceptances. Independent review found no blockers. No production browser, live-game, or deployment validation occurred. Dashboard HEAD 4f748a55c527a9b0bb7bd9eb1fccee87938164e6 on `feature/forever-gear-observation` is pushed; see the latest canonical checkpoint in wow-stuff truth.
 
 **Previous feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
 `feature/forever-gear-observation` extends the shared core with version-scoped persistent projects,
