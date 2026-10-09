@@ -2,6 +2,7 @@ import { formatRelativeTime } from "../format.ts";
 import { searchItemRows, type ItemBoundFilter, type ItemStorageFilter } from "../itemSearch.ts";
 import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts, InventoryFacts } from "../types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 function storageLabel(storage: "bags" | "bank"): string {
   return storage === "bags" ? "Bags" : "Bank";
@@ -87,8 +88,8 @@ export default function ItemsSearch({
         <p className="muted small items-caveat">
           Some bags/bank were never observed — quantities below are a <strong>known total</strong>, not a complete account
           total.
-          {inventory.unknownBank.length > 0 && <> Bank never observed: {inventory.unknownBank.map((c) => c.name).join(", ")}.</>}
-          {inventory.unknownBags.length > 0 && <> Bags never observed: {inventory.unknownBags.map((c) => c.name).join(", ")}.</>}
+          {inventory.unknownBank.length > 0 && <> Bank never observed: {inventory.unknownBank.map((c) => characterDisplayName(characters.find((character) => character.identityKey === c.identityKey) ?? c)).join(", ")}.</>}
+          {inventory.unknownBags.length > 0 && <> Bags never observed: {inventory.unknownBags.map((c) => characterDisplayName(characters.find((character) => character.identityKey === c.identityKey) ?? c)).join(", ")}.</>}
         </p>
       )}
 

@@ -43,6 +43,8 @@ import type { RecentChange, StoredCharacterSummary } from "./store.ts";
 export interface CharacterFacts {
   identityKey: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   realm: string;
   class?: string;
   faction?: string;
@@ -491,6 +493,8 @@ function buildCharacterFacts(
     return {
       identityKey: c.identityKey,
       name: c.name,
+      ...(parsed?.character.surname ? { surname: parsed.character.surname } : {}),
+      ...(parsed?.character.surnameSource ? { surnameSource: parsed.character.surnameSource } : {}),
       realm: c.realm,
       class: c.class,
       faction: c.faction,

@@ -252,7 +252,7 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
 }
 
 export function buildForeverGearObservation(input: {
-  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; surname?: string; surnameSource?: string; realm: string };
   snapshotId: number;
   generatedAt?: number;
   importedAt: number;

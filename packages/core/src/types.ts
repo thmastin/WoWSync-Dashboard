@@ -24,6 +24,10 @@ export interface SectionStatus {
 export interface CharacterSection {
   status: SectionStatus;
   name?: string;
+  /** Optional Forever display surname. Never part of canonical identity. */
+  surname?: string;
+  /** API return tuple(s) supporting the surname candidate; semantics still need live build validation. */
+  surnameSource?: string;
   realm?: string;
   class?: string;
   level?: number;

@@ -166,6 +166,8 @@ function parseCharacter(lines: string[]): CharacterSection {
   };
 
   const name = fieldValue(get("Name: "));
+  const surname = fieldValue(get("Surname: ", false));
+  const surnameSource = surname !== undefined ? fieldValue(get("SurnameSource: ", false)) : undefined;
   const realm = fieldValue(get("Realm: "));
   const cls = fieldValue(get("Class: "));
   const level = fieldNumber(get("Level: "));
@@ -196,10 +198,15 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
+  if (surname !== undefined && (clientFamily !== "Forever" || clientVersion !== "1.60.1" || clientBuild !== "70291" || iface !== "16001")) {
+    fail("Surname is only supported for the verified Forever 1.60.1 build 70291 profile");
+  }
 
   return {
     status,
     name,
+    surname,
+    surnameSource,
     realm,
     class: cls,
     level,

@@ -43,7 +43,7 @@ export function parseSort(sort: string): { key: RosterSortKey; descending: boole
 function matchesQuery(c: CharacterFacts, q: string): boolean {
   if (!q.trim()) return true;
   const needle = q.trim().toLowerCase();
-  return [c.name, c.realm, c.class ?? "", c.faction ?? ""].some((s) => s.toLowerCase().includes(needle));
+  return [c.name, c.surname ?? "", c.realm, c.class ?? "", c.faction ?? ""].some((s) => s.toLowerCase().includes(needle));
 }
 
 function matchesAge(c: CharacterFacts, age: string, now: number): boolean {

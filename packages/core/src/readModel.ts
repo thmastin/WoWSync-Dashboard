@@ -958,7 +958,7 @@ export class DashboardReadModel {
       const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
       if (sourceGuids.some((guid) => !guid) || snapshots.some((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuidConflict) || new Set(sourceGuids).size > 1) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "The Dashboard version/realm/name history contains missing or conflicting WoWSyncDB character GUIDs; the observation cannot safely be resolved to one source character." } };
       const data = buildForeverGearObservation({
-        identity: { version: "forever", identityKey: character.identityKey, name: character.name, realm: character.realm },
+        identity: { version: "forever", identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), ...(character.surnameSource ? { surnameSource: character.surnameSource } : {}), realm: character.realm },
         snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt,
         equipment: snapshot.parsed.equipment, bags: snapshot.parsed.bags, bank: snapshot.parsed.bank,
         structured: snapshot.parsed.foreverGearObservation,
@@ -978,12 +978,12 @@ export class DashboardReadModel {
     version: "forever";
     ruleset: "forever-70291-allocation-screen-v2";
     scope: { accountMembership: "UNKNOWN"; reason: string };
-    recipient: { identityKey: string; name: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; level?: { value: number; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" }>; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
-    candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"] }>;
-    assessments: Array<ForeverGearAssessmentEvaluation & { candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string }; eligibilityAssessment: ReturnType<typeof combineForeverEligibility> }>;
-    recipientEvaluations: Array<{ source: { identityKey: string; name: string; realm: string }; itemRef?: string; recipients: Array<{ identityKey: string; name: string; realm: string; eligibility: string; armorProficiency: string; slotCompatibility: string; upgradeStatus: string; transferability: string; fit: "EXCLUDED" | "LOCAL_REVIEW" | "POTENTIAL_GEAR_FIT" | "UNRANKED"; reasons: string[] }> }>;
-    allocationPlan: Array<{ disposition: "EQUIP_CANDIDATE" | "KEEP" | "POSSIBLE_OTHER_CHARACTER" | "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" | "INSUFFICIENT_EVIDENCE"; item: { name?: string; itemRef?: string; itemIdentity?: string }; source: { identityKey: string; name: string; realm: string; location: "CARRIED_INVENTORY" | "EQUIPPED" | "UNKNOWN"; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; freshness: string }; recipient: { identityKey: string; name: string; realm: string }; comparison?: { upgradeStatus: string; confidence: string; rawComparisons: ForeverGearAssessmentEvaluation["rawStatComparisons"] }; evidence: { provenance: "DERIVED" | "HYPOTHESIS" | "UNKNOWN"; eligibility: string; suitability: string; transferability: string; confidence: "LIMITED" | "UNKNOWN"; reasons: string[]; whatWouldChange: string[] } }>;
-    exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }>;
+    recipient: { identityKey: string; name: string; surname?: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; level?: { value: number; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" }>; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
+    candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"] }>;
+    assessments: Array<ForeverGearAssessmentEvaluation & { candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; surname?: string; realm: string }; recipient: { identityKey: string; name: string; surname?: string; realm: string }; eligibilityAssessment: ReturnType<typeof combineForeverEligibility> }>;
+    recipientEvaluations: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; itemRef?: string; recipients: Array<{ identityKey: string; name: string; surname?: string; realm: string; eligibility: string; armorProficiency: string; slotCompatibility: string; upgradeStatus: string; transferability: string; fit: "EXCLUDED" | "LOCAL_REVIEW" | "POTENTIAL_GEAR_FIT" | "UNRANKED"; reasons: string[] }> }>;
+    allocationPlan: Array<{ disposition: "EQUIP_CANDIDATE" | "KEEP" | "POSSIBLE_OTHER_CHARACTER" | "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" | "INSUFFICIENT_EVIDENCE"; item: { name?: string; itemRef?: string; itemIdentity?: string }; source: { identityKey: string; name: string; surname?: string; realm: string; location: "CARRIED_INVENTORY" | "EQUIPPED" | "UNKNOWN"; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; freshness: string }; recipient: { identityKey: string; name: string; surname?: string; realm: string }; comparison?: { upgradeStatus: string; confidence: string; rawComparisons: ForeverGearAssessmentEvaluation["rawStatComparisons"] }; evidence: { provenance: "DERIVED" | "HYPOTHESIS" | "UNKNOWN"; eligibility: string; suitability: string; transferability: string; confidence: "LIMITED" | "UNKNOWN"; reasons: string[]; whatWouldChange: string[] } }>;
+    exclusions: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; state: string; reason: string }>;
     conclusion: "LOCAL_REVIEW_CANDIDATE_AVAILABLE" | "INSUFFICIENT_EVIDENCE";
     reason: string;
   }>> {
@@ -1008,7 +1008,8 @@ export class DashboardReadModel {
       .filter((row) => row.isHeader !== true && typeof row.name === "string")
       .map((row) => ({ name: row.name as string, ...(typeof row.rank === "number" ? { rank: row.rank } : {}), ...(typeof row.maxRank === "number" ? { maxRank: row.maxRank } : {}), ...(typeof row.skillLineCategoryID === "number" ? { rawCategoryID: row.skillLineCategoryID } : {}), ...(skillLinesObservedAt !== undefined ? { observedAt: skillLinesObservedAt } : {}), provenance: itemEvidenceRecord?.lastAttemptStale === true || skillEvidenceFreshness === "stale" ? "LAST_SEEN" as const : skillEvidenceFreshness === "recent" ? "OBSERVED" as const : "UNKNOWN" as const }));
     const recipient = {
-      identityKey: recipientCharacter.identityKey, name: recipientCharacter.name, realm: recipientCharacter.realm,
+      identityKey: recipientCharacter.identityKey, name: recipientCharacter.name,
+      ...(recipientCharacter.surname ? { surname: recipientCharacter.surname } : {}), realm: recipientCharacter.realm,
       ...(recipientSnapshot ? { snapshotId: recipientSnapshot.id } : {}),
       ...(recipientObservedAt !== undefined ? { observedAt: recipientObservedAt } : {}),
       freshness: recipientFreshness,
@@ -1017,15 +1018,15 @@ export class DashboardReadModel {
       observedSkillLines,
       equipment: recipientData.equipment,
     };
-    const candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"] }> = [];
-    const exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }> = [];
+    const candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"] }> = [];
+    const exclusions: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; state: string; reason: string }> = [];
     for (const sourceCharacter of this.store.listCharacters("forever")) {
       const observation = this.getForeverGearObservation({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
       if (observation.status !== "FOUND" || !observation.value.data) {
-        exclusions.push({ character: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, realm: sourceCharacter.realm }, state: observation.status, reason: observation.status === "FOUND" ? observation.value.provenance.reason ?? "Observation data unavailable." : "Source identity or 70291 evidence could not be safely resolved." });
+        exclusions.push({ character: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, ...(sourceCharacter.surname ? { surname: sourceCharacter.surname } : {}), realm: sourceCharacter.realm }, state: observation.status, reason: observation.status === "FOUND" ? observation.value.provenance.reason ?? "Observation data unavailable." : "Source identity or 70291 evidence could not be safely resolved." });
         continue;
       }
-      candidateSources.push({ source: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, realm: sourceCharacter.realm }, observationState: observation.value.data.evaluationCandidates.state,
+      candidateSources.push({ source: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, ...(sourceCharacter.surname ? { surname: sourceCharacter.surname } : {}), realm: sourceCharacter.realm }, observationState: observation.value.data.evaluationCandidates.state,
         ...(observation.value.data.evaluationCandidates.observedAt !== undefined ? { observedAt: observation.value.data.evaluationCandidates.observedAt, freshness: observation.value.data.evaluationCandidates.freshness } : {}),
         carried: { state: observation.value.data.carried.state, ...(observation.value.data.carried.observedAt !== undefined ? { observedAt: observation.value.data.carried.observedAt, freshness: observation.value.data.carried.freshness } : {}), ...(observation.value.data.carried.items !== undefined ? { itemCount: observation.value.data.carried.items.length } : {}) },
         bank: { state: observation.value.data.bank.state, ...(observation.value.data.bank.observedAt !== undefined ? { observedAt: observation.value.data.bank.observedAt, freshness: observation.value.data.bank.freshness } : {}), ...(observation.value.data.bank.reason ? { reason: observation.value.data.bank.reason } : {}) },
@@ -1253,7 +1254,7 @@ export class DashboardReadModel {
           slotCompatibility: slot.state });
         const fit = evaluateForeverRecipientFit({ identityKey: entry.character.identityKey, eligibility, level: levelCheck, slotCompatibility: slot.state,
           upgrade: upgrade.status, sourceLocation: local ? "LOCAL_CARRIED" : "OTHER_CHARACTER", transferability: "UNKNOWN" });
-        return { identityKey: entry.character.identityKey, name: entry.character.name, realm: entry.character.realm,
+        return { identityKey: entry.character.identityKey, name: entry.character.name, ...(entry.character.surname ? { surname: entry.character.surname } : {}), realm: entry.character.realm,
           eligibility: eligibility.state, armorProficiency: `${armor.state} (${armor.confidence})`, slotCompatibility: slot.state,
           upgradeStatus: upgrade.status, transferability: fit.transferability, fit: fit.state, reasons: fit.reasons };
       }) };
@@ -1303,7 +1304,7 @@ export class DashboardReadModel {
           allocationPlan.push({ disposition,
             item: { ...(assessment.candidate.name ? { name: assessment.candidate.name } : {}), ...(assessment.candidate.itemRef ? { itemRef: assessment.candidate.itemRef } : {}), ...(assessment.candidate.itemIdentity ? { itemIdentity: assessment.candidate.itemIdentity } : {}) },
             source: { ...assessment.source, location: sourceLocationCurrent ? "CARRIED_INVENTORY" : "UNKNOWN", provenance: sourceLocationCurrent ? "OBSERVED" : assessment.candidate.provenance.includes("LAST_SEEN") ? "LAST_SEEN" : "UNKNOWN", ...(sourceAt !== undefined ? { observedAt: sourceAt } : {}), freshness: sourceFreshness },
-            recipient: { identityKey: row.identityKey, name: row.name, realm: row.realm },
+            recipient: { identityKey: row.identityKey, name: row.name, ...(row.surname ? { surname: row.surname } : {}), realm: row.realm },
             ...(targetAssessment ? { comparison: { upgradeStatus: assessment.upgradeStatus, confidence: assessment.upgradeConfidence, rawComparisons: assessment.rawStatComparisons } } : {}),
             evidence: { provenance: disposition === "POSSIBLE_OTHER_CHARACTER" ? "HYPOTHESIS" : disposition === "INSUFFICIENT_EVIDENCE" ? "UNKNOWN" : "DERIVED", eligibility: targetAssessment ? assessment.eligibilityAssessment.state : row.eligibility, suitability: targetAssessment ? assessment.suitability : "UNKNOWN", transferability: local ? "No transfer needed for source character" : row.transferability,
               confidence: localDecision || noGain || disposition === "POSSIBLE_OTHER_CHARACTER" ? "LIMITED" : "UNKNOWN", reasons: [reason, ...row.reasons], whatWouldChange },
@@ -1317,8 +1318,8 @@ export class DashboardReadModel {
           planKeys.add(keepKey);
           const equipped = recipient.equipment.items.find((item) => item.itemRef === comparison.equippedItemRef);
           allocationPlan.push({ disposition: "KEEP", item: { ...(equipped?.name ? { name: equipped.name } : {}), itemRef: comparison.equippedItemRef },
-            source: { identityKey: row.identityKey, name: row.name, realm: row.realm, location: "EQUIPPED", provenance: recipient.equipment.freshness === "recent" ? "OBSERVED" : "UNKNOWN", ...(recipient.equipment.observedAt !== undefined ? { observedAt: recipient.equipment.observedAt } : {}), freshness: recipient.equipment.freshness ?? "unknown" },
-            recipient: { identityKey: row.identityKey, name: row.name, realm: row.realm },
+            source: { identityKey: row.identityKey, name: row.name, ...(row.surname ? { surname: row.surname } : {}), realm: row.realm, location: "EQUIPPED", provenance: recipient.equipment.freshness === "recent" ? "OBSERVED" : "UNKNOWN", ...(recipient.equipment.observedAt !== undefined ? { observedAt: recipient.equipment.observedAt } : {}), freshness: recipient.equipment.freshness ?? "unknown" },
+            recipient: { identityKey: row.identityKey, name: row.name, ...(row.surname ? { surname: row.surname } : {}), realm: row.realm },
             comparison: { upgradeStatus: assessment.upgradeStatus, confidence: assessment.upgradeConfidence, rawComparisons: [comparison] },
             evidence: { provenance: "DERIVED", eligibility: "already observed equipped", suitability: "UNKNOWN", transferability: "not applicable", confidence: "LIMITED", reasons: [reason, comparison.reason], whatWouldChange } });
         }
@@ -1337,7 +1338,7 @@ export class DashboardReadModel {
         allocationPlan.push({ disposition: "INSUFFICIENT_EVIDENCE",
           item: { ...(item.name ? { name: item.name } : {}), ...(item.itemRef ? { itemRef: item.itemRef } : {}), ...(item.itemIdentity ? { itemIdentity: item.itemIdentity } : {}) },
           source: { ...source.source, location: sourceLocationCurrent ? "CARRIED_INVENTORY" : "UNKNOWN", provenance: sourceLocationCurrent ? "OBSERVED" : item.provenance === "LAST_SEEN" ? "LAST_SEEN" : "UNKNOWN", ...(source.carried.observedAt !== undefined ? { observedAt: source.carried.observedAt } : {}), freshness: source.carried.freshness ?? "unknown" },
-          recipient: { identityKey: entry.character.identityKey, name: entry.character.name, realm: entry.character.realm },
+          recipient: { identityKey: entry.character.identityKey, name: entry.character.name, ...(entry.character.surname ? { surname: entry.character.surname } : {}), realm: entry.character.realm },
           evidence: { provenance: "UNKNOWN", eligibility: "UNKNOWN", suitability: "UNKNOWN", transferability: local ? "No transfer needed unless ownership or storage changes" : "UNKNOWN", confidence: "UNKNOWN",
             reasons: [item.reason, "No item-stat or equipment comparison is made until the exact item's equipment status is established."],
             whatWouldChange: ["Fresh, exact-variant GetItemInfoInstant and IsEquippableItem evidence for this item", "Exact-item stats and a current complete equipment capture for the intended recipient", ...(!local ? ["Verified account membership and a permitted transfer route"] : []), ...(sourceLocationCurrent ? [] : ["A fresh carried-inventory capture from the source character"])] },

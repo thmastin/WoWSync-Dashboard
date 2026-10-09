@@ -108,6 +108,8 @@ export interface CharacterTrainerCategoryContext {
 export interface CharacterContext {
   identityKey: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   realm: string;
   /** Chronological, oldest first. */
   snapshotHistory: SnapshotHistoryEntry[];
@@ -190,7 +192,7 @@ function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHis
   };
 }
 
-function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"]): CharacterContext {
+function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], surname?: string, surnameSource?: string, foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"]): CharacterContext {
   const chronological = [...snapshots].sort(compareSnapshotsChronologically);
 
   const snapshotHistory = chronological.map((s) => toHistoryEntry(s.parsed, s.importedAt));
@@ -222,7 +224,7 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
         }))
     : [];
 
-  return { identityKey, name, realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}) };
+  return { identityKey, name, ...(surname ? { surname } : {}), ...(surnameSource ? { surnameSource } : {}), realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}) };
 }
 
 export function buildAccountContext(input: AccountContextInput): AccountContext {
@@ -233,7 +235,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
     const facts = versionFacts[version];
     const characters = [...facts.characters]
       .sort((a, b) => a.realm.localeCompare(b.realm) || a.name.localeCompare(b.name))
-      .map((c) => buildCharacterContext(c.identityKey, c.name, c.realm, characterSnapshots.get(c.identityKey) ?? [], version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined));
+      .map((c) => buildCharacterContext(c.identityKey, c.name, c.realm, characterSnapshots.get(c.identityKey) ?? [], c.surname, c.surnameSource, version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined));
 
     versions[version] = {
       version,

@@ -16,6 +16,8 @@ export interface StoredCharacterSummary {
   version: VersionOrUnknown;
   realm: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   identityKey: string;
   class?: string;
   faction?: string;

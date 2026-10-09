@@ -9,6 +9,7 @@ import {
 } from "@wowsync-dashboard/core/professionCatalog.ts";
 import type { ScopedFacts } from "../scopedFacts.ts";
 import type { ProfessionCoverageEntry } from "../types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 function skillLabel(skill?: number, maxSkill?: number): string {
   const left = skill === undefined ? "?" : String(skill);
@@ -120,7 +121,7 @@ export default function AccountProfessions({
     const professions = character.specialization?.data?.professions;
     if (!Array.isArray(professions)) return [];
     return professions.flatMap((profession: any) => (profession.tiers ?? []).flatMap((tier: any) => (tier.trees ?? []).map((tree: any) => ({
-      identityKey: character.identityKey, characterName: character.name, professionName: profession.name ?? `Skill line ${profession.baseSkillLineID}`,
+      identityKey: character.identityKey, characterName: characterDisplayName(character), professionName: profession.name ?? `Skill line ${profession.baseSkillLineID}`,
       baseSkillLineID: profession.baseSkillLineID, skillLineID: tier.skillLineID, treeID: tree.treeID,
       state: typeof tree.tabState === "number" ? (tree.tabState === 1 ? "Unlocked" : tree.tabState === 0 ? "Locked" : `State ${tree.tabState}`) : tree.tabStateEvidence ?? "UNKNOWN",
       completeness: character.specialization?.completeness ?? "unknown", nodes: Array.isArray(tree.nodes) ? tree.nodes : [], currencies: Array.isArray(tier.currencies) ? tier.currencies : [],
@@ -132,7 +133,7 @@ export default function AccountProfessions({
     return scopes.map((scope: any) => {
       const recipes = Array.isArray(scope.recipes) ? scope.recipes : [];
       const associated = recipes.filter((recipe: any) => Array.isArray(recipe.skillLineIDs) && recipe.skillLineIDs.includes(scope.skillLineID)).length;
-      return { identityKey: character.identityKey, characterName: character.name, scope, state: character.recipeKnowledge?.status ?? "UNKNOWN", total: recipes.length, associated,
+      return { identityKey: character.identityKey, characterName: characterDisplayName(character), scope, state: character.recipeKnowledge?.status ?? "UNKNOWN", total: recipes.length, associated,
         learned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_TRUE").length,
         unlearned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_FALSE").length,
         unknown: recipes.filter((recipe: any) => recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE").length };

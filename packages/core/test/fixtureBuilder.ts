@@ -94,6 +94,8 @@ export interface FixtureOptions {
   generatedAt?: number;
   character?: {
     name?: string;
+    surname?: string;
+    surnameSource?: string;
     realm?: string;
     class?: string;
     level?: number;
@@ -221,6 +223,10 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
     } else {
       out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
       out.push(field("Name", c.name ?? "Fixture"));
+      if (c.clientFamily === "Forever" && c.clientVersion === "1.60.1" && c.clientBuild === "70291" && c.interface === "16001") {
+        out.push(field("Surname", c.surname));
+        if (c.surname) out.push(field("SurnameSource", c.surnameSource ?? "Fixture API candidate"));
+      }
       out.push(field("Realm", c.realm ?? "TestRealm"));
       out.push(field("Class", c.class ?? "Warrior"));
       out.push(field("Level", c.level ?? 1));

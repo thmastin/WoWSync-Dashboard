@@ -107,6 +107,32 @@ test("[REAL] a Forever export imports through POST /api/import as a Forever char
   });
 });
 
+test("Forever surname flows through REST and AccountContext as optional display metadata", async () => {
+  const text = buildWowSyncExport({ generatedAt: 1_791_720_000, character: {
+    name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Surname Realm", class: "HUNTER",
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+  } });
+  await withApp(async (api) => {
+    const imported = await api.importCapture({ text });
+    assert.equal(imported.status, 200);
+    assert.equal(imported.body.result.character.surname, "Emberstone");
+    assert.equal(imported.body.result.character.surnameSource, "UnitName[2]+GetUnitName suffix");
+    assert.equal(imported.body.result.character.identityKey, "forever::surname realm::hallo");
+
+    const listed = await api.get("/api/versions/forever/characters");
+    assert.equal(listed.body.characters[0].surname, "Emberstone");
+    const detail = await api.get(`/api/characters/${encodeURIComponent(imported.body.result.character.identityKey)}`);
+    assert.equal(detail.body.character.surname, "Emberstone");
+    const context = await api.get("/api/account-context");
+    const factsCharacter = context.body.versions.forever.facts.characters[0];
+    const contextCharacter = context.body.versions.forever.characters[0];
+    assert.equal(factsCharacter.surname, "Emberstone");
+    assert.equal(factsCharacter.surnameSource, "UnitName[2]+GetUnitName suffix");
+    assert.equal(contextCharacter.surname, "Emberstone");
+    assert.equal(contextCharacter.surnameSource, "UnitName[2]+GetUnitName suffix");
+  });
+});
+
 test("Forever observation REST route preserves the build guard for older captures", async () => {
   await withApp(async (api) => {
     await api.import("forever/hallo-1789731867.wowsync.txt");

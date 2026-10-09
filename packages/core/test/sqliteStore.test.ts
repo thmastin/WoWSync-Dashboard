@@ -34,6 +34,31 @@ test("importing an export creates a character and a first snapshot", () => {
   }
 });
 
+test("Forever surname persists in snapshot and latest summaries without changing the canonical key", () => {
+  const store = freshStore();
+  try {
+    const firstText = buildWowSyncExport({ generatedAt: 1_700_000_000, character: {
+      name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+    } });
+    const first = store.importSnapshot(firstText);
+    assert.equal(first.snapshot.parsed.character.surname, "Emberstone");
+    assert.equal(first.character.surname, "Emberstone");
+    assert.equal(first.character.surnameSource, "UnitName[2]+GetUnitName suffix");
+    assert.equal(first.character.identityKey, "forever::classic beta pvp 2::hallo");
+    assert.equal(store.buildAccountFacts("forever", 1_700_000_001).characters[0]?.surname, "Emberstone");
+    assert.equal(store.buildAccountContext(1_700_000_001).versions.forever.characters[0]?.surname, "Emberstone");
+
+    const laterLegacy = buildWowSyncExport({ generatedAt: 1_700_000_010, character: {
+      name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+    } });
+    const latest = store.importSnapshot(laterLegacy);
+    assert.equal(latest.character.identityKey, first.character.identityKey);
+    assert.equal(latest.snapshot.parsed.character.surname, undefined);
+    assert.equal(store.listCharacters("forever")[0]?.surname, undefined, "missing latest surname is not carried forward as current");
+    assert.equal(store.listSnapshots(first.character.identityKey).length, 2);
+  } finally { store.close(); }
+});
+
 test("gear candidates persist in snapshot JSON, duplicates are idempotent, and separate observations stay separate", () => {
   const store = freshStore();
   try {

@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
 import type { ForeverGearAllocationApi } from "../src/api.ts";
 import ForeverGearReview from "../src/components/ForeverGearReview.tsx";
+import CharactersGrid from "../src/components/CharactersGrid.tsx";
 import { buildForeverGearReview, describeForeverAssessment, filterForeverGearReview, gearReviewSummary } from "../src/foreverGearReview.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute } from "../src/routing.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 const row = (overrides: Record<string, unknown> = {}) => ({
   disposition: "INSUFFICIENT_EVIDENCE",
@@ -42,6 +44,22 @@ test("the documented Hallo/Fizzwick variant and raw stat comparison remain UNKNO
   assert.equal(group?.recipients[0]?.evidence.transferability, "UNKNOWN");
   assert.equal(group?.recipients[0]?.recipientEvidence.class?.value, "Hunter");
   assert.equal(group?.recipients[0]?.recipientEvidence.equipment.freshness, "FRESH");
+});
+
+test("surname is displayed in roster cards and Forever gear review without affecting character identity", () => {
+  const surnameRow = row({
+    source: { ...row().source, surname: "Stormstep" },
+    recipient: { ...row().recipient, surname: "Emberstone" },
+  });
+  const groups = buildForeverGearReview([{ recipientIdentityKey: "forever::classic-beta-pvp-2::hallo", result: response([surnameRow]) }]);
+  assert.equal(groups[0]?.sourceLabel, "Fizzwick Stormstep · Classic Beta PvP 2");
+  assert.equal(groups[0]?.recipients[0]?.surname, "Emberstone");
+  assert.equal(characterDisplayName({ name: "Hallo", surname: "Emberstone" }), "Hallo Emberstone");
+  const rosterMarkup = renderToStaticMarkup(createElement(CharactersGrid, {
+    characters: [{ identityKey: "forever::realm::hallo", name: "Hallo", surname: "Emberstone", realm: "Realm", snapshotCount: 1, freshness: "recent", bankStatus: "UNKNOWN", professionsObservationStatus: "UNKNOWN", bagsStatus: "UNKNOWN" }],
+    onOpenCharacter: () => undefined,
+  }));
+  assert.match(rosterMarkup, /Hallo Emberstone/);
 });
 
 test("groups only identical exact variants from the same source; partial identities stay separate", () => {

@@ -1,4 +1,5 @@
 import type { CharacterFacts, InventoryAggregateEntry, InventoryFacts, StorageLocation } from "./types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 export const ITEM_SEARCH_RESULT_CAP = 50;
 
@@ -75,7 +76,7 @@ export function flattenInventoryRows(
         itemKey: item.itemKey,
         itemName,
         identityKey: loc.identityKey,
-        characterName: loc.name,
+        characterName: character ? characterDisplayName(character) : loc.name,
         realm: character?.realm ?? "",
         storage: loc.storage,
         qty: loc.qty,

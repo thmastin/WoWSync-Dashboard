@@ -20,6 +20,8 @@ export interface StoredCharacterSummary {
   version: VersionOrUnknown;
   realm: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   identityKey: string;
   class?: string;
   faction?: string;
@@ -283,6 +285,8 @@ export type Freshness = "recent" | "stale" | "unknown";
 export interface CharacterFacts {
   identityKey: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   realm: string;
   class?: string;
   faction?: string;

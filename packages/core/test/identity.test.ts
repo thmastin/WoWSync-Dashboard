@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { characterIdentity } from "../src/identity.ts";
+import { characterDisplayName, characterIdentity } from "../src/identity.ts";
 import { parseWowSyncExport } from "../src/parser.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { detectVersion } from "../src/version.ts";
@@ -34,4 +34,13 @@ test("identity is case-insensitive for realm/name matching", () => {
   const a = identityFor({ character: { name: "Voodan", realm: "Faerlina", clientVersion: "2.5.6" } });
   const b = identityFor({ character: { name: "voodan", realm: "faerlina", clientVersion: "2.5.6" } });
   assert.equal(a.key, b.key);
+});
+
+test("Forever surname changes display only and does not alter the established identity key", () => {
+  const first = identityFor({ character: { name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const withSurname = identityFor({ character: { name: "Hallo", surname: "Emberstone", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  assert.equal(withSurname.key, first.key);
+  assert.equal(withSurname.name, "Hallo");
+  assert.equal(characterDisplayName({ name: "Hallo", surname: "Emberstone" }), "Hallo Emberstone");
+  assert.equal(characterDisplayName({ name: "Hallo" }), "Hallo");
 });

@@ -31,11 +31,12 @@ export interface GearReviewCharacterEvidence {
 export interface GearReviewRecipientRow {
   identityKey: string;
   name: string;
+  surname?: string;
   realm: string;
   disposition: GearReviewDisposition;
   evidence: GearReviewEvidence;
   comparison?: GearReviewComparison;
-  source: { identityKey: string; name: string; realm: string; location: "CARRIED_INVENTORY" | "EQUIPPED" | "UNKNOWN"; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; freshness: string };
+  source: { identityKey: string; name: string; surname?: string; realm: string; location: "CARRIED_INVENTORY" | "EQUIPPED" | "UNKNOWN"; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; freshness: string };
   item: { name?: string; itemRef?: string; itemIdentity?: string };
   recipientEvidence: GearReviewCharacterEvidence;
   conflicting: boolean;
@@ -97,7 +98,7 @@ export function buildForeverGearReview(reads: readonly RecipientAllocationRead[]
           itemLabel: entry.item.name ?? "Unidentified observed item",
           itemRef: entry.item.itemRef,
           sourceIdentityKey: entry.source.identityKey,
-          sourceLabel: `${entry.source.name} · ${entry.source.realm}`,
+          sourceLabel: `${[entry.source.name, entry.source.surname].filter(Boolean).join(" ")} · ${entry.source.realm}`,
           location: entry.source.location,
           provenance: entry.source.provenance,
           observedAt: entry.source.observedAt,
@@ -113,6 +114,7 @@ export function buildForeverGearReview(reads: readonly RecipientAllocationRead[]
       const candidateRow: GearReviewRecipientRow = {
         identityKey: entry.recipient.identityKey,
         name: entry.recipient.name,
+        surname: entry.recipient.surname,
         realm: entry.recipient.realm,
         disposition: entry.disposition,
         evidence: entry.evidence,

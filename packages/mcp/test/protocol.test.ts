@@ -41,9 +41,9 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
   return gearCandidates ? withMetadata.replace(/\n\[END\]$/, `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${candidateHeader}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t1\t0\t0\t4\t4\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN\n\n[END]`) : withMetadata;
 }
 
-function forever(name: string, realm: string) {
+function forever(name: string, realm: string, surname?: string, surnameSource?: string) {
   const generatedAt = now - 15;
-  const text = buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
+  const text = buildWowSyncExport({ generatedAt, character: { name, surname, surnameSource, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
   const itemString = "item:901:0:0:0:0:0:0:0:123:0:0:0";
   const factValue = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
   return { text, sidecar: { clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: generatedAt + 1, completeness: "complete", data: { slots: { "16": { itemID: 900, itemString: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" } } } }, bags: { observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 901, itemString, name: "Observed Forever Variant", count: 2 } } }] } }, bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "Not visited", data: {} }, itemMetadata: {}, itemEvidence: { observedAt: generatedAt + 3, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt + 2, state: "complete" } }, items: [{ itemID: 901, itemString, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [901, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: factValue(value) })) }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: factValue(true) }] } }] } } } };
@@ -83,7 +83,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
-    const observedForever = forever("Hallo", "Forever Realm");
+    const observedForever = forever("Hallo", "Forever Realm", "Emberstone", "UnitName[2]+GetUnitName suffix");
     writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar });
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
@@ -148,9 +148,17 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
 
-    const foreverView = structured<{ status: string; value?: { data?: { identity: { version: string }; equipment: { items: Array<{ provenance: string }> }; carried: { items: Array<{ itemRef: string }> }; evaluationCandidates: { state: string; items: Array<{ itemRef: string; eligibility: string; upgradeStatus: string }> }; unknowns: { eligibility: string; transferability: string }; bank: { state: string } }; provenance: { source?: string; freshness?: string } } }>(await client.callTool({ name: "get_forever_gear_observation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
+    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
+    const foreverSummary = structured<{ status: string; value?: { data?: { name: string; surname?: string; surnameSource?: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverSummary.value?.data?.name, "Hallo");
+    assert.equal(foreverSummary.value?.data?.surname, "Emberstone");
+    assert.equal(foreverSummary.value?.data?.surnameSource, "UnitName[2]+GetUnitName suffix");
+
+    const foreverView = structured<{ status: string; value?: { data?: { identity: { version: string; surname?: string }; equipment: { items: Array<{ provenance: string }> }; carried: { items: Array<{ itemRef: string }> }; evaluationCandidates: { state: string; items: Array<{ itemRef: string; eligibility: string; upgradeStatus: string }> }; unknowns: { eligibility: string; transferability: string }; bank: { state: string } }; provenance: { source?: string; freshness?: string } } }>(await client.callTool({ name: "get_forever_gear_observation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
     assert.equal(foreverView.status, "FOUND");
     assert.equal(foreverView.value?.data?.identity.version, "forever");
+    assert.equal(foreverView.value?.data?.identity.surname, "Emberstone");
     assert.equal(foreverView.value?.data?.equipment.items[0]?.provenance, "OBSERVED");
     assert.equal(foreverView.value?.data?.carried.items[0]?.itemRef, "item:901:0:0:0:0:0:0:0:123:0:0:0");
     assert.equal(foreverView.value?.data?.evaluationCandidates.state, "LAST_SEEN");

@@ -4,6 +4,7 @@ import { formatBagSlots } from "../roster.ts";
 import { filterAndSortRoster, parseSort, rosterClassOptions, ROSTER_AGE_OPTIONS, toggleSort, type RosterSortKey } from "../roster.ts";
 import { formatHash, patchRoute, type AppRoute } from "../routing.ts";
 import type { CharacterFacts } from "../types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 export default function CharactersRoster({
   characters,
@@ -122,7 +123,7 @@ export default function CharactersRoster({
                         onOpenCharacter(c.identityKey);
                       }}
                     >
-                      {c.name}
+                      {characterDisplayName(c)}
                     </a>{" "}
                     <span className={`freshness-badge freshness-${c.freshness}`} title={freshnessGlossary(c.freshness)}>{freshnessLabel(c.freshness)}</span>
                   </td>

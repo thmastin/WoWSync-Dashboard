@@ -4,8 +4,9 @@ import { buildForeverGearReview, describeForeverAssessment, filterForeverGearRev
 import { useAsync } from "../useAsync.ts";
 import { formatAbsoluteTime } from "../format.ts";
 import type { CharacterFacts } from "../types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
-type Read = { identityKey: string; name: string; realm: string; result?: ForeverGearAllocationApi; error?: string };
+type Read = { identityKey: string; name: string; surname?: string; realm: string; result?: ForeverGearAllocationApi; error?: string };
 const dispositionLabel: Record<string, string> = {
   EQUIP_CANDIDATE: "Worth checking on this character",
   KEEP: "Keep with current holder for review",
@@ -24,10 +25,10 @@ export default function ForeverGearReview({ characters, refreshTick, onOpenChara
     const reads = await Promise.all(characters.map(async (character): Promise<Read> => {
       try {
         const result = await fetchForeverGearAllocation(character.identityKey, signal);
-        return { identityKey: character.identityKey, name: character.name, realm: character.realm, result };
+        return { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm, result };
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error;
-        return { identityKey: character.identityKey, name: character.name, realm: character.realm, error: String(error) };
+        return { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm, error: String(error) };
       }
     }));
     return reads;
@@ -57,9 +58,9 @@ export default function ForeverGearReview({ characters, refreshTick, onOpenChara
     <p className="muted small">Roster scope: {characters.length} Forever character{characters.length === 1 ? "" : "s"} in the selected realm view. Same realm does not establish account membership, shared storage, or mail/trade access. No bank rows are inferred from missing bank observations.</p>
     {load.state.status === "loading" && !load.state.data && <p role="status">Loading recipient assessments for the Forever roster…</p>}
     {load.state.status === "error" && <p role="alert">Could not load the roster review: {String(load.state.error)} <button onClick={load.retry}>Retry</button></p>}
-    {failed.length > 0 && <details className="detail-card"><summary>Some character assessments are unavailable ({failed.length})</summary><ul>{failed.map((r) => <li key={r.identityKey}>{r.name} ({r.realm}): {r.error ?? (r.result?.status !== "FOUND" ? `The endpoint returned ${r.result?.status ?? "no response"}.` : "The response did not contain the expected Forever 70291 allocation data.")}</li>)}</ul></details>}
+    {failed.length > 0 && <details className="detail-card"><summary>Some character assessments are unavailable ({failed.length})</summary><ul>{failed.map((r) => <li key={r.identityKey}>{characterDisplayName(r)} ({r.realm}): {r.error ?? (r.result?.status !== "FOUND" ? `The endpoint returned ${r.result?.status ?? "no response"}.` : "The response did not contain the expected Forever 70291 allocation data.")}</li>)}</ul></details>}
     <div className="forever-review-controls">
-      <label>Recipient <select value={recipient} onChange={(e) => setRecipient(e.target.value)}><option value="">All observed characters</option>{characters.map((c) => <option key={c.identityKey} value={c.identityKey}>{c.name} · {c.realm}</option>)}</select></label>
+      <label>Recipient <select value={recipient} onChange={(e) => setRecipient(e.target.value)}><option value="">All observed characters</option>{characters.map((c) => <option key={c.identityKey} value={c.identityKey}>{characterDisplayName(c)} · {c.realm}</option>)}</select></label>
       <label>Assessment <select value={disposition} onChange={(e) => setDisposition(e.target.value)}><option value="">All outcomes</option>{Object.entries(dispositionLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label className="forever-review-search">Find item or character <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name, item variant, character…" /></label>
     </div>
@@ -71,10 +72,10 @@ export default function ForeverGearReview({ characters, refreshTick, onOpenChara
         : ` · ${group.location === "CARRIED_INVENTORY" ? "carried inventory" : group.location === "EQUIPPED" ? "equipped" : "location UNKNOWN"} · ${group.provenance}. ${group.observedAt ? `Observed ${formatAbsoluteTime(group.observedAt)} (${group.freshness}).` : `Timestamp UNKNOWN (${group.freshness}).`}`}</p>
       <button type="button" className="link-button" onClick={() => onOpenCharacter(group.sourceIdentityKey)}>Open source character</button>
       <div className="forever-review-recipient-list">{group.recipients.map((row, rowIndex) => <section key={`${row.identityKey}:${row.disposition}:${rowIndex}`} className="forever-review-recipient">
-        <div className="forever-review-recipient-heading"><h4>{row.name} · {row.realm}</h4><span className={`forever-disposition disposition-${row.disposition.toLowerCase()}`}>{dispositionLabel[row.disposition] ?? row.disposition}</span><button type="button" className="link-button" onClick={() => onOpenCharacter(row.identityKey)}>Open character</button></div>
+        <div className="forever-review-recipient-heading"><h4>{characterDisplayName(row)} · {row.realm}</h4><span className={`forever-disposition disposition-${row.disposition.toLowerCase()}`}>{dispositionLabel[row.disposition] ?? row.disposition}</span><button type="button" className="link-button" onClick={() => onOpenCharacter(row.identityKey)}>Open character</button></div>
         {row.conflicting && <p className="forever-review-conflict" role="alert"><strong>Conflicting assessments for this exact item and character.</strong> Review both evidence rows below; do not treat either outcome as an instruction.</p>}
         <p>{row.evidence.reasons.join(" ") || "No explanatory reason was supplied."}</p>
-        <p className="muted small">Source evidence: {row.source.location === "CARRIED_INVENTORY" ? "carried inventory" : row.source.location === "EQUIPPED" ? "equipped" : "location UNKNOWN"} · {row.source.provenance} · {row.source.observedAt ? formatAbsoluteTime(row.source.observedAt) : "timestamp UNKNOWN"} ({row.source.freshness}). {row.name}'s snapshot is {row.recipientEvidence.freshness}{row.recipientEvidence.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.observedAt)}` : " · timestamp UNKNOWN"}; equipment is {row.recipientEvidence.equipment.state}{row.recipientEvidence.equipment.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.equipment.observedAt)} (${row.recipientEvidence.equipment.freshness ?? "freshness UNKNOWN"})` : " · timestamp UNKNOWN"}. Class {row.recipientEvidence.class ? `${row.recipientEvidence.class.value} (${row.recipientEvidence.class.provenance})` : "UNKNOWN"}; level {row.recipientEvidence.level ? `${row.recipientEvidence.level.value} (${row.recipientEvidence.level.provenance})` : "UNKNOWN"}.</p>
+        <p className="muted small">Source evidence: {row.source.location === "CARRIED_INVENTORY" ? "carried inventory" : row.source.location === "EQUIPPED" ? "equipped" : "location UNKNOWN"} · {row.source.provenance} · {row.source.observedAt ? formatAbsoluteTime(row.source.observedAt) : "timestamp UNKNOWN"} ({row.source.freshness}). {characterDisplayName(row)}'s snapshot is {row.recipientEvidence.freshness}{row.recipientEvidence.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.observedAt)}` : " · timestamp UNKNOWN"}; equipment is {row.recipientEvidence.equipment.state}{row.recipientEvidence.equipment.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.equipment.observedAt)} (${row.recipientEvidence.equipment.freshness ?? "freshness UNKNOWN"})` : " · timestamp UNKNOWN"}. Class {row.recipientEvidence.class ? `${row.recipientEvidence.class.value} (${row.recipientEvidence.class.provenance})` : "UNKNOWN"}; level {row.recipientEvidence.level ? `${row.recipientEvidence.level.value} (${row.recipientEvidence.level.provenance})` : "UNKNOWN"}.</p>
         <p className="muted small">Eligibility: {describeForeverAssessment(row.evidence.eligibility)} · suitability: {describeForeverAssessment(row.evidence.suitability)} · transferability: {describeForeverAssessment(row.evidence.transferability)}. Evidence: {describeForeverAssessment(row.evidence.provenance)} · confidence {row.evidence.confidence.toLowerCase()}.</p>
         {row.comparison?.rawComparisons.map((comparison, index) => <p className="muted small" key={`${comparison.slot}:${comparison.equippedItemRef}:${index}`}>Observed comparison for slot {comparison.slot} against {comparison.equippedItemRef}: {describeForeverAssessment(comparison.classification)}. {comparison.reason} This is a metric comparison, not a complete upgrade verdict.</p>)}
         {row.evidence.whatWouldChange.length > 0 && <details><summary>What evidence would improve this assessment</summary><ul>{row.evidence.whatWouldChange.map((fact, index) => <li key={`${index}:${fact}`}>{fact}</li>)}</ul></details>}
