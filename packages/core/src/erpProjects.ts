@@ -270,6 +270,9 @@ function workOrderAllocationConflicts(project: ErpProject, linkedEvidence: reado
     const a = linked[i]!; const b = linked[j]!;
     const aScope = sourceScope(a);
     if (!aScope || aScope !== sourceScope(b)) continue;
+    const aEvidence = byId.get(a.stableId)!;
+    const bEvidence = byId.get(b.stableId)!;
+    if (aEvidence.freshness !== "recent" || aEvidence.state !== "COVERED_BY_OBSERVED" || bEvidence.freshness !== "recent" || bEvidence.state !== "COVERED_BY_OBSERVED") continue;
     if ((a.kind === "ITEM_ID" || a.kind === "ITEM_REF") && (b.kind === "ITEM_ID" || b.kind === "ITEM_REF") &&
       needItemId(a) !== undefined && needItemId(a) === needItemId(b) &&
       (a.kind !== b.kind || (a.kind === "ITEM_ID" && b.kind === "ITEM_REF") || (a.kind === "ITEM_REF" && b.kind === "ITEM_ID"))) {
@@ -529,12 +532,13 @@ export interface ErpWorkOrderProgress {
   readonly workOrderId: string;
   readonly recordedStatus: ErpWorkOrderStatus;
   readonly completionRecorded: boolean;
-  readonly linkedNeedState: "NO_LINKED_NEEDS" | "ALL_CURRENTLY_MET" | "CURRENT_SHORTFALL" | "MIXED_CURRENT_EVIDENCE" | "STALE_OR_UNKNOWN";
+  readonly linkedNeedState: "NO_LINKED_NEEDS" | "ALL_CURRENTLY_MET" | "CURRENT_SHORTFALL" | "MIXED_CURRENT_EVIDENCE" | "STALE_OR_UNKNOWN" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW";
   readonly observationChange: "CHANGED" | "UNCHANGED" | "UNKNOWN";
-  readonly reconciliation: "PLAYER_RECORDED_COMPLETE" | "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL" | "CURRENT_LINKED_NEEDS_MET" | "CURRENT_LINKED_NEEDS_UNMET" | "MIXED_LINKED_EVIDENCE" | "OBSERVATION_CHANGED_CAUSE_UNKNOWN" | "INSUFFICIENT_EVIDENCE" | "NO_LINKED_NEEDS";
+  readonly reconciliation: "PLAYER_RECORDED_COMPLETE" | "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL" | "CURRENT_LINKED_NEEDS_MET" | "CURRENT_LINKED_NEEDS_UNMET" | "MIXED_LINKED_EVIDENCE" | "OBSERVATION_CHANGED_CAUSE_UNKNOWN" | "INSUFFICIENT_EVIDENCE" | "NO_LINKED_NEEDS" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW";
   readonly coveredNeedIds: readonly string[];
   readonly shortfallNeedIds: readonly string[];
   readonly unresolvedNeedIds: readonly string[];
+  readonly allocationConflictNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly reason: string;
 }
@@ -601,6 +605,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
   });
   const workOrderProgress: ErpWorkOrderProgress[] = project.workOrders.map((order) => {
     const linked = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
+    const allocationConflictNeedIds = workOrderAllocationConflicts(project, linked, allProjects);
     const current = linked.filter((evidence) => evidence.freshness === "recent");
     const coveredNeedIds = current.filter((evidence) => evidence.state === "COVERED_BY_OBSERVED").map((evidence) => evidence.needId);
     const shortfallNeedIds = current.filter((evidence) => evidence.state === "SHORTFALL_OBSERVED").map((evidence) => evidence.needId);
@@ -612,6 +617,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       : unresolvedNeedIds.length ? "STALE_OR_UNKNOWN"
       : coveredNeedIds.length && shortfallNeedIds.length ? "MIXED_CURRENT_EVIDENCE"
       : shortfallNeedIds.length ? "CURRENT_SHORTFALL"
+      : allocationConflictNeedIds.length ? "RESOURCE_ALLOCATION_REQUIRES_REVIEW"
       : "ALL_CURRENTLY_MET";
     let reconciliation: ErpWorkOrderProgress["reconciliation"];
     if (order.status === "COMPLETED" && shortfallNeedIds.length) reconciliation = "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL";
@@ -620,6 +626,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     else if (linkedNeedState === "MIXED_CURRENT_EVIDENCE") reconciliation = "MIXED_LINKED_EVIDENCE";
     else if (linkedNeedState === "STALE_OR_UNKNOWN") reconciliation = "INSUFFICIENT_EVIDENCE";
     else if (linkedNeedState === "CURRENT_SHORTFALL") reconciliation = "CURRENT_LINKED_NEEDS_UNMET";
+    else if (allocationConflictNeedIds.length) reconciliation = "RESOURCE_ALLOCATION_REQUIRES_REVIEW";
     else if (observationChange === "CHANGED") reconciliation = "OBSERVATION_CHANGED_CAUSE_UNKNOWN";
     else if (linkedNeedState === "ALL_CURRENTLY_MET") reconciliation = "CURRENT_LINKED_NEEDS_MET";
     else reconciliation = "INSUFFICIENT_EVIDENCE";
@@ -637,8 +644,10 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
                 ? `Comparable linked resource observations changed for ${changedNeedIds.join(", ")}. The export does not establish whether this work order caused the change or whether its action occurred.`
                   : reconciliation === "NO_LINKED_NEEDS"
                     ? "No resource requirements are linked to this work order, so import evidence cannot assess its outcome."
-                    : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, changedNeedIds, reason };
+      : reconciliation === "RESOURCE_ALLOCATION_REQUIRES_REVIEW"
+        ? `Recent covered linked needs share or ambiguously identify observed source quantities for: ${allocationConflictNeedIds.join(", ")}. Their combined independent availability is not established. Reservations record player intent; they do not lock inventory or prove possession.`
+        : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

@@ -9,6 +9,7 @@ const LABELS: Record<ErpWorkOrderProgress["reconciliation"], string> = {
   OBSERVATION_CHANGED_CAUSE_UNKNOWN: "Observed resource change; cause unknown",
   INSUFFICIENT_EVIDENCE: "Progress evidence is stale, incomplete, or unknown",
   NO_LINKED_NEEDS: "No linked resource evidence",
+  RESOURCE_ALLOCATION_REQUIRES_REVIEW: "Resource allocation requires review",
 };
 
 export function ErpWorkOrderProgressLine({ progress }: { progress?: ErpWorkOrderProgress }) {

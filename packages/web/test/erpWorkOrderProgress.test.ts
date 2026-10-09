@@ -8,7 +8,7 @@ import { ErpWorkOrderProgressLine } from "../src/components/ErpWorkOrderProgress
 const progress: ErpWorkOrderProgress = {
   workOrderId: "mail_item", recordedStatus: "COMPLETED", completionRecorded: true,
   linkedNeedState: "ALL_CURRENTLY_MET", observationChange: "CHANGED", reconciliation: "PLAYER_RECORDED_COMPLETE",
-  coveredNeedIds: ["pick"], shortfallNeedIds: [], unresolvedNeedIds: [], changedNeedIds: ["pick"],
+  coveredNeedIds: ["pick"], shortfallNeedIds: [], unresolvedNeedIds: [], allocationConflictNeedIds: [], changedNeedIds: ["pick"],
   reason: "The player marked this work order complete in the saved plan. Linked resource evidence is reported separately and does not verify which action occurred.",
 };
 

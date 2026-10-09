@@ -46,6 +46,41 @@ test("project REST persists explicit plans and returns evidence from the shared 
   });
 });
 
+test("manual supply readiness is summarized by AccountContext from the REST planning projection", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000) + 1;
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } }));
+    const character = store.listCharacters("classic-era")[0]!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Gather for the repair", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "PLANNED", title: "Gather the shortage", resourceNeedIds: ["stone"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
+    assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
+    const context = await call("GET", "/api/account-context");
+    assert.equal(context.body.schemaVersion, "10");
+    assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
+  });
+});
+
+test("REST and AccountContext do not reconcile covered stock as work-order progress when another plan reserves it", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000) + 1;
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } }));
+    const character = store.listCharacters("classic-era")[0]!;
+    const target = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Craft with available stock", needs: [{ stableId: "target", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: character.identityKey }], workOrders: [{ stableId: "craft", kind: "CRAFT", status: "IN_PROGRESS", title: "Craft manually", resourceNeedIds: ["target"], dependsOn: [] }] });
+    assert.equal(target.status, 201);
+    const competing = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Reserve same observed stock", needs: [{ stableId: "held", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: character.identityKey }], reservations: [{ stableId: "hold", needId: "held", sourceIdentityKey: character.identityKey, quantity: 3, status: "ACTIVE", createdAt: generatedAt, updatedAt: generatedAt }] });
+    assert.equal(competing.status, 201);
+    const plans = await call("GET", "/api/versions/classic-era/erp/projects");
+    const targetView = plans.body.projects.find((entry: any) => entry.stableId === target.body.project.stableId);
+    assert.equal(targetView.workOrderReadiness[0].state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.equal(targetView.workOrderProgress[0].reconciliation, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.deepEqual(targetView.workOrderProgress[0].allocationConflictNeedIds, ["target"]);
+    const context = await call("GET", "/api/account-context");
+    const contextTarget = context.body.planning.projects.find((entry: any) => entry.stableId === target.body.project.stableId);
+    assert.deepEqual(contextTarget.workOrderProgressStates, { RESOURCE_ALLOCATION_REQUIRES_REVIEW: 1 }, "AccountContext reconciles the same reservation-aware progress state as REST");
+  });
+});
+
 test("project REST preserves explicit work-order plan details and histories task status changes as saved intent", async () => {
   await withServer(async (call, store) => {
     const character = store.listCharacters("classic-era")[0]!;

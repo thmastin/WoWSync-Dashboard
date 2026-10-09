@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ErpWorkOrderReadiness } from "@wowsync-dashboard/core";
 import { ErpWorkOrderReadinessLine } from "../src/components/ErpWorkOrderReadinessLine.tsx";
+import { ErpWorkOrderProgressLine } from "../src/components/ErpWorkOrderProgressLine.tsx";
 
 test("work-order readiness uses qualified player-facing language and preserves action limits", () => {
   const ready: ErpWorkOrderReadiness = { workOrderId: "transfer", state: "READY_FOR_PLAYER_REVIEW", blockingWorkOrderIds: [], unresolvedNeedIds: [], actionTargetNeedIds: [], changedNeedIds: [], reason: "No incomplete plan dependency or linked resource-evidence blocker is recorded. An observed source location does not establish access or a transfer route." };
@@ -20,4 +21,7 @@ test("work-order readiness uses qualified player-facing language and preserves a
   assert.match(manualSupply, /Manual supply step can address an observed gap/);
   assert.match(manualSupply, /Price and route remain unknown/);
   assert.doesNotMatch(manualSupply, /Purchase now|Gather now/);
+  const reservationConflict = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { workOrderId: "craft", recordedStatus: "IN_PROGRESS", completionRecorded: false, linkedNeedState: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", observationChange: "UNKNOWN", reconciliation: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: [], allocationConflictNeedIds: ["ore"], changedNeedIds: [], reason: "Current reservations overlap this resource need; intent does not prove locked stock." } }));
+  assert.match(reservationConflict, /Resource allocation requires review/);
+  assert.match(reservationConflict, /intent does not prove locked stock/);
 });

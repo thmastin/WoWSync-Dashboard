@@ -445,6 +445,10 @@ test("work order readiness aggregates linked needs and treats saved reservations
     assert.equal(blocked.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
     assert.deepEqual(blocked.unresolvedNeedIds, ["target_need"]);
     assert.match(blocked.reason, /Reservations record player intent; they do not lock or prove possession/);
+    const conflictedProgress = evaluateErpProject(current, (key) => store.listSnapshots(key), [current, competing], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(conflictedProgress.linkedNeedState, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "progress must not say a linked need is independently met while another saved reservation overlaps it");
+    assert.equal(conflictedProgress.reconciliation, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.deepEqual(conflictedProgress.allocationConflictNeedIds, ["target_need"]);
 
     const ownReservation: ErpProject = { ...current, reservations: [{ stableId: "own_hold", needId: targetNeed.stableId, sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
     const enoughForBoth: ErpProject = { ...competing, reservations: [{ ...competing.reservations[0]!, quantity: 1 }] };
@@ -549,6 +553,42 @@ test("work-order progress separates player completion, observed state, changed e
       assert.equal(stale.reconciliation, "INSUFFICIENT_EVIDENCE");
     } finally { missingStore.close(); }
   } finally { store.close(); }
+});
+
+test("progress preserves evidence-quality and shortfall precedence over ambiguous linked item scopes", () => {
+  const makePlan = (identityKey: string): ErpProject => {
+    const needs: ErpProject["needs"] = [
+      { stableId: "base", kind: "ITEM_ID", resourceKey: "159", label: "Any Rough Stone variant", requiredQuantity: 5, sourceIdentityKey: identityKey },
+      { stableId: "exact", kind: "ITEM_REF", resourceKey: ITEM, label: "Exact Rough Stone variant", requiredQuantity: 3, sourceIdentityKey: identityKey },
+    ];
+    return { ...project(identityKey), needs, reservations: [], workOrders: [{ stableId: "inspect", kind: "INVESTIGATE", status: "IN_PROGRESS", title: "Review linked items", resourceNeedIds: ["base", "exact"], dependsOn: [] }] };
+  };
+  const unknown = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
+  try {
+    const plan = makePlan(unknown.identityKey);
+    const progress = evaluateErpProject(plan, (key) => unknown.store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "STALE_OR_UNKNOWN");
+    assert.equal(progress.reconciliation, "INSUFFICIENT_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, [], "unobserved supplies do not become an allocation conflict fact");
+  } finally { unknown.store.close(); }
+
+  const stale = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    const plan = makePlan(stale.identityKey);
+    const progress = evaluateErpProject(plan, (key) => stale.store.listSnapshots(key), [plan], 1_700_000_000 + 5 * 86400).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "STALE_OR_UNKNOWN");
+    assert.equal(progress.reconciliation, "INSUFFICIENT_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, []);
+  } finally { stale.store.close(); }
+
+  const shortfall = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    const plan = makePlan(shortfall.identityKey);
+    const progress = evaluateErpProject(plan, (key) => shortfall.store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "MIXED_CURRENT_EVIDENCE", "a current exact-variant lower bound can be covered while the base-item target has a confirmed shortfall");
+    assert.equal(progress.reconciliation, "MIXED_LINKED_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, [], "a real shortfall takes precedence over a static ambiguity claim");
+  } finally { shortfall.store.close(); }
 });
 
 test("validation rejects cross-version character references, unsupported assumptions, and unrecorded completion", () => {
