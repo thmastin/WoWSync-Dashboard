@@ -695,6 +695,27 @@ export interface ErpWorkOrderReadiness {
   readonly actionTargetNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly capabilityChecks?: readonly ErpCraftingCapabilityCheck[];
+  readonly linkedNeeds?: readonly ErpWorkOrderNeedCheck[];
+  readonly reason: string;
+}
+
+export interface ErpWorkOrderNeedCheck {
+  readonly needId: string;
+  readonly label: string;
+  readonly kind: ErpResourceNeed["kind"];
+  readonly resourceKey: string;
+  readonly state: NeedSupplyState;
+  readonly requiredQuantity: number;
+  readonly observedQuantity?: number;
+  readonly potentialQuantity?: number;
+  readonly sourceIdentityKey?: string;
+  readonly sourceOwnerKey?: string;
+  readonly observedAt?: number;
+  readonly freshness: Freshness;
+  readonly sourceSections: ErpNeedEvidence["sourceSections"];
+  readonly unresolvedSections: readonly string[];
+  readonly reservationState?: NonNullable<ErpNeedEvidence["reservationAssessment"]>["state"];
+  readonly activeReservationQuantity?: number;
   readonly reason: string;
 }
 
@@ -922,7 +943,17 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       if (evidence.state === "SHORTFALL_OBSERVED") return [{ needId, kind: need.kind, state: "REQUIREMENT_NOT_MET", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `Current evidence does not meet ${context} for the assigned character.` }];
       return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: evidence.reason }];
     }) : [];
-    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}) };
+    const linkedNeeds: ErpWorkOrderNeedCheck[] = order.resourceNeedIds.flatMap((needId) => {
+      const need = project.needs.find((entry) => entry.stableId === needId);
+      const evidence = needEvidenceById.get(needId);
+      if (!need || !evidence) return [];
+      return [{ needId, label: need.label, kind: need.kind, resourceKey: need.resourceKey, state: evidence.state, requiredQuantity: evidence.requiredQuantity,
+        ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}),
+        ...(evidence.sourceIdentityKey ? { sourceIdentityKey: evidence.sourceIdentityKey } : {}), ...(evidence.sourceOwnerKey ? { sourceOwnerKey: evidence.sourceOwnerKey } : {}),
+        ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), freshness: evidence.freshness, sourceSections: evidence.sourceSections, unresolvedSections: evidence.unresolvedSections,
+        ...(evidence.reservationAssessment ? { reservationState: evidence.reservationAssessment.state, activeReservationQuantity: evidence.reservationAssessment.activeQuantity } : {}), reason: evidence.reason }];
+    });
+    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));

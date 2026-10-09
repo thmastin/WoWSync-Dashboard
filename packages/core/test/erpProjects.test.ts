@@ -361,9 +361,12 @@ test("CRAFT readiness binds recipe and profession evidence to the assigned chara
     let readiness = evaluateErpProject(recipeProject, (key) => recipeFixture.store.listSnapshots(key), [recipeProject], 1_700_000_020).workOrderReadiness[0]!;
     assert.equal(readiness.state, "WAITING_FOR_EVIDENCE", "a different roster character's learned recipe cannot satisfy the assigned crafter's capability check");
     assert.equal(readiness.capabilityChecks?.[0]?.state, "SOURCE_DIFFERS_FROM_ASSIGNEE");
+    assert.deepEqual(readiness.linkedNeeds?.map((need) => [need.kind, need.state, need.freshness, need.requiredQuantity, need.sourceIdentityKey]), [["RECIPE", "COVERED_BY_OBSERVED", "recent", 1, recipeFixture.identityKey]], "the work-order view carries its own explicit recipe evidence without asserting craftability");
+    assert.ok(readiness.linkedNeeds?.[0]?.sourceSections.some((section) => section.section === "character" && section.state === "OBSERVED"), "the linked input retains the source section's provenance");
     const sameCrafter = { ...recipeProject, workOrders: [{ ...recipeProject.workOrders[0]!, assignedIdentityKey: recipeFixture.identityKey }] };
     readiness = evaluateErpProject(sameCrafter, (key) => recipeFixture.store.listSnapshots(key), [sameCrafter], 1_700_000_020).workOrderReadiness[0]!;
     assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE");
+    assert.equal(readiness.linkedNeeds?.[0]?.observedQuantity, 1);
     assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
     assert.match(readiness.reason, /do not establish current skill, unlocks, or craftability/);
 

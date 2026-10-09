@@ -65,6 +65,8 @@ test("REST and AccountContext expose paired transfer observations while preservi
     const review = created.body.project.workOrderProgress[0].transferObservationReviews[0];
     assert.equal(review.state, "BOTH_SIDES_CHANGED");
     assert.equal(review.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(created.body.project.workOrderReadiness[0].linkedNeeds.map((need: any) => [need.needId, need.kind, need.requiredQuantity, need.sourceIdentityKey, need.observedQuantity, need.freshness]), [["stone", "ITEM_REF", 1, source.identityKey, 1, "recent"]]);
+    assert.ok(created.body.project.workOrderReadiness[0].linkedNeeds[0].sourceSections.some((section: any) => section.section === "bags" && section.state === "OBSERVED" && section.observedAt === currentAt), "REST keeps section-level source provenance on the work-order input");
     const sourceBagChange = review.source.comparisons.find((comparison: any) => comparison.section === "bags" && comparison.delta !== 0);
     assert.deepEqual(sourceBagChange && [sourceBagChange.previousQuantity, sourceBagChange.currentQuantity, sourceBagChange.delta], [2, 1, -1]);
     assert.match(review.reason, /do not establish that the changes are related or that a transfer occurred/);

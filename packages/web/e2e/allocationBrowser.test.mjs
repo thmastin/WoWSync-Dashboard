@@ -218,10 +218,18 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     const savedPlan = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
     const savedNeed = savedPlan.needs.find((entry) => entry.label === "Mycobloom");
     const savedTransferOrder = savedPlan.workOrders.find((entry) => entry.title === "Review paired source and recipient observations");
+    assert.deepEqual(savedTransferOrder.resourceNeedIds, [savedNeed.stableId]);
+    assert.equal(savedPlan.workOrderReadiness.find((entry) => entry.workOrderId === savedTransferOrder.stableId).linkedNeeds.length, 1);
     assert.equal(savedTransferOrder.sourceIdentityKey, savedNeed.sourceIdentityKey, "transfer source intent matches the linked need source");
     assert.equal(savedTransferOrder.destinationIdentityKey, savedNeed.destinationIdentityKey, "transfer destination intent matches the linked need recipient");
     const transferOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review paired source and recipient observations" });
     await transferOrder.waitFor();
+    assert.match(await transferOrder.innerText(), /Linked inputs and evidence/, await transferOrder.innerText());
+    await transferOrder.locator(".erp-work-order-inputs summary").click();
+    const transferInputs = await transferOrder.innerText();
+    assert.match(transferInputs, /Mycobloom/);
+    assert.match(transferInputs, /observed 2/);
+    assert.match(transferInputs, /Source: Other Potential Holder — Thrall/);
     await transferOrder.getByText("Compare planned source and destination observations (relationship unknown)").click();
     const transferReview = await transferOrder.innerText();
     assert.match(transferReview, /BOTH SIDES CHANGED/);
