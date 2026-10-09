@@ -1,7 +1,7 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft } from "./erpProjects.ts";
+import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent } from "./erpProjects.ts";
 import {
   DemandConflictError,
   storedDemandToExplicitDemand,
@@ -289,6 +289,16 @@ CREATE TABLE IF NOT EXISTS erp_projects (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_erp_projects_version_status ON erp_projects(game_version, updated_at DESC);
+CREATE TABLE IF NOT EXISTS erp_project_events (
+  event_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  occurred_at INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  UNIQUE(project_id, revision)
+);
+CREATE INDEX IF NOT EXISTS idx_erp_project_events_project_revision ON erp_project_events(project_id, revision DESC);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -541,6 +551,8 @@ const READ_ONLY_REQUIRED_TABLES = [
   "snapshot_equipment_observations",
   "item_metadata_evidence",
   "demands",
+  "erp_projects",
+  "erp_project_events",
 ] as const;
 
 export class SqliteSnapshotStore implements SnapshotStore {
@@ -1575,6 +1587,27 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return rows.map((row) => JSON.parse(row.project_json) as ErpProject);
   }
 
+  listErpProjectHistory(stableId: string, limit = 50): ErpProjectEvent[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new RangeError("ERP project history limit must be between 1 and 200.");
+    const rows = many<{ event_json: string }>(this.db.prepare("SELECT event_json FROM erp_project_events WHERE project_id = ? ORDER BY revision DESC LIMIT ?"), stableId, limit);
+    return rows.map((row) => JSON.parse(row.event_json) as ErpProjectEvent);
+  }
+
+  countErpProjectHistory(stableId: string): number {
+    const row = one<{ event_count: number }>(this.db.prepare("SELECT COUNT(*) AS event_count FROM erp_project_events WHERE project_id = ?"), stableId);
+    return row?.event_count ?? 0;
+  }
+
+  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"]): void {
+    const event: ErpProjectEvent = {
+      eventId: `project_event_${randomUUID()}`, projectId: project.stableId, version: project.version,
+      revision: project.revision, occurredAt: project.updatedAt, kind, changedFields,
+      ...(fromStatus !== undefined ? { fromStatus } : {}), toStatus: project.status,
+    };
+    this.db.prepare("INSERT INTO erp_project_events(event_id, project_id, game_version, revision, occurred_at, event_json) VALUES(?,?,?,?,?,?)")
+      .run(event.eventId, event.projectId, event.version, event.revision, event.occurredAt, JSON.stringify(event));
+  }
+
   getErpProject(stableId: string): ErpProject | undefined {
     const row = one<{ project_json: string }>(this.db.prepare("SELECT project_json FROM erp_projects WHERE stable_id = ?"), stableId);
     return row ? JSON.parse(row.project_json) as ErpProject : undefined;
@@ -1588,22 +1621,31 @@ export class SqliteSnapshotStore implements SnapshotStore {
       createdAt: now, updatedAt: now, revision: 1, needs: input.needs ?? [], reservations: input.reservations ?? [], workOrders: input.workOrders ?? [],
     };
     validateErpProject(project, (key) => this.getCharacter(key)?.version === project.version);
-    this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
-      .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
+    this.inTransaction(() => {
+      this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
+        .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
+      this.recordErpProjectEvent(project, "CREATED", ["project"]);
+    });
     return project;
   }
 
   updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined {
-    const existing = this.getErpProject(project.stableId);
-    if (!existing) return undefined;
-    if (!Number.isSafeInteger(expectedRevision) || existing.revision !== expectedRevision) throw new ErpProjectConflictError();
-    if (project.version !== existing.version || project.createdAt !== existing.createdAt) throw new TypeError("Project version and creation time are immutable.");
-    const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
-    validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
-    const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
-      .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
-    if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
-    return updated;
+    return this.inTransaction(() => {
+      const existing = this.getErpProject(project.stableId);
+      if (!existing) return undefined;
+      if (!Number.isSafeInteger(expectedRevision) || existing.revision !== expectedRevision) throw new ErpProjectConflictError();
+      if (project.version !== existing.version || project.createdAt !== existing.createdAt) throw new TypeError("Project version and creation time are immutable.");
+      const trackedFields = ["title", "objective", "status", "completionNote", "priority", "needs", "reservations", "workOrders"] as const;
+      const changedFields = trackedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(project[field]));
+      const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
+      validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+      const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
+        .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
+      if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
+      const kind = existing.status !== updated.status ? "STATUS_CHANGED" : "UPDATED";
+      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined);
+      return updated;
+    });
   }
 
   setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined {
@@ -1698,6 +1740,12 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   }
   listErpProjects(version: VersionOrUnknown): ErpProject[] {
     return this.store.listErpProjects(version);
+  }
+  listErpProjectHistory(stableId: string, limit = 50): ErpProjectEvent[] {
+    return this.store.listErpProjectHistory(stableId, limit);
+  }
+  countErpProjectHistory(stableId: string): number {
+    return this.store.countErpProjectHistory(stableId);
   }
   getErpProject(stableId: string): ErpProject | undefined {
     return this.store.getErpProject(stableId);

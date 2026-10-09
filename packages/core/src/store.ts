@@ -10,7 +10,7 @@ import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } fr
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
-import type { ErpProject, ErpProjectDraft } from "./erpProjects.ts";
+import type { ErpProject, ErpProjectDraft, ErpProjectEvent } from "./erpProjects.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -212,6 +212,8 @@ export interface SnapshotReadStore {
   listDemands(version: VersionOrUnknown): ExplicitDemand[];
   /** Explicit user-authored ERP projects for one version. No observations are inferred from this intent. */
   listErpProjects(version: VersionOrUnknown): ErpProject[];
+  listErpProjectHistory(stableId: string, limit?: number): ErpProjectEvent[];
+  countErpProjectHistory(stableId: string): number;
   getErpProject(stableId: string): ErpProject | undefined;
   /**
    * The one ACTIVE demand for this exact (version, demand type, commodity) key, if any. Persistence and

@@ -122,10 +122,14 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   server.registerTool("get_erp_projects", {
     title: "Review WoWSync ERP projects",
-    description: "Returns version-isolated, player-authored projects, work orders, reservations, and evidence-qualified resource availability for one explicit version. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
-    inputSchema: z.object({ version: versionSchema }).strict(),
+    description: "Returns a bounded version-isolated page of player-authored projects, including recent edit history, work orders, reservations, and evidence-qualified resource availability. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
+    inputSchema: z.object({ version: versionSchema, limit: limitSchema.max(20).optional() }).strict(),
     annotations: toolAnnotations,
-  }, async ({ version }) => textResult({ version, projects: readModel.getErpProjects({ version }) }));
+  }, async ({ version, limit }) => {
+    const projects = readModel.getErpProjects({ version });
+    const resolvedLimit = limit ?? 10;
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit });
+  });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
   server.registerTool("get_character_summary", {

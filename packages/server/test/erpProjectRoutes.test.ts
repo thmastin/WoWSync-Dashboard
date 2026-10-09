@@ -30,11 +30,14 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.equal(created.body.project.needEvidence[0].state, "UNKNOWN", "unobserved bank prevents claiming a complete shortfall");
     assert.equal(created.body.project.needEvidence[0].observedQuantity, 3);
     assert.equal(created.body.project.reservationReview[0].state, "WITHIN_OBSERVED_SUPPLY");
+    assert.deepEqual(created.body.project.history.map((event: any) => [event.revision, event.kind]), [[1, "CREATED"]]);
     const listed = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.equal(listed.body.projects[0].stableId, created.body.project.stableId);
     const context = await call("GET", "/api/account-context");
     assert.equal(context.body.planning.projects[0].title, "Prepare first craft");
     assert.equal(context.body.planning.projects[0].version, "classic-era");
+    assert.equal(context.body.planning.projects[0].revision, 1);
+    assert.equal(context.body.planning.projects[0].historyEventCount, 1);
     assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, []);
   });
 });
@@ -49,11 +52,18 @@ test("project REST uses optimistic revisions and never writes completion without
     const good = await call("PUT", `/api/versions/retail/erp/projects/${p.stableId}`, { expectedRevision: p.revision, project: { ...p, title: "Provision the character" } });
     assert.equal(good.status, 200);
     assert.equal(good.body.project.revision, 2);
+    assert.deepEqual(good.body.project.history.map((event: any) => [event.revision, event.kind, event.changedFields]), [[2, "UPDATED", ["title"]], [1, "CREATED", ["project"]]]);
     const conflict = await call("PUT", `/api/versions/retail/erp/projects/${p.stableId}`, { expectedRevision: p.revision, project: { ...p, title: "stale edit" } });
     assert.equal(conflict.status, 409);
     const completed = await call("PUT", `/api/versions/retail/erp/projects/${p.stableId}`, { expectedRevision: 2, project: { ...good.body.project, status: "COMPLETED", completionNote: "Player observed the provisioning tasks complete." } });
     assert.equal(completed.status, 200);
     assert.equal(completed.body.project.completionNote, "Player observed the provisioning tasks complete.");
+    assert.equal(completed.body.project.history[0].kind, "STATUS_CHANGED", "completion is a user intent edit and preserves history rather than asserting a game observation");
+    assert.deepEqual(completed.body.project.history.map((event: any) => [event.revision, event.changedFields]), [[3, ["status", "completionNote"]], [2, ["title"]], [1, ["project"]]]);
+    const context = await call("GET", "/api/account-context");
+    const summary = context.body.planning.projects.find((entry: any) => entry.stableId === p.stableId);
+    assert.equal(summary.revision, 3);
+    assert.equal(summary.historyEventCount, 3);
   });
 });
 

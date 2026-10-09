@@ -621,7 +621,14 @@ export class DashboardReadModel {
     const currencies = this.store.listVersionCurrencies(query.version);
     const needsSharedStorage = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined));
     const sharedStorage = needsSharedStorage ? this.store.projectSharedStorage() : undefined;
-    return projects.map((project) => evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage));
+    return projects.map((project) => {
+      const historyEventCount = this.store.countErpProjectHistory(project.stableId);
+      const history = this.store.listErpProjectHistory(project.stableId, 50);
+      return {
+        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage),
+        history, historyEventCount, historyTruncated: historyEventCount > history.length,
+      };
+    });
   }
 
   /** Snapshot-scoped Retail candidate evidence; this is not an inventory, allocation, or gear-policy projection. */

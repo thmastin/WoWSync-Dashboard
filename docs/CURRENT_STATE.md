@@ -1,6 +1,20 @@
 # Current WoWSync state
 
-**Feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
+**Latest feature-branch checkpoint (2026-10-09):** project revision history is now append-only and
+transactional. Create, edit, and status changes commit a revision event atomically with the project;
+REST/MCP and the Projects & Work Orders page expose the latest 50 entries with total/truncation
+metadata, while AccountContext schema 8 includes current revision and event count. Status and
+completion-note changes remain player-entered Dashboard intent. History does not claim a game action
+or infer causality. Exact Retail recipe learned-state rows can now satisfy a single recipe-knowledge
+need; partial catalogs, missing entries, historical data, other versions, current skill, unlocks,
+reagents, and craftability retain explicit uncertainty. The full validation command passes: core
+784/784, MCP 2/2, server 245 pass + 2
+skipped, web 287/287; TypeScript checks and production build pass (520.07 kB JavaScript bundle
+advisory). Focused independent review found and resolved status-transition display and separator
+issues. Still no browser, persistent DEV, live-game, or production
+validation. Current HEAD and report are recorded in the latest durable truth checkpoint.
+
+**Previous feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
 `feature/forever-gear-observation` extends the shared core with version-scoped persistent projects,
 resource needs, cross-project reservations, manual work orders, project summaries in AccountContext,
 REST CRUD/status routes, read-only MCP `get_erp_projects`, and a Dashboard Projects & Work Orders

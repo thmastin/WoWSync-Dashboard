@@ -152,9 +152,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
-    const emptyErpProjects = structured<{ version: string; projects: unknown[] }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
-    assert.deepEqual(emptyErpProjects, { version: "forever", projects: [] }, "MCP exposes planning through the bounded read-only contract");
-    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }> }> }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
+    const emptyErpProjects = structured<{ version: string; projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
+    assert.deepEqual(emptyErpProjects, { version: "forever", projects: [], returnedCount: 0, totalCount: 0, truncated: false }, "MCP exposes planning through the bounded read-only contract");
+    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[] }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }> }>; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
     const currencyPlan = retailErpProjects.projects.find((entry) => entry.title === "Currency reservation protocol fixture");
     assert.equal(currencyPlan?.needEvidence[0]?.state, "UNKNOWN", "MCP preserves the currency section's LAST_SEEN provenance instead of presenting it as current");
     assert.equal(currencyPlan?.needEvidence[0]?.potentialQuantity, 3);
@@ -166,6 +166,10 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(ownerPlan?.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
     assert.equal(ownerPlan?.needEvidence[0]?.potentialQuantity, 3);
     assert.equal(ownerPlan?.needEvidence[0]?.sourceOwnerKey, "retail::warband::local");
+    assert.deepEqual(ownerPlan?.history.map((event) => [event.revision, event.kind]), [[1, "CREATED"]], "MCP exposes the same project audit timeline as REST through the read-only contract");
+    assert.equal(retailErpProjects.truncated, false);
+    const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
+    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 2, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
     assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);

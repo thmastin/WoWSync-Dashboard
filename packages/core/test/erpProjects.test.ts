@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
-import { ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
+import { DashboardReadModel } from "../src/readModel.ts";
+import { assessErpNeed, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
 
 const ITEM = "item:159";
@@ -17,6 +18,20 @@ function seedRetailCurrency(options: { isAccountWide?: boolean; quantity?: numbe
   const raw = buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "Crafter", realm: "Realm A", clientFamily: "Retail", clientVersion: "12.1.0", moneyCopper: 5000 } });
   const imported = store.importSnapshot(raw, { currencies: { observedAt: 1_700_000_000, completeness: "complete", data: { listRead: true, formatVersion: 1, currencies: [{ currencyID: 1822, name: "Flightstones", quantity: options.quantity === undefined ? 8 : options.quantity, isAccountWide: options.isAccountWide ?? false }] } } });
   if (options.lastSeen) store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientFamily: "Retail", clientVersion: "12.1.0", moneyCopper: 5000 } }));
+  return { store, identityKey: imported.character.identityKey };
+}
+function seedRetailRecipes(recipes: Array<{ recipeID: number; learned?: boolean; learnedState: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN"; evidence?: "OBSERVED" | "LAST_SEEN" }>, options: { second?: typeof recipes } = {}) {
+  const store = new SqliteSnapshotStore(":memory:");
+  const observedAt = 1_700_000_000;
+  const capture = (rows: typeof recipes, generatedAt: number) => {
+    const raw = buildWowSyncExport({ generatedAt, character: { name: "Recipe Keeper", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } });
+    const recipeRows = rows.map((row) => ({ recipeID: row.recipeID, ...(row.learned === undefined ? {} : { learned: row.learned }), learnedState: row.learnedState, recipeInfoResult: row.learned === undefined ? "NIL_RESULT" : "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", skillLineIDs: [], evidence: row.evidence ?? "OBSERVED", observedAt }));
+    const profession = { baseSkillLineID: 171, skillLineID: 171, professionID: 171, parentProfessionID: 171, professionName: "Alchemy", evidence: "OBSERVED", observedAt, client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 }, coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, recipes: recipeRows };
+    const data = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, professions: [profession] };
+    return store.importSnapshot(raw, { characterState: { formatVersion: 1, clientFamily: "Retail", professionRecipes: { formatVersion: 1, observedAt, completeness: "partial", data } } });
+  };
+  const imported = capture(recipes, observedAt);
+  if (options.second) capture(options.second, observedAt + 10);
   return { store, identityKey: imported.character.identityKey };
 }
 function project(identityKey: string): ErpProject {
@@ -301,18 +316,70 @@ test("missing profession evidence retains its known source state and completenes
   } finally { store.close(); }
 });
 
+test("Retail recipe plans evaluate only an exact explicit learned-state row", () => {
+  const { store, identityKey } = seedRetailRecipes([
+    { recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" },
+    { recipeID: 3002, learned: false, learnedState: "OBSERVED_FALSE" },
+    { recipeID: 3003, learnedState: "UNKNOWN" },
+  ]);
+  try {
+    const p: ErpProject = { ...project(identityKey), version: "retail", needs: [3001, 3002, 3003, 3999].map((recipeID) => ({ stableId: `recipe_${recipeID}`, kind: "RECIPE", resourceKey: String(recipeID), label: `Recipe ${recipeID}`, requiredQuantity: 1, sourceIdentityKey: identityKey })), reservations: [], workOrders: [] };
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_020);
+    assert.equal(view.needEvidence[0]?.state, "COVERED_BY_OBSERVED");
+    assert.equal(view.needEvidence[0]?.observedQuantity, 1);
+    assert.match(view.needEvidence[0]?.reason ?? "", /does not establish current profession skill, unlock requirements, reagents/);
+    assert.equal(view.needEvidence[1]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(view.needEvidence[1]?.observedQuantity, 0);
+    assert.equal(view.needEvidence[2]?.state, "UNKNOWN", "an explicit unknown API result stays unknown");
+    assert.equal(view.needEvidence[3]?.state, "UNKNOWN", "absence from partial candidate enumeration is not a negative result");
+    assert.match(view.needEvidence[3]?.reason ?? "", /absence does not mean unlearned/);
+  } finally { store.close(); }
+});
+
+test("Retail recipe plans preserve LAST_SEEN history and never borrow recipe evidence across versions", () => {
+  const historical = seedRetailRecipes([{ recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" }], { second: [{ recipeID: 3004, learned: true, learnedState: "OBSERVED_TRUE" }] });
+  const classic = seedStore();
+  try {
+    const retailNeed = { stableId: "old_recipe", kind: "RECIPE" as const, resourceKey: "3001", label: "Historical recipe", requiredQuantity: 1, sourceIdentityKey: historical.identityKey };
+    const retail: ErpProject = { ...project(historical.identityKey), version: "retail", needs: [retailNeed], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(retail, (key) => historical.store.listSnapshots(key), [retail], 1_700_000_020);
+    assert.equal(view.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(view.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
+    const unsupported = assessErpNeed({ ...retailNeed, sourceIdentityKey: classic.identityKey }, classic.store.listSnapshots(classic.identityKey), 1_700_000_020, undefined, "classic-era");
+    assert.equal(unsupported.state, "UNSUPPORTED_EVIDENCE");
+    assert.match(unsupported.reason, /supported only for Retail/);
+  } finally { historical.store.close(); classic.store.close(); }
+});
+
 test("project persistence is version-isolated, survives reopen, and rejects stale revisions", () => {
   const { store, identityKey } = seedStore();
   const p = project(identityKey);
   try {
     const created = store.createErpProject(p);
+    assert.deepEqual(store.listErpProjectHistory(created.stableId).map((event) => [event.revision, event.kind, event.changedFields]), [[1, "CREATED", ["project"]]]);
     assert.equal(created.version, "classic-era");
     assert.equal(store.listErpProjects("retail").length, 0);
     assert.equal(store.listErpProjects("classic-era")[0]?.stableId, created.stableId);
     const changed = store.updateErpProject({ ...created, title: "Prepare the craft" }, created.revision)!;
     assert.equal(changed.revision, 2);
+    const paused = store.setErpProjectStatus(created.stableId, "PAUSED", changed.revision)!;
+    assert.equal(paused.revision, 3);
+    assert.deepEqual(store.listErpProjectHistory(created.stableId).map((event) => [event.revision, event.kind, event.changedFields]), [[3, "STATUS_CHANGED", ["status"]], [2, "UPDATED", ["title"]], [1, "CREATED", ["project"]]]);
     assert.throws(() => store.updateErpProject({ ...changed, title: "Stale edit" }, 1), ErpProjectConflictError);
     assert.equal(store.getErpProject(created.stableId)?.title, "Prepare the craft");
+  } finally { store.close(); }
+});
+
+test("project read model bounds recent history while reporting the full durable event count", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    let current = store.createErpProject({ version: "classic-era", title: "Plan" });
+    for (let index = 1; index <= 50; index++) current = store.updateErpProject({ ...current, title: `Plan revision ${index}` }, current.revision)!;
+    const view = new DashboardReadModel(store, () => 1_700_000_200).getErpProjects({ version: "classic-era" })[0]!;
+    assert.equal(view.historyEventCount, 51);
+    assert.equal(view.history.length, 50);
+    assert.equal(view.historyTruncated, true);
+    assert.equal(view.history[0]?.revision, 51);
   } finally { store.close(); }
 });
 
@@ -325,6 +392,7 @@ test("validation rejects cross-version character references, unsupported assumpt
     validateErpProject({ ...valid, status: "COMPLETED", completionNote: "Observed the final planned state in game." }, (key) => store.getCharacter(key)?.version === "classic-era");
     assert.throws(() => validateErpProject({ ...valid, workOrders: [{ ...valid.workOrders[0]!, status: "COMPLETED" }] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "COMPLETION_EVIDENCE_REQUIRED");
     assert.throws(() => validateErpProject({ ...valid, workOrders: [{ ...valid.workOrders[0]!, dependsOn: ["unknown"] }] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "UNKNOWN_WORK_ORDER_DEPENDENCY");
+    assert.throws(() => validateErpProject({ ...valid, needs: [{ stableId: "recipe", kind: "RECIPE", resourceKey: "9007199254740993", label: "Unsafe recipe ID", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [], workOrders: [] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "INVALID_RECIPE_NEED");
     assert.throws(() => validateErpProject({ ...valid, needs: [{ stableId: "profession", kind: "PROFESSION", resourceKey: "Mining", label: "Mining", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ ...valid.reservations[0]!, needId: "profession" }], workOrders: [] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "NON_QUANTIFIABLE_RESERVATION");
   } finally { store.close(); }
 });

@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-09 (Azeroth ERP Slice 4 planning foundation implemented on the isolated feature branch; see
+Last updated: 2026-10-09 (Azeroth ERP Slice 5 project revision history implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -115,7 +115,9 @@ Work happening now.
 Work intended next, in this order.
 
 - [x] **Azeroth ERP Slice 4 — version-scoped project planning, resource reservations, manual work orders, and observation reconciliation** (implemented on `feature/forever-gear-observation`; see [`ERP_PLANNING.md`](ERP_PLANNING.md)). Persistent planning intent is separate from observations; exact-item/base-item/gold/profession needs and evidence-qualified Retail character currency and shared-owner item needs are projected; item and gold deltas compare supported complete observations; work orders never execute in game. Shared owners remain separate from characters; observed location does not imply character access. This feature branch has not been deployed to persistent DEV or validated through the browser.
-  The wider ERP roadmap remains open: recipes and crafting feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access.
+- [x] **Azeroth ERP Slice 5 — append-only project revision history across the planning interfaces** (same feature branch). Create/edit/status writes atomically record revision, changed field names, and status transitions; REST/MCP expose bounded recent history with total/truncation metadata, AccountContext includes the latest revision and event count, and the workbench presents the timeline. The history records saved Dashboard intent, not game outcomes. Automated-tested, not browser-validated or deployed to persistent DEV.
+- [x] **Azeroth ERP Slice 6 — exact Retail recipe-knowledge project need** (same feature branch). An explicitly observed exact learned/not-learned recipe row may satisfy or report a shortfall for a single recipe-knowledge requirement; missing rows in partial catalogs, LAST_SEEN rows, and non-Retail versions remain UNKNOWN or historical potential. This does not infer skill, unlocks, reagents, or craftability. Automated-tested with synthetic contract-shaped data; not live-validated.
+  The next planning increment also projects exact Retail learned-recipe rows into a recipe-knowledge need; partial catalogs and all other versions remain UNKNOWN. The wider ERP roadmap remains open: crafting/reagent feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access.
   Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see

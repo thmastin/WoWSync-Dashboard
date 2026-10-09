@@ -84,6 +84,19 @@ export interface ErpProjectDraft {
   workOrders?: readonly ErpWorkOrder[];
 }
 
+/** Append-only user-intent history. This records Dashboard edits, never inferred game actions. */
+export interface ErpProjectEvent {
+  readonly eventId: string;
+  readonly projectId: string;
+  readonly version: WowVersion;
+  readonly revision: number;
+  readonly occurredAt: number;
+  readonly kind: "CREATED" | "UPDATED" | "STATUS_CHANGED";
+  readonly changedFields: readonly string[];
+  readonly fromStatus?: ErpProjectStatus;
+  readonly toStatus: ErpProjectStatus;
+}
+
 export class ErpProjectValidationError extends TypeError {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.name = "ErpProjectValidationError"; this.code = code; }
@@ -123,11 +136,13 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (!Number.isSafeInteger(n.requiredQuantity) || n.requiredQuantity < 1) fail("INVALID_REQUIRED_QUANTITY", "Required quantity must be a positive integer in the resource's declared unit.");
     if (n.kind === "ITEM_ID" && !/^[1-9]\d*$/.test(n.resourceKey)) fail("INVALID_ITEM_ID", "ITEM_ID resource keys must be positive numeric IDs.");
     if (n.kind === "GOLD_COPPER" && n.resourceKey !== "copper") fail("INVALID_GOLD_KEY", "Gold requirements use the copper unit and resource key 'copper'.");
+    if (n.kind === "RECIPE" && (!/^[1-9]\d*$/.test(n.resourceKey) || !Number.isSafeInteger(Number(n.resourceKey)) || n.requiredQuantity !== 1)) fail("INVALID_RECIPE_NEED", "A recipe-knowledge requirement uses one positive safe-integer recipe ID and quantity 1; reagent quantities belong in separate item needs.");
     if (n.kind === "ITEM_REF" && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(n.resourceKey)) fail("INVALID_ITEM_REF", "ITEM_REF must be an exact WoW itemString.");
     if (n.kind === "CURRENCY" && !/^[1-9]\d*$/.test(n.resourceKey)) fail("INVALID_CURRENCY_ID", "CURRENCY resource keys must be positive numeric currency IDs.");
     identity(n.destinationIdentityKey, "Destination character"); identity(n.sourceIdentityKey, "Source character");
     if (n.sourceIdentityKey && n.sourceOwnerKey) fail("AMBIGUOUS_PROJECT_SOURCE", "Choose exactly one character or shared-storage owner as the resource source.");
     if (n.sourceOwnerKey && (!parseOwnerKey(n.sourceOwnerKey) || p.version !== "retail")) fail("INVALID_PROJECT_STORAGE_OWNER", "Shared-storage sources must name a supported Retail Warband or guild owner key; this does not imply character access.");
+    if (n.sourceOwnerKey && n.kind !== "ITEM_ID" && n.kind !== "ITEM_REF") fail("INVALID_SHARED_RESOURCE_KIND", "Shared-storage owners can only source item quantity needs; currencies, professions, and recipes are not inferred from storage location.");
   }
   const workIds = new Set<string>();
   for (const w of p.workOrders) {
@@ -312,9 +327,9 @@ function assessSharedStorageNeed(need: ErpResourceNeed, shared: SharedStoragePro
 }
 
 /** Compare explicit project needs to one explicitly selected character's latest evidence only. */
-export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies): ErpNeedEvidence {
+export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies, version?: WowVersion): ErpNeedEvidence {
   const sourceIdentityKey = need.sourceIdentityKey;
-  const missing = (reason: string, unresolvedSections: string[] = []): ErpNeedEvidence => ({ needId: need.stableId, state: need.kind === "ITEM_ID" || need.kind === "ITEM_REF" || need.kind === "GOLD_COPPER" || need.kind === "CURRENCY" || need.kind === "PROFESSION" ? "UNKNOWN" : "UNSUPPORTED_EVIDENCE", ...(sourceIdentityKey ? { sourceIdentityKey } : {}), requiredQuantity: need.requiredQuantity, freshness: "unknown", sourceSections: [], unresolvedSections, unknownQuantityRowCount: 0, reason });
+  const missing = (reason: string, unresolvedSections: string[] = []): ErpNeedEvidence => ({ needId: need.stableId, state: need.kind === "ITEM_ID" || need.kind === "ITEM_REF" || need.kind === "GOLD_COPPER" || need.kind === "CURRENCY" || need.kind === "PROFESSION" || need.kind === "RECIPE" ? "UNKNOWN" : "UNSUPPORTED_EVIDENCE", ...(sourceIdentityKey ? { sourceIdentityKey } : {}), requiredQuantity: need.requiredQuantity, freshness: "unknown", sourceSections: [], unresolvedSections, unknownQuantityRowCount: 0, reason });
   if (!sourceIdentityKey) return missing("No explicit source character was selected; roster co-location does not prove account ownership.");
   if (need.kind === "CURRENCY") {
     if (currencies?.version !== "retail") return missing("Structured currency evidence is currently supported only for Retail; other client versions remain UNKNOWN.", ["version-scoped currency evidence"]);
@@ -333,12 +348,42 @@ export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredS
     if (character.state === "LAST_SEEN") return { needId: need.stableId, sourceIdentityKey, state: value >= need.requiredQuantity ? "POTENTIAL_COVERAGE_LAST_SEEN" : "UNKNOWN", potentialQuantity: value, requiredQuantity: need.requiredQuantity, ...(at !== undefined ? { observedAt: at } : {}), freshness, sourceSections: [sourceSection], unresolvedSections: ["historical currency evidence"], unknownQuantityRowCount: 0, reason: `LAST_SEEN character-scoped ${entry.name ?? `currency ${need.resourceKey}`} quantity ${value}; required ${need.requiredQuantity}. This is historical potential, not current supply.` };
     return { needId: need.stableId, sourceIdentityKey, state: value >= need.requiredQuantity ? "COVERED_BY_OBSERVED" : "SHORTFALL_OBSERVED", observedQuantity: value, requiredQuantity: need.requiredQuantity, ...(at !== undefined ? { observedAt: at } : {}), freshness, sourceSections: [sourceSection], unresolvedSections: [], unknownQuantityRowCount: 0, reason: `OBSERVED character-scoped ${entry.name ?? `currency ${need.resourceKey}`} quantity ${value}; required ${need.requiredQuantity}. Account-wide access and other characters are not included.` };
   }
+  if (need.kind === "RECIPE" && version !== "retail") return { ...missing(`Structured learned-recipe evidence is currently supported only for Retail; ${version ?? "the selected version"} remains UNKNOWN.`, ["version-scoped recipe evidence"]), state: "UNSUPPORTED_EVIDENCE", sourceIdentityKey };
   const snapshot = newest(snapshots);
   if (!snapshot) return missing("The selected source character has no imported observation.");
   const change = observationChange(need, previousSnapshot(snapshots, snapshot), snapshot);
   const observedAt = snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
   const freshness = evidenceFreshness(observedAt, now);
   const characterSource = { section: "character" as const, state: snapshot.parsed.character.status.state, ...(snapshot.parsed.character.status.observedAt !== undefined ? { observedAt: snapshot.parsed.character.status.observedAt } : {}), ...(snapshot.parsed.character.status.completeness ? { completeness: snapshot.parsed.character.status.completeness } : {}) };
+  if (need.kind === "RECIPE") {
+    const section = snapshot.parsed.characterState?.professionRecipes;
+    const sectionData = section?.data as Record<string, unknown> | undefined;
+    const professionRows = Array.isArray(sectionData?.professions) ? sectionData.professions as Array<Record<string, unknown>> : [];
+    const matches = professionRows.flatMap((profession) => {
+      const recipes = Array.isArray(profession.recipes) ? profession.recipes as Array<Record<string, unknown>> : [];
+      return recipes.filter((recipe) => recipe.recipeID === Number(need.resourceKey)).map((recipe) => ({ profession, recipe }));
+    });
+    const sourceAt = section?.observedAt ?? section?.status.observedAt;
+    const rowTimes = matches.flatMap(({ profession, recipe }) => recipe.evidence === "OBSERVED"
+      ? [recipe.observedAt, profession.observedAt].filter((value): value is number => typeof value === "number")
+      : [recipe.lastSeenAt, profession.lastSeenAt, recipe.observedAt, profession.observedAt].filter((value): value is number => typeof value === "number"));
+    const evidenceAt = rowTimes.length ? Math.max(...rowTimes) : sourceAt;
+    const recipeFreshness = evidenceFreshness(evidenceAt, now);
+    const currentEvidence = section?.status.state === "OBSERVED" ? matches.filter(({ profession, recipe }) => profession.evidence === "OBSERVED" && recipe.evidence === "OBSERVED") : [];
+    const observedStates = new Set(currentEvidence.map(({ recipe }) => recipe.learnedState).filter((state) => state === "OBSERVED_TRUE" || state === "OBSERVED_FALSE"));
+    const hasHistoricalMatch = matches.some(({ profession, recipe }) => recipe.evidence === "LAST_SEEN" || profession.evidence === "LAST_SEEN");
+    const recipeSourceState: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" = section?.status.state === "OBSERVED" ? "OBSERVED" : section?.status.state === "LAST_SEEN" || hasHistoricalMatch ? "LAST_SEEN" : "UNKNOWN";
+    const recipeSource = { section: "character" as const, state: recipeSourceState, ...(evidenceAt !== undefined ? { observedAt: evidenceAt } : {}), ...(section?.completeness ? { completeness: section.completeness } : {}) };
+    if (observedStates.size === 1) {
+      const learned = observedStates.has("OBSERVED_TRUE");
+      return { needId: need.stableId, sourceIdentityKey, state: learned ? "COVERED_BY_OBSERVED" : "SHORTFALL_OBSERVED", observedQuantity: learned ? 1 : 0, requiredQuantity: 1, ...(evidenceAt !== undefined ? { observedAt: evidenceAt } : {}), freshness: recipeFreshness, sourceSections: [recipeSource], unresolvedSections: [], unknownQuantityRowCount: 0, reason: `Retail's structured recipe observation reports recipe ${need.resourceKey} as ${learned ? "learned" : "not learned"} for this character. Candidate recipe coverage is partial; this exact ID had an explicit learned-state result. This does not establish current profession skill, unlock requirements, reagents, or that crafting is presently possible.` };
+    }
+    if (observedStates.size > 1) return { ...missing(`Retail recipe ${need.resourceKey} has contradictory current learned-state rows; no result is selected.`, ["conflicting recipe evidence"]), sourceIdentityKey, ...(evidenceAt !== undefined ? { observedAt: evidenceAt } : {}), freshness: recipeFreshness, sourceSections: [recipeSource] };
+    const lastSeenLearned = matches.some(({ profession, recipe }) => recipe.learnedState === "OBSERVED_TRUE" && (recipe.evidence === "LAST_SEEN" || profession.evidence === "LAST_SEEN" || section?.status.state === "LAST_SEEN"));
+    if (lastSeenLearned) return { needId: need.stableId, sourceIdentityKey, state: "POTENTIAL_COVERAGE_LAST_SEEN", potentialQuantity: 1, requiredQuantity: 1, ...(evidenceAt !== undefined ? { observedAt: evidenceAt } : {}), freshness: recipeFreshness, sourceSections: [{ ...recipeSource, state: "LAST_SEEN" }], unresolvedSections: ["historical recipe learned state"], unknownQuantityRowCount: 0, reason: `Recipe ${need.resourceKey} was recorded as learned in LAST_SEEN evidence. It is historical potential only; current knowledge, skill, unlocks, and craftability have not been verified.` };
+    const reason = !section?.data ? "No structured Retail recipe-learning observation is available for this character." : matches.length === 0 ? `Recipe ${need.resourceKey} is absent from a candidate list whose completeness is explicitly UNKNOWN; absence does not mean unlearned.` : "The exact recipe row has UNKNOWN, failed, or non-current learned-state evidence.";
+    return { ...missing(reason, ["exact recipe learned-state result"]), sourceIdentityKey, ...(evidenceAt !== undefined ? { observedAt: evidenceAt } : {}), freshness: recipeFreshness, sourceSections: [recipeSource] };
+  }
   if (need.kind === "GOLD_COPPER") {
     const amount = snapshot.parsed.character.moneyCopper;
     if (amount === undefined || characterSource.state === "UNKNOWN") return { ...missing("Gold was not reported as observed in the selected character's latest export."), sourceIdentityKey, observedAt, freshness, sourceSections: [characterSource] };
@@ -405,14 +450,17 @@ export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredS
 }
 
 export interface ErpProjectView extends ErpProject {
+  readonly history: readonly ErpProjectEvent[];
+  readonly historyEventCount: number;
+  readonly historyTruncated: boolean;
   readonly needEvidence: readonly ErpNeedEvidence[];
   readonly reservationReview: readonly { reservationId: string; state: "WITHIN_OBSERVED_SUPPLY" | "EXCEEDS_OBSERVED_SUPPLY" | "SUPPLY_UNKNOWN"; reservedQuantity: number; observedQuantity?: number; reason: string }[];
 }
 
 /** Read-time projection; recorded plans never mutate or claim observed inventory. */
-export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection): ErpProjectView {
+export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
   const needEvidence = project.needs.map((need) => {
-    const evidence = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [], now, currencies);
+    const evidence = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [], now, currencies, project.version);
     const scope = sourceScope(need);
     if (!scope) return { ...evidence, reservationAssessment: { state: "UNKNOWN" as const, activeQuantity: 0, reason: "No explicit source character or shared-storage owner was selected; roster co-location does not prove ownership or access." } };
     const reservations = overlappingReservations(need, scope, project.version, allProjects);
@@ -444,7 +492,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const reservations = overlappingReservations(ownNeed, reservationScope, project.version, allProjects);
     const totalReserved = reservations.reduce((sum, entry) => sum + entry.quantity, 0);
     const ambiguousItemScope = reservations.some((entry) => entry.ambiguous);
-    const supply = reservation.sourceOwnerKey ? assessSharedStorageNeed(ownNeed, sharedStorage, now) : assessErpNeed(ownNeed, reservation.sourceIdentityKey ? snapshotsFor(reservation.sourceIdentityKey) : [], now, currencies);
+    const supply = reservation.sourceOwnerKey ? assessSharedStorageNeed(ownNeed, sharedStorage, now) : assessErpNeed(ownNeed, reservation.sourceIdentityKey ? snapshotsFor(reservation.sourceIdentityKey) : [], now, currencies, project.version);
     const state = ownNeed.kind === "PROFESSION" || ownNeed.kind === "RECIPE" || supply.observedQuantity === undefined || ambiguousItemScope || (totalReserved > supply.observedQuantity && supply.unresolvedSections.length > 0)
       ? "SUPPLY_UNKNOWN"
       : totalReserved <= supply.observedQuantity ? "WITHIN_OBSERVED_SUPPLY" : "EXCEEDS_OBSERVED_SUPPLY";
