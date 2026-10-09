@@ -158,10 +158,11 @@ test("Forever allocation route exposes separate evidence-gated decisions without
     assert.equal(view.assessments[0].suitability, "UNKNOWN");
     assert.equal(view.assessments[0].upgradeStatus, "UNKNOWN");
     assert.equal(view.assessments[0].transferability, "UNKNOWN");
-    assert.equal(view.assessments[0].allocationPriority, "UNKNOWN");
+    assert.equal(view.assessments[0].allocationPriority, "UNRANKED");
     assert.equal(view.assessments[0].decision, "NO_RECOMMENDATION");
     assert.equal(view.assessments[0].candidate.binding.value, true);
-    assert.match(view.assessments[0].missingEvidence.join(" "), /account membership/);
+    assert.match(view.scope.reason, /WoW account ID/);
+    assert.match(view.assessments[0].missingEvidence.join(" "), /class\/item restriction evidence/);
     const account = await api.get("/api/account-context");
     const characterContext = account.body.versions.forever.characters.find((character: any) => character.identityKey === key);
     assert.deepEqual(characterContext.foreverGearAllocation.value.data, view, "AccountContext carries the same canonical allocation read model");

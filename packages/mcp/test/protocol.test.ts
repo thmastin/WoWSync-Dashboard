@@ -168,7 +168,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(foreverAllocation.value?.data?.assessments[0]?.eligibility, "UNKNOWN");
     assert.equal(foreverAllocation.value?.data?.assessments[0]?.upgradeStatus, "UNKNOWN");
     assert.equal(foreverAllocation.value?.data?.assessments[0]?.transferability, "UNKNOWN");
-    assert.equal(foreverAllocation.value?.data?.assessments[0]?.allocationPriority, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.allocationPriority, "UNRANKED");
     assert.equal(foreverAllocation.value?.data?.assessments[0]?.decision, "NO_RECOMMENDATION");
     assert.equal((await client.callTool({ name: "get_forever_gear_observation", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "Forever version is explicit and mandatory");
 

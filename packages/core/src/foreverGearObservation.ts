@@ -134,6 +134,27 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
   };
   const infoReturns = Array.isArray(info?.returns) ? info.returns : [];
   const statEntries = Array.isArray(statsTable?.entries) ? statsTable.entries : [];
+  const equippable = object(fact.isEquippableItem);
+  const equippableReturns = Array.isArray(equippable?.returns) ? equippable.returns : [];
+  const equippableValue = object(object(equippableReturns[0])?.observation);
+  const itemSpec = object(fact.itemSpecInfo);
+  const itemSpecTable = object(itemSpec?.table);
+  const itemSpecInput = object(itemSpec?.input);
+  const itemSpecEntries = Array.isArray(itemSpecTable?.entries) ? itemSpecTable.entries : [];
+  const itemSpecIDs = itemSpecEntries.map((entry) => {
+    const row = object(entry);
+    const observation = object(row?.observation);
+    return observation?.state === "OBSERVED" && observation.type === "number" && typeof observation.value === "number"
+      ? observation.value : undefined;
+  });
+  const itemSpecInfo = itemSpec?.api === "C_Item.GetItemSpecInfo" && itemSpecInput?.itemString === itemRef
+    && itemSpec?.state === "OBSERVED_VALUE" && itemSpecTable?.state === "OBSERVED_TABLE" && itemSpecTable.complete === true
+    && itemSpecIDs.length === itemSpecEntries.length && itemSpecIDs.every((id) => typeof id === "number")
+    ? { state: "OBSERVED_TABLE" as const, api: itemSpec.api, itemString: itemRef, specializationIDs: itemSpecIDs as number[], complete: true,
+      ...(typeof itemSpec.observedAt === "number" ? { observedAt: itemSpec.observedAt, freshness: classifyFreshness(itemSpec.observedAt, now) } : {}),
+      provenance: "OBSERVED_RAW_API_RESULT" as const }
+    : { state: "UNKNOWN" as const, api: itemSpec?.api ?? "UNKNOWN", itemString: itemSpecInput?.itemString ?? "UNKNOWN",
+      reason: "No complete exact-item C_Item.GetItemSpecInfo result is available." };
   const deltaSection = object(statDeltaComparisons);
   const deltaRows = Array.isArray(deltaSection?.comparisons) ? deltaSection.comparisons : [];
   const exactPairDeltas = deltaRows.flatMap((entry) => {
@@ -148,6 +169,8 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
   });
   return {
     itemInfo: { state: info?.state ?? "UNKNOWN", api: info?.api ?? "UNKNOWN", returnCount: info?.returnCount ?? null, ...(typeof info?.observedAt === "number" ? { observedAt: info.observedAt } : {}), returns: infoReturns },
+    playerEquipability: { api: equippable?.api ?? "UNKNOWN", state: equippable?.state ?? "UNKNOWN", itemString: object(equippable?.input)?.itemString ?? "UNKNOWN", ...(equippableValue?.state === "OBSERVED" && equippableValue.type === "boolean" ? { value: equippableValue.value } : {}), ...(typeof equippable?.observedAt === "number" ? { observedAt: equippable.observedAt, freshness: classifyFreshness(equippable.observedAt, now) } : {}), reason: "C_Item.IsEquippableItem is a point-in-time check for the currently logged-in player; it cannot be reused as another character's check." },
+    itemSpecInfo,
     itemStats: { state: statsTable?.state ?? stats?.state ?? "UNKNOWN", callState: stats?.state ?? "UNKNOWN", api: stats?.api ?? "UNKNOWN", entryCount: statsTable?.entryCount ?? null, complete: statsTable?.complete ?? false, ...((typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt) !== undefined ? { observedAt: typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt } : {}), entries: statEntries },
     statDeltaEvidence: { api: deltaSection?.state === "API_MISSING" ? "API_MISSING" : "C_Item.GetItemStatDelta", state: deltaSection?.state ?? "UNKNOWN", completeness: deltaSection?.completeness ?? "unknown", ...(typeof deltaSection?.observedAt === "number" ? { observedAt: deltaSection.observedAt, freshness: classifyFreshness(deltaSection.observedAt, now) } : {}), reason: statDeltaSourceCurrent ? "Complete, recent pair observations are filtered to the candidate and exact equipped variants present in this equipment snapshot." : "Raw pair results are withheld unless item facts, bag/equipment sources, pair-section completeness, and freshness are all current." },
     statDeltaComparisons: exactPairDeltas,

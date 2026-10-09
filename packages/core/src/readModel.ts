@@ -18,6 +18,7 @@ import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
+import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, evaluateForeverTransferability, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -44,6 +45,10 @@ export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: nu
 export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
 export interface CharacterTrainerQuery extends CharacterSnapshotQuery { category?: string; query?: string; status?: "known" | "available" | "unavailable" | "other"; offset?: number; limit?: number }
 export interface AccountChangesQuery { version: VersionOrUnknown; realm?: string; offset?: number; limit?: number }
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
 
 function foreverItemField(evidence: unknown, name: string): { state?: unknown; value?: unknown } | undefined {
   if (!evidence || typeof evidence !== "object") return undefined;
@@ -80,6 +85,20 @@ function foreverNumericStats(evidence: unknown, now: number): Array<{ key: strin
     const row = entry as { key?: unknown; observation?: { state?: unknown; value?: unknown } };
     return typeof row.key === "string" && row.observation?.state === "OBSERVED" && typeof row.observation.value === "number" ? [{ key: row.key, value: row.observation.value }] : [];
   });
+}
+
+function foreverStatTable(evidence: unknown, now: number): ForeverStatTable | undefined {
+  if (!evidence || typeof evidence !== "object") return undefined;
+  const stats = (evidence as { itemStats?: unknown }).itemStats;
+  if (!stats || typeof stats !== "object") return undefined;
+  const record = stats as { state?: unknown; api?: unknown; complete?: unknown; observedAt?: unknown; entries?: unknown };
+  if (record.api !== "C_Item.GetItemStats" || record.state !== "OBSERVED_TABLE" || record.complete !== true
+    || typeof record.observedAt !== "number" || classifyFreshness(record.observedAt, now) !== "recent" || !Array.isArray(record.entries)) return undefined;
+  return { state: "OBSERVED_TABLE", complete: true, entries: record.entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as { key?: unknown; observation?: { state?: unknown; value?: unknown } };
+    return typeof row.key === "string" ? [{ key: row.key, state: typeof row.observation?.state === "string" ? row.observation.state : "UNKNOWN", value: row.observation?.value }] : [];
+  }) };
 }
 
 function foreverItemEvidenceIsRecent(evidence: unknown, now: number): boolean {
@@ -960,9 +979,9 @@ export class DashboardReadModel {
     scope: { accountMembership: "UNKNOWN"; reason: string };
     recipient: { identityKey: string; name: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; level?: { value: number; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: "OBSERVED" | "LAST_SEEN" }>; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
     candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"] }>;
-    assessments: Array<{ candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string }; eligibility: "UNKNOWN"; eligibilityChecks: { requiredLevel: { state: "MET" | "NOT_MET" | "UNKNOWN"; itemRequiredLevel?: number; recipientLevel?: number; reason: string }; classRestriction: { state: "UNKNOWN"; reason: string }; weaponProficiency: { state: "UNKNOWN"; matchingObservedSkill?: string; observedSkillLines: string[]; reason: string }; slotCompatibility: { state: "MATCHED_EQUIP_LOCATION" | "UNKNOWN"; matchingSlot?: number; reason: string } }; suitability: "UNKNOWN"; upgradeStatus: "UNKNOWN"; rawStatComparisons: Array<{ key: string; candidateValue: number; equippedValue: number; equippedSlot: number; equippedItemRef?: string; delta: number; candidateEquipLocation?: string; equippedEquipLocation?: string; assessment: "RAW_COMPARISON_ONLY"; reason: string }>; transferability: "UNKNOWN"; allocationPriority: "UNKNOWN"; decision: "NO_RECOMMENDATION"; missingEvidence: string[]; reason: string }>;
+    assessments: Array<ForeverGearAssessmentEvaluation & { candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string } }>;
     exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }>;
-    conclusion: "INSUFFICIENT_EVIDENCE";
+    conclusion: "LOCAL_REVIEW_CANDIDATE_AVAILABLE" | "INSUFFICIENT_EVIDENCE";
     reason: string;
   }>> {
     if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Forever allocation is isolated to Forever 1.60.1 build 70291 / interface 16001; no other version rules are applied." } } };
@@ -1008,6 +1027,30 @@ export class DashboardReadModel {
         bank: { state: observation.value.data.bank.state, ...(observation.value.data.bank.observedAt !== undefined ? { observedAt: observation.value.data.bank.observedAt, freshness: observation.value.data.bank.freshness } : {}), ...(observation.value.data.bank.reason ? { reason: observation.value.data.bank.reason } : {}) },
         candidates: observation.value.data.evaluationCandidates.items });
     }
+    const recipientItemEvidence = recipientSnapshot?.parsed.foreverGearObservation?.itemEvidence as Record<string, unknown> | undefined;
+    const recipientItemData = recipientItemEvidence?.data as Record<string, unknown> | undefined;
+    const recipientSpecialization = recipientItemData?.specialization as Record<string, unknown> | undefined;
+    const activeInfo = asRecord(recipientSpecialization?.activeInfo);
+    const activeInfoReturns = Array.isArray(activeInfo?.returns) ? activeInfo.returns : [];
+    const activeSpecializationIDRaw = asRecord(asRecord(activeInfoReturns[0])?.observation);
+    const activeSpecializationIDValue = activeSpecializationIDRaw?.state === "OBSERVED" && activeSpecializationIDRaw.type === "number" && typeof activeSpecializationIDRaw.value === "number" ? activeSpecializationIDRaw.value : undefined;
+    const activeIndexCall = asRecord(recipientSpecialization?.activeIndex);
+    const activeIndexReturns = Array.isArray(activeIndexCall?.returns) ? activeIndexCall.returns : [];
+    const activeIndexValue = asRecord(asRecord(activeIndexReturns[0])?.observation);
+    const recipientSpecializationCurrent = recipientItemEvidence?.lastAttemptStale !== true
+      && activeIndexCall?.api === "C_SpecializationInfo.GetSpecialization"
+      && activeInfo?.api === "C_SpecializationInfo.GetSpecializationInfo" && activeInfo?.state === "OBSERVED_VALUE"
+      && activeIndexValue?.state === "OBSERVED" && activeIndexValue.type === "number" && typeof activeIndexValue.value === "number" && activeIndexValue.value > 0
+      && typeof recipientSpecialization?.capturedAt === "number" && classifyFreshness(recipientSpecialization.capturedAt, this.now()) === "recent"
+      && typeof activeSpecializationIDValue === "number";
+    const activeSpecializationID = recipientSpecializationCurrent ? activeSpecializationIDValue : undefined;
+    const recipientEquipmentComplete = recipientSnapshot?.parsed.foreverGearObservation?.equipment?.completeness === "complete"
+      && recipient.equipment.state === "OBSERVED" && recipient.equipment.freshness === "recent";
+    const recipientSlotEvidence: ForeverSlotEvidence[] = recipient.equipment.items.map((item) => {
+      const itemEvidence = (item as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
+      const field = foreverItemField(itemEvidence, "equipLocation");
+      return { slot: item.slot, ...(item.itemRef ? { itemRef: item.itemRef } : {}), ...(field?.state === "OBSERVED" && typeof field.value === "string" ? { equipLocation: field.value } : {}), provenance: item.provenance };
+    });
     const assessments = candidateSources.flatMap((source) => source.candidates.map((candidate) => {
       const classField = foreverItemField(candidate.itemApiEvidence, "itemClass");
       const subclassField = foreverItemField(candidate.itemApiEvidence, "itemSubclass");
@@ -1020,54 +1063,93 @@ export class DashboardReadModel {
       const equipLocation = equipField?.state === "OBSERVED" && typeof equipField.value === "string" ? equipField.value : undefined;
       const requiredLevel = candidateMetadataRecent && requiredLevelField?.state === "OBSERVED" && typeof requiredLevelField.value === "number" ? requiredLevelField.value : undefined;
       const recipientLevel = recipient.freshness === "recent" && recipient.level?.provenance === "OBSERVED" ? recipient.level.value : undefined;
-      const levelState = requiredLevel !== undefined && recipientLevel !== undefined ? requiredLevel <= recipientLevel ? "MET" as const : "NOT_MET" as const : "UNKNOWN" as const;
-      const sameEquipLocation = source.carried.freshness === "recent" && candidate.provenance !== "LAST_SEEN" && recipient.equipment.freshness === "recent" && equipLocation ? recipient.equipment.items.find((item) => {
-        const equippedField = foreverItemField((item as unknown as { itemApiEvidence?: unknown }).itemApiEvidence, "equipLocation");
-        return equippedField?.state === "OBSERVED" && equippedField.value === equipLocation;
-      }) : undefined;
-      const candidateStats = foreverNumericStats(candidate.itemApiEvidence, this.now());
-      const rawStatComparisons = source.carried.freshness === "recent" && source.freshness === "recent" && candidate.provenance !== "LAST_SEEN" && candidateMetadataRecent && recipient.equipment.freshness === "recent" ? candidateStats.flatMap((stat) => {
-        return recipient.equipment.items.flatMap((equipped) => {
+      const recipientCandidate = recipientData.evaluationCandidates.items.find((row) => row.itemRef === candidate.itemRef);
+      const recipientEquipability = (recipientCandidate?.itemApiEvidence as Record<string, unknown> | undefined)?.playerEquipability as Record<string, unknown> | undefined;
+      const sourceEquipability = (candidate.itemApiEvidence as Record<string, unknown> | undefined)?.playerEquipability as Record<string, unknown> | undefined;
+      const sameCharacter = source.source.identityKey === recipient.identityKey;
+      const equipability = sameCharacter ? sourceEquipability : recipientEquipability;
+      const equipabilityCurrent = equipability?.api === "C_Item.IsEquippableItem" && equipability?.itemString === candidate.itemRef
+        && equipability?.state === "OBSERVED_VALUE" && typeof equipability?.value === "boolean"
+        && typeof equipability?.observedAt === "number" && classifyFreshness(equipability.observedAt, this.now()) === "recent";
+      const eligibility = assessForeverEligibility({ sameCharacter: equipabilityCurrent, apiEquippable: equipabilityCurrent ? equipability?.value as boolean : undefined, apiObservedRecent: equipabilityCurrent, requiredLevel, recipientLevel });
+      const slotCompatibility = evaluateForeverSlotCompatibility({ equipLocation, equipment: recipientSlotEvidence, equipmentComplete: recipientEquipmentComplete });
+      const matchingSlots = new Set(slotCompatibility.possibleSlots);
+      const candidateStats = foreverStatTable(candidate.itemApiEvidence, this.now());
+      const rawStatComparisons = !candidate.provenance.includes("LAST_SEEN") && candidateStats && recipientEquipmentComplete
+        ? recipient.equipment.items.flatMap((equipped) => {
+          if (!equipped.itemRef || !matchingSlots.has(equipped.slot) || equipped.provenance !== "OBSERVED") return [];
           const equippedEvidence = (equipped as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
-          const equippedClassField = foreverItemField(equippedEvidence, "itemClass");
-          if (itemClass !== "Weapon" || equippedClassField?.state !== "OBSERVED" || equippedClassField.value !== itemClass) return [];
-          const matching = foreverNumericStats(equippedEvidence, this.now()).find((entry) => entry.key === stat.key);
-          if (!matching) return [];
-          const equippedLocationField = foreverItemField(equippedEvidence, "equipLocation");
-          const equippedLocation = equippedLocationField?.state === "OBSERVED" && typeof equippedLocationField.value === "string" ? equippedLocationField.value : undefined;
-          return [{ key: stat.key, candidateValue: stat.value, equippedValue: matching.value, equippedSlot: equipped.slot, ...(equipped.itemRef ? { equippedItemRef: equipped.itemRef } : {}), delta: stat.value - matching.value, ...(equipLocation ? { candidateEquipLocation: equipLocation } : {}), ...(equippedLocation ? { equippedEquipLocation: equippedLocation } : {}), assessment: "RAW_COMPARISON_ONLY" as const, reason: "Same raw GetItemStats key was observed for both exact item variants. This does not establish slot compatibility, stat completeness, build value, equipability, or upgrade status." }];
-        });
-      }) : [];
-      const rawSkillLines = recipient.observedSkillLines.map((skill) => skill.name);
+          const equippedStats = foreverStatTable(equippedEvidence, this.now());
+          const comparison = compareForeverStatTables(candidateStats, equippedStats, equipped.slot, equipped.itemRef, itemClass);
+          return comparison ? [comparison] : [];
+        }) : [];
+      const deltaRows = Array.isArray((candidate.itemApiEvidence as Record<string, unknown> | undefined)?.statDeltaComparisons)
+        ? (candidate.itemApiEvidence as { statDeltaComparisons: Array<Record<string, unknown>> }).statDeltaComparisons : [];
+      const statDeltaCalibrations = rawStatComparisons.flatMap((comparison) => {
+        const row = deltaRows.find((entry) => entry.candidateItemString === candidate.itemRef && entry.equippedItemString === comparison.equippedItemRef);
+        if (!row || !Array.isArray(row.entries)) return [];
+        const table: ForeverStatTable = { state: "OBSERVED_TABLE", complete: row.complete === true, entries: row.entries.flatMap((entry) => {
+          if (!entry || typeof entry !== "object") return [];
+          const e = entry as { key?: unknown; observation?: { state?: unknown; value?: unknown } };
+          return typeof e.key === "string" ? [{ key: e.key, state: typeof e.observation?.state === "string" ? e.observation.state : "UNKNOWN", value: e.observation?.value }] : [];
+        }) };
+        const equipped = recipient.equipment.items.find((item) => item.itemRef === comparison.equippedItemRef);
+        const equippedEvidence = equipped && (equipped as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
+        return [calibrateForeverStatDelta({ candidate: candidateStats, equipped: foreverStatTable(equippedEvidence, this.now()), delta: table })];
+      });
+      const upgrade = classifyForeverRecordedUpgrade(rawStatComparisons, slotCompatibility);
+      const itemSpecInfo = (candidate.itemApiEvidence as Record<string, unknown> | undefined)?.itemSpecInfo as Record<string, unknown> | undefined;
+      const itemSpecializationIDs = Array.isArray(itemSpecInfo?.specializationIDs) ? itemSpecInfo.specializationIDs.filter((value): value is number => typeof value === "number") : undefined;
+      const suitabilityEvidence = assessForeverSuitability({ activeSpecializationID, itemSpecializationIDs, specializationEvidenceCurrent: recipientSpecializationCurrent && itemSpecInfo?.state === "OBSERVED_TABLE" && itemSpecInfo?.freshness === "recent" });
+      const transferability = evaluateForeverTransferability(typeof candidate.bound === "boolean" && source.carried.state === "OBSERVED"
+        && source.carried.freshness === "recent" && !candidate.provenance.includes("LAST_SEEN") ? candidate.bound : undefined);
+      const classRestriction = { state: "UNKNOWN" as const, reason: "No explicit Forever item class-restriction evidence is available; IsEquippableItem is retained only as a raw player-scoped signal." };
+      const weaponProficiency = itemClass !== "Weapon" ? { state: "NOT_APPLICABLE" as const, observedSkillLines: recipient.observedSkillLines.map((skill) => skill.name), reason: "The observed item class is not Weapon." }
+        : { state: "UNKNOWN" as const, observedSkillLines: recipient.observedSkillLines.map((skill) => skill.name), reason: `Forever proficiency mapping for ${itemSubclass ?? "UNKNOWN"} is not established from raw skill names alone; IsEquippableItem is not treated as a proficiency check.` };
+      const sourceLocationCurrent = source.carried.state === "OBSERVED" && source.carried.freshness === "recent"
+        && !candidate.provenance.includes("LAST_SEEN");
+      const localPotential = sameCharacter && sourceLocationCurrent && eligibility.playerApiSignal === "TRUE"
+        && (upgrade.status === "POSSIBLE_RECORDED_STAT_UPGRADE" || upgrade.status === "POSSIBLE_EMPTY_SLOT_FILL")
+        && slotCompatibility.conflicts.length === 0;
+      const missingEvidence = [
+        ...(eligibility.playerApiSignal === "UNKNOWN" ? ["A current C_Item.IsEquippableItem observation for this exact variant on the recipient"] : []),
+        ...(classRestriction.state === "UNKNOWN" ? ["Verified Forever class/item restriction evidence (IsEquippableItem alone is not class proof)"] : []),
+        ...(weaponProficiency.state === "UNKNOWN" ? ["A verified Forever proficiency result for this weapon category"] : []),
+        ...(eligibility.requiredLevel === "UNKNOWN" ? ["Fresh recipient level or live-corroborated item required level"] : []),
+        ...(slotCompatibility.state === "UNKNOWN" ? ["Known Forever equip-location token and equipment-slot mapping"] : []),
+        ...(upgrade.status === "UNKNOWN" || upgrade.status === "RECORDED_STAT_TRADEOFF" ? ["Build-specific stat weights, complete effects, and/or a resolved stat trade-off"] : []),
+        ...(suitabilityEvidence.state === "UNKNOWN" ? ["Fresh active specialization and exact-item specialization tags"] : []),
+        ...(transferability.state === "UNKNOWN" ? ["Verified account relationship and a current permitted transfer route"] : []),
+        ...(source.source.identityKey !== recipient.identityKey && source.carried.state !== "OBSERVED" ? ["A fresh observed source location"] : []),
+        ...(source.source.identityKey !== recipient.identityKey ? ["Verified account membership before assigning cross-character allocation priority"] : []),
+      ];
       return {
         candidate, source: source.source, recipient: { identityKey: recipient.identityKey, name: recipient.name, realm: recipient.realm },
-        eligibility: "UNKNOWN" as const,
+        eligibility: eligibility.state, playerApiSignal: eligibility.playerApiSignal,
         eligibilityChecks: {
-          requiredLevel: { state: levelState, ...(requiredLevel !== undefined ? { itemRequiredLevel: requiredLevel } : {}), ...(recipientLevel !== undefined ? { recipientLevel } : {}), reason: levelState === "MET" ? "Observed GetItemInfo required level does not exceed the recipient's observed level; class, proficiency, and other requirements remain unknown." : levelState === "NOT_MET" ? "The observed GetItemInfo required level exceeds the recipient's observed level." : "A fresh recipient level or live-corroborated item required level is unavailable." },
-          classRestriction: { state: "UNKNOWN" as const, reason: "The captured Forever item API tuple does not expose a validated class-allow/deny restriction list." },
-          weaponProficiency: { state: "UNKNOWN" as const, observedSkillLines: rawSkillLines, reason: itemClass === "Weapon" ? `Observed skill lines are preserved as raw facts, but Forever 70291 category and subclass mapping is not validated for ${itemSubclass ?? "UNKNOWN"}; neither a match nor an absent line proves proficiency.` : "No validated weapon-proficiency conclusion applies to this item." },
-          slotCompatibility: { state: sameEquipLocation ? "MATCHED_EQUIP_LOCATION" as const : "UNKNOWN" as const, ...(sameEquipLocation ? { matchingSlot: sameEquipLocation.slot } : {}), reason: sameEquipLocation ? "An equipped item has the same live-corroborated equip-location token; this does not establish character eligibility." : "No equipped row has the same item equip-location token; alternative-slot and hand compatibility rules remain unverified." },
+          requiredLevel: { state: eligibility.requiredLevel, ...(requiredLevel !== undefined ? { itemRequiredLevel: requiredLevel } : {}), ...(recipientLevel !== undefined ? { recipientLevel } : {}), reason: eligibility.reason },
+          classRestriction,
+          weaponProficiency,
+          slotCompatibility,
         },
-        suitability: "UNKNOWN" as const, upgradeStatus: "UNKNOWN" as const, rawStatComparisons,
-        transferability: "UNKNOWN" as const, allocationPriority: "UNKNOWN" as const,
-        decision: "NO_RECOMMENDATION" as const,
-        missingEvidence: [
-          "Forever-70291-validated class restrictions and item-specific equip eligibility",
-          "Weapon/armor proficiency rules for this item subclass and recipient",
-          "Observed recipient build/talent choices and validated suitability rules",
-          "Validated equip-slot compatibility plus complete effective-stat comparisons for upgrade conclusions",
-          "Current source ownership/access route and item-specific transferability evidence",
-          "Verified account membership before treating import-context characters as one roster",
-        ],
-        reason: levelState === "MET" && rawStatComparisons.length > 0
-          ? "The item meets its observed level requirement. Matching raw stats are shown for comparison, but proficiency, slot behavior, build suitability, complete effective stats, and transferability are not established; no recommendation is made."
-          : "This potential-equipment row has partial live-corroborated metadata. Required-level evidence is reported separately; class eligibility, proficiency, suitability, upgrade value, transferability, and priority remain unknown.",
+        suitability: suitabilityEvidence.state, suitabilityEvidence,
+        upgradeStatus: upgrade.status, upgradeConfidence: upgrade.confidence, rawStatComparisons, statDeltaCalibrations,
+        transferability: source.source.identityKey === recipient.identityKey ? "UNKNOWN" as const : transferability.state,
+        transferabilityReason: source.source.identityKey === recipient.identityKey ? "No cross-character transfer is needed for the source character's own carried item." : transferability.reason,
+        allocationPriority: localPotential ? "LOCAL_REVIEW_CANDIDATE" as const : transferability.state === "BLOCKED_BOUND_TO_SOURCE" && source.source.identityKey !== recipient.identityKey ? "BLOCKED_BY_BINDING" as const : source.source.identityKey !== recipient.identityKey ? "UNRANKED_UNKNOWN_SCOPE" as const : "UNRANKED" as const,
+        decision: localPotential ? "REVIEW_LOCAL_CANDIDATE" as const : "NO_RECOMMENDATION" as const,
+        missingEvidence,
+        reason: localPotential ? "The exact item is currently carried by this character, IsEquippableItem returned true for that player/item, and either a structurally compatible slot is empty or a complete recorded stat vector dominates a compatible item. This is only a review candidate: class/proficiency eligibility, build fit, and complete upgrade status remain unestablished." : "Dimensions are evaluated separately. A structural slot match or raw-stat result does not by itself establish eligibility, suitability, a complete upgrade, transfer access, or allocation priority.",
       };
     }));
     const observedAt = resolved.value.provenance.observedAt;
     return { status: "FOUND", value: {
       data: { version: "forever", ruleset: "forever-70291-evidence-gated-v1", scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
-        candidateSources, assessments, exclusions, conclusion: "INSUFFICIENT_EVIDENCE", reason: assessments.length === 0 ? "No currently observed potential-equipment rows are available to assess; missing candidate data does not prove there is no useful equipment." : "Potential-equipment rows were found, but no character receives an equip, upgrade, transfer, or priority recommendation until the listed evidence is verified." },
+        candidateSources, assessments, exclusions,
+        conclusion: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE") ? "LOCAL_REVIEW_CANDIDATE_AVAILABLE" : "INSUFFICIENT_EVIDENCE",
+        reason: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE")
+          ? "At least one source-local item has a current positive player API result and a limited structural or raw-stat signal. This review candidate is not a confirmed eligibility result, upgrade, or cross-character allocation."
+          : assessments.length === 0 ? "No currently observed potential-equipment rows are available to assess; missing candidate data does not prove there is no useful equipment." : "Potential-equipment rows were found, but the evidence does not support a source-local equip candidate or cross-character recommendation." },
       provenance: { state: "DERIVED", version: "forever", identityKey: recipient.identityKey, ...(observedAt !== undefined ? { observedAt, freshness: classifyFreshness(observedAt, this.now()) } : {}), snapshotId: recipientSnapshot?.id, source: "Forever 70291 observations from the Dashboard import context", reason: "No Retail rules are used; unresolved evidence remains UNKNOWN." },
     } };
   }

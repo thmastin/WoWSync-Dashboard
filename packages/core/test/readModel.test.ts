@@ -115,8 +115,9 @@ test("Forever allocation keeps source location, unknown roster membership, and e
       const className = "Weapon";
       const values = [name, `|H${itemRef}|h[${name}]|h`, 1, itemLevel, requiredLevel, className, subClass, 1, equipLoc, 1, 0, 2, subClassID, 0, 0, null, false, ""];
       return { itemID: id, itemString: itemRef, name, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [id, className, subClass, equipLoc, 1, 2, subClassID].map((value) => ({ observation: observed(value) })) },
-        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(true) }] },
+        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, returns: [{ observation: observed(true) }] },
         itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, observedAt, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
+        itemSpecInfo: { api: "C_Item.GetItemSpecInfo", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "1", observation: observed(71) }] } },
         itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ keyType: "string", key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", observation: observed(dps) }] } } };
     };
     const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5) => {
@@ -128,7 +129,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
         equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
         bags: { observedAt: generatedAt, completeness: "complete", data: bags },
         bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
-        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: facts } } } : {}),
+        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, specialization: { capturedAt: generatedAt, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ observation: observed(1) }] }, activeInfo: { api: "C_SpecializationInfo.GetSpecializationInfo", state: "OBSERVED_VALUE", returns: [{ observation: observed(71) }] } }, items: facts } } } : {}),
       } });
     };
     make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: false, bindingState: "OBSERVED_FALSE" } } }] }, [fact(2901, carriedRef, "Mining Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 1.5, 4, 1)]);
@@ -169,10 +170,10 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.recipientLevel, 8);
     assert.equal(currentAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
     assert.equal(currentAssessment?.eligibilityChecks.weaponProficiency.state, "UNKNOWN");
-    assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "UNKNOWN", "mainhand alias behavior is not inferred from an unmatched equipped location token");
-    assert.equal(currentAssessment?.suitability, "UNKNOWN");
-    assert.equal(currentAssessment?.upgradeStatus, "UNKNOWN");
-    assert.deepEqual(currentAssessment?.rawStatComparisons.map((row) => [row.key, row.candidateValue, row.equippedValue, row.delta]), [["ITEM_MOD_DAMAGE_PER_SECOND_SHORT", 1.5, 1.875, -0.375]]);
+    assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "MAPPED", "Forever equip-location mapping finds the occupied main-hand slot despite a different exact token");
+    assert.equal(currentAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact-item and recipient specialization evidence only produces a suitability hint");
+    assert.equal(currentAssessment?.upgradeStatus, "NO_RECORDED_STAT_GAIN");
+    assert.deepEqual(currentAssessment?.rawStatComparisons[0]?.values.find((row) => row.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT"), { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", candidate: 1.5, equipped: 1.875, delta: -0.375 });
     const staleAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === staleRef);
     assert.equal(staleAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "stale item metadata cannot establish a current level gate");
     assert.deepEqual(staleAssessment?.rawStatComparisons, [], "stale item metadata cannot enter raw comparisons");
@@ -183,10 +184,21 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(mismatchAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "a variant mismatch invalidates selected tuple fields");
     assert.deepEqual(mismatchAssessment?.rawStatComparisons, [], "unvalidated exact-variant contracts cannot enter raw comparisons");
     assert.equal(currentAssessment?.transferability, "UNKNOWN");
-    assert.equal(currentAssessment?.allocationPriority, "UNKNOWN");
+    assert.equal(currentAssessment?.allocationPriority, "UNRANKED_UNKNOWN_SCOPE");
     assert.equal(currentAssessment?.decision, "NO_RECOMMENDATION");
     assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
     assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
+    const local = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
+    assert.equal(local.status, "FOUND");
+    if (local.status === "FOUND" && local.value.data) {
+      const selfAssessment = local.value.data.assessments.find((assessment) => assessment.source.identityKey === local.value.data?.recipient.identityKey && assessment.candidate.itemRef === carriedRef);
+      assert.equal(selfAssessment?.eligibility, "UNKNOWN", "the direct API signal does not prove full eligibility");
+      assert.equal(selfAssessment?.playerApiSignal, "TRUE");
+      assert.equal(selfAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
+      assert.equal(selfAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact item tags and active specialization are joined only as a suitability hint");
+      assert.equal(selfAssessment?.decision, "REVIEW_LOCAL_CANDIDATE");
+      assert.notEqual(selfAssessment?.decision, "CONSIDER_EQUIPPING_ON_SOURCE");
+    }
   } finally { store.close(); }
 });
 
