@@ -493,6 +493,26 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
   } finally { store.close(); }
 });
 
+test("RETRIEVE work orders are first-class manual actions and never imply storage access", () => {
+  const { store, identityKey } = seedStore({
+    bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 5 }] }] },
+    bank: { unknown: true },
+  });
+  try {
+    const p: ErpProject = {
+      ...project(identityKey),
+      needs: [{ stableId: "need_stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey }],
+      reservations: [],
+      workOrders: [{ stableId: "retrieve_stone", kind: "RETRIEVE", status: "PLANNED", title: "Retrieve Rough Stone", resourceNeedIds: ["need_stone"], dependsOn: [] }],
+    };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const readiness = read.workOrderReadiness[0]!;
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(readiness.reason, /does not establish current access or retrieval eligibility/);
+    assert.equal(read.workOrderProgress[0]?.transferObservationReviews, undefined, "retrieval is not treated as a character-to-character transfer");
+  } finally { store.close(); }
+});
+
 test("work order readiness aggregates linked needs and treats saved reservations as intent", () => {
   const { store, identityKey } = seedStore();
   try {

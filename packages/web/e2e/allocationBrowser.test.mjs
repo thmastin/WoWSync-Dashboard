@@ -243,15 +243,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await transferForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const orderForm = projectCard.locator("form.erp-inline-form");
-    await orderForm.getByLabel("Action", { exact: true }).fill("Manually inspect the stored supply");
-    await orderForm.getByLabel("Action type").selectOption("INVESTIGATE");
+    await orderForm.getByLabel("Action", { exact: true }).fill("Manually review possible retrieval of observed supply");
+    await orderForm.getByLabel("Action type").selectOption("RETRIEVE");
+    assert.match(await projectCard.locator("form.erp-inline-form").last().innerText(), /Retrieval from bank or shared storage remains player-controlled and requires the player to confirm current access/);
     await orderForm.getByLabel("Linked resource needs").selectOption({ label: "Mycobloom" });
     await orderForm.getByRole("button", { name: "Add work order" }).click();
-    const order = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Manually inspect the stored supply" });
+    const order = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Manually review possible retrieval of observed supply" });
     await order.waitFor();
     const progressText = await order.innerText();
     assert.match(progressText, /Current linked resource shortfall/, progressText);
-    assert.match(progressText, /INVESTIGATE · PLANNED/, "observed stock shortfall does not auto-complete the manual work order");
+    assert.match(progressText, /RETRIEVE · PLANNED/, "observed stock shortfall does not auto-complete the manual work order");
     assert.doesNotMatch(progressText, /COMPLETED/);
 
     await orderForm.getByRole("button", { name: "Close" }).click();

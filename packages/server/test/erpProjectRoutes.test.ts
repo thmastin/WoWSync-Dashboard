@@ -50,6 +50,24 @@ test("project REST persists explicit plans and returns evidence from the shared 
   });
 });
 
+test("project REST preserves RETRIEVE as a distinct manual action and keeps storage access unknown", async () => {
+  await withServer(async (call, store) => {
+    const character = store.listCharacters("classic-era")[0]!;
+    const now = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } }));
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", {
+      title: "Retrieve observed stock manually",
+      needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: character.identityKey }],
+      workOrders: [{ stableId: "retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review storage access", resourceNeedIds: ["stone"], dependsOn: [] }],
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.project.workOrders[0].kind, "RETRIEVE");
+    assert.match(created.body.project.workOrderReadiness[0].reason, /does not establish current access or retrieval eligibility/);
+    const context = await call("GET", "/api/account-context");
+    assert.equal(context.body.planning.projects[0].workOrderCounts.PLANNED, 1);
+  });
+});
+
 test("REST and AccountContext expose paired transfer observations while preserving unknown causality", async () => {
   await withServer(async (call, store) => {
     const currentAt = Math.floor(Date.now() / 1000);
