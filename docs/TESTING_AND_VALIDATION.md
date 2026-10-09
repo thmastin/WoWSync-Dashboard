@@ -14,6 +14,31 @@ npm run build:web      # production build of packages/web
 `tsc --noEmit` (see root `tsconfig.base.json`) type-checks `packages/core` and `packages/server`,
 which otherwise run their `.ts` files directly under Node 24 with no compile step.
 
+## ERP acceptance command
+
+Run the deterministic ERP acceptance suite with one command:
+
+```bash
+npm run validate:erp
+```
+
+It runs every workspace test, type-checks core/server/MCP/web, builds the web application, then
+runs Playwright against a disposable SQLite database and a local Dashboard server. The suite needs
+Node 24 and a Chromium browser, but no game client, account export, paid service, LLM API, or model
+credentials. Playwright uses `/usr/bin/chromium` when present; otherwise install its local browser
+once with `npx playwright install chromium`. Set `WOWSYNC_CHROMIUM_PATH` to select another local
+Chromium executable. Browser and server tests use temporary fixtures and ports only.
+
+`packages/mcp/test/erpLifecycle.test.ts` is a synthetic acceptance journey across import, inventory
+classification, demand create/update/deactivate, SQLite persistence, REST, and MCP stdio. It asserts
+REST/MCP projection parity and ensures guild-only holdings do not become personal/account-owned
+inventory. `packages/core/test/erpMigrationCompatibility.test.ts` checks additive demand-schema
+creation against a frozen synthetic pre-ERP database. `packages/web/e2e/allocationBrowser.test.mjs`
+drives the demand workflow in a real browser. These tests cover the currently implemented stock
+target slice; they do not claim crafting execution, reservations, work orders, or causal gameplay
+reconciliation are implemented. See [`ERP_VALIDATION_PROGRAM.md`](ERP_VALIDATION_PROGRAM.md) for
+the coverage map and pending acceptance scope.
+
 The full test suite is loopback-network-dependent in places (server tests bind random loopback
 ports). On the Omarchy DEV host specifically, the host firewall denies host-local loopback ports
 used by tests; run the suite from a private network namespace there (see

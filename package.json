@@ -12,6 +12,9 @@
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
+    "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/server/tsconfig.json --noEmit && tsc -p packages/mcp/tsconfig.json --noEmit && tsc -p packages/web/tsconfig.json --noEmit",
+    "test:browser": "node --test packages/web/e2e/*.test.mjs",
+    "validate:erp": "npm test && npm run typecheck && npm run build:web && npm run test:browser",
     "test:deploy-tool": "node --test tools/omarchy/test/wowsync-dev-deploy.test.mjs tools/omarchy/test/wowsync-dev-deploy-workflow.test.mjs",
     "dev:server": "node --watch packages/server/src/index.ts",
     "dev:web": "npm run dev --workspace packages/web",
@@ -28,6 +31,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "playwright": "^1.64.0",
     "typescript": "^5.8.2"
   }
 }
