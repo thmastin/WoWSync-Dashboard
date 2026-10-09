@@ -716,7 +716,10 @@ revision events. Detailed semantics and validation are implemented in
 schema 8 carries a compact revision/history summary, while REST, read-only MCP, and the Projects &
 Work Orders tab use the same core projection. The projection includes manual work-order readiness
 from explicit dependencies and linked resource needs. Current observed shortfalls, stale/unknown
-evidence, and incomplete prerequisites are distinguished from a manual-review state.
+evidence, and incomplete prerequisites are distinguished from a manual-review state. A fresh linked
+observation change after player-marked completion triggers review without assigning causality or
+overwriting the saved completion state. Players can record planned/in-progress/waiting status in the
+Dashboard; these controls change plan state only.
 
 This branch supports evidence checks for exact itemString, declared base item ID, gold copper,
 exact-name profession skill, and explicitly character-scoped Retail currency IDs. Retail item needs

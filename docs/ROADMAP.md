@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-09 (Azeroth ERP Slice 5 project revision history implemented on the isolated feature branch; see
+Last updated: 2026-10-09 (Azeroth ERP Slice 8 work-order manual status lifecycle implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -118,6 +118,7 @@ Work intended next, in this order.
 - [x] **Azeroth ERP Slice 5 — append-only project revision history across the planning interfaces** (same feature branch). Create/edit/status writes atomically record revision, changed field names, and status transitions; REST/MCP expose bounded recent history with total/truncation metadata, AccountContext includes the latest revision and event count, and the workbench presents the timeline. The history records saved Dashboard intent, not game outcomes. Automated-tested, not browser-validated or deployed to persistent DEV.
 - [x] **Azeroth ERP Slice 6 — exact Retail recipe-knowledge project need** (same feature branch). An explicitly observed exact learned/not-learned recipe row may satisfy or report a shortfall for a single recipe-knowledge requirement; missing rows in partial catalogs, LAST_SEEN rows, and non-Retail versions remain UNKNOWN or historical potential. This does not infer skill, unlocks, reagents, or craftability. Automated-tested with synthetic contract-shaped data; not live-validated.
 - [x] **Azeroth ERP Slice 7 — work-order dependency and evidence readiness** (same feature branch). Player-authored work orders can link resource needs and prerequisites. Shared core read projection reports prerequisite blocks, current observed shortfalls, missing/stale evidence, terminal/paused state, or a manual-review step with action-specific limits. This does not infer game prerequisites or execute anything. Automated-tested, not browser/live validated.
+- [x] **Azeroth ERP Slice 8 — player-controlled work-order status lifecycle** (same feature branch). The Dashboard can record planned, in-progress, and waiting-for-evidence intent, and requires a player note to mark completion. These controls persist plan state only; no game actions execute. Automated UI-tested, not browser/live validated.
   The next planning increment also projects exact Retail learned-recipe rows into a recipe-knowledge need; partial catalogs and all other versions remain UNKNOWN. The wider ERP roadmap remains open: crafting/reagent feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access.
   Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are

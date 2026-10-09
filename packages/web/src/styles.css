@@ -1347,6 +1347,7 @@ button.roster-name-link {
 .erp-project-actions button, .erp-card-actions button, .erp-need-list button, .erp-work-order-list button, .erp-inline-form button { background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
 .erp-project-card h3 { margin: 20px 0 8px; font-size: 1rem; }
 .erp-need-list, .erp-work-order-list { display: grid; gap: 9px; padding-left: 22px; }
+  .erp-work-order-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .erp-need-list li, .erp-work-order-list li { padding: 10px 12px; border-radius: 5px; background: #ffffff07; }
 .erp-need-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .erp-need-list li p { margin: 6px 0; color: #c2cad6; }
