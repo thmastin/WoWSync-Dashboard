@@ -416,6 +416,15 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
     assert.equal(changed.state, "OBSERVATION_CHANGED_REQUIRES_REVIEW");
     assert.deepEqual(changed.changedNeedIds, ["covered_need"]);
     assert.match(changed.reason, /does not establish that this work order caused it or that the planned step is complete/);
+    const recordedComplete: ErpProject = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "review" ? { ...order, status: "COMPLETED", completionNote: "Player recorded a manual transfer." } : order) };
+    const changedAfterCompletion = read(recordedComplete, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(changedAfterCompletion.state, "OBSERVATION_CHANGED_REQUIRES_REVIEW", "later inventory evidence asks for review without overwriting the player's recorded status");
+    assert.match(changedAfterCompletion.reason, /marked complete by the player/);
+    const completedWithUnknown: ErpProject = { ...recordedComplete, workOrders: recordedComplete.workOrders.map((order) => order.stableId === "review" ? { ...order, resourceNeedIds: ["covered_need", "unknown_need"] } : order) };
+    const mixedEvidence = read(completedWithUnknown, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.deepEqual(mixedEvidence.changedNeedIds, ["covered_need"]);
+    assert.deepEqual(mixedEvidence.unresolvedNeedIds, ["unknown_need"]);
+    assert.match(mixedEvidence.reason, /Linked evidence also remains unknown/);
     assert.equal(read(plan, 1_900_000_000).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "WAITING_FOR_EVIDENCE", "stale observed supply is not marked ready");
     assert.equal(read({ ...plan, status: "PAUSED" }).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "PROJECT_NOT_ACTIVE");
   } finally { store.close(); }
