@@ -93,7 +93,7 @@ test("Forever item API evidence exposes potential candidates without claiming el
   const itemString = "item:999:4:5";
   const structured: ForeverStructuredObservation = { ...sidecar,
     bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
-    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" }, equipment: { observedAt: 100, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)], statDeltaComparisons: { state: "OBSERVED_RAW_COMPARISONS", completeness: "complete", observedAt: 105, comparisons: [{ api: "C_Item.GetItemStatDelta", state: "OBSERVED_VALUE", input: { candidateItemString: itemString, equippedItemString: "item:999:4:5" }, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "ITEM_MOD_STAMINA_SHORT", observation: { state: "OBSERVED", type: "number", value: 2 } }] } }] } } },
   };
   const view = buildForeverGearObservation({ identity, snapshotId: 5, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
   assert.equal(view.evaluationCandidates.state, "OBSERVED");
@@ -104,10 +104,25 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemInfo.returns[4]?.observation.value, 1);
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemStats.entries[0]?.key, "ITEM_MOD_STAMINA_SHORT");
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "PARTIALLY_VALIDATED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.interpretation, "RAW_ORDERED_PAIR_RESULT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.equippedItemString, "item:999:4:5");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.freshness, "recent");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.completeness, "complete");
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.requiredLevel.value, 1);
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.itemClass.value, "Armor");
   assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
   assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
+  const stale = structuredClone(structured);
+  const staleDelta = ((stale.itemEvidence?.data as Record<string, unknown>).statDeltaComparisons as Record<string, unknown>);
+  staleDelta.observedAt = 1;
+  const staleView = buildForeverGearObservation({ identity, snapshotId: 6, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: stale, now: 10_000_000 });
+  assert.deepEqual(staleView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "stale pair results are withheld from the current item view");
+  assert.equal(staleView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.freshness, "stale");
+  const unmatched = structuredClone(structured);
+  const pairs = ((unmatched.itemEvidence?.data as Record<string, unknown>).statDeltaComparisons as { comparisons: Array<{ input: { equippedItemString: string } }> }).comparisons;
+  pairs[0]!.input.equippedItemString = "item:123:not-equipped";
+  const unmatchedView = buildForeverGearObservation({ identity, snapshotId: 7, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: unmatched, now: 110 });
+  assert.deepEqual(unmatchedView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "pair results are withheld unless the exact equipped variant is observed");
 });
 
 test("Forever GetItemInfo semantics remain UNKNOWN when the returned hyperlink conflicts with the observed variant", () => {
