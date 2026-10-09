@@ -60,7 +60,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "11");
+    assert.equal(context.body.schemaVersion, "12");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
@@ -159,5 +159,28 @@ test("shared owner planning keeps Warband contents separate and historical in RE
     const context = await call("GET", "/api/account-context");
     const summary = context.body.planning.projects.find((entry: any) => entry.stableId === project.stableId);
     assert.deepEqual(summary.needStates, { POTENTIAL_COVERAGE_LAST_SEEN: 1 });
+  });
+});
+
+test("same-version source screens stay conditional and agree across REST and AccountContext", async () => {
+  await withServer(async (call, store) => {
+    const destination = store.listCharacters("classic-era")[0]!;
+    const source = store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Potential Holder", realm: "Other Realm", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Find manual source", needs: [{ stableId: "stone_need", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, destinationIdentityKey: destination.identityKey }] });
+    assert.equal(created.status, 201);
+    const rest = await call("GET", "/api/versions/classic-era/erp/projects");
+    const view = rest.body.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    const screen = view.resourceSourceScreens[0];
+    assert.deepEqual([screen.destinationIdentityKey, screen.scannedCharacterCount], [destination.identityKey, 1]);
+    assert.equal(screen.candidates[0].sourceIdentityKey, source.identityKey);
+    assert.equal(screen.candidates[0].observedQuantity, 2);
+    assert.equal(screen.candidates[0].locations[0].section, "bags");
+    assert.equal(screen.candidates[0].transferability, "UNKNOWN");
+    assert.equal(screen.candidates[0].accountMembership, "UNKNOWN");
+    assert.equal(screen.candidates[0].access, "UNKNOWN");
+    const context = await call("GET", "/api/account-context");
+    const summary = context.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    assert.deepEqual(summary.resourceSourceScreenCounts, { needsScreened: 1, possibleSources: 1, unresolvedCharacters: 1 }, "the candidate exists but an incomplete source section remains unresolved");
+    assert.equal(view.resourceSourceScreens[0].candidates[0].sourceIdentityKey, source.identityKey, "REST keeps the concrete source that the compact context counts");
   });
 });

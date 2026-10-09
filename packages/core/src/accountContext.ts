@@ -47,7 +47,7 @@ import { buildErpResourceCommitmentSummary, type ErpProjectView } from "./erpPro
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "11";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "12";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -141,7 +141,7 @@ export interface AccountContext {
   currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
   /** Player-authored ERP intent, separate from observed facts; evidence is summarized by the planning read model. */
-  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; needStates: Record<string, number> }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }> };
+  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; needStates: Record<string, number>; resourceSourceScreenCounts: { needsScreened: number; possibleSources: number; unresolvedCharacters: number } }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }> };
 }
 
 export interface AccountContextInput {
@@ -262,6 +262,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
       workOrderReadinessStates: Object.fromEntries([...new Set(p.workOrderReadiness.map((w) => w.state))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.state === state).length])),
       workOrderProgressStates: Object.fromEntries([...new Set(p.workOrderProgress.map((w) => w.reconciliation))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.reconciliation === state).length])),
       needStates: Object.fromEntries([...new Set(p.needEvidence.map((n) => n.state))].sort().map((state) => [state, p.needEvidence.filter((n) => n.state === state).length])),
+      resourceSourceScreenCounts: { needsScreened: p.resourceSourceScreens.length, possibleSources: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.candidateCount, 0), unresolvedCharacters: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.unresolvedCharacterCount, 0) },
     })), resourceCommitments: Object.fromEntries(WOW_VERSIONS.map((version) => {
       const summary = buildErpResourceCommitmentSummary((input.erpProjects ?? []).filter((project) => project.version === version));
       return [version, { lineCount: summary.totalCount, linesWithReservations: summary.linesWithReservations, unknownSourceLines: summary.unknownSourceLines, overlappingScopeLines: summary.overlappingScopeLines, truncated: summary.truncated }];

@@ -1,4 +1,4 @@
-import type { StoredSnapshot } from "./store.ts";
+import type { StoredCharacterSummary, StoredSnapshot } from "./store.ts";
 import type { AccountCurrencies } from "./wowCurrencies.ts";
 import { parseOwnerKey, type SharedStorageProjection } from "./sharedStorage.ts";
 import type { WowVersion } from "./types.ts";
@@ -513,10 +513,69 @@ export interface ErpProjectView extends ErpProject {
   readonly historyEventCount: number;
   readonly historyTruncated: boolean;
   readonly needEvidence: readonly ErpNeedEvidence[];
+  readonly resourceSourceScreens: readonly ErpResourceSourceScreen[];
   readonly workOrderReadiness: readonly ErpWorkOrderReadiness[];
   readonly workOrderProgress: readonly ErpWorkOrderProgress[];
   readonly reservationReview: readonly { reservationId: string; state: "WITHIN_OBSERVED_SUPPLY" | "EXCEEDS_OBSERVED_SUPPLY" | "SUPPLY_UNKNOWN"; reservedQuantity: number; observedQuantity?: number; reason: string }[];
 }
+
+export interface ErpResourceSourceLocation {
+  readonly section: "bags" | "character bank";
+  readonly state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
+  readonly observedAt?: number;
+  readonly completeness?: string;
+  /** Exact quantity only when the section is completely identified and quantified. */
+  readonly quantity?: number;
+  /** Known positive matching quantity when total section contents are incomplete. */
+  readonly knownLowerBound?: number;
+}
+
+export interface ErpResourceSourceItem {
+  readonly itemRef: string;
+  readonly section: "bags" | "character bank";
+  readonly state: "OBSERVED" | "LAST_SEEN";
+  readonly quantity?: number;
+  readonly knownLowerBound?: number;
+  readonly observedAt?: number;
+}
+
+export interface ErpResourceSourceCandidate {
+  readonly sourceIdentityKey: string;
+  readonly sourceName: string;
+  readonly sourceSurname?: string;
+  readonly sourceRealm: string;
+  readonly needId: string;
+  readonly kind: "ITEM_ID" | "ITEM_REF";
+  readonly resourceKey: string;
+  readonly state: "OBSERVED" | "LAST_SEEN";
+  readonly observedQuantity?: number;
+  readonly potentialQuantity?: number;
+  readonly activeReservationQuantity: number;
+  readonly reservationState: "UNRESERVED" | "WITHIN_OBSERVED_SUPPLY" | "OVER_RESERVED" | "UNKNOWN";
+  readonly availableObservedLowerBound?: number;
+  readonly freshness: "recent" | "stale" | "unknown";
+  readonly observedAt?: number;
+  readonly locations: readonly ErpResourceSourceLocation[];
+  readonly matchingItems: readonly ErpResourceSourceItem[];
+  readonly unresolvedSections: readonly string[];
+  /** Roster co-location never establishes these cross-character facts. */
+  readonly accountMembership: "UNKNOWN";
+  readonly access: "UNKNOWN";
+  readonly transferability: "UNKNOWN";
+  readonly reason: string;
+}
+
+export interface ErpResourceSourceScreen {
+  readonly needId: string;
+  readonly destinationIdentityKey: string;
+  readonly scannedCharacterCount: number;
+  readonly unresolvedCharacterCount: number;
+  readonly candidateCount: number;
+  readonly candidatesTruncated: boolean;
+  readonly candidates: readonly ErpResourceSourceCandidate[];
+}
+
+const ERP_RESOURCE_SOURCE_CANDIDATE_LIMIT = 25;
 
 export interface ErpResourceCommitmentLine {
   readonly version: WowVersion;
@@ -634,6 +693,16 @@ export interface ErpWorkOrderReadiness {
   readonly unresolvedNeedIds: readonly string[];
   readonly actionTargetNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
+  readonly capabilityChecks?: readonly ErpCraftingCapabilityCheck[];
+  readonly reason: string;
+}
+
+export interface ErpCraftingCapabilityCheck {
+  readonly needId: string;
+  readonly kind: "PROFESSION" | "RECIPE";
+  readonly state: "SUPPORTED_FOR_ASSIGNEE" | "ASSIGNED_CHARACTER_MISSING" | "SOURCE_NOT_SELECTED" | "SOURCE_DIFFERS_FROM_ASSIGNEE" | "REQUIREMENT_NOT_MET" | "EVIDENCE_UNKNOWN";
+  readonly assignedIdentityKey?: string;
+  readonly evidenceSourceIdentityKey?: string;
   readonly reason: string;
 }
 
@@ -652,36 +721,130 @@ export interface ErpWorkOrderProgress {
   readonly reason: string;
 }
 
+function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvidence, allProjects: readonly ErpProject[], version: WowVersion): ErpNeedEvidence {
+  const scope = sourceScope(need);
+  if (!scope) return { ...evidence, reservationAssessment: { state: "UNKNOWN", activeQuantity: 0, reason: "No explicit source character or shared-storage owner was selected; roster co-location does not prove ownership or access." } };
+  const reservations = overlappingReservations(need, scope, version, allProjects);
+  const activeQuantity = reservations.reduce((sum, reservation) => sum + reservation.quantity, 0);
+  const ambiguous = reservations.some((reservation) => reservation.ambiguous);
+  const completeSupply = evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
+  const overReserved = evidence.observedQuantity !== undefined && activeQuantity > evidence.observedQuantity;
+  const capabilityResource = need.kind === "PROFESSION" || need.kind === "RECIPE";
+  const state = capabilityResource || ambiguous || evidence.observedQuantity === undefined || (overReserved && !completeSupply)
+    ? "UNKNOWN" as const
+    : overReserved ? "OVER_RESERVED" as const
+    : activeQuantity ? "WITHIN_OBSERVED_SUPPLY" as const : "UNRESERVED" as const;
+  const availableObservedLowerBound = !ambiguous && evidence.observedQuantity !== undefined && activeQuantity <= evidence.observedQuantity
+    ? evidence.observedQuantity - activeQuantity : undefined;
+  const reason = capabilityResource ? "Profession and recipe capabilities are not countable inventory units; reservations cannot be reconciled as quantities."
+    : ambiguous ? "Base item and exact-variant reservations overlap; their combined quantity cannot be allocated safely."
+    : state === "OVER_RESERVED" ? `Active reservations total ${activeQuantity}, exceeding ${evidence.observedQuantity} observed. Resolve the competing plans; inventory is unchanged.`
+    : state === "UNKNOWN" ? "Reservation availability is unknown because the source or relevant supply evidence is incomplete."
+    : activeQuantity ? `At least ${availableObservedLowerBound} observed units remain outside ${activeQuantity} explicitly reserved units; this is not proof of transferability or a live balance.`
+    : evidence.observedQuantity !== undefined ? `No active reservations; ${evidence.observedQuantity} units are observed at this source, subject to freshness and completeness.`
+    : "No explicit source supply is available to assess reservations.";
+  return { ...evidence, reservationAssessment: { state, activeQuantity, ...(availableObservedLowerBound !== undefined ? { availableObservedLowerBound } : {}), reason } };
+}
+
+function resourceSourceLocations(snapshot: StoredSnapshot, need: ErpResourceNeed): ErpResourceSourceLocation[] {
+  const locations: ErpResourceSourceLocation[] = [];
+  for (const [name, section] of [["bags", snapshot.parsed.bags], ["character bank", snapshot.parsed.bank]] as const) {
+    let matched = 0;
+    let sectionHasUnknownRows = false;
+    for (const row of section.items) {
+      if (!row.itemRef) { sectionHasUnknownRows = true; continue; }
+      const matches = need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : itemId(row.itemRef) === Number(need.resourceKey);
+      if (!matches) continue;
+      if (row.qty === undefined) sectionHasUnknownRows = true;
+      else matched += row.qty;
+    }
+    const complete = section.status.state !== "UNKNOWN" && section.status.completeness?.toLowerCase() === "complete" && !sectionHasUnknownRows;
+    locations.push({ section: name, state: section.status.state, ...(section.status.observedAt !== undefined ? { observedAt: section.status.observedAt } : {}), ...(section.status.completeness ? { completeness: section.status.completeness } : {}), ...(complete ? { quantity: matched } : matched > 0 ? { knownLowerBound: matched } : {}) });
+  }
+  return locations;
+}
+
+function resourceSourceItems(snapshot: StoredSnapshot, need: ErpResourceNeed): ErpResourceSourceItem[] {
+  const matched = new Map<string, ErpResourceSourceItem & { hasUnknownQuantity: boolean }>();
+  for (const [sectionName, section] of [["bags", snapshot.parsed.bags], ["character bank", snapshot.parsed.bank]] as const) {
+    if (section.status.state === "UNKNOWN") continue;
+    for (const row of section.items) {
+      if (!row.itemRef) continue;
+      const matches = need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : itemId(row.itemRef) === Number(need.resourceKey);
+      if (!matches) continue;
+      const key = `${sectionName}\u0000${section.status.state}\u0000${row.itemRef}`;
+      const existing = matched.get(key);
+      matched.set(key, {
+        itemRef: row.itemRef, section: sectionName, state: section.status.state,
+        ...(section.status.observedAt !== undefined ? { observedAt: section.status.observedAt } : {}),
+        quantity: (existing?.quantity ?? 0) + (row.qty ?? 0),
+        hasUnknownQuantity: Boolean(existing?.hasUnknownQuantity || row.qty === undefined),
+      });
+    }
+  }
+  return [...matched.values()].map(({ hasUnknownQuantity, quantity, ...item }) => ({ ...item, ...(hasUnknownQuantity ? ((quantity ?? 0) > 0 ? { knownLowerBound: quantity! } : {}) : { quantity }) })).sort((a, b) => a.section.localeCompare(b.section) || a.itemRef.localeCompare(b.itemRef) || a.state.localeCompare(b.state));
+}
+
+function resourceSourceScreens(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now: number, currencies: AccountCurrencies | undefined, candidateSources: readonly StoredCharacterSummary[]): ErpResourceSourceScreen[] {
+  const sameVersionCandidates = candidateSources.filter((character) => character.version === project.version);
+  return project.needs.flatMap((need) => {
+    const destinationIdentityKey = need.destinationIdentityKey;
+    if (!destinationIdentityKey || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const sources = sameVersionCandidates.filter((character) => character.identityKey !== destinationIdentityKey);
+    let unresolvedCharacterCount = 0;
+    const candidates: ErpResourceSourceCandidate[] = [];
+    for (const character of sources) {
+      const snapshots = snapshotsFor(character.identityKey);
+      const candidateNeed: ErpResourceNeed = { ...need, sourceIdentityKey: character.identityKey, sourceOwnerKey: undefined };
+      const rawEvidence = assessErpNeed(candidateNeed, snapshots, now, currencies, project.version);
+      const evidence = applyReservationAssessment(candidateNeed, rawEvidence, allProjects, project.version);
+      const latest = newest(snapshots);
+      const locations = latest ? resourceSourceLocations(latest, candidateNeed) : [];
+      const matchingItems = latest ? resourceSourceItems(latest, candidateNeed) : [];
+      const currentComplete = locations.length === 2 && locations.every((location) => location.state === "OBSERVED" && location.quantity !== undefined);
+      if (!currentComplete || evidence.freshness !== "recent" || evidence.state === "UNKNOWN") unresolvedCharacterCount++;
+      const observedQuantity = evidence.observedQuantity;
+      const potentialQuantity = evidence.potentialQuantity;
+      if (!(observedQuantity !== undefined && observedQuantity > 0) && !(potentialQuantity !== undefined && potentialQuantity > 0)) continue;
+      const provenance = observedQuantity !== undefined && observedQuantity > 0 ? "OBSERVED" as const : "LAST_SEEN" as const;
+      candidates.push({
+        sourceIdentityKey: character.identityKey, sourceName: character.name, ...(character.surname ? { sourceSurname: character.surname } : {}), sourceRealm: character.realm,
+        needId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, state: provenance,
+        ...(observedQuantity !== undefined && observedQuantity > 0 ? { observedQuantity } : {}), ...(potentialQuantity !== undefined && potentialQuantity > 0 ? { potentialQuantity } : {}),
+        activeReservationQuantity: evidence.reservationAssessment?.activeQuantity ?? 0, reservationState: evidence.reservationAssessment?.state ?? "UNKNOWN",
+        ...(evidence.reservationAssessment?.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: evidence.reservationAssessment.availableObservedLowerBound } : {}),
+        freshness: evidence.freshness, ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), locations, matchingItems,
+        unresolvedSections: evidence.unresolvedSections, accountMembership: "UNKNOWN", access: "UNKNOWN", transferability: "UNKNOWN",
+        reason: `${provenance === "OBSERVED" ? "A matching quantity was observed" : "A matching quantity was recorded only in historical evidence"} on this same-version character. This source screen does not establish account membership, access, or a transfer route.${evidence.unresolvedSections.length ? ` Unresolved evidence: ${evidence.unresolvedSections.join(", ")}.` : ""}`,
+      });
+    }
+    candidates.sort((a, b) => (a.state === b.state ? 0 : a.state === "OBSERVED" ? -1 : 1) || a.sourceRealm.localeCompare(b.sourceRealm) || a.sourceName.localeCompare(b.sourceName) || a.sourceIdentityKey.localeCompare(b.sourceIdentityKey));
+    return [{ needId: need.stableId, destinationIdentityKey, scannedCharacterCount: sources.length, unresolvedCharacterCount, candidateCount: candidates.length, candidatesTruncated: candidates.length > ERP_RESOURCE_SOURCE_CANDIDATE_LIMIT, candidates: candidates.slice(0, ERP_RESOURCE_SOURCE_CANDIDATE_LIMIT) }];
+  });
+}
+
 /** Read-time projection; recorded plans never mutate or claim observed inventory. */
-export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
+export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection, candidateSources: readonly StoredCharacterSummary[] = []): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
   const needEvidence = project.needs.map((need) => {
-    const evidence = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [], now, currencies, project.version);
-    const scope = sourceScope(need);
-    if (!scope) return { ...evidence, reservationAssessment: { state: "UNKNOWN" as const, activeQuantity: 0, reason: "No explicit source character or shared-storage owner was selected; roster co-location does not prove ownership or access." } };
-    const reservations = overlappingReservations(need, scope, project.version, allProjects);
-    const activeQuantity = reservations.reduce((sum, reservation) => sum + reservation.quantity, 0);
-    const ambiguous = reservations.some((reservation) => reservation.ambiguous);
-    const completeSupply = evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
-    const overReserved = evidence.observedQuantity !== undefined && activeQuantity > evidence.observedQuantity;
-    const capabilityResource = need.kind === "PROFESSION" || need.kind === "RECIPE";
-    const state = capabilityResource || ambiguous || evidence.observedQuantity === undefined || (overReserved && !completeSupply)
-      ? "UNKNOWN" as const
-      : overReserved ? "OVER_RESERVED" as const
-      : activeQuantity ? "WITHIN_OBSERVED_SUPPLY" as const : "UNRESERVED" as const;
-    const availableObservedLowerBound = !ambiguous && evidence.observedQuantity !== undefined && activeQuantity <= evidence.observedQuantity
-      ? evidence.observedQuantity - activeQuantity : undefined;
-    const reason = capabilityResource ? "Profession and recipe capabilities are not countable inventory units; reservations cannot be reconciled as quantities."
-      : ambiguous ? "Base item and exact-variant reservations overlap; their combined quantity cannot be allocated safely."
-      : state === "OVER_RESERVED" ? `Active reservations total ${activeQuantity}, exceeding ${evidence.observedQuantity} observed. Resolve the competing plans; inventory is unchanged.`
-      : state === "UNKNOWN" ? "Reservation availability is unknown because the source or relevant supply evidence is incomplete."
-      : activeQuantity ? `At least ${availableObservedLowerBound} observed units remain outside ${activeQuantity} explicitly reserved units; this is not proof of transferability or a live balance.`
-      : evidence.observedQuantity !== undefined ? `No active reservations; ${evidence.observedQuantity} units are observed at this source, subject to freshness and completeness.`
-      : "No explicit source supply is available to assess reservations.";
-    return { ...evidence, reservationAssessment: { state, activeQuantity, ...(availableObservedLowerBound !== undefined ? { availableObservedLowerBound } : {}), reason } };
+    const raw = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [], now, currencies, project.version);
+    return applyReservationAssessment(need, raw, allProjects, project.version);
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
   const workOrderReadiness: ErpWorkOrderReadiness[] = project.workOrders.map((order) => {
-    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[] };
+    const capabilityChecks: ErpCraftingCapabilityCheck[] = order.kind === "CRAFT" ? order.resourceNeedIds.flatMap<ErpCraftingCapabilityCheck>((needId): ErpCraftingCapabilityCheck[] => {
+      const need = project.needs.find((entry) => entry.stableId === needId);
+      if (!need || (need.kind !== "PROFESSION" && need.kind !== "RECIPE")) return [];
+      const evidence = needEvidenceById.get(needId);
+      const context = need.kind === "RECIPE" ? `Exact recipe ${need.resourceKey}` : `Exact profession “${need.resourceKey}” at skill ${need.requiredQuantity}`;
+      if (!order.assignedIdentityKey) return [{ needId, kind: need.kind, state: "ASSIGNED_CHARACTER_MISSING", evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} cannot be screened against a crafter until a character is assigned.` }];
+      if (!need.sourceIdentityKey) return [{ needId, kind: need.kind, state: "SOURCE_NOT_SELECTED", assignedIdentityKey: order.assignedIdentityKey, reason: `${context} has no character-specific evidence source; other roster observations are not substituted.` }];
+      if (need.sourceIdentityKey !== order.assignedIdentityKey) return [{ needId, kind: need.kind, state: "SOURCE_DIFFERS_FROM_ASSIGNEE", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} was observed for a different character than the assigned crafter; character capabilities are not shared across the roster.` }];
+      if (!evidence || evidence.freshness !== "recent") return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} evidence is missing, historical, stale, or has unknown freshness for the assigned character.` }];
+      if (evidence.state === "COVERED_BY_OBSERVED") return [{ needId, kind: need.kind, state: "SUPPORTED_FOR_ASSIGNEE", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} is directly observed recently for the assigned character. This supports only the recorded skill/learned fact, not unlocks or craftability.` }];
+      if (evidence.state === "SHORTFALL_OBSERVED") return [{ needId, kind: need.kind, state: "REQUIREMENT_NOT_MET", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `Current evidence does not meet ${context} for the assigned character.` }];
+      return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: evidence.reason }];
+    }) : [];
+    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));
@@ -696,6 +859,10 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     if (project.status !== "ACTIVE") return { ...base, state: "PROJECT_NOT_ACTIVE", reason: `The project is ${project.status}; no next action is presented until the player resumes an active project.` };
     const blockingWorkOrderIds = order.dependsOn.filter((dependencyId) => project.workOrders.find((candidate) => candidate.stableId === dependencyId)?.status !== "COMPLETED");
     if (blockingWorkOrderIds.length) return { ...base, state: "BLOCKED_BY_DEPENDENCY", blockingWorkOrderIds, reason: `Complete and record these prerequisite work orders first: ${blockingWorkOrderIds.join(", ")}. A cancelled prerequisite does not satisfy a dependency.` };
+    const unmetCapabilities = capabilityChecks.filter((check) => check.state === "REQUIREMENT_NOT_MET");
+    if (unmetCapabilities.length) return { ...base, state: "OBSERVED_RESOURCE_SHORTFALL", unresolvedNeedIds: unmetCapabilities.map((check) => check.needId), reason: `${unmetCapabilities.map((check) => check.reason).join(" ")} This is a character capability shortfall, not a substitute crafter recommendation.` };
+    const unresolvedCapabilities = capabilityChecks.filter((check) => check.state !== "SUPPORTED_FOR_ASSIGNEE");
+    if (unresolvedCapabilities.length) return { ...base, state: "WAITING_FOR_EVIDENCE", unresolvedNeedIds: unresolvedCapabilities.map((check) => check.needId), reason: `Crafting capability evidence is not matched to the assigned character: ${unresolvedCapabilities.map((check) => check.reason).join(" ")}` };
     const observedShortfalls = staleOrUnknown.filter((evidence) => evidence.state === "SHORTFALL_OBSERVED" && evidence.freshness === "recent");
     const manualSupplyTargets = observedShortfalls.filter((evidence) => {
       const need = project.needs.find((candidate) => candidate.stableId === evidence.needId);
@@ -772,5 +939,5 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       : totalReserved <= supply.observedQuantity ? "WITHIN_OBSERVED_SUPPLY" : "EXCEEDS_OBSERVED_SUPPLY";
     reservationReview.push({ reservationId: reservation.stableId, state, reservedQuantity: totalReserved, ...(supply.observedQuantity !== undefined ? { observedQuantity: supply.observedQuantity } : {}), reason: ambiguousItemScope ? `Reservations for base item ${needItemId(ownNeed)} and exact item variants overlap, but their quantities cannot be reconciled safely.` : state === "WITHIN_OBSERVED_SUPPLY" ? `Explicit reservations total ${totalReserved}; the selected source has ${supply.observedQuantity} observed at ${supply.freshness} freshness. Intent does not establish access or transferability.` : state === "EXCEEDS_OBSERVED_SUPPLY" ? `Reservations total ${totalReserved}, exceeding ${supply.observedQuantity} observed. Replanning is needed; no inventory is changed.` : `Supply for ${ownNeed.label} at the selected source is UNKNOWN; the reservation is intent, not possession.` });
   }
-  return { ...project, needEvidence, workOrderReadiness, workOrderProgress, reservationReview };
+  return { ...project, needEvidence, resourceSourceScreens: resourceSourceScreens(project, snapshotsFor, allProjects, now, currencies, candidateSources), workOrderReadiness, workOrderProgress, reservationReview };
 }

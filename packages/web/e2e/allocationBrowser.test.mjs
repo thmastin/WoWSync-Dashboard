@@ -103,6 +103,24 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
       warband: warbandSection("OBSERVED", [], now),
       guild: guildSection("gclub-project-fixture", [], now),
     }));
+    store.importSnapshot(renderExport({
+      name: "Other Potential Holder",
+      realm: "Thrall",
+      generated: now,
+      bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now),
+      bank: observedSection([], now),
+      warband: warbandSection("OBSERVED", [], now),
+      guild: guildSection("gclub-other-holder", [], now),
+    }));
+    store.importSnapshot(renderExport({
+      name: "Another Potential Holder",
+      realm: "Aerie Peak",
+      generated: now,
+      bags: observedSection([row(ITEM_ID, 3, { name: "Mycobloom" })], now),
+      bank: observedSection([], now),
+      warband: warbandSection("OBSERVED", [], now),
+      guild: guildSection("gclub-another-holder", [], now),
+    }));
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address();
     assert.ok(address && typeof address !== "string");
@@ -128,18 +146,37 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await needForm.getByLabel("Resource key").fill(String(ITEM_ID));
     await needForm.getByLabel("Label").fill("Mycobloom");
     await needForm.getByLabel("Quantity").fill("20");
-    await needForm.getByLabel("Source character or shared owner").selectOption({ label: "Project Fixture — Cairne" });
+    await needForm.getByLabel("Source character or shared owner").selectOption({ label: "None — supply UNKNOWN" });
+    await needForm.getByLabel("Intended recipient").selectOption({ label: "Project Fixture — Cairne" });
     await needForm.getByRole("button", { name: "Add requirement" }).click();
     const needEvidence = projectCard.locator(".erp-need-list li").first();
     await needEvidence.waitFor();
-    const needEvidenceText = await needEvidence.innerText();
-    assert.match(needEvidenceText, /Covered by observed supply/, needEvidenceText);
+    let needEvidenceText = await needEvidence.innerText();
+    assert.match(needEvidenceText, /Supply unknown/, needEvidenceText);
+    assert.match(needEvidenceText, /Possible observed sources for this intended recipient/);
+    assert.match(needEvidenceText, /Other Potential Holder — Thrall/);
+    assert.match(needEvidenceText, /item:940101/);
+    assert.match(needEvidenceText, /Base-item search groups these exact variants/);
+    assert.match(needEvidenceText, /Account membership, access, and transferability: UNKNOWN/);
+    await needEvidence.getByRole("button", { name: "Set planned source" }).first().click();
+    await needEvidence.getByText(/Recorded as the planned source/).waitFor();
+    needEvidenceText = await needEvidence.innerText();
+    assert.match(needEvidenceText, /Observed shortfall/, needEvidenceText);
+    assert.match(needEvidenceText, /Source: (Other Potential Holder — Thrall|Another Potential Holder — Aerie Peak)/);
+    assert.match(needEvidenceText, /Recorded as the planned source \(intent only\)/);
+    page.once("dialog", (dialog) => dialog.accept("1"));
+    await needEvidence.getByRole("button", { name: "Reserve" }).click();
+    await needEvidence.locator(".erp-status").filter({ hasText: /1 reserved across overlapping plans/ }).waitFor();
+    const sourceChange = needEvidence.getByRole("button", { name: "Set planned source" });
+    assert.equal(await sourceChange.count(), 1, "the selected source is labelled as planned; the other candidate offers a change action");
+    assert.equal(await sourceChange.evaluateAll((buttons) => buttons.every((button) => button.disabled)), true, "changing source while a reservation is active is blocked rather than causing a rejected project update");
+    await needEvidence.getByText(/Release this need’s active reservation before changing its planned source/).waitFor();
     const commitmentPanel = page.getByRole("region", { name: "Resource commitments" });
     await commitmentPanel.waitFor();
     const commitmentText = await commitmentPanel.innerText();
     assert.match(commitmentText, /Mycobloom/);
     assert.match(commitmentText, /20 requested/, "planning intent is visible as its own quantity");
-    assert.match(commitmentText, /40/, "observed stock is shown independently from planned demand");
+    assert.match(commitmentText, /2/, "observed source stock is shown independently from planned demand");
     assert.match(commitmentText, /Freshness:/);
 
     await needForm.getByRole("button", { name: "Close" }).click();
@@ -152,8 +189,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     const order = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Manually inspect the stored supply" });
     await order.waitFor();
     const progressText = await order.innerText();
-    assert.match(progressText, /Linked resource needs currently covered/, progressText);
-    assert.match(progressText, /not completion or the action that produced it/, progressText);
+    assert.match(progressText, /Current linked resource shortfall/, progressText);
+    assert.match(progressText, /INVESTIGATE · PLANNED/, "observed stock shortfall does not auto-complete the manual work order");
+    assert.doesNotMatch(progressText, /COMPLETED/);
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
   } finally {
     if (browser) await browser.close();

@@ -14,5 +14,5 @@ const LABELS: Record<ErpWorkOrderReadiness["state"], string> = {
 
 export function ErpWorkOrderReadinessLine({ readiness }: { readiness?: ErpWorkOrderReadiness }) {
   if (!readiness) return <p className="erp-readiness">Plan readiness is unknown; no assessment is available.</p>;
-  return <p className={`erp-readiness erp-readiness-${readiness.state.toLowerCase()}`}><strong>{LABELS[readiness.state]}:</strong> {readiness.reason}</p>;
+  return <div className={`erp-readiness erp-readiness-${readiness.state.toLowerCase()}`}><p><strong>{LABELS[readiness.state]}:</strong> {readiness.reason}</p>{readiness.capabilityChecks?.length ? <ul aria-label="Crafting capability evidence">{readiness.capabilityChecks.map((check) => <li key={check.needId}><strong>{check.kind === "RECIPE" ? "Recipe" : "Profession skill"}:</strong> {check.reason}</li>)}</ul> : null}</div>;
 }

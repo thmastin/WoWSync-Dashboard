@@ -1352,6 +1352,12 @@ button.roster-name-link {
 .erp-need-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .erp-need-list li p { margin: 6px 0; color: #c2cad6; }
 .erp-need-list li .erp-change-note { padding: 8px 10px; border-left: 2px solid #8096b0; background: #ffffff08; color: #cbd4df; font-size: .82rem; }
+.erp-source-screen { margin-top: 12px; padding: 9px 12px; border-left: 2px solid #a58ac9; background: #ffffff08; }
+.erp-source-screen p { font-size: .84rem; }
+.erp-source-screen ul { display: grid; gap: 8px; margin: 8px 0; padding-left: 18px; }
+.erp-source-screen li { display: block; padding: 0; background: transparent; }
+.erp-source-screen small { display: block; margin-top: 4px; color: #aeb7c5; }
+.erp-source-screen code { overflow-wrap: anywhere; color: #d7c8ef; }
 .erp-need-list small, .erp-work-order-list small { display: block; margin-top: 5px; color: #9da8b8; }
 .erp-resource-commitments { margin: 20px 0 26px; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
 .erp-resource-commitments > p { color: #b8c2d0; max-width: 1000px; }

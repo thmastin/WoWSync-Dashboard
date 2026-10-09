@@ -620,13 +620,14 @@ export class DashboardReadModel {
     requireVersion(query.version);
     const projects = this.store.listErpProjects(query.version);
     const currencies = this.store.listVersionCurrencies(query.version);
+    const candidateSources = this.store.listCharacters(query.version);
     const needsSharedStorage = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined));
     const sharedStorage = needsSharedStorage ? this.store.projectSharedStorage() : undefined;
     return projects.map((project) => {
       const historyEventCount = this.store.countErpProjectHistory(project.stableId);
       const history = this.store.listErpProjectHistory(project.stableId, 50);
       return {
-        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage),
+        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage, candidateSources),
         history, historyEventCount, historyTruncated: historyEventCount > history.length,
       };
     });
