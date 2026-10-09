@@ -15,6 +15,7 @@ import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
 import AllocationTab from "./components/AllocationTab.tsx";
 import ForeverGearReview from "./components/ForeverGearReview.tsx";
+import ErpProjectsWorkbench from "./components/ErpProjectsWorkbench.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -265,6 +266,9 @@ export default function App() {
                 <button className={tabView === "research" ? "active" : ""} onClick={() => navigate(patchRoute(route, { version: "retail", view: "research" }))}>
                   Research
                 </button>
+                <button className={tabView === "projects" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "projects" }))}>
+                  Projects &amp; Work Orders
+                </button>
                 {activeVersion === "retail" && (
                   <>
                     <button className={tabView === "allocation" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "allocation" }))}>
@@ -282,7 +286,7 @@ export default function App() {
                 )}
               </div>
 
-              {route.view === "shared" || route.view === "allocation" ? null : scoped && scoped.isRealmScoped ? (
+              {route.view === "shared" || route.view === "allocation" || route.view === "projects" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
@@ -303,6 +307,7 @@ export default function App() {
             </div>
 
             {route.view === "allocation" && <AllocationTab activeVersion={activeVersion} refreshTick={refreshTick} />}
+            {route.view === "projects" && <ErpProjectsWorkbench version={activeVersion} refreshTick={refreshTick} characters={facts?.characters ?? []} onRefresh={refresh} />}
             {scoped && route.view === "gear-review" && activeVersion === "forever" && <ForeverGearReview characters={scoped.characters} refreshTick={refreshTick} onOpenCharacter={openCharacter} />}
             {route.view === "shared" && <SharedStorageView />}
             {route.view === "research" && <MidnightResearch />}
@@ -315,10 +320,10 @@ export default function App() {
                 onOpenCharacter={openCharacter}
               />
             )}
-            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && route.view !== "projects" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && route.view !== "projects" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster

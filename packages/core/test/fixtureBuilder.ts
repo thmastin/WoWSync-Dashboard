@@ -47,8 +47,8 @@ export interface FixtureEquipmentSlot {
 
 export interface FixtureProfession {
   name: string;
-  skill: number;
-  maxSkill: number;
+  skill?: number;
+  maxSkill?: number;
   skillLineID?: number;
   tier?: string;
   expansion?: string;
@@ -127,6 +127,7 @@ export interface FixtureOptions {
   bags?: {
     containers?: FixtureContainer[];
     unknown?: boolean;
+    partial?: boolean;
   };
   bank?: {
     containers?: FixtureContainer[];
@@ -135,11 +136,15 @@ export interface FixtureOptions {
     purchasedBagSlots?: number;
     lastSeen?: boolean;
     unknown?: boolean;
+    partial?: boolean;
   };
   professions?: {
     entries?: FixtureProfession[];
     retail?: boolean;
     unknown?: boolean;
+    lastSeen?: boolean;
+    partial?: boolean;
+    observedAt?: number;
   };
   spells?: {
     entries?: FixtureSpell[];
@@ -295,7 +300,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
+      out.push(field("State", `OBSERVED; ${b.partial ? "partial" : "complete"}; observed=` + generatedAt));
       out.push(...inventoryBody(b.containers ?? []));
     }
     sections.push(out.join("\n"));
@@ -310,7 +315,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("Reason", "Not observed"));
     } else {
       if (bk.snapshotVisit !== undefined) out.push(field("LastVisit", bk.snapshotVisit));
-      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; complete; observed=` + generatedAt));
+      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; ${bk.partial ? "partial" : "complete"}; observed=` + generatedAt));
       if (bk.coverage) out.push(field("Coverage", bk.coverage));
       if (bk.snapshotVisit !== undefined) out.push(field("SnapshotVisit", bk.snapshotVisit));
       if (bk.purchasedBagSlots !== undefined) out.push(field("PurchasedBankBagSlots", bk.purchasedBagSlots));
@@ -327,7 +332,8 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
+      const professionState = p.lastSeen ? "LAST_SEEN" : "OBSERVED";
+      out.push(field("State", `${professionState}; ${p.partial ? "partial" : "complete"}${p.lastSeen && p.observedAt === undefined ? "" : `; observed=${p.observedAt ?? generatedAt}`}`));
       if (p.retail) {
         out.push(row("profession", "skill", "maxSkill", "skillLineID", "tier", "expansion", "category"));
         for (const e of p.entries ?? []) {

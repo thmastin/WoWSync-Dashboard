@@ -105,3 +105,13 @@ test("detail from=professions survives round-trip", () => {
   assert.equal(again.view, "detail");
   assert.equal(again.from, "professions");
 });
+
+test("ERP project workbench routes independently within each supported version", () => {
+  for (const version of ["classic-era", "tbc-anniversary", "retail", "forever"] as const) {
+    const route = { ...defaultRoute(version), view: "projects" as const };
+    const again = parseHash(formatHash(route), "retail");
+    assert.equal(again.version, version);
+    assert.equal(again.view, "projects");
+    assert.ok(sameRoute(route, again));
+  }
+});

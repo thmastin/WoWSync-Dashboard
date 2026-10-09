@@ -24,6 +24,7 @@ import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.t
 import { hostGuard } from "./net.ts";
 import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
 import { registerDemandRoutes } from "./demandRoutes.ts";
+import { registerErpProjectRoutes } from "./erpProjectRoutes.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -70,6 +71,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   const selfOrigin = options.selfOrigin ?? `http://127.0.0.1:${port}`;
   if (options.allowedHosts) app.use(hostGuard(options.allowedHosts));
   app.use(express.json({ limit: "10mb" }));
+  registerErpProjectRoutes(app, store);
 
   app.get("/api/versions", (_req, res) => {
     const summaries = store.listVersions();

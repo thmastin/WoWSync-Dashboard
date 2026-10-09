@@ -704,3 +704,30 @@ never deleted; no direct SQLite write). No ACTIVE validation demand remained.
 WoW evidence -> DEV SQLite -> explicit demand (API) -> DashboardReadModel.getAllocationReview
              -> read-only MCP get_allocation_review -> Secure MCP Tunnel -> ChatGPT
 ```
+
+## Feature-branch extension: persistent ERP planning
+
+The Forever development branch adds an additive planning layer documented in
+[`ERP_PLANNING.md`](ERP_PLANNING.md). It extends the existing evidence/read-model architecture with
+version-scoped project intent, resource needs, reservations, and manual work orders. Detailed
+semantics and validation are implemented in `packages/core/src/erpProjects.ts`; persistence uses an
+additive `erp_projects` table with optimistic revision checks. AccountContext schema 7 carries a
+compact summary, while REST, read-only MCP, and the Projects & Work Orders tab use the same core
+projection.
+
+This branch supports evidence checks for exact itemString, declared base item ID, gold copper,
+exact-name profession skill, and explicitly character-scoped Retail currency IDs. Retail item needs
+may select an existing Warband or guild owner as a distinct storage source. Shared owner evidence is
+reused from the immutable journal projection; Warband remains installation-local, guild contents
+remain guild-owned, and observed location/quantity does not establish character access or a transfer
+route. Partial scans can prove positive lower bounds but not exhaustive shortfalls. Currency and
+recipe needs in other versions remain unsupported. Item changes compare only complete OBSERVED
+sections from adjacent snapshots of the same selected character and are explicitly non-causal.
+Reservations aggregate only across matching version/resource/explicit source scopes; unseen storage
+and overlapping base-item/variant reservations remain UNKNOWN. Completion requires player-entered
+notes. Nothing in this layer moves or uses game resources.
+
+This is feature-branch development, not a main-branch or persistent-DEV capability. It has automated
+coverage but no browser, DEV, game, or production validation. The broader ERP roadmap remains open
+for recipes/crafting feasibility, non-Retail currency and shared-storage evidence, account/access
+scope, procurement economics, project history, and evidence-based completion reconciliation.

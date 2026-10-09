@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft } from "./erpProjects.ts";
 import {
   DemandConflictError,
   storedDemandToExplicitDemand,
@@ -276,6 +277,18 @@ CREATE TABLE IF NOT EXISTS demands (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_demands_active_key
   ON demands(game_version, demand_type, base_item_id) WHERE status = 'ACTIVE';
+
+-- User-authored ERP planning state. This is intent and manual execution state, never observed game state.
+-- Aggregate JSON keeps work orders, explicit resource needs, and reservations transactionally versioned.
+CREATE TABLE IF NOT EXISTS erp_projects (
+  stable_id TEXT PRIMARY KEY,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  project_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_erp_projects_version_status ON erp_projects(game_version, updated_at DESC);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -1541,7 +1554,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
       foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
       foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm }));
     }
-    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverGearAllocations });
+    const erpProjects = WOW_VERSIONS.flatMap((version) => readModel.getErpProjects({ version }));
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverGearAllocations, erpProjects });
   }
 
   // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------
@@ -1553,6 +1567,49 @@ export class SqliteSnapshotStore implements SnapshotStore {
   listDemands(version: VersionOrUnknown): ExplicitDemand[] {
     if (version !== "retail") return [];
     return many<DemandRow>(this.stmts.demandsForVersion, version).map((row) => storedDemandToExplicitDemand(toStoredDemand(row)));
+  }
+
+  listErpProjects(version: VersionOrUnknown): ErpProject[] {
+    if (version === "unknown-version") return [];
+    const rows = many<{ project_json: string }>(this.db.prepare("SELECT project_json FROM erp_projects WHERE game_version = ? ORDER BY updated_at DESC, stable_id"), version);
+    return rows.map((row) => JSON.parse(row.project_json) as ErpProject);
+  }
+
+  getErpProject(stableId: string): ErpProject | undefined {
+    const row = one<{ project_json: string }>(this.db.prepare("SELECT project_json FROM erp_projects WHERE stable_id = ?"), stableId);
+    return row ? JSON.parse(row.project_json) as ErpProject : undefined;
+  }
+
+  createErpProject(input: ErpProjectDraft): ErpProject {
+    const now = Math.floor(Date.now() / 1000);
+    const project: ErpProject = {
+      stableId: `project_${randomUUID()}`, version: input.version, title: input.title.trim(),
+      ...(input.objective !== undefined ? { objective: input.objective.trim() } : {}), status: input.status ?? "ACTIVE", priority: input.priority ?? 3,
+      createdAt: now, updatedAt: now, revision: 1, needs: input.needs ?? [], reservations: input.reservations ?? [], workOrders: input.workOrders ?? [],
+    };
+    validateErpProject(project, (key) => this.getCharacter(key)?.version === project.version);
+    this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
+      .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
+    return project;
+  }
+
+  updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined {
+    const existing = this.getErpProject(project.stableId);
+    if (!existing) return undefined;
+    if (!Number.isSafeInteger(expectedRevision) || existing.revision !== expectedRevision) throw new ErpProjectConflictError();
+    if (project.version !== existing.version || project.createdAt !== existing.createdAt) throw new TypeError("Project version and creation time are immutable.");
+    const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
+    validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+    const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
+      .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
+    if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
+    return updated;
+  }
+
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined {
+    const project = this.getErpProject(stableId);
+    if (!project) return undefined;
+    return this.updateErpProject({ ...project, status }, expectedRevision);
   }
 
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
@@ -1638,6 +1695,12 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   }
   listDemands(version: VersionOrUnknown): ExplicitDemand[] {
     return this.store.listDemands(version);
+  }
+  listErpProjects(version: VersionOrUnknown): ErpProject[] {
+    return this.store.listErpProjects(version);
+  }
+  getErpProject(stableId: string): ErpProject | undefined {
+    return this.store.getErpProject(stableId);
   }
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
     return this.store.getActiveDemand(version, demandType, baseItemId);

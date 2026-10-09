@@ -515,6 +515,7 @@ export interface AccountContext {
   schemaVersion: string;
   generatedAt: number;
   versions: Record<string, AccountContextVersionSummary>;
+  planning?: { projects: Array<{ stableId: string; version: string; title: string; status: string; priority: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; needStates: Record<string, number> }> };
 }
 
 // --- "Ask My Account" (LLM POC) ---

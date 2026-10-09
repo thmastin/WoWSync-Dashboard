@@ -10,6 +10,7 @@ import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } fr
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
+import type { ErpProject, ErpProjectDraft } from "./erpProjects.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -209,6 +210,9 @@ export interface SnapshotReadStore {
    * represents CURRENT USER INTENT, not an audit/event history (see demand.ts).
    */
   listDemands(version: VersionOrUnknown): ExplicitDemand[];
+  /** Explicit user-authored ERP projects for one version. No observations are inferred from this intent. */
+  listErpProjects(version: VersionOrUnknown): ErpProject[];
+  getErpProject(stableId: string): ErpProject | undefined;
   /**
    * The one ACTIVE demand for this exact (version, demand type, commodity) key, if any. Persistence and
    * the API both enforce at most one; this read method simply reflects that invariant.
@@ -300,4 +304,8 @@ export interface SnapshotStore extends SnapshotReadStore {
   updateDemand(stableId: string, input: UpdateDemandInput): ExplicitDemand | undefined;
   /** Sets a demand's status to INACTIVE. Not a delete: the row (and its history) remains. Returns undefined if stableId does not exist. */
   deactivateDemand(stableId: string): ExplicitDemand | undefined;
+  createErpProject(input: ErpProjectDraft): ErpProject;
+  /** Optimistic concurrency: returns undefined for a missing project and throws ErpProjectConflictError on stale revision. */
+  updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined;
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined;
 }

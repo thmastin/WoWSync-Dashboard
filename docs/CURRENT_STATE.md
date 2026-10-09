@@ -1,5 +1,25 @@
 # Current WoWSync state
 
+**Feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
+`feature/forever-gear-observation` extends the shared core with version-scoped persistent projects,
+resource needs, cross-project reservations, manual work orders, project summaries in AccountContext,
+REST CRUD/status routes, read-only MCP `get_erp_projects`, and a Dashboard Projects & Work Orders
+workspace. Item/base-item/gold/exact-name profession evidence is evaluated from explicitly selected
+character observations; current same-character export pairs expose non-causal section-level deltas.
+Retail character-scoped currency evidence and existing Retail Warband/Guild item observations can be
+selected explicitly as separate resource sources. Partial scans may establish a positive lower bound,
+but cannot establish exhaustive shortfall; shared locations do not establish player ownership, access,
+or transfer route. Currency, guild, and Warband evidence preserve their own scope and freshness.
+`npm.cmd run validate:forever` passed after the shared-owner extension: core 781/781, MCP 2/2,
+server 247 total (245 pass, 2 skipped), and web 286/286; all four TypeScript checks and production web
+build passed. The build retains the large-chunk advisory (~519 kB). Focused independent review found
+no blockers; its partial-Warband positive-lower-bound coverage request is now covered by a regression
+test. No browser, persistent DEV, game, or production validation has occurred. See
+[`ERP_PLANNING.md`](ERP_PLANNING.md) and the 2026-10-09 checkpoint report linked from the project
+truth index. Recipes/craft feasibility, non-Retail currency/shared-storage projections, automatic
+goal reconciliation/history, procurement evidence, transfer access, and broader operational
+work-order flows remain open; this slice does not complete the ERP program.
+
 **Describes commit `5b3b0558447872c51974106e7f18144ab82b6263` on `main`
 (ops: track full wowsync-dev systemd topology).** Application behavior has not changed since that
 commit as of this documentation milestone (documentation-only commits may follow it on

@@ -120,6 +120,13 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     return textResult({ version, realm, characters: characters.slice(0, resolvedLimit), returnedCount: Math.min(characters.length, resolvedLimit), totalCount: characters.length, truncated: characters.length > resolvedLimit });
   });
 
+  server.registerTool("get_erp_projects", {
+    title: "Review WoWSync ERP projects",
+    description: "Returns version-isolated, player-authored projects, work orders, reservations, and evidence-qualified resource availability for one explicit version. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
+    inputSchema: z.object({ version: versionSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version }) => textResult({ version, projects: readModel.getErpProjects({ version }) }));
+
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
   server.registerTool("get_character_summary", {
     title: "Get a character summary",

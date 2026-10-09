@@ -27,6 +27,7 @@ export * from "./foreverGearRules.ts";
 export * from "./readModel.ts";
 export * from "./researchRegistry.ts";
 export * from "./demand.ts";
+export * from "./erpProjects.ts";
 export * from "./allocation.ts";
 export * from "./allocationReview.ts";
 export * from "./heldItemIdentity.ts";

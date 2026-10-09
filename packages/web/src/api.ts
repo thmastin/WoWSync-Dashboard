@@ -17,6 +17,7 @@ import type {
   ExplicitDemand,
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
+import type { ErpProject, ErpProjectDraft, ErpProjectView } from "@wowsync-dashboard/core";
 
 export interface GearCandidateEvidenceApi {
   data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
@@ -386,4 +387,21 @@ export function deactivateDemand(version: VersionOrUnknown, stableId: string) {
     { method: "POST", body: "{}" },
     { validate: hasObject("demand") },
   );
+}
+
+export function fetchErpProjects(version: VersionOrUnknown, signal?: AbortSignal) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[] }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) });
+}
+
+export function createErpProject(version: VersionOrUnknown, input: Omit<ErpProjectDraft, "version">) {
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, { method: "POST", body: JSON.stringify(input) }, { validate: hasObject("project") });
+}
+
+export function updateErpProject(project: ErpProjectView) {
+  const { needEvidence: _needEvidence, reservationReview: _reservationReview, ...intent } = project;
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}`, { method: "PUT", body: JSON.stringify({ expectedRevision: project.revision, project: intent }) }, { validate: hasObject("project") });
+}
+
+export function setErpProjectStatus(project: ErpProjectView, status: ErpProject["status"]) {
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}/status`, { method: "PATCH", body: JSON.stringify({ expectedRevision: project.revision, status }) }, { validate: hasObject("project") });
 }

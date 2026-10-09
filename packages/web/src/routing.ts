@@ -13,7 +13,7 @@
 import type { VersionOrUnknown } from "./types.ts";
 import { WOW_VERSIONS } from "./versions.ts";
 
-export type RouteView = "overview" | "characters" | "economy" | "professions" | "shared" | "items" | "research" | "allocation" | "gear-review" | "detail";
+export type RouteView = "overview" | "characters" | "economy" | "professions" | "shared" | "items" | "research" | "allocation" | "gear-review" | "projects" | "detail";
 
 export interface AppRoute {
   version: VersionOrUnknown;
@@ -36,8 +36,8 @@ export interface AppRoute {
   boundFilter: string;
 }
 
-const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation", "gear-review", "detail"]);
-const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation", "gear-review"]);
+const VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation", "gear-review", "projects", "detail"]);
+const TAB_VIEWS = new Set<RouteView>(["overview", "characters", "economy", "professions", "shared", "items", "research", "allocation", "gear-review", "projects"]);
 
 export function isVersion(value: string): value is VersionOrUnknown {
   return (WOW_VERSIONS as string[]).includes(value) || value === "unknown-version";

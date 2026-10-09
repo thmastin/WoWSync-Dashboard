@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-04 (Azeroth ERP Vertical Slice 3 shipped, merged and live-validated; see
+Last updated: 2026-10-09 (Azeroth ERP Slice 4 planning foundation implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -114,21 +114,20 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Azeroth ERP Slice 4+ (not scoped here; do not design in detail in this document).**
-  Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
+- [x] **Azeroth ERP Slice 4 — version-scoped project planning, resource reservations, manual work orders, and observation reconciliation** (implemented on `feature/forever-gear-observation`; see [`ERP_PLANNING.md`](ERP_PLANNING.md)). Persistent planning intent is separate from observations; exact-item/base-item/gold/profession needs and evidence-qualified Retail character currency and shared-owner item needs are projected; item and gold deltas compare supported complete observations; work orders never execute in game. Shared owners remain separate from characters; observed location does not imply character access. This feature branch has not been deployed to persistent DEV or validated through the browser.
+  The wider ERP roadmap remains open: recipes and crafting feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access.
+  Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
   [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is the Retail
   Dashboard Allocation tab (shipped; see Recently Completed). An MCP
   mutation tool for demand CRUD remains absent by design (MCP mutation would overturn an enforced
-  invariant), and
-  a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
-  BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
-  is deliberately left exploratory — see
-  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) rather than
-  committing to any of it here.
-
+  invariant), and a special Hellomags sale-inventory designation is undesigned. The fuller set of
+  future ERP directions (player-intent/strategy modeling, BoE utility, richer reserve policy,
+  exact-item identity, TSM/CraftSim/Journalator integration) remains exploratory — see
+  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md).
+  Richer external pricing/crafting integrations remain future work.
 - [ ] **GearExport: keep `latestExport` fresh in memory while playing (remove manual `/wowsync`).**
   **Repo:** GearExport only (this Dashboard repo must not modify the addon). Pairs with Slice 1
   `watch:saved` so the player's biggest friction — remembering to run a report — goes away.

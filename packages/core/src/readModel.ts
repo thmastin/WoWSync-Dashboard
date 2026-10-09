@@ -14,6 +14,7 @@ import { itemIdFromItemRef, type ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedObservationView, SharedOwnerView } from "./sharedStorageApi.ts";
 import type { StorageLocation, InventoryAggregateEntry } from "./accountFacts.ts";
 import { classifyFreshness } from "./freshness.ts";
+import { evaluateErpProject, type ErpProjectView } from "./erpProjects.ts";
 import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
@@ -611,6 +612,16 @@ export class DashboardReadModel {
   listCharacters(query: { version: VersionOrUnknown; realm?: string }): StoredCharacterSummary[] {
     requireVersion(query.version);
     return this.store.listCharacters(query.version).filter((character) => !query.realm || character.realm === query.realm);
+  }
+
+  /** Durable planning intent plus a fresh evidence projection from each explicitly named character only. */
+  getErpProjects(query: { version: VersionOrUnknown }): ErpProjectView[] {
+    requireVersion(query.version);
+    const projects = this.store.listErpProjects(query.version);
+    const currencies = this.store.listVersionCurrencies(query.version);
+    const needsSharedStorage = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined));
+    const sharedStorage = needsSharedStorage ? this.store.projectSharedStorage() : undefined;
+    return projects.map((project) => evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage));
   }
 
   /** Snapshot-scoped Retail candidate evidence; this is not an inventory, allocation, or gear-policy projection. */
