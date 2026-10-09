@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
 import { createApp } from "../src/app.ts";
 import { readSavedExports } from "../src/importSaved.ts";
 
@@ -153,6 +154,7 @@ test("Forever allocation route exposes separate evidence-gated decisions without
     const response = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
     assert.equal(response.status, 200);
     const view = response.body.value.data;
+    assertForeverAllocationContract(view);
     assert.equal(view.version, "forever");
     assert.equal(view.recipient.class.value, "HUNTER");
     assert.equal(view.recipient.level.value, 8);

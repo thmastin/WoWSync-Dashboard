@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
@@ -162,6 +163,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(foreverView.value?.provenance.freshness, "stale");
     const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; allocationPlan?: Array<{ disposition: string; item: { itemRef?: string }; recipient: { identityKey: string }; evidence: { transferability: string } }>; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
     assert.equal(foreverAllocation.status, "FOUND");
+    if (foreverAllocation.value?.data) assertForeverAllocationContract(foreverAllocation.value.data);
     assert.equal(foreverAllocation.value?.data?.version, "forever");
     assert.equal(foreverAllocation.value?.data?.scope.accountMembership, "UNKNOWN");
     assert.equal(foreverAllocation.value?.data?.conclusion, "INSUFFICIENT_EVIDENCE");
