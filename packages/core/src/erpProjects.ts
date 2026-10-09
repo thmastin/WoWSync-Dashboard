@@ -240,15 +240,64 @@ function sourceScope(source: { sourceIdentityKey?: string; sourceOwnerKey?: stri
   if (source.sourceOwnerKey && !source.sourceIdentityKey) return `owner:${source.sourceOwnerKey}`;
   return undefined;
 }
-function overlappingReservations(need: ErpResourceNeed, source: string, version: WowVersion, projects: readonly ErpProject[]): Array<{ quantity: number; ambiguous: boolean }> {
+function overlappingReservations(need: ErpResourceNeed, source: string, version: WowVersion, projects: readonly ErpProject[]): Array<{ quantity: number; ambiguous: boolean; projectId: string; needId: string }> {
   return projects.filter((p) => p.version === version).flatMap((p) => p.reservations
     .filter((r) => r.status === "ACTIVE" && sourceScope(r) === source)
     .flatMap((r) => {
       const candidate = p.needs.find((entry) => entry.stableId === r.needId);
       return candidate && reservationScopesOverlap(need, candidate)
-        ? [{ quantity: r.quantity, ambiguous: (need.kind === "ITEM_ID" && candidate.kind === "ITEM_REF") || (need.kind === "ITEM_REF" && candidate.kind === "ITEM_ID") }]
+        ? [{ quantity: r.quantity, projectId: p.stableId, needId: candidate.stableId, ambiguous: (need.kind === "ITEM_ID" && candidate.kind === "ITEM_REF") || (need.kind === "ITEM_REF" && candidate.kind === "ITEM_ID") }]
         : [];
     }));
+}
+function workOrderAllocationConflicts(project: ErpProject, linkedEvidence: readonly ErpNeedEvidence[], allProjects: readonly ErpProject[]): string[] {
+  const byId = new Map(linkedEvidence.map((evidence) => [evidence.needId, evidence]));
+  const linked = project.needs.filter((need) => byId.has(need.stableId) && need.kind !== "PROFESSION" && need.kind !== "RECIPE");
+  const blocked = new Set<string>();
+  const groups = new Map<string, ErpResourceNeed[]>();
+  const identity = (need: ErpResourceNeed): string => `${need.kind}:${need.resourceKey}`;
+
+  for (const need of linked) {
+    const scope = sourceScope(need);
+    if (!scope) continue;
+    const key = `${scope}|${identity(need)}`;
+    groups.set(key, [...(groups.get(key) ?? []), need]);
+  }
+
+  // A base item need and an exact-variant need can overlap, but the observed
+  // variant quantities cannot safely establish how much of the base is free.
+  for (let i = 0; i < linked.length; i++) for (let j = i + 1; j < linked.length; j++) {
+    const a = linked[i]!; const b = linked[j]!;
+    const aScope = sourceScope(a);
+    if (!aScope || aScope !== sourceScope(b)) continue;
+    if ((a.kind === "ITEM_ID" || a.kind === "ITEM_REF") && (b.kind === "ITEM_ID" || b.kind === "ITEM_REF") &&
+      needItemId(a) !== undefined && needItemId(a) === needItemId(b) &&
+      (a.kind !== b.kind || (a.kind === "ITEM_ID" && b.kind === "ITEM_REF") || (a.kind === "ITEM_REF" && b.kind === "ITEM_ID"))) {
+      blocked.add(a.stableId); blocked.add(b.stableId);
+    }
+  }
+
+  for (const needs of groups.values()) {
+    const representative = needs[0]!;
+    const scope = sourceScope(representative)!;
+    const evidence = needs.map((need) => byId.get(need.stableId)!);
+    if (evidence.some((entry) => entry.freshness !== "recent" || entry.state !== "COVERED_BY_OBSERVED")) continue;
+    const required = needs.reduce((sum, need) => sum + need.requiredQuantity, 0);
+    const observedValues = new Set(evidence.map((entry) => entry.observedQuantity));
+    const observed = observedValues.size === 1 ? evidence[0]?.observedQuantity : undefined;
+    const linkedIds = new Set(needs.map((need) => need.stableId));
+    const active = overlappingReservations(representative, scope, project.version, allProjects)
+      .filter((reservation) => reservation.projectId !== project.stableId || !linkedIds.has(reservation.needId));
+    const otherReserved = active.reduce((sum, reservation) => sum + reservation.quantity, 0);
+    const unknownReservation = needs.some((need) => {
+      const assessment = byId.get(need.stableId)?.reservationAssessment;
+      return assessment?.state === "UNKNOWN" && assessment.activeQuantity > 0;
+    });
+    if (observed === undefined || active.some((reservation) => reservation.ambiguous) || unknownReservation || observed - otherReserved < required) {
+      needs.forEach((need) => blocked.add(need.stableId));
+    }
+  }
+  return [...blocked].sort();
 }
 function newest(snapshots: readonly StoredSnapshot[]): StoredSnapshot | undefined {
   return [...snapshots].sort((a, b) => snapshotObservedAt(b.generatedAt, b.importedAt) - snapshotObservedAt(a.generatedAt, a.importedAt) || b.id - a.id)[0];
@@ -468,7 +517,7 @@ export interface ErpProjectView extends ErpProject {
 
 export interface ErpWorkOrderReadiness {
   readonly workOrderId: string;
-  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
+  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
   readonly blockingWorkOrderIds: readonly string[];
   readonly unresolvedNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
@@ -536,6 +585,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const observedShortfall = staleOrUnknown.find((evidence) => evidence.state === "SHORTFALL_OBSERVED" && evidence.freshness !== "stale" && evidence.freshness !== "unknown");
     if (observedShortfall) return { ...base, state: "OBSERVED_RESOURCE_SHORTFALL", unresolvedNeedIds: [observedShortfall.needId], reason: `A current observation records a shortfall for ${observedShortfall.needId}. Review the source and replan before acting.` };
     if (staleOrUnknown.length) return { ...base, state: "WAITING_FOR_EVIDENCE", unresolvedNeedIds: staleOrUnknown.map((evidence) => evidence.needId), reason: `Required plan evidence is unknown, historical, incomplete, or stale for: ${staleOrUnknown.map((evidence) => evidence.needId).join(", ")}. Refresh observations or resolve the missing evidence before treating this step as ready.` };
+    const reservationConflicts = workOrderAllocationConflicts(project, linkedEvidence, allProjects);
+    if (reservationConflicts.length) return { ...base, state: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", unresolvedNeedIds: reservationConflicts, reason: `The combined linked needs, ambiguous overlapping item scopes, or active saved reservations cannot be supported by independent observed supply for: ${reservationConflicts.join(", ")}. Reservations record player intent; they do not lock or prove possession of resources. Reconcile the quantities and item scopes before treating this work order as ready; no resource was moved or consumed.` };
     if (changedNeedEvidence.length) return { ...base, state: "OBSERVATION_CHANGED_REQUIRES_REVIEW", changedNeedIds: changedNeedEvidence.map((evidence) => evidence.needId), reason: `A comparable observation changed for linked needs: ${changedNeedEvidence.map((evidence) => evidence.needId).join(", ")}. Review the new amounts; a change alone does not establish that this work order caused it or that the planned step is complete.` };
     const actionLimit = order.kind === "TRANSFER" ? " An observed source location does not establish access or a transfer route." : order.kind === "EQUIP" ? " These resource checks do not establish equip eligibility or upgrade value." : order.kind === "CRAFT" ? " Learned recipe state and listed materials do not establish current skill, unlocks, or craftability." : " This is not an execution command or proof that all game prerequisites are met.";
     return { ...base, state: "READY_FOR_PLAYER_REVIEW", reason: `No incomplete plan dependency or linked resource-evidence blocker is recorded.${actionLimit}` };

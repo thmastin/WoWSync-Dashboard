@@ -433,6 +433,49 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
   } finally { store.close(); }
 });
 
+test("work order readiness aggregates linked needs and treats saved reservations as intent", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const targetNeed = { stableId: "target_need", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone for craft", requiredQuantity: 3, sourceIdentityKey: identityKey };
+    const current: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "craft_step", kind: "CRAFT", status: "PLANNED", title: "Prepare craft", resourceNeedIds: [targetNeed.stableId], dependsOn: [] }] };
+    const competitorNeed = { ...targetNeed, stableId: "competing_need", label: "Stone for another project" };
+    const competing: ErpProject = { ...project(identityKey), stableId: "competing_project", needs: [competitorNeed], reservations: [{ stableId: "competing_hold", needId: competitorNeed.stableId, sourceIdentityKey: identityKey, quantity: 3, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const read = (plans: ErpProject[]) => evaluateErpProject(current, (key) => store.listSnapshots(key), plans, 1_700_000_010).workOrderReadiness[0]!;
+    const blocked = read([current, competing]);
+    assert.equal(blocked.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.deepEqual(blocked.unresolvedNeedIds, ["target_need"]);
+    assert.match(blocked.reason, /Reservations record player intent; they do not lock or prove possession/);
+
+    const ownReservation: ErpProject = { ...current, reservations: [{ stableId: "own_hold", needId: targetNeed.stableId, sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const enoughForBoth: ErpProject = { ...competing, reservations: [{ ...competing.reservations[0]!, quantity: 1 }] };
+    const ready = evaluateErpProject(ownReservation, (key) => store.listSnapshots(key), [ownReservation, enoughForBoth], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(ready.state, "READY_FOR_PLAYER_REVIEW", "own reserved units plus unreserved observed supply meet the linked need");
+
+    const secondNeed = { ...targetNeed, stableId: "second_target_need", label: "More stone for the same work order", requiredQuantity: 2 };
+    const duplicateNeeds: ErpProject = { ...current, needs: [targetNeed, secondNeed], workOrders: [{ ...current.workOrders[0]!, resourceNeedIds: [targetNeed.stableId, secondNeed.stableId] }] };
+    const duplicateNoReservation = evaluateErpProject(duplicateNeeds, (key) => store.listSnapshots(key), [duplicateNeeds], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(duplicateNoReservation.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "two linked needs cannot each count the same observed stack independently");
+    assert.deepEqual(duplicateNoReservation.unresolvedNeedIds, ["second_target_need", "target_need"]);
+
+    const duplicateWithExternalReservation = evaluateErpProject(duplicateNeeds, (key) => store.listSnapshots(key), [duplicateNeeds, competing], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(duplicateWithExternalReservation.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "combined linked needs and another saved reservation cannot exceed the observed lower bound");
+
+    const sufficientDuplicates: ErpProject = { ...duplicateNeeds, needs: [targetNeed, { ...secondNeed, requiredQuantity: 1 }] };
+    const sufficient = evaluateErpProject(sufficientDuplicates, (key) => store.listSnapshots(key), [sufficientDuplicates], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(sufficient.state, "READY_FOR_PLAYER_REVIEW", "aggregated linked requirements within the observed amount remain reviewable");
+
+    const unrelatedHold = { ...targetNeed, stableId: "other_need_in_same_project", label: "Separate reservation", requiredQuantity: 1 };
+    const sameProjectHold: ErpProject = { ...current, needs: [targetNeed, unrelatedHold], reservations: [{ stableId: "other_hold", needId: unrelatedHold.stableId, sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const sameProjectBlocked = evaluateErpProject(sameProjectHold, (key) => store.listSnapshots(key), [sameProjectHold], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(sameProjectBlocked.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "an unlinked reservation in the same project still competes for the source quantity");
+
+    const ambiguousNeed = { ...targetNeed, stableId: "base_target_need", kind: "ITEM_ID" as const, resourceKey: "159", requiredQuantity: 1 };
+    const overlappingNeeds: ErpProject = { ...current, needs: [targetNeed, ambiguousNeed], workOrders: [{ ...current.workOrders[0]!, resourceNeedIds: [targetNeed.stableId, ambiguousNeed.stableId] }] };
+    const ambiguous = evaluateErpProject(overlappingNeeds, (key) => store.listSnapshots(key), [overlappingNeeds], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(ambiguous.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "base-item and exact-variant needs are ambiguous even without reservations");
+  } finally { store.close(); }
+});
+
 test("work-order progress separates player completion, observed state, changed evidence, and unresolved data", () => {
   const options = (generatedAt: number, quantity: number) => ({ generatedAt, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
   const store = new SqliteSnapshotStore(":memory:");
