@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { createApp } from "../src/app.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
@@ -20,8 +21,9 @@ const HALLO = "forever::classic beta pvp 2::hallo emberstone";
 const VOODAN = "tbc-anniversary::dreamscythe::voodan";
 const TORAHN = "tbc-anniversary::dreamscythe::torahn";
 
-async function withApp(run: (api: Api) => Promise<void>) {
+async function withApp(run: (api: Api) => Promise<void>, seedStore?: (store: SqliteSnapshotStore) => void) {
   const store = new SqliteSnapshotStore(":memory:");
+  seedStore?.(store);
   const app = createApp(store, 0);
   const server = await new Promise<http.Server>((resolve) => {
     const s = http.createServer(app);
@@ -107,6 +109,33 @@ test("Forever observation REST route preserves the build guard for older capture
     assert.equal(response.body.value.data, undefined);
     assert.match(response.body.value.provenance.reason, /build 70291 \/ interface 16001/);
   });
+});
+
+test("Forever potential equipment candidates reach REST and AccountContext with eligibility and upgrade UNKNOWN", async () => {
+  const generatedAt = 1_791_509_781;
+  const itemString = "item:1777:3:5";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed item", qty: 1 }] }] }, bank: { unknown: true } });
+  await withApp(async (api) => {
+    const key = "forever::forever realm::gearcheck";
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-observation`);
+    assert.equal(rest.body.value.data.evaluationCandidates.state, "OBSERVED");
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].itemRef, itemString);
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].eligibility, "UNKNOWN");
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].upgradeStatus, "UNKNOWN");
+    assert.equal(rest.body.value.data.bank.state, "UNKNOWN");
+    const context = await api.get("/api/account-context");
+    const accountView = context.body.versions.forever.characters.find((character: any) => character.identityKey === key).foreverGearObservation;
+    assert.deepEqual(accountView.value, rest.body.value, "AccountContext reuses the REST read model result");
+    assert.equal(context.body.versions.retail.characters.some((character: any) => character.identityKey === key), false);
+  }, (store) => store.importSnapshot(text, { foreverGearObservation: {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
+    equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+    bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 1777, itemString, count: 1, name: "Observed item" } } }] } },
+    itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 1777, itemString,
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [1777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
+    }] } },
+  } }));
 });
 
 test("[REAL] /api/versions lists Forever with a label, and its own totals", async () => {

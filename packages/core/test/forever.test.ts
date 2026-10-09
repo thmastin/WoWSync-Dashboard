@@ -452,11 +452,38 @@ test("[REAL] AccountContext carries a forever version alongside the others, embe
     assert.equal(hallo.transitions[0].inventoryChanged, false);
     // Trainer view reuses the existing summarizer; Forever has observed no trainer categories.
     assert.deepEqual(hallo.trainer, []);
-    assert.equal(ctx.schemaVersion, "4");
+    assert.equal(ctx.schemaVersion, "5");
     assert.ok(ctx.currency.note.includes("Copper"));
   } finally {
     store.close();
   }
+});
+
+test("[SYNTHETIC] AccountContext includes the GUID-guarded Forever potential gear view and preserves unknown conclusions", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const generatedAt = NOW_RECENT;
+  const itemString = "item:777:1:2";
+  try {
+    const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed chest", qty: 1 }] }] }, bank: { unknown: true } });
+    store.importSnapshot(text, { foreverGearObservation: {
+      clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
+      equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+      bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 777, itemString, count: 1, name: "Observed chest" } } }] } },
+      itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 777, itemString,
+        itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
+      }] } },
+    } });
+    const ctx = store.buildAccountContext(generatedAt + 20);
+    const foreverContext = ctx.versions.forever.characters.find((character) => character.name === "Gearcheck");
+    assert.equal(foreverContext?.foreverGearObservation?.status, "FOUND");
+    const view = (foreverContext?.foreverGearObservation as { status: "FOUND"; value: { data: { evaluationCandidates: { items: Array<{ itemRef: string }>; state: string }; unknowns: { eligibility: string; upgradeStatus: string } } } }).value.data;
+    assert.equal(view.evaluationCandidates.state, "OBSERVED");
+    assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+    assert.equal(view.unknowns.eligibility, "UNKNOWN");
+    assert.equal(view.unknowns.upgradeStatus, "UNKNOWN");
+    assert.equal(ctx.versions.retail.characters.some((character) => character.name === "Gearcheck"), false);
+  } finally { store.close(); }
 });
 
 test("[REAL] AccountContext is deterministic with Forever included", () => {

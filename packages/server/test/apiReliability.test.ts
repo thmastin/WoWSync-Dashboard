@@ -201,11 +201,11 @@ test("/api/versions never fabricates a 0 total: empty and unobserved versions ha
   });
 });
 
-test("the canonical account context declares schema 4 and explains realm-partitioned totals in-band", async () => {
+test("the canonical account context declares schema 5 and explains realm-partitioned totals in-band", async () => {
   await withApp(async (base) => {
     await post(base, read("classic-era/bromrik-1789171621.wowsync.txt"));
     const ctx = await json(await fetch(`${base}/api/account-context`));
-    assert.equal(ctx.schemaVersion, "4");
+    assert.equal(ctx.schemaVersion, "5");
     assert.match(ctx.versions["classic-era"].scopeNote, /realm-partitioned/);
     assert.equal("scopeNote" in ctx.versions["retail"], false);
     assert.match(ctx.currency.note, /NOT zero gold/);

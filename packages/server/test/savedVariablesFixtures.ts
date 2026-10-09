@@ -23,6 +23,7 @@ export interface SavedRecord {
   bags?: string;
   bank?: string;
   itemMetadata?: string;
+  forever70291Evidence?: string;
 }
 
 export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: number | null; legacy?: string } = {}): string {
@@ -39,6 +40,7 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     if (r.equipment !== undefined) lines.push(`["equipment"] = ${r.equipment},`);
     if (r.bags !== undefined) lines.push(`["bags"] = ${r.bags},`);
     if (r.bank !== undefined) lines.push(`["bank"] = ${r.bank},`);
+    if (r.forever70291Evidence !== undefined) lines.push(`["forever70291Evidence"] = ${r.forever70291Evidence},`);
     lines.push("},", '["visits"] = {', "},");
     if (r.text !== undefined || r.specProjection !== undefined) {
       lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`);

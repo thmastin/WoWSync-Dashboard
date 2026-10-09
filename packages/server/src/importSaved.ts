@@ -318,6 +318,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
     const equipment = luaGet(sections, "equipment");
+    const foreverEvidence = luaGet(sections, "forever70291Evidence");
     const itemMetadata = luaGet(record, "itemMetadata");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
@@ -350,6 +351,16 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
             const section = luaGet(sections, key);
             return isLuaTable(section) ? [[key, luaToPlain(section)]] : [];
           })),
+          ...(isLuaTable(foreverEvidence) ? (() => {
+            const data = luaGet(foreverEvidence, "data");
+            const itemFacts = luaGet(data, "itemFacts");
+            return isLuaTable(itemFacts) ? { itemEvidence: {
+              observedAt: luaGet(itemFacts, "observedAt"),
+              completeness: luaGet(itemFacts, "completeness"),
+              source: luaGet(itemFacts, "source"),
+              data: luaToPlain(itemFacts),
+            } } : {};
+          })() : {}),
           ...(isLuaTable(itemMetadata) ? { itemMetadata: luaToPlain(itemMetadata) } : {}),
         }
       : undefined;

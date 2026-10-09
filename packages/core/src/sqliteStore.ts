@@ -20,6 +20,7 @@ import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
 import { mergeForeverStructuredObservation, normalizeForeverStructuredObservation } from "./foreverGearObservation.ts";
+import { DashboardReadModel } from "./readModel.ts";
 import {
   canonicalJson,
   evaluateEquipmentPolicy,
@@ -1522,6 +1523,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
   buildAccountContext(now: number = Math.floor(Date.now() / 1000)): AccountContext {
     const versionFacts = {} as Record<WowVersion, AccountFacts>;
     const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
+    const foreverGearObservations = new Map<string, ReturnType<DashboardReadModel["getForeverGearObservation"]>>();
     for (const version of WOW_VERSIONS) {
       const facts = this.buildAccountFacts(version, now);
       versionFacts[version] = facts;
@@ -1529,7 +1531,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
         characterSnapshots.set(character.identityKey, this.listSnapshots(character.identityKey));
       }
     }
-    return buildAccountContextPure({ now, versionFacts, characterSnapshots });
+    const readModel = new DashboardReadModel(this, () => now);
+    for (const character of versionFacts.forever.characters) {
+      foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
+    }
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations });
   }
 
   // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------

@@ -57,3 +57,74 @@ test("structured bag slot arrays preserve the observed one-based WoW slot indexe
     { slot: 2, itemRef: "item:112:7", quantity: 1 },
   ]);
 });
+
+function itemFact(itemString: string, itemID: number, equipLocation: string, equippable: boolean) {
+  const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  return { itemString, itemID,
+    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [itemID, "Armor", "Leather", equipLocation].map((value) => ({ observation: observed(value) })) },
+    isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(equippable) }] },
+  };
+}
+
+test("Forever item API evidence exposes potential candidates without claiming eligibility or upgrades", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 5, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "OBSERVED");
+  assert.equal(view.evaluationCandidates.items.length, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+  assert.equal(view.evaluationCandidates.items[0]?.equipLocation, "INVTYPE_CHEST");
+  assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT");
+  assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
+  assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
+});
+
+test("candidate classification matches exact item variants and leaves missing rows partial", () => {
+  const firstVariant = "item:999:4:5";
+  const otherVariant = "item:999:4:5:6";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: {
+      "1": { itemID: 999, itemString: firstVariant, count: 1 },
+      "2": { itemID: 999, itemString: otherVariant, count: 2 },
+    } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(firstVariant, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 6, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "PARTIAL");
+  assert.deepEqual(view.evaluationCandidates.items.map((item) => item.itemRef), [firstVariant]);
+  assert.match(view.evaluationCandidates.reason, /not ruled out/);
+});
+
+test("uncached or stale item facts never become current candidate exclusions", () => {
+  const uncached = { ...itemFact("item:999:4:5", 999, "INVTYPE_CHEST", true),
+    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "API_ERROR", returns: [] },
+  };
+  const missingFact: ForeverStructuredObservation = { ...sidecar,
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [uncached] } },
+  };
+  const unknown = buildForeverGearObservation({ identity, snapshotId: 7, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: missingFact, now: 110 });
+  assert.equal(unknown.evaluationCandidates.state, "PARTIAL", "the source inventory itself is partial even when no API fact is usable");
+  assert.equal(unknown.evaluationCandidates.items.length, 0);
+  const stale = buildForeverGearObservation({ identity, snapshotId: 8, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 1, completeness: "complete", source: "Old C_Item evidence", data: { sourceSections: { bags: { observedAt: 1, state: "complete" } }, items: [itemFact("item:999:4:5", 999, "INVTYPE_CHEST", true)] } } }, now: 10_000_000 });
+  assert.equal(stale.evaluationCandidates.state, "LAST_SEEN");
+  assert.equal(stale.evaluationCandidates.items[0]?.provenance, "LAST_SEEN");
+  assert.equal(stale.bank.state, "UNKNOWN");
+});
+
+test("partial or stale carried-source timestamps cannot be upgraded by a fresh item API sample", () => {
+  const itemString = "item:999:4:5";
+  const facts = [itemFact(itemString, 999, "INVTYPE_CHEST", true)];
+  const partial = buildForeverGearObservation({ identity, snapshotId: 9, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 109, completeness: "complete", source: "fresh API, partial source", data: { sourceSections: { bags: { observedAt: 101, state: "partial" } }, items: facts } } }, now: 110 });
+  assert.equal(partial.evaluationCandidates.state, "PARTIAL");
+  assert.equal(partial.evaluationCandidates.items[0]?.provenance, "DERIVED", "an exact row remains usable evidence while coverage is partial");
+  const old = buildForeverGearObservation({ identity, snapshotId: 10, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 10_000_000, completeness: "complete", source: "fresh API, old source", data: { sourceSections: { bags: { observedAt: 1, state: "complete" } }, items: facts } } }, now: 10_000_000 });
+  assert.equal(old.evaluationCandidates.state, "LAST_SEEN");
+  assert.equal(old.evaluationCandidates.freshness, "recent", "the fresh API sample cannot refresh its old inventory source");
+  assert.equal(old.evaluationCandidates.items[0]?.provenance, "LAST_SEEN");
+});

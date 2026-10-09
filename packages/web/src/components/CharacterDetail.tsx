@@ -299,7 +299,7 @@ export default function CharacterDetail({
                   ? `Snapshot source: Forever WoWSyncDB structured sections · export ${formatAbsoluteTime(snapshot.parsed.foreverGearObservation.generatedAt)}`
                   : "Source: WOWSYNC v1 export · structured section timestamps unavailable for this snapshot."}
               </p>
-              <p>Equipped slots and carried items below are observations. Candidate classification, eligibility, suitability, upgrade status, and transferability are UNKNOWN.</p>
+              <p>Equipped slots and carried items below are observations. Potential equipment candidates use same-snapshot Forever item API evidence; they are not character eligibility or upgrade verdicts.</p>
               <p className="muted small">Equipment: {foreverObservation?.equipment.state} · {foreverObservation?.equipment.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.equipment.observedAt)} (${foreverObservation.equipment.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.equipment.source}</p>
               {foreverObservation?.equipment.items.map((slot, index) => (
                 <div key={`forever-eq-${slot.slot}-${index}`} className="muted small">{slot.provenance === "OBSERVED" ? "OBSERVED equipped" : "UNKNOWN equipment slot"} · item identity {slot.itemIdentity ?? "UNKNOWN"} · {slot.slotName}: {slot.name ?? "?"} · {slot.itemRef ?? "item identifier unavailable"}</div>
@@ -308,7 +308,10 @@ export default function CharacterDetail({
               {foreverObservation?.carried.items === undefined ? <div>Carried inventory: UNKNOWN.</div> : foreverObservation.carried.items.map((item, index) => (
                 <div key={`forever-bag-${index}`} className="muted small">{item.provenance} carried · item identity {item.itemIdentity ?? "UNKNOWN"} · {item.name ?? "?"} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"}</div>
               ))}
-              <p>Possible evaluation candidates: {foreverObservation?.evaluationCandidates.state}. {foreverObservation?.evaluationCandidates.reason}</p>
+              <p className="muted small">Potential equipment candidates: {foreverObservation?.evaluationCandidates.state} | {foreverObservation?.evaluationCandidates.observedAt ? `item evidence ${formatAbsoluteTime(foreverObservation.evaluationCandidates.observedAt)} (${foreverObservation.evaluationCandidates.freshness})` : "item evidence timestamp UNKNOWN"} | {String(foreverObservation?.evaluationCandidates.source ?? "UNKNOWN")} | {foreverObservation?.evaluationCandidates.reason}</p>
+              {foreverObservation?.evaluationCandidates.items.map((item, index) => (
+                <div key={`forever-candidate-${index}`} className="muted small">{item.provenance} potential equipment | {item.name ?? item.itemRef} | {item.itemType ?? "type UNKNOWN"}/{item.itemSubType ?? "subtype UNKNOWN"} | {item.equipLocation} | carried {item.container === undefined ? "location UNKNOWN" : `bag ${item.container}, slot ${item.slot ?? "?"}`} x {item.quantity ?? "?"} | {item.itemRef} | eligibility UNKNOWN | suitability UNKNOWN | upgrade UNKNOWN | transferability UNKNOWN</div>
+              ))}
               <p>Bank: {foreverObservation?.bank.state === "UNKNOWN" ? `UNKNOWN; ${foreverObservation.bank.reason}` : `${foreverObservation?.bank.state ?? "UNKNOWN"}.`}</p>
               </>}
               </>}

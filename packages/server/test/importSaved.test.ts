@@ -574,7 +574,8 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
   const file = svFile(savedVariables([{
     guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
-    bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [] } }),
+    bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
+    forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: { itemFacts: { observedAt: generatedAt + 3, completeness: "complete", source: "C_Item live facts", items: [{ itemID: 124, itemString: "item:124:0:7", itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 124 } }, { index: 2, observation: { state: "OBSERVED", type: "string", value: "Weapon" } }, { index: 3, observation: { state: "OBSERVED", type: "string", value: "Sword" } }, { index: 4, observation: { state: "OBSERVED", type: "string", value: "INVTYPE_WEAPON" } }] }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] } } }),
   }]));
   await withServer(async (base, store) => {
     const result = await runImportSaved(["--character", "Hallo", "--file", file, "--url", base], live(base));
@@ -583,6 +584,8 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal(snapshot.parsed.foreverGearObservation?.sourceCharacterGuid, guid);
     assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
     assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
+    assert.equal(snapshot.parsed.foreverGearObservation?.itemEvidence?.observedAt, generatedAt + 3);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.items[0]?.itemString, "item:124:0:7");
   });
 });
 

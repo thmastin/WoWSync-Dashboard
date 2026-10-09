@@ -12,6 +12,7 @@ export interface ForeverStructuredObservation {
   bags?: Record<string, unknown>;
   bank?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
+  itemEvidence?: Record<string, unknown>;
 }
 
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
@@ -37,6 +38,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("equipment") ? { equipment: section("equipment") } : {}),
     ...(section("bags") ? { bags: section("bags") } : {}),
     ...(section("bank") ? { bank: section("bank") } : {}),
+    ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
     ...(v.itemMetadata && typeof v.itemMetadata === "object" && !Array.isArray(v.itemMetadata) ? { itemMetadata: v.itemMetadata as Record<string, unknown> } : {}),
   };
 }
@@ -125,6 +127,11 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
   }
   if (!existing.itemMetadata && incoming.itemMetadata) { value.itemMetadata = incoming.itemMetadata; updated = true; }
   else if (existing.itemMetadata && incoming.itemMetadata && JSON.stringify(stable(existing.itemMetadata)) !== JSON.stringify(stable(incoming.itemMetadata))) conflict = true;
+  const beforeFacts = existing.itemEvidence; const nextFacts = incoming.itemEvidence;
+  if (nextFacts) {
+    if (!beforeFacts || (nextFacts.observedAt as number) > (beforeFacts.observedAt as number)) { value.itemEvidence = nextFacts; updated = true; }
+    else if ((nextFacts.observedAt as number) === (beforeFacts.observedAt as number) && JSON.stringify(stable(beforeFacts)) !== JSON.stringify(stable(nextFacts))) conflict = true;
+  }
   return { value, outcome: updated ? "updated" : conflict ? "conflict" : "already-recorded" };
 }
 
@@ -153,14 +160,103 @@ export function buildForeverGearObservation(input: {
   const bagsState = useStructuredBags ? structuredState(structured?.bags) : bags.status.state;
   const equipmentItems = structuredEquipment(useStructuredEquipment ? structured?.equipment : undefined, equipment.slots, equipmentState);
   const carriedItems = bagsState === "UNKNOWN" && !useStructuredBags ? undefined : structuredBags(useStructuredBags ? structured?.bags : undefined, bags.items, bagsState);
+  const evidence = object(structured?.itemEvidence);
+  const evidenceData = object(evidence?.data);
+  const evidenceBagSource = object(object(evidenceData?.sourceSections)?.bags);
+  const evidenceBagObservedAt = typeof evidenceBagSource?.observedAt === "number" ? evidenceBagSource.observedAt : undefined;
+  const evidenceBagFreshness = freshness(evidenceBagObservedAt);
+  const evidenceBagComplete = evidenceBagSource?.state === "complete" && evidenceBagFreshness === "recent"
+    && structured?.bags?.completeness === "complete" && bagsState === "OBSERVED" && freshness(bagsAt) === "recent";
+  const itemFactsLastSeen = evidence !== undefined && (bagsState === "LAST_SEEN" || evidence?.lastAttemptStale === true
+    || evidenceBagSource?.state === "LAST_SEEN"
+    || evidenceBagFreshness === "stale"
+    || freshness(bagsAt) === "stale"
+    || (typeof evidence?.observedAt === "number" && freshness(evidence.observedAt) === "stale"));
+  const rawFacts = evidenceData?.items;
+  const factRows = Array.isArray(rawFacts) ? rawFacts.map(object).filter((row): row is Record<string, unknown> => row !== undefined) : [];
+  const factsByRef = new Map(factRows.flatMap((row) => typeof row.itemString === "string" ? [[row.itemString, row] as const] : []));
+  const observedCarried = carriedItems ?? [];
+  const itemFactComplete = evidence?.completeness === "complete" && evidenceData !== undefined;
+  const carriedCovered = observedCarried.filter((item) => item.itemRef && factsByRef.has(item.itemRef)).length;
+  const itemFactCoverageComplete = itemFactComplete && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
+    && observedCarried.every((item) => {
+      if (!item.itemRef) return false;
+      const fact = factsByRef.get(item.itemRef);
+      const instant = object(fact?.itemInfoInstant);
+      const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
+      const apiID = object(object(returns[0])?.observation);
+      const itemType = object(object(returns[1])?.observation);
+      const itemSubType = object(object(returns[2])?.observation);
+      const equipLocation = object(object(returns[3])?.observation);
+      const equippableCall = object(fact?.isEquippableItem);
+      const equippableReturns = equippableCall && Array.isArray(equippableCall.returns) ? equippableCall.returns : [];
+      const equippable = object(object(equippableReturns[0])?.observation);
+      return instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE"
+        && apiID?.state === "OBSERVED" && apiID.type === "number" && apiID.value === (item.itemID ?? itemIdFromRef(item.itemRef))
+        && itemType?.state === "OBSERVED" && itemType.type === "string"
+        && itemSubType?.state === "OBSERVED" && itemSubType.type === "string"
+        && equipLocation?.state === "OBSERVED" && equipLocation.type === "string"
+        && equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
+        && equippable?.state === "OBSERVED" && equippable.type === "boolean";
+    });
+  const evaluationItems = observedCarried.flatMap((item) => {
+    if (!item.itemRef) return [];
+    const fact = factsByRef.get(item.itemRef);
+    if (!fact) return [];
+    const instant = object(fact.itemInfoInstant);
+    const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
+    const observedReturn = (index: number) => object(object(returns[index - 1])?.observation);
+    const returnedID = observedReturn(1);
+    const itemType = observedReturn(2);
+    const itemSubType = observedReturn(3);
+    const equipLocation = observedReturn(4);
+    const itemID = item.itemID ?? itemIdFromRef(item.itemRef);
+    const equippableCall = object(fact.isEquippableItem);
+    const equippableRows = equippableCall && Array.isArray(equippableCall.returns) ? equippableCall.returns : [];
+    const equippable = object(object(equippableRows[0])?.observation);
+    const apiItemType = instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE"
+      && returnedID?.state === "OBSERVED" && returnedID.type === "number" && returnedID.value === itemID;
+    const usableEquipLocation = equipLocation?.state === "OBSERVED" && equipLocation.type === "string"
+      && typeof equipLocation.value === "string" && equipLocation.value.length > 0 && equipLocation.value !== "INVTYPE_NON_EQUIP_IGNORE";
+    const isProjectile = itemType?.state === "OBSERVED" && itemType.type === "string" && itemType.value === "Projectile";
+    const itemLevelVerdict = equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
+      && equippable?.state === "OBSERVED" && equippable.type === "boolean" && equippable.value === true;
+    if (!apiItemType || !usableEquipLocation || !itemLevelVerdict || isProjectile) return [];
+    return [{ ...item, classification: "POTENTIAL_EQUIPMENT" as const,
+      itemType: itemType?.state === "OBSERVED" && itemType.type === "string" ? itemType.value as string : undefined,
+      itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
+      equipLocation: equipLocation.value as string,
+      evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
+      ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
+      provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
+      eligibility: "UNKNOWN" as const, suitability: "UNKNOWN" as const,
+      upgradeStatus: "UNKNOWN" as const, transferability: "UNKNOWN" as const,
+      reason: "The client marked this item type equippable; this does not establish character eligibility, proficiency, suitability, upgrade value, or transferability." }];
+  });
+  const evaluationState = itemFactsLastSeen ? "LAST_SEEN" as const
+    : itemFactCoverageComplete ? "OBSERVED" as const
+    : evaluationItems.length > 0 || evidence?.completeness === "partial" || (evidence !== undefined && bagsState === "OBSERVED" && structured?.bags?.completeness === "partial") ? "PARTIAL" as const : "UNKNOWN" as const;
+  const evaluationReason = evaluationState === "LAST_SEEN"
+    ? "Potential equipment classification uses historical Forever item API evidence; verify its freshness before using it in an allocation decision."
+    : evaluationState === "OBSERVED"
+    ? "Potential equipment candidates use exact carried itemStrings and same-snapshot Forever item API evidence. Character eligibility and allocation conclusions remain unknown."
+    : evaluationState === "PARTIAL"
+      ? `${evaluationItems.length} potential item(s) have matching Forever evidence; item API coverage is incomplete for ${Math.max(0, observedCarried.length - carriedCovered)} carried row(s). Unclassified rows are not ruled out.`
+      : "Potential equipment classification is UNKNOWN because matching, complete Forever item API evidence is unavailable.";
   return {
     identity: { ...identity, accountScope: "UNKNOWN", accountScopeReason: "WoWSync character identity carries version, realm, and name but no WoW account identifier; this view is scoped to the Dashboard import context and does not assert Battle.net account identity." },
     snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems },
-    evaluationCandidates: { state: "UNKNOWN" as const, items: [], reason: "No validated Forever equipment-location metadata is available to distinguish wearable gear from other carried items." },
+    evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), reason: bank.status.state === "UNKNOWN" ? "Bank contents were not observed; unavailable is not empty." : undefined },
     metadataSource: structured?.itemMetadata ? "Forever WoWSyncDB itemMetadata" : "UNKNOWN",
   };
+}
+
+function itemIdFromRef(itemRef: string): number | undefined {
+  const id = /^item:(\d+)/.exec(itemRef)?.[1];
+  const parsed = id === undefined ? undefined : Number(id);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
