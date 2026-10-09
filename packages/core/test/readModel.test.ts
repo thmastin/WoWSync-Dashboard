@@ -5,6 +5,7 @@ import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { observation } from "./equipmentObservationFixtures.ts";
+import { assertForeverAllocationContract } from "./foreverAllocationContract.ts";
 
 const NOW = 1_800_000_000;
 function retail(name: string, realm: string, moneyCopper?: number) {
@@ -155,6 +156,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data) return;
     const view = result.value.data;
+    assertForeverAllocationContract(view);
     assert.equal(view.version, "forever");
     assert.equal(view.scope.accountMembership, "UNKNOWN");
     assert.equal(view.recipient.class?.value, "MAGE");

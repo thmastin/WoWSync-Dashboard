@@ -103,7 +103,7 @@ test("PORT is parsed strictly: empty means the default, anything else invalid is
   }
 });
 
-test("private Unix listener requires an explicit absolute path and serves HTTP without a TCP bind", async () => {
+test("private Unix listener requires an explicit absolute path and serves HTTP without a TCP bind", { skip: process.platform === "win32" && "Unix-domain listener test is unsupported on this Windows host." }, async () => {
   assert.equal(resolveListenSocket({}), undefined);
   assert.equal(resolveListenSocket({ WOWSYNC_LISTEN_SOCKET: "  " }), undefined);
   for (const bad of ["relative.sock", "../socket", "/tmp/bad\npath", "/tmp/bad\0path"]) {

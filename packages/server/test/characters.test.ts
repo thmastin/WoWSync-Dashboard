@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
 import { createApp } from "../src/app.ts";
 import { readSavedExports } from "../src/importSaved.ts";
 
@@ -153,6 +154,7 @@ test("Forever allocation route exposes separate evidence-gated decisions without
     const response = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
     assert.equal(response.status, 200);
     const view = response.body.value.data;
+    assertForeverAllocationContract(view);
     assert.equal(view.version, "forever");
     assert.equal(view.recipient.class.value, "HUNTER");
     assert.equal(view.recipient.level.value, 8);
@@ -235,6 +237,7 @@ test("[LIVE REGRESSION] Hallo/Fizzwick 70291 mail-test captures stay evidence-qu
       assert.equal(allocationResponse.status, 200);
       allocations.set(key, allocationResponse.body.value.data);
       const allocation = allocationResponse.body.value.data;
+      assertForeverAllocationContract(allocation);
       assert.equal(allocation.version, "forever");
       assert.equal(allocation.scope.accountMembership, "UNKNOWN");
       assert.ok(allocation.candidateSources.every((source: any) => source.bank.state === "UNKNOWN"));
