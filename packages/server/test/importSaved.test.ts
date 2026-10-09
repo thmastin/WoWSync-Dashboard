@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
-import { BridgeError, findSavedVariablesFiles, readSavedExports, runImportSaved, selectExport, type Deps } from "../src/importSaved.ts";
+import { BridgeError, findSavedVariablesFiles, parseSavedExports, readSavedExports, runImportSaved, selectExport, type Deps } from "../src/importSaved.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { warband } from "../../core/test/sharedStorageBuilders.ts";
 import { exportFor, record, savedVariables, toLua } from "./savedVariablesFixtures.ts";
@@ -280,6 +280,14 @@ test("two saved records for one name+realm resolve to the NEWEST export, with a 
   assert.match(warnings[0], /2 saved records exist for Virek-Cairne/);
   const tie = [record("Virek", 100), { ...record("Virek", 100), text: exportFor("Virek", 100, { level: 60 }) }].map(({ name, realm, text, generatedAt }) => ({ name, realm, text, generatedAt }));
   assert.throws(() => selectExport(tie, { character: "Virek" }), /same time with different text/);
+});
+
+test("same-time identical SavedVariables exports with missing or conflicting source GUIDs are refused", () => {
+  const first = { ...record("Virek", 100, { guid: "Player-1-A" }), sourceCharacterGuid: "Player-1-A" };
+  const second = { ...record("Virek", 100, { guid: "Player-2-B" }), sourceCharacterGuid: "Player-2-B" };
+  assert.throws(() => selectExport([first, second], { character: "Virek" }), /missing or conflicting WoWSyncDB character GUIDs/);
+  const missing = { ...record("Virek", 100, { guid: "Player-3-C" }), sourceCharacterGuid: undefined };
+  assert.throws(() => selectExport([first, missing], { character: "Virek" }), /missing or conflicting WoWSyncDB character GUIDs/);
 });
 
 // --- consistency checks --------------------------------------------------------------------------------------
@@ -614,6 +622,32 @@ test("A13 readSavedExports carries the canonical sections.equipment subset plus 
   assert.deepEqual(carried, { envelope: envelope(), projection: sidecar() }, "exact 7958c56 fields, as plain JSON");
   assert.deepEqual(carried.envelope.observedAt, 1791375064);
   assert.equal((carried.envelope.specEquipmentObservation as any).roster.specializations[2].isUnlocked, false);
+});
+
+test("Forever 70291 bridge carries identity-matched structured inventory timestamps and metadata", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const record = {
+    ...({ guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt } as const),
+    captureProfile: "Forever:1.60.1:70291:16001",
+    equipment: toLua({ observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } }),
+    bags: toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } }),
+    bank: toLua({ observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} }),
+    itemMetadata: toLua({ "123": { classID: 4 } }),
+  };
+  const [saved] = parseSavedExports(savedVariables([record]), "fixture");
+  assert.deepEqual(saved.foreverGearObservation, {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: "Player-1-HALLO",
+    equipment: { observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } },
+    bags: { observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } },
+    bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} },
+    itemMetadata: { "123": { classID: 4 } },
+  });
+  const wrongProfile = parseSavedExports(savedVariables([{ ...record, captureProfile: "Forever:1.60.1:69913:16001" }]), "fixture")[0];
+  assert.equal(wrongProfile.foreverGearObservation, undefined);
+  const oldText = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "69913", interface: "16001" } });
+  const wrongBuild = parseSavedExports(savedVariables([{ ...record, text: oldText }]), "fixture")[0];
+  assert.equal(wrongBuild.foreverGearObservation, undefined);
 });
 
 test("A41 the bridge never transports S.Attempt's lastAttemptAt / lastAttemptError", () => {

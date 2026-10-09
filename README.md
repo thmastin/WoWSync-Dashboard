@@ -32,6 +32,11 @@ the rest of this README if you're navigating the docs rather than just running t
   MCP tool `analyze_retail_gear_candidate` exposes the same deterministic facts to connected
   assistants. See [`docs/RETAIL_GEAR_ALLOCATION.md`](docs/RETAIL_GEAR_ALLOCATION.md) for the
   evidence contract and decision limits.
+- **Forever gear observations:** Forever character detail shows observed equipped slots and carried
+  items with exact item-string variants and the available capture source/time. It does not identify
+  speculative candidates or claim equipability, suitability, upgrades, or transferability. The
+  read-only MCP tool `get_forever_gear_observation` exposes the same conservative observation view;
+  absent bank data remains UNKNOWN. See [`docs/FOREVER_GEAR_OBSERVATION.md`](docs/FOREVER_GEAR_OBSERVATION.md).
 
 ## Supported WoW versions
 

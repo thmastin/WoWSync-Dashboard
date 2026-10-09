@@ -305,6 +305,8 @@ export interface ParsedSnapshot {
   itemMetadata?: ItemMetadataSection;
   /** Optional Retail-only sidecar. Its rows remain scoped to this snapshot and observed locations. */
   gearCandidates?: GearCandidatesSection;
+  /** Forever 70291 structured observation timestamps; never interpreted with Retail allocation rules. */
+  foreverGearObservation?: import("./foreverGearObservation.ts").ForeverStructuredObservation;
 }
 
 /** WoW version spaces. Data must never be aggregated across these. */

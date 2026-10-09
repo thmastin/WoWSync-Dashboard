@@ -237,6 +237,14 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json({ character });
   });
 
+  app.get("/api/characters/:identityKey/forever-gear-observation", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    const result = new DashboardReadModel(store).getForeverGearObservation({ version: character.version, name: character.name, realm: character.realm });
+    if (result.status !== "FOUND") return res.status(404).json({ error: "Forever gear observation is not available for this character.", code: result.status });
+    res.json(result);
+  });
+
   // Permanently deletes ONE character and its entire snapshot history.
   //
   // Deliberately hard to trigger by accident: the request must carry a JSON
@@ -309,8 +317,9 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     const currencies: unknown = req.body?.currencies;
     const characterState: unknown = req.body?.characterState;
     const equipmentObservation: unknown = req.body?.equipmentObservation;
+    const foreverGearObservation: unknown = req.body?.foreverGearObservation;
     try {
-      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }), ...(equipmentObservation == null ? {} : { equipmentObservation }) });
+      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }), ...(equipmentObservation == null ? {} : { equipmentObservation }), ...(foreverGearObservation == null ? {} : { foreverGearObservation }) });
       res.json({
         result: {
           ...result,

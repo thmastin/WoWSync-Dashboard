@@ -19,6 +19,7 @@ import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
+import { mergeForeverStructuredObservation, normalizeForeverStructuredObservation } from "./foreverGearObservation.ts";
 import {
   canonicalJson,
   evaluateEquipmentPolicy,
@@ -725,6 +726,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const version = detectVersion(parsed.character);
     const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version);
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
+    const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
+    if (normalizedForeverObservation) parsed.foreverGearObservation = normalizedForeverObservation;
     const identity = characterIdentity(version, parsed.character);
     const now = Math.floor(Date.now() / 1000);
 
@@ -761,6 +764,18 @@ export class SqliteSnapshotStore implements SnapshotStore {
           }
           const equipmentObservation =
             extras.equipmentObservation === undefined ? undefined : this.recordEquipmentObservation(characterRow.id, existing.id, version, extras.equipmentObservation, now);
+          let foreverGearOutcome: ImportResult["foreverGearObservation"];
+          if (extras.foreverGearObservation !== undefined) {
+            const existingParsed = toStoredSnapshot(existing).parsed;
+            if (!normalizedForeverObservation) foreverGearOutcome = "invalid-or-unsupported";
+            else {
+              const merged = mergeForeverStructuredObservation(existingParsed.foreverGearObservation, normalizedForeverObservation);
+              existingParsed.foreverGearObservation = merged.value;
+              existing.parsed_json = JSON.stringify(existingParsed);
+              this.stmts.updateParsedSnapshot.run(existing.parsed_json, existing.id);
+              foreverGearOutcome = merged.outcome;
+            }
+          }
           const duplicateSnapshot = toStoredSnapshot(existing);
           return {
             character: this.summarize(characterRow.id)!,
@@ -774,6 +789,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             ...(currencies ? { currencies } : {}),
             ...(characterStateOutcome ? { characterState: characterStateOutcome } : {}),
             ...(equipmentObservation ? { equipmentObservation } : {}),
+            ...(foreverGearOutcome ? { foreverGearObservation: foreverGearOutcome } : {}),
           };
         }
       } else {
@@ -876,6 +892,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         sharedStorage,
         ...(currencies ? { currencies } : {}),
         ...(equipmentObservation ? { equipmentObservation } : {}),
+        ...(extras.foreverGearObservation !== undefined ? { foreverGearObservation: normalizedForeverObservation ? "recorded" : "invalid-or-unsupported" } : {}),
         ...(extras.characterState !== undefined ? { characterState: normalizedCharacterState ? "recorded" : "invalid-or-unsupported" } : {}),
       };
     });

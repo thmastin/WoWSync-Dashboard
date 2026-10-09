@@ -192,7 +192,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     }
 
     const text = chosen.text!;
-    const structuredSha256 = sidecarPayloadHash({ currencies: chosen.currencies, characterState: chosen.characterState, equipmentObservation: chosen.equipmentObservation });
+    const structuredSha256 = sidecarPayloadHash({ currencies: chosen.currencies, characterState: chosen.characterState, equipmentObservation: chosen.equipmentObservation, foreverGearObservation: chosen.foreverGearObservation });
     const summary = describeExport(text);
     const problems = consistencyProblems(chosen, summary, { character: summary.name ?? chosen.name ?? "" });
     if (problems.length > 0) return stop(`Not sent: the newest saved export is not consistent.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
@@ -214,21 +214,21 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256) {
       out("  Same text with changed structured SavedVariables state: attaching the newer sidecar observations.");
     }
-    const stranded = records.filter((record) => record !== chosen && (record.currencies !== undefined || record.characterState !== undefined) && record.text === undefined);
+    const stranded = records.filter((record) => record !== chosen && (record.currencies !== undefined || record.characterState !== undefined || record.foreverGearObservation !== undefined) && record.text === undefined);
     for (const record of stranded) {
       out(`  Structured read for ${record.name ?? "?"} · ${record.realm ?? "?"} has no saved text export to attach to; run /wowsync on that character, then /reload or log out.`);
     }
     out(`  Sending ${summary.bytes} text bytes plus structured SavedVariables state (SHA-256 ${summary.sha256}) to ${deps.captureTransport ? `${config.origin}/api/captures` : importEndpoint(config.origin)} ...`);
     try {
       if (deps.captureTransport) {
-        const capture = await deps.captureTransport.send(text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
+        const capture = await deps.captureTransport.send(text, chosen.currencies, chosen.characterState, chosen.equipmentObservation, chosen.foreverGearObservation);
         deps.status?.({ type: "acknowledgement", at: new Date().toISOString(), file: config.file, product, captureId: capture.captureId, character: summary.name, realm: summary.realm, version: summary.version });
         out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
         lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
         sendFailures = 0;
         return finish(0);
       }
-      const result = await postImport(deps, config.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
+      const result = await postImport(deps, config.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation, chosen.foreverGearObservation);
       for (const line of describeImportResult(result, summary.sha256)) out(`  ${line}`);
       lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
       sendFailures = 0;

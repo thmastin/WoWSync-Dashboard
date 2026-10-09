@@ -181,6 +181,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterEquipment(query)));
+  server.registerTool("get_forever_gear_observation", {
+    title: "Get Forever observed equipment and carried items",
+    description: "Returns one Forever-version character's observed equipped slots and carried inventory with snapshot/source/freshness provenance. The existing Dashboard identity model has no WoW account identifier, so account scope is explicitly UNKNOWN and limited to this Dashboard import context. Candidate classification remains UNKNOWN unless validated Forever metadata supports it; eligibility, suitability, upgrade status, transferability, and unobserved bank contents remain UNKNOWN. Never applies Retail rules.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getForeverGearObservation(query)));
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
     description: "Returns profession and specialization state plus Retail recipe learned-state observations for one explicit-version character. Recipe candidates are partial, absence never means unlearned, and LAST_SEEN evidence is labeled.",

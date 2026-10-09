@@ -129,6 +129,7 @@ export interface ImportResult {
    * Possible outcomes follow the existing characterState pattern.
    */
   equipmentObservation?: "recorded" | "already-recorded" | "conflict" | "projection-mismatch" | "projection-without-canonical" | "invalid-or-unsupported";
+  foreverGearObservation?: "recorded" | "updated" | "already-recorded" | "conflict" | "invalid-or-unsupported";
 }
 
 /** Optional structured data that travels with an export's text (never parsed from it). */
@@ -139,6 +140,8 @@ export interface ImportExtras {
   characterState?: unknown;
   /** Retail canonical sections.equipment evidence plus the latestExport projection, as plain JSON; validated, version-gated and policy-checked by the store. */
   equipmentObservation?: unknown;
+  /** Forever 70291 structured equipment/bags/bank observations, identity- and profile-gated. */
+  foreverGearObservation?: unknown;
 }
 
 /** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */

@@ -16,6 +16,8 @@ import type { SectionStatus } from "../types.ts";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
+import { buildForeverGearObservation } from "@wowsync-dashboard/core/foreverGearObservation.ts";
+import { foreverSnapshotIdentityIssue } from "../foreverIdentityGuard.ts";
 
 function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
@@ -88,6 +90,10 @@ export default function CharacterDetail({
   }, [load.state.data]);
 
   const snapshot = snapshots.find((s) => s.id === selectedId) ?? snapshots[0];
+  const foreverIdentityIssue = character?.version === "forever" ? foreverSnapshotIdentityIssue(snapshots.map((entry) => entry.parsed.foreverGearObservation)) : undefined;
+  const foreverObservation = character?.version === "forever" && snapshot && snapshot.parsed.character.clientFamily === "Forever" && snapshot.parsed.character.clientVersion === "1.60.1" && snapshot.parsed.character.clientBuild === "70291" && snapshot.parsed.character.interface === "16001"
+    ? buildForeverGearObservation({ identity: { version: "forever", identityKey: character.identityKey, name: character.name, realm: character.realm }, snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt, equipment: snapshot.parsed.equipment, bags: snapshot.parsed.bags, bank: snapshot.parsed.bank, structured: snapshot.parsed.foreverGearObservation, now: Math.floor(Date.now() / 1000) })
+    : undefined;
   // Enrichment for this character's game version (bags, Character Bank, carried Warband/Guild); never blocks the page.
   const itemInfo = useItemInfoLoader(character?.version, refreshTick);
 
@@ -228,7 +234,7 @@ export default function CharacterDetail({
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
             <SectionFreshnessLine status={snapshot.parsed.equipment.status} />
-            {snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
+            {character.version === "forever" && foreverIdentityIssue ? <p role="status">Equipment withheld: {foreverIdentityIssue}</p> : snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
               <>
@@ -275,8 +281,44 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
-          <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-gear-observation">
+              <h3>Forever gear observations</h3>
+              {snapshot.parsed.character.clientFamily !== "Forever" || snapshot.parsed.character.clientVersion !== "1.60.1" || snapshot.parsed.character.clientBuild !== "70291" || snapshot.parsed.character.interface !== "16001" ? (
+                <p>Observation view unavailable: this slice requires Forever 1.60.1 build 70291 / interface 16001.</p>
+              ) : <>
+              <p className="muted small">
+                {foreverObservation?.identity.accountScope === "UNKNOWN"
+                  ? `${foreverObservation.identity.accountScope}: ${foreverObservation.identity.accountScopeReason}`
+                  : "Account scope unavailable."}
+              </p>
+              {foreverIdentityIssue && <p role="status">Observation unavailable: {foreverIdentityIssue}</p>}
+              {!foreverIdentityIssue && <>
+              <p className="muted small">
+                {snapshot.parsed.foreverGearObservation
+                  ? `Snapshot source: Forever WoWSyncDB structured sections · export ${formatAbsoluteTime(snapshot.parsed.foreverGearObservation.generatedAt)}`
+                  : "Source: WOWSYNC v1 export · structured section timestamps unavailable for this snapshot."}
+              </p>
+              <p>Equipped slots and carried items below are observations. Candidate classification, eligibility, suitability, upgrade status, and transferability are UNKNOWN.</p>
+              <p className="muted small">Equipment: {foreverObservation?.equipment.state} · {foreverObservation?.equipment.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.equipment.observedAt)} (${foreverObservation.equipment.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.equipment.source}</p>
+              {foreverObservation?.equipment.items.map((slot, index) => (
+                <div key={`forever-eq-${slot.slot}-${index}`} className="muted small">{slot.provenance} equipped · {slot.slotName}: {slot.name ?? "?"} · {slot.itemRef ?? "item variant unavailable"}</div>
+              ))}
+              <p className="muted small">Carried inventory: {foreverObservation?.carried.state} · {foreverObservation?.carried.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.carried.observedAt)} (${foreverObservation.carried.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.carried.source}</p>
+              {foreverObservation?.carried.items === undefined ? <div>Carried inventory: UNKNOWN.</div> : foreverObservation.carried.items.map((item, index) => (
+                <div key={`forever-bag-${index}`} className="muted small">{item.provenance} carried · {item.name ?? "?"} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"}</div>
+              ))}
+              <p>Possible evaluation candidates: {foreverObservation?.evaluationCandidates.state}. {foreverObservation?.evaluationCandidates.reason}</p>
+              <p>Bank: {foreverObservation?.bank.state === "UNKNOWN" ? `UNKNOWN; ${foreverObservation.bank.reason}` : `${foreverObservation?.bank.state ?? "UNKNOWN"}.`}</p>
+              </>}
+              </>}
+            </section>
+          )}
+
+          {character.version === "forever" && foreverIdentityIssue ? <div className="detail-card" role="status">Forever inventory withheld: {foreverIdentityIssue}</div> : <>
+            <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
+            <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
+          </>}
           {snapshot.parsed.accountBank && (
             <InventoryCard
               id="detail-warband"

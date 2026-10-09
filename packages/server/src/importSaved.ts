@@ -211,6 +211,9 @@ export interface SavedExport {
   characterState?: unknown;
   /** Retail equipment observation (sections.equipment + latestExport projection), as plain JSON. Absent when not available. */
   equipmentObservation?: unknown;
+  /** Forever 70291 equipment/inventory sections with their structured observation timestamps. */
+  foreverGearObservation?: unknown;
+  sourceCharacterGuid?: string;
 }
 
 /**
@@ -250,6 +253,15 @@ const EQUIPMENT_ENVELOPE_FIELDS = ["observedAt", "capture", "revision", "complet
 function isRetailExportText(text: string): boolean {
   try {
     return detectVersion(parseWowSyncExport(text).character) === "retail";
+  } catch {
+    return false;
+  }
+}
+
+function isForever70291ExportText(text: string): boolean {
+  try {
+    const character = parseWowSyncExport(text).character;
+    return detectVersion(character) === "forever" && character.clientVersion === "1.60.1" && character.clientBuild === "70291" && character.interface === "16001";
   } catch {
     return false;
   }
@@ -306,6 +318,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
     const equipment = luaGet(sections, "equipment");
+    const itemMetadata = luaGet(record, "itemMetadata");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
     const professionRecipes = luaGet(sections, "professionRecipes");
@@ -325,6 +338,21 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
         }
       : undefined;
     const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
+    const captureProfile = luaGet(record, "captureProfile");
+    const foreverGearObservation = typeof text === "string" && typeof captureProfile === "string" && captureProfile === "Forever:1.60.1:70291:16001" && isForever70291ExportText(text)
+      ? {
+          clientProfile: captureProfile,
+          name: typeof name === "string" ? name : "",
+          realm: typeof realm === "string" ? realm : "",
+          generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
+          ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
+          ...Object.fromEntries(["equipment", "bags", "bank"].flatMap((key) => {
+            const section = luaGet(sections, key);
+            return isLuaTable(section) ? [[key, luaToPlain(section)]] : [];
+          })),
+          ...(isLuaTable(itemMetadata) ? { itemMetadata: luaToPlain(itemMetadata) } : {}),
+        }
+      : undefined;
     out.push({
       name: typeof name === "string" ? name : undefined,
       realm: typeof realm === "string" ? realm : undefined,
@@ -334,6 +362,8 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
       ...(characterState ? { characterState } : {}),
       ...(equipmentObservation ? { equipmentObservation } : {}),
+      ...(foreverGearObservation ? { foreverGearObservation } : {}),
+      ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
     });
   }
   return out.sort(
@@ -384,6 +414,9 @@ export function selectExport(records: readonly SavedExport[], request: { charact
   const top = withText.filter((r) => (r.generatedAt ?? 0) === newest);
   if (new Set(top.map((r) => r.text)).size > 1) {
     throw new BridgeError(`${label(top[0])} has ${top.length} saved records generated at the same time with different text; refusing to guess.`);
+  }
+  if ((top.length > 1 && top.some((r) => !r.sourceCharacterGuid)) || new Set(top.flatMap((r) => r.sourceCharacterGuid ? [r.sourceCharacterGuid] : [])).size > 1) {
+    throw new BridgeError(`${label(top[0])} has same-time exports with missing or conflicting WoWSyncDB character GUIDs; refusing to mix source characters.`);
   }
   const warnings: string[] = [];
   if (withText.length > 1) {
@@ -630,14 +663,14 @@ export const importEndpoint = (origin: string): string => `${origin}/api/import`
  * send, shared by `import:saved` and `watch:saved`: neither has any import logic of its own. Throws {@link ImportPostError}
  * (a BridgeError) with the reason; nothing has been imported when it does.
  */
-export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown, equipmentObservation?: unknown): Promise<any> {
+export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown, equipmentObservation?: unknown, foreverGearObservation?: unknown): Promise<any> {
   let response: Response;
   try {
     response = await deps.fetch(importEndpoint(origin), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // `currencies` (the record's structured section) rides along only when the record has one; the text is untouched.
-      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }), ...(equipmentObservation === undefined ? {} : { equipmentObservation }) }),
+      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }), ...(equipmentObservation === undefined ? {} : { equipmentObservation }), ...(foreverGearObservation === undefined ? {} : { foreverGearObservation }) }),
       signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
     });
   } catch (err) {

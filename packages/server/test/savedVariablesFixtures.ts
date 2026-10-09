@@ -19,6 +19,10 @@ export interface SavedRecord {
   equipment?: string;
   /** Raw Lua for GearExport's `latestExport.specEquipmentObservation` projection. */
   specProjection?: string;
+  captureProfile?: string;
+  bags?: string;
+  bank?: string;
+  itemMetadata?: string;
 }
 
 export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: number | null; legacy?: string } = {}): string {
@@ -33,6 +37,8 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
     if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);
     if (r.equipment !== undefined) lines.push(`["equipment"] = ${r.equipment},`);
+    if (r.bags !== undefined) lines.push(`["bags"] = ${r.bags},`);
+    if (r.bank !== undefined) lines.push(`["bank"] = ${r.bank},`);
     lines.push("},", '["visits"] = {', "},");
     if (r.text !== undefined || r.specProjection !== undefined) {
       lines.push('["latestExport"] = {', `["generatedAt"] = ${r.generatedAt ?? 0},`);
@@ -40,6 +46,8 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
       if (r.specProjection !== undefined) lines.push(`["specEquipmentObservation"] = ${r.specProjection},`);
       lines.push("},");
     }
+    if (r.captureProfile !== undefined) lines.push(`["captureProfile"] = ${q(r.captureProfile)},`);
+    if (r.itemMetadata !== undefined) lines.push(`["itemMetadata"] = ${r.itemMetadata},`);
     lines.push("},");
   }
   lines.push("},", "}", "");

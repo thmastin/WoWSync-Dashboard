@@ -155,6 +155,18 @@ export interface ParsedSnapshot {
     status: SectionStatus;
     categories: TrainerCategory[];
   };
+  foreverGearObservation?: {
+    clientProfile: "Forever:1.60.1:70291:16001";
+    name: string;
+    realm: string;
+    generatedAt: number;
+    sourceCharacterGuid?: string;
+    sourceCharacterGuidConflict?: boolean;
+    equipment?: Record<string, unknown>;
+    bags?: Record<string, unknown>;
+    bank?: Record<string, unknown>;
+    itemMetadata?: Record<string, unknown>;
+  };
 }
 
 export interface TrainerService {

@@ -98,6 +98,17 @@ test("[REAL] a Forever export imports through POST /api/import as a Forever char
   });
 });
 
+test("Forever observation REST route preserves the build guard for older captures", async () => {
+  await withApp(async (api) => {
+    await api.import("forever/hallo-1789731867.wowsync.txt");
+    const response = await api.get(`/api/characters/${encodeURIComponent(HALLO)}/forever-gear-observation`);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.status, "FOUND");
+    assert.equal(response.body.value.data, undefined);
+    assert.match(response.body.value.provenance.reason, /build 70291 \/ interface 16001/);
+  });
+});
+
 test("[REAL] /api/versions lists Forever with a label, and its own totals", async () => {
   await withApp(async (api) => {
     await seed(api);

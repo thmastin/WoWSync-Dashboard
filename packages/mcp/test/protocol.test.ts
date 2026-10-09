@@ -40,6 +40,12 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
   return gearCandidates ? withMetadata.replace(/\n\[END\]$/, `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${candidateHeader}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t1\t0\t0\t4\t4\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN\n\n[END]`) : withMetadata;
 }
 
+function forever(name: string, realm: string) {
+  const generatedAt = now - 15;
+  const text = buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
+  return { text, sidecar: { clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: generatedAt + 1, completeness: "complete", data: { slots: { "16": { itemID: 900, itemString: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" } } } }, bags: { observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 901, itemString: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", count: 2 } } }] } }, bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "Not visited", data: {} }, itemMetadata: {} } };
+}
+
 function structured<T>(result: { isError?: boolean; structuredContent?: unknown }): T {
   assert.equal(result.isError, undefined);
   assert.notEqual(result.structuredContent, undefined);
@@ -74,6 +80,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
+    const observedForever = forever("Hallo", "Forever Realm");
+    writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar });
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
@@ -113,6 +121,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_forever_gear_observation",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",
@@ -133,7 +142,19 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
-    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
+    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
+
+    const foreverView = structured<{ status: string; value?: { data?: { identity: { version: string }; equipment: { items: Array<{ provenance: string }> }; carried: { items: Array<{ itemRef: string }> }; evaluationCandidates: { state: string }; unknowns: { eligibility: string; transferability: string }; bank: { state: string } }; provenance: { source?: string; freshness?: string } } }>(await client.callTool({ name: "get_forever_gear_observation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverView.status, "FOUND");
+    assert.equal(foreverView.value?.data?.identity.version, "forever");
+    assert.equal(foreverView.value?.data?.equipment.items[0]?.provenance, "OBSERVED");
+    assert.equal(foreverView.value?.data?.carried.items[0]?.itemRef, "item:901:0:0:0:0:0:0:0:123:0:0:0");
+    assert.equal(foreverView.value?.data?.evaluationCandidates.state, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.unknowns.eligibility, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.unknowns.transferability, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.bank.state, "UNKNOWN");
+    assert.equal(foreverView.value?.provenance.freshness, "stale");
+    assert.equal((await client.callTool({ name: "get_forever_gear_observation", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "Forever version is explicit and mandatory");
 
     const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string; identityKey: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
     assert.equal(candidateRead.provenance.state, "DERIVED");
@@ -572,6 +593,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_forever_gear_observation",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",

@@ -40,6 +40,71 @@ test("same-name realm matches are ambiguity, never a silent choice", () => {
   } finally { store.close(); }
 });
 
+test("Forever source character GUID collisions remain unresolved instead of merging account-context observations", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    for (const [generatedAt, guid] of [[NOW - 10, "Player-1-A"], [NOW - 5, "Player-2-B"]] as const) {
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+      store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: guid, equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } } } });
+    }
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.data, undefined);
+      assert.match(result.value.provenance.reason ?? "", /missing or conflicting WoWSyncDB character GUIDs/);
+    }
+  } finally { store.close(); }
+});
+
+test("Forever duplicate text cannot erase a conflicting WoWSyncDB source GUID", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const raw = buildWowSyncExport({ generatedAt: NOW, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+    const observation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW, sourceCharacterGuid: "Player-1-A", equipment: { observedAt: NOW, completeness: "complete", data: { slots: {} } } };
+    store.importSnapshot(raw, { foreverGearObservation: observation });
+    const duplicate = { ...observation, sourceCharacterGuid: "Player-2-B" };
+    assert.equal(store.importSnapshot(raw, { foreverGearObservation: duplicate }).foreverGearObservation, "conflict");
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") assert.equal(result.value.data, undefined);
+  } finally { store.close(); }
+});
+
+test("Forever observation resolves within its version and reports observed variants with explicit UNKNOWN claims", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const raw = buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", qty: 1 }] }] }, bank: { unknown: true } });
+    const sidecar = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW - 5, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: NOW - 4, completeness: "complete", data: { slots: { "16": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 } } } }, bags: { observedAt: NOW - 3, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", count: 1 } } }] } }, bank: { observedAt: NOW - 3, completeness: "unknown", reason: "not observed", data: {} }, itemMetadata: {} };
+    const first = store.importSnapshot(raw, { foreverGearObservation: sidecar });
+    const newer = structuredClone(sidecar);
+    newer.equipment.observedAt = NOW - 1;
+    newer.equipment.data.slots["16"] = { itemID: 43, itemString: "item:43:9", name: "Newer structured observation", itemLevel: 3 };
+    const duplicate = store.importSnapshot(raw, { foreverGearObservation: newer });
+    assert.equal(duplicate.isDuplicate, true);
+    assert.equal(duplicate.foreverGearObservation, "updated");
+    const conflicting = structuredClone(newer);
+    conflicting.equipment.data.slots["16"] = { itemID: 44, itemString: "item:44:8", name: "Same-time conflict", itemLevel: 4 };
+    assert.equal(store.importSnapshot(raw, { foreverGearObservation: conflicting }).foreverGearObservation, "conflict");
+    const read = new DashboardReadModel(store, () => NOW);
+    const result = read.getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.provenance.version, "forever");
+      assert.equal(result.value.data?.equipment.items[0]?.itemRef, "item:43:9");
+      assert.equal(result.value.data?.equipment.items[0]?.provenance, "OBSERVED");
+      assert.equal(result.value.data?.carried?.items?.[0]?.itemRef, "item:42:0:0:0:0:0:0:0:123:0:0:0");
+      assert.equal(result.value.data?.evaluationCandidates.state, "UNKNOWN");
+      assert.equal(result.value.data?.unknowns.transferability, "UNKNOWN");
+      assert.equal(result.value.data?.bank.state, "UNKNOWN");
+      assert.equal(result.value.data?.identity.accountScope, "UNKNOWN");
+    }
+    const wrongVersion = read.getForeverGearObservation({ version: "retail", name: "Hallo", realm: "Hallo" });
+    assert.equal(wrongVersion.status, "FOUND");
+    if (wrongVersion.status === "FOUND") assert.equal(wrongVersion.value.data, undefined);
+    assert.equal(read.getForeverGearObservation({ version: "forever", name: "Nobody", realm: "Hallo" }).status, "NOT_FOUND");
+  } finally { store.close(); }
+});
+
 test("Retail candidate analysis integrates SQLite evidence, uppercase WoW class tokens, per-spec equipment, and provenance", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";

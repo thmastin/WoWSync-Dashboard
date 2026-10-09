@@ -17,6 +17,7 @@ import { classifyFreshness } from "./freshness.ts";
 import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
+import { buildForeverGearObservation } from "./foreverGearObservation.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -877,6 +878,30 @@ export class DashboardReadModel {
 
   getCharacterEquipment(query: CharacterQuery): CharacterResolution<ReadValue<EquipmentSection>> {
     return this.resolveSection(query, "equipment");
+  }
+
+  getForeverGearObservation(query: CharacterQuery): CharacterResolution<ReadValue<ReturnType<typeof buildForeverGearObservation>>> {
+    requireVersion(query.version);
+    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Forever gear observations are isolated to the Forever 70291 profile." } } };
+    return this.resolve(query, (character, snapshot) => {
+      if (!snapshot) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
+      const profile = snapshot.parsed.character;
+      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || profile.clientBuild !== "70291" || profile.interface !== "16001") {
+        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires the validated Forever 1.60.1 build 70291 / interface 16001 profile." } };
+      }
+      const snapshots = this.store.listSnapshots(character.identityKey);
+      const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
+      if (sourceGuids.some((guid) => !guid) || snapshots.some((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuidConflict) || new Set(sourceGuids).size > 1) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "The Dashboard version/realm/name history contains missing or conflicting WoWSyncDB character GUIDs; the observation cannot safely be resolved to one source character." } };
+      const data = buildForeverGearObservation({
+        identity: { version: "forever", identityKey: character.identityKey, name: character.name, realm: character.realm },
+        snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt,
+        equipment: snapshot.parsed.equipment, bags: snapshot.parsed.bags, bank: snapshot.parsed.bank,
+        structured: snapshot.parsed.foreverGearObservation,
+        now: this.now(),
+      });
+      const observedAt = snapshot.parsed.foreverGearObservation?.generatedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
+      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: snapshot.parsed.foreverGearObservation ? "Forever 70291 WoWSyncDB structured sections plus WOWSYNC v1 export" : "WOWSYNC v1 export; structured WoWSyncDB section timestamps unavailable", reason: snapshot.parsed.foreverGearObservation ? undefined : "Structured Forever section sidecar was not available for this imported snapshot." } };
+    });
   }
   getCharacterProfessions(query: CharacterQuery): CharacterResolution<ReadValue<ProfessionsSection>> {
     return this.resolve(query, (character, snapshot) => {
