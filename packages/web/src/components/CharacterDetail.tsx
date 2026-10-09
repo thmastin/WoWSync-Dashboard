@@ -92,6 +92,7 @@ export default function CharacterDetail({
   onBack,
   onDeleted,
   onOpenSharedStorage,
+  onOpenForeverGearReview,
 }: {
   identityKey: string;
   /** Changes after an import/delete elsewhere, so this page reloads instead of showing pre-import data. */
@@ -101,6 +102,8 @@ export default function CharacterDetail({
   onDeleted: () => void;
   /** Opens the account-level Shared Storage view (the reconciled Warband / Guild Bank), which is where that state lives. */
   onOpenSharedStorage?: () => void;
+  /** Opens the roster-level Forever gear review from this character's assessment. */
+  onOpenForeverGearReview?: () => void;
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -362,7 +365,7 @@ export default function CharacterDetail({
 
           {character.version === "forever" && (
             <section className="detail-card" id="detail-forever-gear-allocation">
-              <h3>Forever allocation assessment</h3>
+              <div className="forever-detail-heading"><h3>Forever allocation assessment</h3>{onOpenForeverGearReview && <button type="button" className="link-button" onClick={onOpenForeverGearReview}>Compare across roster</button>}</div>
               {foreverAllocationLoad.state.status === "error" ? <p role="status">Allocation evidence unavailable: {String(foreverAllocationLoad.state.error)} <button onClick={foreverAllocationLoad.retry}>Retry</button></p> : null}
               {foreverAllocationLoad.state.status === "loading" ? <p className="muted">Loading latest Forever allocation evidence…</p> : null}
               {foreverAllocationLoad.state.status === "ready" && foreverAllocationLoad.state.data?.value?.data ? (() => {

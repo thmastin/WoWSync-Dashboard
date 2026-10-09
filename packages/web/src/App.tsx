@@ -14,6 +14,7 @@ import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
 import AllocationTab from "./components/AllocationTab.tsx";
+import ForeverGearReview from "./components/ForeverGearReview.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -116,6 +117,12 @@ export default function App() {
     }
   }, [scoped, route, navigate]);
 
+  useEffect(() => {
+    if (route.view === "gear-review" && route.version !== "forever") {
+      navigate(patchRoute(route, { version: "forever", view: "gear-review" }), true);
+    }
+  }, [route, navigate]);
+
   const accent = VERSION_ACCENTS[activeVersion];
   const activeVersionSummary = versionSummaries?.find((v) => v.version === activeVersion);
   const activeSyncStrip = formatVersionSyncStrip(activeVersionSummary);
@@ -133,6 +140,10 @@ export default function App() {
 
   function openSharedStorage() {
     navigate(patchRoute(route, { version: "retail", view: "shared" }));
+  }
+
+  function openForeverGearReview() {
+    navigate(patchRoute(route, { version: "forever", view: "gear-review" }));
   }
 
   function openProfessions() {
@@ -230,6 +241,7 @@ export default function App() {
               navigate(patchRoute(route, { view: route.from ?? "characters", identityKey: undefined, from: null }));
             }}
             onOpenSharedStorage={openSharedStorage}
+            onOpenForeverGearReview={openForeverGearReview}
           />
         ) : (
           <>
@@ -263,6 +275,11 @@ export default function App() {
                     </button>
                   </>
                 )}
+                {activeVersion === "forever" && (
+                  <button className={tabView === "gear-review" ? "active" : ""} onClick={() => navigate(patchRoute(route, { version: "forever", view: "gear-review" }))}>
+                    Gear Review
+                  </button>
+                )}
               </div>
 
               {route.view === "shared" || route.view === "allocation" ? null : scoped && scoped.isRealmScoped ? (
@@ -286,6 +303,7 @@ export default function App() {
             </div>
 
             {route.view === "allocation" && <AllocationTab activeVersion={activeVersion} refreshTick={refreshTick} />}
+            {scoped && route.view === "gear-review" && activeVersion === "forever" && <ForeverGearReview characters={scoped.characters} refreshTick={refreshTick} onOpenCharacter={openCharacter} />}
             {route.view === "shared" && <SharedStorageView />}
             {route.view === "research" && <MidnightResearch />}
             {scoped && route.view === "items" && (

@@ -1285,3 +1285,36 @@ button.roster-name-link {
 .allocation-pager { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .allocation-removed summary { cursor: pointer; font-family: "Cinzel", serif; }
 .allocation-removed-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding: 6px 0; }
+
+.forever-review-page { display: grid; gap: 12px; }
+.forever-review-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.forever-review-intro h2 { margin: 4px 0; }
+.forever-detail-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.forever-detail-heading h3 { margin: 0; }
+.forever-review-intro p { max-width: 90ch; }
+.forever-review-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.forever-review-summary > div { display: flex; flex-direction: column; gap: 3px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.forever-review-summary strong { font-size: 1.4rem; }
+.forever-review-summary span { color: var(--text-muted); font-size: 0.8rem; }
+.forever-review-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.forever-review-controls label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 0.82rem; }
+.forever-review-controls select, .forever-review-controls input { min-width: 12rem; }
+.forever-review-controls .forever-review-search { flex: 1; }
+.forever-review-search input { width: 100%; }
+.forever-review-item > header, .forever-review-recipient-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.forever-review-item > header h3 { margin: 0; }
+.forever-review-recipient-list { display: grid; gap: 8px; margin-top: 10px; }
+.forever-review-recipient { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--panel) 72%, var(--bg)); }
+.forever-review-recipient h4 { margin: 0; }
+.forever-disposition, .evidence-chip { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; color: var(--text-muted); font-size: 0.78rem; }
+.disposition-equip_candidate, .disposition-possible_other_character { color: var(--warning, #b78a35); }
+.disposition-insufficient_evidence { color: var(--text-muted); }
+.forever-review-recipient details { margin-top: 8px; }
+.forever-review-conflict { padding: 8px 10px; border-left: 3px solid var(--warning, #b78a35); background: color-mix(in srgb, var(--warning, #b78a35) 10%, transparent); }
+.forever-review-recipient summary { cursor: pointer; }
+.forever-review-page .link-button { border: 0; padding: 2px 4px; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; }
+@media (max-width: 700px) {
+  .forever-review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .forever-review-intro { flex-direction: column; }
+  .forever-review-controls > label, .forever-review-controls select, .forever-review-controls input { width: 100%; }
+}
