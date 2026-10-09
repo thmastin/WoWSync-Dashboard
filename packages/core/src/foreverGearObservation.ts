@@ -176,9 +176,9 @@ export function buildForeverGearObservation(input: {
   const factRows = Array.isArray(rawFacts) ? rawFacts.map(object).filter((row): row is Record<string, unknown> => row !== undefined) : [];
   const factsByRef = new Map(factRows.flatMap((row) => typeof row.itemString === "string" ? [[row.itemString, row] as const] : []));
   const observedCarried = carriedItems ?? [];
-  const itemFactComplete = evidence?.completeness === "complete" && evidenceData !== undefined;
+  const itemFactsAvailable = evidence !== undefined && evidenceData !== undefined;
   const carriedCovered = observedCarried.filter((item) => item.itemRef && factsByRef.has(item.itemRef)).length;
-  const itemFactCoverageComplete = itemFactComplete && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
+  const itemFactCoverageComplete = itemFactsAvailable && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
     && observedCarried.every((item) => {
       if (!item.itemRef) return false;
       const fact = factsByRef.get(item.itemRef);
@@ -239,7 +239,7 @@ export function buildForeverGearObservation(input: {
   const evaluationReason = evaluationState === "LAST_SEEN"
     ? "Potential equipment classification uses historical Forever item API evidence; verify its freshness before using it in an allocation decision."
     : evaluationState === "OBSERVED"
-    ? "Potential equipment candidates use exact carried itemStrings and same-snapshot Forever item API evidence. Character eligibility and allocation conclusions remain unknown."
+    ? "Every carried row has matching, complete, recent Forever item API evidence. Candidate classification covers carried inventory only; character eligibility and allocation conclusions remain unknown."
     : evaluationState === "PARTIAL"
       ? `${evaluationItems.length} potential item(s) have matching Forever evidence; item API coverage is incomplete for ${Math.max(0, observedCarried.length - carriedCovered)} carried row(s). Unclassified rows are not ruled out.`
       : "Potential equipment classification is UNKNOWN because matching, complete Forever item API evidence is unavailable.";

@@ -128,3 +128,19 @@ test("partial or stale carried-source timestamps cannot be upgraded by a fresh i
   assert.equal(old.evaluationCandidates.freshness, "recent", "the fresh API sample cannot refresh its old inventory source");
   assert.equal(old.evaluationCandidates.items[0]?.provenance, "LAST_SEEN");
 });
+
+test("partial equipment item facts do not downgrade complete carried-candidate coverage", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "partial", source: "equipment source partial; carried facts complete", data: {
+      sourceSections: { equipment: { observedAt: 100, state: "partial" }, bags: { observedAt: 101, state: "complete" } },
+      items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)],
+    } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 11, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "OBSERVED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+  assert.match(view.evaluationCandidates.reason, /Every carried row has matching/);
+  assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
+});
