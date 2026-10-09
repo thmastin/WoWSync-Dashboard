@@ -5,6 +5,7 @@ const LABELS: Record<ErpWorkOrderReadiness["state"], string> = {
   TERMINAL: "Work order is closed",
   BLOCKED_BY_DEPENDENCY: "Waiting for prerequisite work",
   OBSERVED_RESOURCE_SHORTFALL: "Observed resource shortfall",
+  MANUAL_SUPPLY_STEP_RECOMMENDED: "Manual supply step can address an observed gap",
   RESOURCE_ALLOCATION_REQUIRES_REVIEW: "Linked resource needs require review",
   WAITING_FOR_EVIDENCE: "Waiting for current evidence",
   OBSERVATION_CHANGED_REQUIRES_REVIEW: "Observed change requires review",

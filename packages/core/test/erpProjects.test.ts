@@ -476,6 +476,35 @@ test("work order readiness aggregates linked needs and treats saved reservations
   } finally { store.close(); }
 });
 
+test("gather and purchase work orders surface only complete observed item gaps as manual next steps", () => {
+  const complete = seedStore({ bank: { containers: [] } });
+  try {
+    const identityKey = complete.identityKey;
+    const itemNeed = { stableId: "need_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 6, sourceIdentityKey: identityKey };
+    const make = (kind: "GATHER" | "PURCHASE", needs: ErpProject["needs"] = [itemNeed]): ErpProject => ({
+      ...project(identityKey), needs,
+      reservations: [],
+      workOrders: [{ stableId: `step_${kind}`, kind, status: "PLANNED", title: `${kind} the missing item`, resourceNeedIds: needs.map((need) => need.stableId), dependsOn: [] }],
+    });
+    for (const kind of ["GATHER", "PURCHASE"] as const) {
+      const readiness = evaluateErpProject(make(kind), (key) => complete.store.listSnapshots(key), [make(kind)], 1_700_000_010).workOrderReadiness[0]!;
+      assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
+      assert.deepEqual(readiness.actionTargetNeedIds, ["need_item"]);
+      assert.match(readiness.reason, /does not establish a gathering route, purchase availability, price, or action completion/);
+    }
+    const gold = { stableId: "need_gold", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Purchase budget", requiredQuantity: 7000, sourceIdentityKey: identityKey };
+    const purchaseWithInsufficientBudget = make("PURCHASE", [itemNeed, gold]);
+    assert.equal(evaluateErpProject(purchaseWithInsufficientBudget, (key) => complete.store.listSnapshots(key), [purchaseWithInsufficientBudget], 1_700_000_010).workOrderReadiness[0]?.state, "OBSERVED_RESOURCE_SHORTFALL", "an item procurement step does not bypass a linked observed gold shortfall");
+  } finally { complete.store.close(); }
+
+  const incomplete = seedStore();
+  try {
+    const itemNeed = { stableId: "need_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 6, sourceIdentityKey: incomplete.identityKey };
+    const gather = { ...project(incomplete.identityKey), needs: [itemNeed], reservations: [], workOrders: [{ stableId: "gather", kind: "GATHER" as const, status: "PLANNED" as const, title: "Gather stone", resourceNeedIds: [itemNeed.stableId], dependsOn: [] }] };
+    assert.equal(evaluateErpProject(gather, (key) => incomplete.store.listSnapshots(key), [gather], 1_700_000_010).workOrderReadiness[0]?.state, "WAITING_FOR_EVIDENCE", "unknown bank evidence means the system cannot call this a confirmed shortfall or supply action target");
+  } finally { incomplete.store.close(); }
+});
+
 test("work-order progress separates player completion, observed state, changed evidence, and unresolved data", () => {
   const options = (generatedAt: number, quantity: number) => ({ generatedAt, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
   const store = new SqliteSnapshotStore(":memory:");

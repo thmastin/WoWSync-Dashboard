@@ -517,9 +517,10 @@ export interface ErpProjectView extends ErpProject {
 
 export interface ErpWorkOrderReadiness {
   readonly workOrderId: string;
-  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
+  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "MANUAL_SUPPLY_STEP_RECOMMENDED" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
   readonly blockingWorkOrderIds: readonly string[];
   readonly unresolvedNeedIds: readonly string[];
+  readonly actionTargetNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly reason: string;
 }
@@ -567,7 +568,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
   const workOrderReadiness: ErpWorkOrderReadiness[] = project.workOrders.map((order) => {
-    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], changedNeedIds: [] as string[] };
+    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[] };
     const linkedEvidence = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));
@@ -582,11 +583,18 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     if (project.status !== "ACTIVE") return { ...base, state: "PROJECT_NOT_ACTIVE", reason: `The project is ${project.status}; no next action is presented until the player resumes an active project.` };
     const blockingWorkOrderIds = order.dependsOn.filter((dependencyId) => project.workOrders.find((candidate) => candidate.stableId === dependencyId)?.status !== "COMPLETED");
     if (blockingWorkOrderIds.length) return { ...base, state: "BLOCKED_BY_DEPENDENCY", blockingWorkOrderIds, reason: `Complete and record these prerequisite work orders first: ${blockingWorkOrderIds.join(", ")}. A cancelled prerequisite does not satisfy a dependency.` };
-    const observedShortfall = staleOrUnknown.find((evidence) => evidence.state === "SHORTFALL_OBSERVED" && evidence.freshness !== "stale" && evidence.freshness !== "unknown");
-    if (observedShortfall) return { ...base, state: "OBSERVED_RESOURCE_SHORTFALL", unresolvedNeedIds: [observedShortfall.needId], reason: `A current observation records a shortfall for ${observedShortfall.needId}. Review the source and replan before acting.` };
-    if (staleOrUnknown.length) return { ...base, state: "WAITING_FOR_EVIDENCE", unresolvedNeedIds: staleOrUnknown.map((evidence) => evidence.needId), reason: `Required plan evidence is unknown, historical, incomplete, or stale for: ${staleOrUnknown.map((evidence) => evidence.needId).join(", ")}. Refresh observations or resolve the missing evidence before treating this step as ready.` };
+    const observedShortfalls = staleOrUnknown.filter((evidence) => evidence.state === "SHORTFALL_OBSERVED" && evidence.freshness === "recent");
+    const manualSupplyTargets = observedShortfalls.filter((evidence) => {
+      const need = project.needs.find((candidate) => candidate.stableId === evidence.needId);
+      return need && (need.kind === "ITEM_ID" || need.kind === "ITEM_REF") && (order.kind === "GATHER" || order.kind === "PURCHASE");
+    });
+    const nonActionShortfalls = observedShortfalls.filter((evidence) => !manualSupplyTargets.includes(evidence));
+    if (nonActionShortfalls.length) return { ...base, state: "OBSERVED_RESOURCE_SHORTFALL", unresolvedNeedIds: nonActionShortfalls.map((evidence) => evidence.needId), reason: `A current observation records a shortfall for ${nonActionShortfalls.map((evidence) => evidence.needId).join(", ")}. Review the source and replan before acting.` };
+    const waiting = staleOrUnknown.filter((evidence) => evidence.state !== "SHORTFALL_OBSERVED" || evidence.freshness !== "recent");
+    if (waiting.length) return { ...base, state: "WAITING_FOR_EVIDENCE", unresolvedNeedIds: waiting.map((evidence) => evidence.needId), reason: `Required plan evidence is unknown, historical, incomplete, or stale for: ${waiting.map((evidence) => evidence.needId).join(", ")}. Refresh observations or resolve the missing evidence before treating this step as ready.` };
     const reservationConflicts = workOrderAllocationConflicts(project, linkedEvidence, allProjects);
     if (reservationConflicts.length) return { ...base, state: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", unresolvedNeedIds: reservationConflicts, reason: `The combined linked needs, ambiguous overlapping item scopes, or active saved reservations cannot be supported by independent observed supply for: ${reservationConflicts.join(", ")}. Reservations record player intent; they do not lock or prove possession of resources. Reconcile the quantities and item scopes before treating this work order as ready; no resource was moved or consumed.` };
+    if (manualSupplyTargets.length) return { ...base, state: "MANUAL_SUPPLY_STEP_RECOMMENDED", actionTargetNeedIds: manualSupplyTargets.map((evidence) => evidence.needId), reason: `Current complete source evidence is below the planned quantity for ${manualSupplyTargets.map((evidence) => evidence.needId).join(", ")}. This saved ${order.kind.toLowerCase()} step is a player-reviewed option for addressing that gap; the system does not establish a gathering route, purchase availability, price, or action completion, and executes nothing.` };
     if (changedNeedEvidence.length) return { ...base, state: "OBSERVATION_CHANGED_REQUIRES_REVIEW", changedNeedIds: changedNeedEvidence.map((evidence) => evidence.needId), reason: `A comparable observation changed for linked needs: ${changedNeedEvidence.map((evidence) => evidence.needId).join(", ")}. Review the new amounts; a change alone does not establish that this work order caused it or that the planned step is complete.` };
     const actionLimit = order.kind === "TRANSFER" ? " An observed source location does not establish access or a transfer route." : order.kind === "EQUIP" ? " These resource checks do not establish equip eligibility or upgrade value." : order.kind === "CRAFT" ? " Learned recipe state and listed materials do not establish current skill, unlocks, or craftability." : " This is not an execution command or proof that all game prerequisites are met.";
     return { ...base, state: "READY_FOR_PLAYER_REVIEW", reason: `No incomplete plan dependency or linked resource-evidence blocker is recorded.${actionLimit}` };
