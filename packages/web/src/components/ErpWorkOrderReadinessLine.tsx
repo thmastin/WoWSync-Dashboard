@@ -6,6 +6,7 @@ const LABELS: Record<ErpWorkOrderReadiness["state"], string> = {
   BLOCKED_BY_DEPENDENCY: "Waiting for prerequisite work",
   OBSERVED_RESOURCE_SHORTFALL: "Observed resource shortfall",
   WAITING_FOR_EVIDENCE: "Waiting for current evidence",
+  OBSERVATION_CHANGED_REQUIRES_REVIEW: "Observed change requires review",
   READY_FOR_PLAYER_REVIEW: "No recorded plan blockers; review manually",
 };
 

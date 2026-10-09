@@ -411,6 +411,11 @@ test("work order readiness respects recorded dependencies, evidence freshness, a
     assert.match(review.reason, /does not establish access or a transfer route/);
     const completedDependency: ErpProject = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "prereq" ? { ...order, status: "COMPLETED", completionNote: "Player recorded completion." } : order) };
     assert.equal(read(completedDependency).workOrderReadiness.find((entry) => entry.workOrderId === "blocked")?.state, "READY_FOR_PLAYER_REVIEW");
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 7000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    const changed = read(plan, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(changed.state, "OBSERVATION_CHANGED_REQUIRES_REVIEW");
+    assert.deepEqual(changed.changedNeedIds, ["covered_need"]);
+    assert.match(changed.reason, /does not establish that this work order caused it or that the planned step is complete/);
     assert.equal(read(plan, 1_900_000_000).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "WAITING_FOR_EVIDENCE", "stale observed supply is not marked ready");
     assert.equal(read({ ...plan, status: "PAUSED" }).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "PROJECT_NOT_ACTIVE");
   } finally { store.close(); }
