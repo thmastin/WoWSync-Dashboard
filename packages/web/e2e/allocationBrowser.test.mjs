@@ -158,6 +158,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(needEvidenceText, /item:940101/);
     assert.match(needEvidenceText, /Base-item search groups these exact variants/);
     assert.match(needEvidenceText, /Account membership, access, and transferability: UNKNOWN/);
+    const possibleSource = needEvidence.locator("li").filter({ hasText: "Other Potential Holder" });
+    await possibleSource.getByRole("button", { name: "Create source verification task" }).first().click();
+    const verifySourceOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Verify possible source for Mycobloom" });
+    await verifySourceOrder.waitFor();
+    const verificationText = await verifySourceOrder.innerText();
+    assert.match(verificationText, /item:940101\S* \(OBSERVED in bags, seen /);
+    assert.match(verificationText, /Account membership, source access, recipient access, and a valid transfer route are UNKNOWN/);
+    assert.match(verificationText, /does not authorize or perform a transfer/);
+    await possibleSource.getByText("Source verification work order already exists for this need.").waitFor();
     await needEvidence.getByRole("button", { name: "Set planned source" }).first().click();
     await needEvidence.getByText(/Recorded as the planned source/).waitFor();
     needEvidenceText = await needEvidence.innerText();
