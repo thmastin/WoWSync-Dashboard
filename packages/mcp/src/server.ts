@@ -187,6 +187,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverGearObservation(query)));
+  server.registerTool("get_forever_gear_allocation", {
+    title: "Evaluate observed Forever gear candidates",
+    description: "Evaluates exact observed Forever carried potential-equipment rows against one requested Forever character and the Dashboard Forever import context. It reports separate eligibility, suitability, upgrade, transferability, and priority outcomes plus missing evidence. Account membership is UNKNOWN; candidate presence is not ownership sharing. Never applies Retail rules or recommends a transfer from location alone.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getForeverGearAllocation(query)));
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
     description: "Returns profession and specialization state plus Retail recipe learned-state observations for one explicit-version character. Recipe candidates are partial, absence never means unlearned, and LAST_SEEN evidence is labeled.",

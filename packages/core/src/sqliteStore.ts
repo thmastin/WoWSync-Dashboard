@@ -1524,6 +1524,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const versionFacts = {} as Record<WowVersion, AccountFacts>;
     const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
     const foreverGearObservations = new Map<string, ReturnType<DashboardReadModel["getForeverGearObservation"]>>();
+    const foreverGearAllocations = new Map<string, ReturnType<DashboardReadModel["getForeverGearAllocation"]>>();
     for (const version of WOW_VERSIONS) {
       const facts = this.buildAccountFacts(version, now);
       versionFacts[version] = facts;
@@ -1534,8 +1535,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const readModel = new DashboardReadModel(this, () => now);
     for (const character of versionFacts.forever.characters) {
       foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
+      foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm }));
     }
-    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations });
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverGearAllocations });
   }
 
   // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------

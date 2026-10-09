@@ -18,7 +18,7 @@ export interface ForeverStructuredObservation {
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 type ForeverEquipmentLike = { status: { state: ForeverSectionState; observedAt?: number }; slots: Array<{ slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string; itemLevel?: string }> };
 type ForeverInventoryLike = { status: { state: ForeverSectionState; observedAt?: number }; items: Array<{ itemRef?: string; name?: string; qty?: number }> };
-type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; quantity?: number; provenance: ForeverSectionState };
+type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; quantity?: number; bound?: boolean; bindingState?: string; provenance: ForeverSectionState };
 
 export function normalizeForeverStructuredObservation(value: unknown, version: VersionOrUnknown, name?: string, realm?: string, generatedAt?: number): ForeverStructuredObservation | undefined {
   if (version !== "forever" || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -84,7 +84,7 @@ function structuredBags(section: Record<string, unknown> | undefined, fallback: 
       const item = object(itemValue);
       if (!item) return [];
       const itemID = typeof item.itemID === "number" ? item.itemID : undefined;
-      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name: typeof item.name === "string" ? item.name : undefined, quantity: typeof item.count === "number" ? item.count : undefined, provenance }];
+      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name: typeof item.name === "string" ? item.name : undefined, quantity: typeof item.count === "number" ? item.count : undefined, ...(typeof item.bound === "boolean" ? { bound: item.bound } : {}), ...(typeof item.bindingState === "string" ? { bindingState: item.bindingState } : {}), provenance }];
     });
   });
 }
@@ -221,11 +221,25 @@ export function buildForeverGearObservation(input: {
     const isProjectile = itemType?.state === "OBSERVED" && itemType.type === "string" && itemType.value === "Projectile";
     const itemLevelVerdict = equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
       && equippable?.state === "OBSERVED" && equippable.type === "boolean" && equippable.value === true;
+    const rawItemInfo = object(fact.itemInfo);
+    const rawItemStats = object(fact.itemStats);
+    const itemStatsTable = object(rawItemStats?.table);
     if (!apiItemType || !usableEquipLocation || !itemLevelVerdict || isProjectile) return [];
-    return [{ ...item, classification: "POTENTIAL_EQUIPMENT" as const,
+    return [{ ...item,
+      locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) },
+      ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." },
+      binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." },
+      transferabilityEvidence: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." },
+      classification: "POTENTIAL_EQUIPMENT" as const,
       itemType: itemType?.state === "OBSERVED" && itemType.type === "string" ? itemType.value as string : undefined,
       itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
       equipLocation: equipLocation.value as string,
+      itemApiEvidence: {
+        itemInfo: { state: rawItemInfo?.state ?? "UNKNOWN", api: rawItemInfo?.api ?? "UNKNOWN", returnCount: rawItemInfo?.returnCount ?? null, returns: Array.isArray(rawItemInfo?.returns) ? rawItemInfo.returns : [] },
+        itemStats: { state: itemStatsTable?.state ?? rawItemStats?.state ?? "UNKNOWN", api: rawItemStats?.api ?? "UNKNOWN", entryCount: itemStatsTable?.entryCount ?? null, complete: itemStatsTable?.complete ?? false, entries: Array.isArray(itemStatsTable?.entries) ? itemStatsTable.entries : [] },
+        semanticInterpretation: "UNKNOWN",
+        reason: "Forever 70291 GetItemInfo/GetItemStats results are retained as raw, exact-variant API evidence. Field semantics and tooltip/effective-stat agreement require live validation before eligibility or upgrade conclusions.",
+      },
       evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
       ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
       provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
@@ -247,7 +261,7 @@ export function buildForeverGearObservation(input: {
     identity: { ...identity, accountScope: "UNKNOWN", accountScopeReason: "WoWSync character identity carries version, realm, and name but no WoW account identifier; this view is scoped to the Dashboard import context and does not assert Battle.net account identity." },
     snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems },
-    carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems },
+    carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), reason: bank.status.state === "UNKNOWN" ? "Bank contents were not observed; unavailable is not empty." : undefined },

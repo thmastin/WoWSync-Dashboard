@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchCharacter, fetchSnapshots } from "../api.ts";
+import { fetchCharacter, fetchSnapshots, fetchForeverGearAllocation } from "../api.ts";
 import { useAsync } from "../useAsync.ts";
 import ErrorNotice from "./ErrorNotice.tsx";
 import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCatalog.ts";
@@ -96,6 +96,11 @@ export default function CharacterDetail({
     : undefined;
   // Enrichment for this character's game version (bags, Character Bank, carried Warband/Guild); never blocks the page.
   const itemInfo = useItemInfoLoader(character?.version, refreshTick);
+  const foreverAllocationLoad = useAsync(
+    (signal) => character?.version === "forever" ? fetchForeverGearAllocation(identityKey, signal) : Promise.resolve(null),
+    `forever-allocation:${identityKey}`,
+    refreshTick,
+  );
 
   if (!character) {
     if (load.state.status === "error") return <ErrorNotice error={load.state.error} onRetry={load.retry} onBack={onBack} />;
@@ -315,6 +320,37 @@ export default function CharacterDetail({
               <p>Bank: {foreverObservation?.bank.state === "UNKNOWN" ? `UNKNOWN; ${foreverObservation.bank.reason}` : `${foreverObservation?.bank.state ?? "UNKNOWN"}.`}</p>
               </>}
               </>}
+            </section>
+          )}
+
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-gear-allocation">
+              <h3>Forever allocation assessment</h3>
+              {foreverAllocationLoad.state.status === "error" ? <p role="status">Allocation evidence unavailable: {String(foreverAllocationLoad.state.error)} <button onClick={foreverAllocationLoad.retry}>Retry</button></p> : null}
+              {foreverAllocationLoad.state.status === "loading" ? <p className="muted">Loading latest Forever allocation evidence…</p> : null}
+              {foreverAllocationLoad.state.status === "ready" && foreverAllocationLoad.state.data?.value?.data ? (() => {
+                const allocation = foreverAllocationLoad.state.data.value.data;
+                return <>
+                  <p>{allocation.conclusion}: {allocation.reason}</p>
+                  <p className="muted small">Import-context roster scope: {allocation.scope.accountMembership}. {allocation.scope.reason}</p>
+                  <p className="muted small">Recipient: {allocation.recipient.class?.value ?? "class UNKNOWN"} · level {allocation.recipient.level?.value ?? "UNKNOWN"} · character snapshot {allocation.recipient.freshness}. Equipment {allocation.recipient.equipment.state}{allocation.recipient.equipment.observedAt ? ` observed ${formatAbsoluteTime(allocation.recipient.equipment.observedAt)} (${allocation.recipient.equipment.freshness ?? "unknown freshness"})` : " timestamp UNKNOWN"}:</p>
+                  {allocation.recipient.equipment.items.map((item, index) => <p key={`allocation-eq-${item.slot}-${index}`} className="muted small">{item.provenance} · {item.slotName}: {item.itemRef ?? "item identity UNKNOWN"}</p>)}
+                  {allocation.candidateSources.map((source) => <p key={source.source.identityKey} className="muted small">{source.source.name}: carried {source.carried.state}{source.carried.itemCount !== undefined ? ` · ${source.carried.itemCount} observed rows` : " · item count UNKNOWN"}; bank {source.bank.state}{source.bank.reason ? ` · ${source.bank.reason}` : ""}{source.bank.observedAt ? ` · observed ${formatAbsoluteTime(source.bank.observedAt)} (${source.bank.freshness ?? "unknown freshness"})` : ""}.</p>)}
+                  {allocation.assessments.length === 0 ? <p>No currently classified carried potential-equipment rows are available. Missing candidate observations do not establish an empty gear source.</p> : allocation.assessments.map((assessment, index) => {
+                    const sourceEvidence = allocation.candidateSources.find((source) => source.source.identityKey === assessment.source.identityKey);
+                    return <div key={`${assessment.source.identityKey}:${assessment.candidate.itemRef ?? index}`} className="allocation-row">
+                      <strong>{assessment.candidate.name ?? assessment.candidate.itemRef ?? "Unknown item"}</strong>
+                      <p className="muted small">Observed with {assessment.source.name} ({assessment.source.realm}){assessment.candidate.container !== undefined ? ` · bag ${assessment.candidate.container}, slot ${assessment.candidate.slot ?? "?"}` : " · location UNKNOWN"} · {assessment.candidate.quantity ?? "?"} carried · {assessment.candidate.itemRef ?? "exact variant UNKNOWN"}{sourceEvidence?.carried.observedAt ? ` · carried capture ${formatAbsoluteTime(sourceEvidence.carried.observedAt)} (${sourceEvidence.carried.freshness ?? "unknown freshness"})` : " · carried capture time UNKNOWN"}</p>
+                      <p className="muted small">Potential type: {assessment.candidate.itemType ?? "UNKNOWN"}/{assessment.candidate.itemSubType ?? "UNKNOWN"} · slot type {assessment.candidate.equipLocation ?? "UNKNOWN"}. Location: carried by {assessment.source.name}; ownership UNKNOWN. Item API: {assessment.candidate.itemApiEvidence?.itemInfo.state ?? "UNKNOWN"}{sourceEvidence?.observedAt ? ` · evidence observed ${formatAbsoluteTime(sourceEvidence.observedAt)} (${sourceEvidence.freshness ?? "unknown freshness"})` : " · timestamp UNKNOWN"}. Binding: {assessment.candidate.binding?.state === "OBSERVED" ? (assessment.candidate.binding.value ? "observed bound" : "observed not bound") : "UNKNOWN"}; transferability UNKNOWN.</p>
+                      {assessment.candidate.itemApiEvidence && <p className="muted small">Raw item metadata evidence: GetItemInfo {assessment.candidate.itemApiEvidence.itemInfo.state} ({assessment.candidate.itemApiEvidence.itemInfo.returnCount ?? "?"} returns); GetItemStats {assessment.candidate.itemApiEvidence.itemStats.state} ({assessment.candidate.itemApiEvidence.itemStats.entryCount ?? "?"} fields). Interpretation remains UNKNOWN pending live validation.</p>}
+                      <p>Recipient {assessment.recipient.name}: eligibility {assessment.eligibility}; suitability {assessment.suitability}; upgrade {assessment.upgradeStatus}; transferability {assessment.transferability}; priority {assessment.allocationPriority}. {assessment.decision}.</p>
+                      <p className="muted small">{assessment.reason}</p>
+                      <details><summary>Evidence needed</summary><ul>{assessment.missingEvidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></details>
+                    </div>;
+                  })}
+                  {allocation.exclusions.length > 0 && <details><summary>Characters withheld from source evaluation ({allocation.exclusions.length})</summary><ul>{allocation.exclusions.map((entry) => <li key={entry.character.identityKey}>{entry.character.name}: {entry.reason}</li>)}</ul></details>}
+                </>;
+              })() : null}
             </section>
           )}
 

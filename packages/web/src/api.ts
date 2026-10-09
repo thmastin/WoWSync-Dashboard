@@ -26,6 +26,23 @@ export interface GearAllocationApi {
   status: string;
   value?: { recommendation: string; candidate: { itemID?: number; itemLevel?: number; baseEquipLocation?: string; validity: string }; assessments: Array<{ character: { identityKey: string; name: string; realm: string }; spec: { specID: number; name: string; role: string }; eligibility: string; suitability: string; primaryStatSuitability: string; comparison: string; deltaItemLevel?: number; reasons: string[]; currentSnapshotObservation: { state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; latestStoredObservation: { relationship: string; state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; retained: { state: "QUALIFIED"; snapshotId: number; observedAt: number; capture: number; revision: number } | { state: "UNKNOWN"; reason: string } }>; excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }>; limitations: string[] };
 }
+export interface ForeverGearAllocationApi {
+  status: "FOUND" | "NOT_FOUND" | "AMBIGUOUS";
+  value?: {
+    data?: {
+      version: "forever";
+      ruleset: "forever-70291-evidence-gated-v1";
+      scope: { accountMembership: "UNKNOWN"; reason: string };
+      recipient: { identityKey: string; name: string; realm: string; observedAt?: number; freshness: string; class?: { value: string; provenance: string }; level?: { value: number; provenance: string }; equipment: { state: string; source: string; observedAt?: number; freshness?: string; items: Array<{ slot: number; slotName: string; itemRef?: string; itemIdentity?: string; provenance: string }> } };
+      candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: unknown[] }>;
+      assessments: Array<{ candidate: { itemRef?: string; name?: string; itemType?: string; itemSubType?: string; equipLocation?: string; container?: number; slot?: number; quantity?: number; binding?: { state: string; value?: boolean }; itemApiEvidence?: { semanticInterpretation: string; itemStats: { state: string; entryCount: number | null }; itemInfo: { state: string; returnCount: number | null } } }; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string }; eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string; missingEvidence: string[]; reason: string }>;
+      exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }>;
+      conclusion: string;
+      reason: string;
+    };
+    provenance: { state: string; observedAt?: number; freshness?: string; source?: string; reason?: string };
+  };
+}
 export interface GearCandidateRef { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }
 
 /**
@@ -324,6 +341,10 @@ export function fetchGearCandidateEvidence(version: VersionOrUnknown, signal?: A
 export function fetchGearAllocation(version: VersionOrUnknown, ref: { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }, signal?: AbortSignal): Promise<GearAllocationApi> {
   const qs = new URLSearchParams({ exporterIdentityKey: ref.exporterIdentityKey, snapshotId: String(ref.snapshotId), rowOrdinal: String(ref.rowOrdinal) });
   return request(`/api/versions/${encodeURIComponent(version)}/gear-allocation?${qs}`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+}
+
+export function fetchForeverGearAllocation(identityKey: string, signal?: AbortSignal): Promise<ForeverGearAllocationApi> {
+  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-gear-allocation`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
 }
 
 /** Every demand for a version, any status (the removed-target history and conflict lookups read this). */

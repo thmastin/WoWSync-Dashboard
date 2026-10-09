@@ -58,10 +58,32 @@ test("structured bag slot arrays preserve the observed one-based WoW slot indexe
   ]);
 });
 
+test("carried location, ownership, binding, and transferability remain separate", () => {
+  const itemString = "item:999:4:5";
+  const view = buildForeverGearObservation({ identity, snapshotId: 40, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bags: { observedAt: 104, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 2, bound: true, bindingState: "OBSERVED_TRUE" } } }] } } }, now: 110 });
+  const item = view.carried.items?.[0];
+  assert.equal(item?.itemRef, itemString);
+  assert.equal(item?.locatedWith.state, "OBSERVED");
+  assert.equal(item?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
+  assert.equal(item?.ownership.state, "UNKNOWN", "inventory location does not establish ownership");
+  assert.equal(item?.binding.state, "OBSERVED");
+  assert.equal(item?.binding.value, true);
+  assert.equal(item?.transferability.state, "UNKNOWN", "binding alone does not establish transferability");
+  assert.equal(view.identity.accountScope, "UNKNOWN");
+  const old = buildForeverGearObservation({ identity, snapshotId: 41, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bags: { observedAt: 1, completeness: "complete", lastAttemptStale: true, data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 2, bound: true, bindingState: "OBSERVED_TRUE" } } }] } } }, now: 10_000_000 });
+  assert.equal(old.carried.items?.[0]?.locatedWith.state, "LAST_SEEN");
+  assert.equal(old.carried.items?.[0]?.binding.state, "LAST_SEEN", "historical binding never becomes current OBSERVED evidence");
+  assert.equal(old.carried.items?.[0]?.transferability.state, "UNKNOWN");
+});
+
 function itemFact(itemString: string, itemID: number, equipLocation: string, equippable: boolean) {
   const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
   return { itemString, itemID,
     itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [itemID, "Armor", "Leather", equipLocation].map((value) => ({ observation: observed(value) })) },
+    itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, returns: ["Synthetic", itemString, 2, 3, 1, "Armor", "Leather", 1, equipLocation].map((value, index) => ({ index: index + 1, observation: observed(value) })) },
+    itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ key: "ITEM_MOD_STAMINA_SHORT", observation: observed(5) }] } },
     isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(equippable) }] },
   };
 }
@@ -78,6 +100,9 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
   assert.equal(view.evaluationCandidates.items[0]?.equipLocation, "INVTYPE_CHEST");
   assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemInfo.returns[4]?.observation.value, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemStats.entries[0]?.key, "ITEM_MOD_STAMINA_SHORT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "UNKNOWN");
   assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
   assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
 });

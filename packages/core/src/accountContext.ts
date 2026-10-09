@@ -31,6 +31,7 @@ import type { ParsedSnapshot, SectionState, WowVersion } from "./types.ts";
 import type { StoredSnapshot } from "./store.ts";
 import type { CharacterResolution, ReadValue } from "./readModel.ts";
 import type { buildForeverGearObservation } from "./foreverGearObservation.ts";
+import type { DashboardReadModel } from "./readModel.ts";
 import { WOW_VERSIONS } from "./version.ts";
 
 // Bumped to "3" (additive, on top of the v2 changes below): gold/playtime
@@ -45,7 +46,7 @@ import { WOW_VERSIONS } from "./version.ts";
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "5";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "6";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -116,6 +117,8 @@ export interface CharacterContext {
   trainer: CharacterTrainerCategoryContext[];
   /** Forever 70291 view from the same GUID-guarded read model used by REST and MCP. */
   foreverGearObservation?: CharacterResolution<ReadValue<ReturnType<typeof buildForeverGearObservation>>>;
+  /** Evidence-gated, cross-character Forever assessment; all unsupported conclusions remain UNKNOWN. */
+  foreverGearAllocation?: ReturnType<DashboardReadModel["getForeverGearAllocation"]>;
 }
 
 export interface VersionContext {
@@ -144,6 +147,7 @@ export interface AccountContextInput {
   characterSnapshots: Map<string, StoredSnapshot[]>;
   /** Precomputed with the canonical read-model version and source-GUID guard. */
   foreverGearObservations?: Map<string, CharacterContext["foreverGearObservation"]>;
+  foreverGearAllocations?: Map<string, CharacterContext["foreverGearAllocation"]>;
 }
 
 // The one chronology rule (see chronology.ts) - shared with the SQLite
@@ -186,7 +190,7 @@ function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHis
   };
 }
 
-function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], foreverGearObservation?: CharacterContext["foreverGearObservation"]): CharacterContext {
+function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"]): CharacterContext {
   const chronological = [...snapshots].sort(compareSnapshotsChronologically);
 
   const snapshotHistory = chronological.map((s) => toHistoryEntry(s.parsed, s.importedAt));
@@ -218,7 +222,7 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
         }))
     : [];
 
-  return { identityKey, name, realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}) };
+  return { identityKey, name, realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}) };
 }
 
 export function buildAccountContext(input: AccountContextInput): AccountContext {
@@ -229,7 +233,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
     const facts = versionFacts[version];
     const characters = [...facts.characters]
       .sort((a, b) => a.realm.localeCompare(b.realm) || a.name.localeCompare(b.name))
-      .map((c) => buildCharacterContext(c.identityKey, c.name, c.realm, characterSnapshots.get(c.identityKey) ?? [], version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined));
+      .map((c) => buildCharacterContext(c.identityKey, c.name, c.realm, characterSnapshots.get(c.identityKey) ?? [], version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined));
 
     versions[version] = {
       version,

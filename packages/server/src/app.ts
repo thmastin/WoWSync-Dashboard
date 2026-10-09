@@ -245,6 +245,15 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json(result);
   });
 
+  app.get("/api/characters/:identityKey/forever-gear-allocation", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    if (character.version !== "forever") return res.status(404).json({ error: "Forever allocation is not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
+    const result = new DashboardReadModel(store).getForeverGearAllocation({ version: character.version, name: character.name, realm: character.realm });
+    if (result.status !== "FOUND") return res.status(404).json({ error: "Forever allocation evidence is not available for this character.", code: result.status });
+    res.json(result);
+  });
+
   // Permanently deletes ONE character and its entire snapshot history.
   //
   // Deliberately hard to trigger by accident: the request must carry a JSON

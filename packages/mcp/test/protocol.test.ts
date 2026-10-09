@@ -123,6 +123,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",
@@ -159,6 +160,16 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(foreverView.value?.data?.unknowns.transferability, "UNKNOWN");
     assert.equal(foreverView.value?.data?.bank.state, "UNKNOWN");
     assert.equal(foreverView.value?.provenance.freshness, "stale");
+    const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverAllocation.status, "FOUND");
+    assert.equal(foreverAllocation.value?.data?.version, "forever");
+    assert.equal(foreverAllocation.value?.data?.scope.accountMembership, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.conclusion, "INSUFFICIENT_EVIDENCE");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.eligibility, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.upgradeStatus, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.transferability, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.allocationPriority, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.decision, "NO_RECOMMENDATION");
     assert.equal((await client.callTool({ name: "get_forever_gear_observation", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "Forever version is explicit and mandatory");
 
     const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string; identityKey: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
@@ -598,6 +609,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",

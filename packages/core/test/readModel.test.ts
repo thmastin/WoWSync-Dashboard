@@ -105,6 +105,59 @@ test("Forever observation resolves within its version and reports observed varia
   } finally { store.close(); }
 });
 
+test("Forever allocation keeps source location, unknown roster membership, and every decision dimension separate", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const carriedRef = "item:2901::::::::8:1485::14:::::::";
+  try {
+    const make = (name: string, guid: string, bags: unknown, itemEvidence?: unknown) => {
+      const generatedAt = NOW - 5;
+      const raw = buildWowSyncExport({ generatedAt, character: { name, realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: name === "Receiver" ? "MAGE" : "HUNTER", level: name === "Receiver" ? 8 : 9 }, bags: { containers: [] }, bank: { unknown: true } });
+      store.importSnapshot(raw, { foreverGearObservation: {
+        clientProfile: "Forever:1.60.1:70291:16001", name, realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: guid,
+        equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+        bags: { observedAt: generatedAt, completeness: "complete", data: bags },
+        bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
+        ...(itemEvidence ? { itemEvidence } : {}),
+      } });
+    };
+    const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: true, bindingState: "OBSERVED_TRUE" } } }] }, {
+      observedAt: NOW - 5, completeness: "complete", source: "fixture exact-item API evidence", data: {
+        sourceSections: { bags: { observedAt: NOW - 5, state: "complete" } },
+        items: [{ itemID: 2901, itemString: carriedRef,
+          itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: observed(value) })) },
+          isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(true) }] } }],
+      },
+    });
+    make("Receiver", "Player-1-RECEIVER", { containers: [] });
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Receiver", realm: "Classic Beta PvP 2" });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND" || !result.value.data) return;
+    const view = result.value.data;
+    assert.equal(view.version, "forever");
+    assert.equal(view.scope.accountMembership, "UNKNOWN");
+    assert.equal(view.recipient.class?.value, "MAGE");
+    assert.equal(view.recipient.level?.value, 8);
+    const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
+    assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);
+    assert.equal(carrier?.candidates[0]?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
+    assert.equal(carrier?.candidates[0]?.ownership.state, "UNKNOWN");
+    assert.equal(carrier?.candidates[0]?.binding.value, true);
+    assert.equal(carrier?.candidates[0]?.transferability, "UNKNOWN");
+    assert.equal(carrier?.candidates[0]?.transferabilityEvidence.state, "UNKNOWN");
+    assert.equal(view.assessments.length, 1);
+    assert.equal(view.assessments[0]?.recipient.name, "Receiver");
+    assert.equal(view.assessments[0]?.eligibility, "UNKNOWN");
+    assert.equal(view.assessments[0]?.suitability, "UNKNOWN");
+    assert.equal(view.assessments[0]?.upgradeStatus, "UNKNOWN");
+    assert.equal(view.assessments[0]?.transferability, "UNKNOWN");
+    assert.equal(view.assessments[0]?.allocationPriority, "UNKNOWN");
+    assert.equal(view.assessments[0]?.decision, "NO_RECOMMENDATION");
+    assert.match(view.assessments[0]?.missingEvidence.join(" ") ?? "", /account membership/);
+    assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
+  } finally { store.close(); }
+});
+
 test("Retail candidate analysis integrates SQLite evidence, uppercase WoW class tokens, per-spec equipment, and provenance", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";

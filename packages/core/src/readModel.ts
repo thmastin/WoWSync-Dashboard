@@ -903,6 +903,79 @@ export class DashboardReadModel {
       return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: snapshot.parsed.foreverGearObservation ? "Forever 70291 WoWSyncDB structured sections plus WOWSYNC v1 export" : "WOWSYNC v1 export; structured WoWSyncDB section timestamps unavailable", reason: snapshot.parsed.foreverGearObservation ? undefined : "Structured Forever section sidecar was not available for this imported snapshot." } };
     });
   }
+
+  /**
+   * Evidence-first cross-character Forever evaluation. Candidate rows retain
+   * their observed carrier; Dashboard import-context membership is never
+   * promoted into account ownership or transfer access.
+   */
+  getForeverGearAllocation(query: CharacterQuery): CharacterResolution<ReadValue<{
+    version: "forever";
+    ruleset: "forever-70291-evidence-gated-v1";
+    scope: { accountMembership: "UNKNOWN"; reason: string };
+    recipient: { identityKey: string; name: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" }; level?: { value: number; provenance: "OBSERVED" }; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
+    candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"] }>;
+    assessments: Array<{ candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string }; eligibility: "UNKNOWN"; suitability: "UNKNOWN"; upgradeStatus: "UNKNOWN"; transferability: "UNKNOWN"; allocationPriority: "UNKNOWN"; decision: "NO_RECOMMENDATION"; missingEvidence: string[]; reason: string }>;
+    exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }>;
+    conclusion: "INSUFFICIENT_EVIDENCE";
+    reason: string;
+  }>> {
+    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Forever allocation is isolated to Forever 1.60.1 build 70291 / interface 16001; no other version rules are applied." } } };
+    const resolved = this.getForeverGearObservation(query);
+    if (resolved.status !== "FOUND") return resolved;
+    if (!resolved.value.data) return { status: "FOUND", value: { provenance: { ...resolved.value.provenance, state: "UNKNOWN", reason: resolved.value.provenance.reason ?? "The recipient has no safely resolved Forever 70291 observation; allocation cannot be evaluated." } } };
+    const recipientData = resolved.value.data;
+    const recipientCharacter = this.store.listCharacters("forever").find((c) => c.identityKey === recipientData.identity.identityKey);
+    if (!recipientCharacter) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
+    const recipientSnapshot = this.store.listSnapshots(recipientCharacter.identityKey)[0];
+    const profile = recipientSnapshot?.parsed.character;
+    const recipientObservedAt = recipientSnapshot?.generatedAt ?? recipientSnapshot?.importedAt;
+    const recipientFreshness = recipientObservedAt === undefined ? "unknown" as const : classifyFreshness(recipientObservedAt, this.now());
+    const recipient = {
+      identityKey: recipientCharacter.identityKey, name: recipientCharacter.name, realm: recipientCharacter.realm,
+      ...(recipientSnapshot ? { snapshotId: recipientSnapshot.id } : {}),
+      ...(recipientObservedAt !== undefined ? { observedAt: recipientObservedAt } : {}),
+      freshness: recipientFreshness,
+      ...(profile?.status.state === "OBSERVED" && profile.class ? { class: { value: profile.class, provenance: "OBSERVED" as const } } : {}),
+      ...(profile?.status.state === "OBSERVED" && profile.level !== undefined ? { level: { value: profile.level, provenance: "OBSERVED" as const } } : {}),
+      equipment: recipientData.equipment,
+    };
+    const candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"] }> = [];
+    const exclusions: Array<{ character: { identityKey: string; name: string; realm: string }; state: string; reason: string }> = [];
+    for (const sourceCharacter of this.store.listCharacters("forever")) {
+      const observation = this.getForeverGearObservation({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+      if (observation.status !== "FOUND" || !observation.value.data) {
+        exclusions.push({ character: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, realm: sourceCharacter.realm }, state: observation.status, reason: observation.status === "FOUND" ? observation.value.provenance.reason ?? "Observation data unavailable." : "Source identity or 70291 evidence could not be safely resolved." });
+        continue;
+      }
+      candidateSources.push({ source: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, realm: sourceCharacter.realm }, observationState: observation.value.data.evaluationCandidates.state,
+        ...(observation.value.data.evaluationCandidates.observedAt !== undefined ? { observedAt: observation.value.data.evaluationCandidates.observedAt, freshness: observation.value.data.evaluationCandidates.freshness } : {}),
+        carried: { state: observation.value.data.carried.state, ...(observation.value.data.carried.observedAt !== undefined ? { observedAt: observation.value.data.carried.observedAt, freshness: observation.value.data.carried.freshness } : {}), ...(observation.value.data.carried.items !== undefined ? { itemCount: observation.value.data.carried.items.length } : {}) },
+        bank: { state: observation.value.data.bank.state, ...(observation.value.data.bank.observedAt !== undefined ? { observedAt: observation.value.data.bank.observedAt, freshness: observation.value.data.bank.freshness } : {}), ...(observation.value.data.bank.reason ? { reason: observation.value.data.bank.reason } : {}) },
+        candidates: observation.value.data.evaluationCandidates.items });
+    }
+    const assessments = candidateSources.flatMap((source) => source.candidates.map((candidate) => ({
+      candidate, source: source.source, recipient: { identityKey: recipient.identityKey, name: recipient.name, realm: recipient.realm },
+      eligibility: "UNKNOWN" as const, suitability: "UNKNOWN" as const, upgradeStatus: "UNKNOWN" as const,
+      transferability: "UNKNOWN" as const, allocationPriority: "UNKNOWN" as const,
+      decision: "NO_RECOMMENDATION" as const,
+      missingEvidence: [
+        "Forever-70291-validated candidate class/level restrictions and recipient-specific CanEquip evidence",
+        "Observed recipient build/talent and validated suitability rules",
+        "Live-correlated effective item stats for candidate and current matching equipment slot",
+        "Current source ownership/access route and item-specific transferability evidence",
+        "Verified account membership before treating import-context characters as one roster",
+      ],
+      reason: "This is a potential-equipment observation only. The captured item type and equipment location do not establish character eligibility, build fit, upgrade value, transferability, or allocation priority.",
+    })));
+    const observedAt = resolved.value.provenance.observedAt;
+    return { status: "FOUND", value: {
+      data: { version: "forever", ruleset: "forever-70291-evidence-gated-v1", scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
+        candidateSources, assessments, exclusions, conclusion: "INSUFFICIENT_EVIDENCE", reason: assessments.length === 0 ? "No currently observed potential-equipment rows are available to assess; missing candidate data does not prove there is no useful equipment." : "Potential-equipment rows were found, but no character receives an equip, upgrade, transfer, or priority recommendation until the listed evidence is verified." },
+      provenance: { state: "DERIVED", version: "forever", identityKey: recipient.identityKey, ...(observedAt !== undefined ? { observedAt, freshness: classifyFreshness(observedAt, this.now()) } : {}), snapshotId: recipientSnapshot?.id, source: "Forever 70291 observations from the Dashboard import context", reason: "No Retail rules are used; unresolved evidence remains UNKNOWN." },
+    } };
+  }
+
   getCharacterProfessions(query: CharacterQuery): CharacterResolution<ReadValue<ProfessionsSection>> {
     return this.resolve(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };

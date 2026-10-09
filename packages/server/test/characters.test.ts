@@ -138,6 +138,49 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
   } }));
 });
 
+test("Forever allocation route exposes separate evidence-gated decisions without cross-version leakage", async () => {
+  const generatedAt = 1_791_549_000;
+  const itemString = "item:2901::::::::8:1485::14:::::::";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Allocator", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: "HUNTER", level: 8 }, bags: { containers: [] }, bank: { unknown: true } });
+  await withApp(async (api) => {
+    const key = "forever::forever realm::allocator";
+    const response = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
+    assert.equal(response.status, 200);
+    const view = response.body.value.data;
+    assert.equal(view.version, "forever");
+    assert.equal(view.recipient.class.value, "HUNTER");
+    assert.equal(view.recipient.level.value, 8);
+    assert.equal(view.scope.accountMembership, "UNKNOWN");
+    assert.equal(view.assessments.length, 1);
+    assert.equal(view.assessments[0].candidate.itemRef, itemString);
+    assert.equal(view.assessments[0].source.name, "Allocator");
+    assert.equal(view.assessments[0].eligibility, "UNKNOWN");
+    assert.equal(view.assessments[0].suitability, "UNKNOWN");
+    assert.equal(view.assessments[0].upgradeStatus, "UNKNOWN");
+    assert.equal(view.assessments[0].transferability, "UNKNOWN");
+    assert.equal(view.assessments[0].allocationPriority, "UNKNOWN");
+    assert.equal(view.assessments[0].decision, "NO_RECOMMENDATION");
+    assert.equal(view.assessments[0].candidate.binding.value, true);
+    assert.match(view.assessments[0].missingEvidence.join(" "), /account membership/);
+    const account = await api.get("/api/account-context");
+    const characterContext = account.body.versions.forever.characters.find((character: any) => character.identityKey === key);
+    assert.deepEqual(characterContext.foreverGearAllocation.value.data, view, "AccountContext carries the same canonical allocation read model");
+    const retailKey = encodeURIComponent("retail::forever realm::allocator");
+    assert.equal((await api.get(`/api/characters/${retailKey}/forever-gear-allocation`)).body.code, "VERSION_NOT_SUPPORTED");
+  }, (store) => {
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Allocator", realm: "Forever Realm", clientFamily: "Retail", clientVersion: "12.1.0" } }));
+    store.importSnapshot(text, { foreverGearObservation: {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Allocator", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-ALLOCATOR",
+    equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+    bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString, count: 1, bound: true, bindingState: "OBSERVED_TRUE" } } }] } },
+    bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
+    itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "fixture API evidence", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 2901, itemString,
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] } },
+    } });
+  });
+});
+
 test("[REAL] /api/versions lists Forever with a label, and its own totals", async () => {
   await withApp(async (api) => {
     await seed(api);
