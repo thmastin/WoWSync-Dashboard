@@ -567,6 +567,25 @@ test("END TO END: the bridge imports through the real /api/import; a second run 
   });
 });
 
+test("END TO END: Forever import:saved carries the structured sidecar and WoWSyncDB GUID into the read model", async () => {
+  const generatedAt = 1_791_500_000;
+  const guid = "Player-1-HALLO";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const file = svFile(savedVariables([{
+    guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
+    equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
+    bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [] } }),
+  }]));
+  await withServer(async (base, store) => {
+    const result = await runImportSaved(["--character", "Hallo", "--file", file, "--url", base], live(base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("forever::hallo::hallo")[0];
+    assert.equal(snapshot.parsed.foreverGearObservation?.sourceCharacterGuid, guid);
+    assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
+    assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
+  });
+});
+
 test("END TO END: a refusal by the real server and an absent server both leave the Dashboard untouched", async () => {
   const file = svFile(savedVariables([VIREK]));
   const store = new SqliteSnapshotStore(":memory:");

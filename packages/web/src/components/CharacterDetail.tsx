@@ -302,11 +302,11 @@ export default function CharacterDetail({
               <p>Equipped slots and carried items below are observations. Candidate classification, eligibility, suitability, upgrade status, and transferability are UNKNOWN.</p>
               <p className="muted small">Equipment: {foreverObservation?.equipment.state} · {foreverObservation?.equipment.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.equipment.observedAt)} (${foreverObservation.equipment.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.equipment.source}</p>
               {foreverObservation?.equipment.items.map((slot, index) => (
-                <div key={`forever-eq-${slot.slot}-${index}`} className="muted small">{slot.provenance} equipped · {slot.slotName}: {slot.name ?? "?"} · {slot.itemRef ?? "item variant unavailable"}</div>
+                <div key={`forever-eq-${slot.slot}-${index}`} className="muted small">{slot.provenance === "OBSERVED" ? "OBSERVED equipped" : "UNKNOWN equipment slot"} · item identity {slot.itemIdentity ?? "UNKNOWN"} · {slot.slotName}: {slot.name ?? "?"} · {slot.itemRef ?? "item identifier unavailable"}</div>
               ))}
               <p className="muted small">Carried inventory: {foreverObservation?.carried.state} · {foreverObservation?.carried.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.carried.observedAt)} (${foreverObservation.carried.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.carried.source}</p>
               {foreverObservation?.carried.items === undefined ? <div>Carried inventory: UNKNOWN.</div> : foreverObservation.carried.items.map((item, index) => (
-                <div key={`forever-bag-${index}`} className="muted small">{item.provenance} carried · {item.name ?? "?"} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"}</div>
+                <div key={`forever-bag-${index}`} className="muted small">{item.provenance} carried · item identity {item.itemIdentity ?? "UNKNOWN"} · {item.name ?? "?"} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"}</div>
               ))}
               <p>Possible evaluation candidates: {foreverObservation?.evaluationCandidates.state}. {foreverObservation?.evaluationCandidates.reason}</p>
               <p>Bank: {foreverObservation?.bank.state === "UNKNOWN" ? `UNKNOWN; ${foreverObservation.bank.reason}` : `${foreverObservation?.bank.state ?? "UNKNOWN"}.`}</p>

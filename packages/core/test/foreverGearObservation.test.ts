@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForeverGearObservation, normalizeForeverStructuredObservation } from "../src/foreverGearObservation.ts";
+import { buildForeverGearObservation, normalizeForeverStructuredObservation, type ForeverStructuredObservation } from "../src/foreverGearObservation.ts";
 import type { EquipmentSection, InventorySection } from "../src/types.ts";
 
 const equipment: EquipmentSection = { status: { state: "OBSERVED", observedAt: 100 }, slots: [{ slot: 16, slotName: "Main Hand", empty: false, itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade" }] };
 const bags: InventorySection = { status: { state: "OBSERVED", observedAt: 101 }, containers: [], itemsKnownEmpty: false, items: [{ itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade", qty: 1 }, { itemRef: "item:456:0:0:0:0:0:0:0:77:0:0:0", name: "Variant", qty: 2 }] };
 const bank: InventorySection = { status: { state: "UNKNOWN", reason: "Not captured" }, containers: [], itemsKnownEmpty: false, items: [] };
 const identity = { version: "forever" as const, identityKey: "forever::hallo::hero", name: "Hero", realm: "Hallo" };
-const sidecar = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hero", realm: "Hallo", generatedAt: 99, sourceCharacterGuid: "Player-1-HERO", equipment: { observedAt: 100, completeness: "complete", data: { slots: { "16": { itemID: 999, itemString: "item:999:4:5", name: "Structured Blade", itemLevel: 2 } } } }, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString: "item:999:4:5", count: 2, name: "Structured Variant" } } }] } }, bank: { observedAt: 101, completeness: "unknown", reason: "not visited", data: {} }, itemMetadata: {} };
+const sidecar: ForeverStructuredObservation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hero", realm: "Hallo", generatedAt: 99, sourceCharacterGuid: "Player-1-HERO", equipment: { observedAt: 100, completeness: "complete", data: { slots: { "16": { itemID: 999, itemString: "item:999:4:5", name: "Structured Blade", itemLevel: 2 } } } }, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString: "item:999:4:5", count: 2, name: "Structured Variant" } } }] } }, bank: { observedAt: 101, completeness: "unknown", reason: "not visited", data: {} }, itemMetadata: {} };
 
 test("Forever structured sidecar is isolated by version, identity, profile, and export timestamp", () => {
   assert.ok(normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 99));
@@ -40,4 +40,20 @@ test("missing and stale structured observations remain explicit", () => {
   assert.equal(missing.equipment.freshness, "stale");
   assert.equal(missing.metadataSource, "UNKNOWN");
   assert.equal(missing.evaluationCandidates.state, "UNKNOWN");
+});
+
+test("equipment slots without item identifiers remain UNKNOWN and partial identifiers stay visible", () => {
+  const view = buildForeverGearObservation({ identity, snapshotId: 3, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: { ...sidecar, equipment: { observedAt: 103, completeness: "partial", data: { slots: { "1": {}, "16": { itemID: 321, name: "Partial only" } } } } }, now: 110 });
+  assert.equal(view.equipment.items[0]?.provenance, "UNKNOWN");
+  assert.equal(view.equipment.items[0]?.itemRef, undefined);
+  assert.equal(view.equipment.items[1]?.itemRef, "item:321");
+  assert.equal(view.equipment.items[1]?.itemIdentity, "PARTIAL");
+});
+
+test("structured bag slot arrays preserve the observed one-based WoW slot indexes", () => {
+  const view = buildForeverGearObservation({ identity, snapshotId: 4, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: { ...sidecar, bags: { observedAt: 104, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 111, itemString: "item:111:0", count: 3 }, { itemID: 112, itemString: "item:112:7", count: 1 }] }] } } }, now: 110 });
+  assert.deepEqual(view.carried.items?.map((item) => ({ slot: item.slot, itemRef: item.itemRef, quantity: item.quantity })), [
+    { slot: 1, itemRef: "item:111:0", quantity: 3 },
+    { slot: 2, itemRef: "item:112:7", quantity: 1 },
+  ]);
 });

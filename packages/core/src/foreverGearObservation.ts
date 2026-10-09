@@ -17,6 +17,7 @@ export interface ForeverStructuredObservation {
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 type ForeverEquipmentLike = { status: { state: ForeverSectionState; observedAt?: number }; slots: Array<{ slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string; itemLevel?: string }> };
 type ForeverInventoryLike = { status: { state: ForeverSectionState; observedAt?: number }; items: Array<{ itemRef?: string; name?: string; qty?: number }> };
+type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; quantity?: number; provenance: ForeverSectionState };
 
 export function normalizeForeverStructuredObservation(value: unknown, version: VersionOrUnknown, name?: string, realm?: string, generatedAt?: number): ForeverStructuredObservation | undefined {
   if (version !== "forever" || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -46,28 +47,38 @@ function entries(value: unknown): Array<[string, unknown]> {
   return [];
 }
 
+/** Lua bag tables use 1-based slot keys; contiguous keys become JS arrays at index 0. */
+function slotEntries(value: unknown): Array<[string, unknown]> {
+  if (Array.isArray(value)) return Array.from(value.entries(), ([index, item]) => [String(index + 1), item]);
+  if (value && typeof value === "object") return Object.entries(value as Record<string, unknown>);
+  return [];
+}
+
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function structuredEquipment(section: Record<string, unknown> | undefined, fallback: ForeverEquipmentLike["slots"], provenance: string) {
   const rawSlots = object(section?.data)?.slots;
-  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: slot.slotName, itemID: undefined, itemRef: slot.itemRef, name: slot.name, itemLevel: slot.itemLevel, provenance }));
+  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: slot.slotName, itemID: undefined, itemRef: slot.itemRef, itemIdentity: slot.itemRef ? "OBSERVED" as const : "UNKNOWN" as const, name: slot.name, itemLevel: slot.itemLevel, provenance: slot.itemRef ? provenance : "UNKNOWN" as const }));
   return entries(rawSlots).flatMap(([key, value]) => {
     const item = object(value);
     if (!item) return [];
     const slot = Number(key);
-    return [{ slot, slotName: `Slot ${key}`, itemID: typeof item.itemID === "number" ? item.itemID : undefined, itemRef: typeof item.itemString === "string" ? item.itemString : undefined, name: typeof item.name === "string" ? item.name : undefined, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, provenance }];
+    const itemID = typeof item.itemID === "number" ? item.itemID : undefined;
+    const itemString = typeof item.itemString === "string" ? item.itemString : undefined;
+    const identified = itemID !== undefined || itemString !== undefined;
+    return [{ slot, slotName: `Slot ${key}`, itemID, itemRef: itemString ?? (itemID === undefined ? undefined : `item:${itemID}`), itemIdentity: itemString ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name: typeof item.name === "string" ? item.name : undefined, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, provenance: identified ? provenance : "UNKNOWN" as const }];
   });
 }
 
-function structuredBags(section: Record<string, unknown> | undefined, fallback: ForeverInventoryLike["items"], provenance: string) {
+function structuredBags(section: Record<string, unknown> | undefined, fallback: ForeverInventoryLike["items"], provenance: ForeverSectionState): ForeverCarriedItem[] {
   const containers = object(section?.data)?.containers;
-  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, name: item.name, quantity: item.qty, provenance }));
+  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, itemIdentity: item.itemRef ? "OBSERVED" : "UNKNOWN", name: item.name, quantity: item.qty, provenance }));
   return entries(containers).flatMap(([containerKey, containerValue]) => {
     const container = object(containerValue);
     if (!container) return [];
-    return entries(container.slots).flatMap(([slot, itemValue]) => {
+    return slotEntries(container.slots).flatMap(([slot, itemValue]) => {
       const item = object(itemValue);
       if (!item) return [];
       const itemID = typeof item.itemID === "number" ? item.itemID : undefined;

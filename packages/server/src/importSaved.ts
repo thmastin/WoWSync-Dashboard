@@ -778,7 +778,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) stderr.push(`warning: ${target.warning}`);
     out(`Sending to ${importEndpoint(target.origin)} ...`);
-    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation), summary.sha256));
+    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation, chosen.foreverGearObservation), summary.sha256));
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
     if (err instanceof BridgeError) {
