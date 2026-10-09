@@ -125,6 +125,25 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.deepEqual(unmatchedView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "pair results are withheld unless the exact equipped variant is observed");
 });
 
+test("CanUseItem is preserved as base-ID/current-player evidence and never exact-variant proof", () => {
+  const itemString = "item:999:4:5:77:0:0:0";
+  const fact = itemFact(itemString, 999, "INVTYPE_CHEST", true) as ReturnType<typeof itemFact> & Record<string, unknown>;
+  const observed = (value: number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  fact.playerCanUseItem = { api: "C_PlayerInfo.CanUseItem", state: "OBSERVED_VALUE", observedAt: 105,
+    input: { itemID: 999, itemString, scope: "CURRENT_PLAYER_ONLY" }, returns: [{ observation: observed(true) }] };
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "synthetic API contract fixture", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [fact] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 55, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  const signal = view.evaluationCandidates.items[0]?.itemApiEvidence.playerCanUseItem;
+  assert.equal(signal?.state, "OBSERVED");
+  assert.equal(signal?.itemID, 999);
+  assert.equal(signal?.identityScope, "BASE_ITEM_ID");
+  assert.match(signal?.reason ?? "", /not exact-variant/);
+  assert.equal(signal?.itemString, itemString, "exact variant is retained as contextual identity, not API input semantics");
+});
+
 test("Forever GetItemInfo semantics remain UNKNOWN when the returned hyperlink conflicts with the observed variant", () => {
   const itemString = "item:999:4:5";
   const wrongLink = itemFact(itemString, 999, "INVTYPE_CHEST", true);

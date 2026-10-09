@@ -93,8 +93,8 @@ test("item spec tags are suitability hints only; missing tags stay unknown", () 
   assert.equal(assessForeverSuitability({ activeSpecializationID: 3, itemSpecializationIDs: [], specializationEvidenceCurrent: true }).state, "UNKNOWN");
 });
 
-test("binding blocks a cross-character route only when the source bound facet is observed true", () => {
-  assert.equal(evaluateForeverTransferability(true).state, "BLOCKED_BOUND_TO_SOURCE");
+test("a generic bound boolean does not distinguish soulbound from account-bound", () => {
+  assert.equal(evaluateForeverTransferability(true).state, "UNKNOWN");
   assert.equal(evaluateForeverTransferability(false).state, "UNKNOWN");
   assert.equal(evaluateForeverTransferability(undefined).state, "UNKNOWN");
 });

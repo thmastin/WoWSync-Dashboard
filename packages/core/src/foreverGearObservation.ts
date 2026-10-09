@@ -137,6 +137,18 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
   const equippable = object(fact.isEquippableItem);
   const equippableReturns = Array.isArray(equippable?.returns) ? equippable.returns : [];
   const equippableValue = object(object(equippableReturns[0])?.observation);
+  const canUseCall = object(fact.playerCanUseItem);
+  const canUseInput = object(canUseCall?.input);
+  const canUseReturns = Array.isArray(canUseCall?.returns) ? canUseCall.returns : [];
+  const canUseValue = object(object(canUseReturns[0])?.observation);
+  const expectedItemID = Number(itemRef.match(/^item:(\d+)/)?.[1]);
+  const playerCanUseItem = canUseCall?.api === "C_PlayerInfo.CanUseItem" && canUseInput?.scope === "CURRENT_PLAYER_ONLY"
+    && canUseInput?.itemString === itemRef && canUseInput?.itemID === expectedItemID
+    && canUseCall?.state === "OBSERVED_VALUE" && canUseValue?.state === "OBSERVED" && canUseValue.type === "boolean"
+    ? { state: "OBSERVED" as const, value: canUseValue.value as boolean, api: canUseCall.api, itemString: itemRef, itemID: expectedItemID,
+      ...(typeof canUseCall.observedAt === "number" ? { observedAt: canUseCall.observedAt, freshness: classifyFreshness(canUseCall.observedAt, now) } : {}),
+      provenance: "OBSERVED_PLAYER_SCOPED_BASE_ITEM_SIGNAL" as const, identityScope: "BASE_ITEM_ID" as const, reason: "C_PlayerInfo.CanUseItem is called with the base item ID for the current player; itemString is only the exact observed variant associated with that call. This is not exact-variant or other-character eligibility." }
+    : { state: "UNKNOWN" as const, api: canUseCall?.api ?? "UNKNOWN", itemString: canUseInput?.itemString ?? "UNKNOWN", identityScope: "BASE_ITEM_ID" as const, reason: "No complete current-player C_PlayerInfo.CanUseItem result for the base item ID is available." };
   const itemSpec = object(fact.itemSpecInfo);
   const itemSpecTable = object(itemSpec?.table);
   const itemSpecInput = object(itemSpec?.input);
@@ -155,6 +167,7 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
       provenance: "OBSERVED_RAW_API_RESULT" as const }
     : { state: "UNKNOWN" as const, api: itemSpec?.api ?? "UNKNOWN", itemString: itemSpecInput?.itemString ?? "UNKNOWN",
       reason: "No complete exact-item C_Item.GetItemSpecInfo result is available." };
+  const bindingEvidence = object(fact.bindingEvidence);
   const deltaSection = object(statDeltaComparisons);
   const deltaRows = Array.isArray(deltaSection?.comparisons) ? deltaSection.comparisons : [];
   const exactPairDeltas = deltaRows.flatMap((entry) => {
@@ -170,7 +183,9 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
   return {
     itemInfo: { state: info?.state ?? "UNKNOWN", api: info?.api ?? "UNKNOWN", returnCount: info?.returnCount ?? null, ...(typeof info?.observedAt === "number" ? { observedAt: info.observedAt } : {}), returns: infoReturns },
     playerEquipability: { api: equippable?.api ?? "UNKNOWN", state: equippable?.state ?? "UNKNOWN", itemString: object(equippable?.input)?.itemString ?? "UNKNOWN", ...(equippableValue?.state === "OBSERVED" && equippableValue.type === "boolean" ? { value: equippableValue.value } : {}), ...(typeof equippable?.observedAt === "number" ? { observedAt: equippable.observedAt, freshness: classifyFreshness(equippable.observedAt, now) } : {}), reason: "C_Item.IsEquippableItem is a point-in-time check for the currently logged-in player; it cannot be reused as another character's check." },
+    playerCanUseItem,
     itemSpecInfo,
+    bindingEvidence: bindingEvidence ? { ...bindingEvidence, freshness: typeof bindingEvidence.observedAt === "number" ? classifyFreshness(bindingEvidence.observedAt, now) : "unknown" } : { state: "UNKNOWN", semanticInterpretation: "UNKNOWN_UNVALIDATED", reason: "No exact-item raw binding API calls are available." },
     itemStats: { state: statsTable?.state ?? stats?.state ?? "UNKNOWN", callState: stats?.state ?? "UNKNOWN", api: stats?.api ?? "UNKNOWN", entryCount: statsTable?.entryCount ?? null, complete: statsTable?.complete ?? false, ...((typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt) !== undefined ? { observedAt: typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt } : {}), entries: statEntries },
     statDeltaEvidence: { api: deltaSection?.state === "API_MISSING" ? "API_MISSING" : "C_Item.GetItemStatDelta", state: deltaSection?.state ?? "UNKNOWN", completeness: deltaSection?.completeness ?? "unknown", ...(typeof deltaSection?.observedAt === "number" ? { observedAt: deltaSection.observedAt, freshness: classifyFreshness(deltaSection.observedAt, now) } : {}), reason: statDeltaSourceCurrent ? "Complete, recent pair observations are filtered to the candidate and exact equipped variants present in this equipment snapshot." : "Raw pair results are withheld unless item facts, bag/equipment sources, pair-section completeness, and freshness are all current." },
     statDeltaComparisons: exactPairDeltas,

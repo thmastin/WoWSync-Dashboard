@@ -170,6 +170,8 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.recipientLevel, 8);
     assert.equal(currentAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
     assert.equal(currentAssessment?.eligibilityChecks.weaponProficiency.state, "UNKNOWN");
+    assert.equal(currentAssessment?.playerCanUseSignal, "UNKNOWN", "synthetic older fixture does not invent a CanUseItem observation");
+    assert.equal(currentAssessment?.bindingAssessment.state, "UNKNOWN", "generic bound=false does not establish a transfer route");
     assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "MAPPED", "Forever equip-location mapping finds the occupied main-hand slot despite a different exact token");
     assert.equal(currentAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact-item and recipient specialization evidence only produces a suitability hint");
     assert.equal(currentAssessment?.upgradeStatus, "NO_RECORDED_STAT_GAIN");
@@ -188,6 +190,11 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(currentAssessment?.decision, "NO_RECOMMENDATION");
     assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
     assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
+    const rosterReview = view.recipientEvaluations.find((row) => row.itemRef === carriedRef && row.source.identityKey === carrier?.source.identityKey);
+    assert.equal(rosterReview?.recipients.length, 5, "candidate is screened against each known Forever character only");
+    assert.ok(rosterReview?.recipients.some((row) => row.name === "Receiver" && row.upgradeStatus === "NO_RECORDED_STAT_GAIN"));
+    assert.ok(rosterReview?.recipients.some((row) => row.name === "StaleCarrier" && row.transferability === "UNKNOWN"));
+    assert.ok(rosterReview?.recipients.every((row) => row.fit !== "LOCAL_REVIEW" || row.name === "Carrier"));
     const local = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
     assert.equal(local.status, "FOUND");
     if (local.status === "FOUND" && local.value.data) {

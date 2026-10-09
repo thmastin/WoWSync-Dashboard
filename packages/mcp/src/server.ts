@@ -189,7 +189,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async (query) => textResult(readModel.getForeverGearObservation(query)));
   server.registerTool("get_forever_gear_allocation", {
     title: "Evaluate observed Forever gear candidates",
-    description: "Evaluates exact observed Forever carried potential-equipment rows against one requested Forever character and the Dashboard Forever import context. It reports separate eligibility, suitability, upgrade, transferability, and priority outcomes plus missing evidence. Account membership is UNKNOWN; candidate presence is not ownership sharing. Never applies Retail rules or recommends a transfer from location alone.",
+    description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverGearAllocation(query)));

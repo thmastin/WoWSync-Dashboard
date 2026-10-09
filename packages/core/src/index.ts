@@ -23,6 +23,7 @@ export * from "./wowCurrencies.ts";
 export * from "./equipmentObservation.ts";
 export * from "./retailGearAllocation.ts";
 export * from "./foreverGearObservation.ts";
+export * from "./foreverGearRules.ts";
 export * from "./readModel.ts";
 export * from "./researchRegistry.ts";
 export * from "./demand.ts";

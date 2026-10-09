@@ -36,19 +36,23 @@ export type ForeverSlotCompatibility = {
 export type ForeverGearAssessmentEvaluation = {
   eligibility: "INELIGIBLE_REQUIRED_LEVEL" | "UNKNOWN";
   playerApiSignal: "TRUE" | "FALSE" | "UNKNOWN";
+  playerCanUseSignal: "TRUE" | "FALSE" | "UNKNOWN";
   eligibilityChecks: {
     requiredLevel: { state: "MET" | "NOT_MET" | "UNKNOWN"; itemRequiredLevel?: number; recipientLevel?: number; reason: string };
-    classRestriction: { state: "UNKNOWN"; reason: string };
-    weaponProficiency: { state: "UNKNOWN" | "NOT_APPLICABLE"; observedSkillLines: string[]; reason: string };
+    classRestriction: { state: "PASS" | "FAIL" | "UNKNOWN"; reason: string };
+    armorProficiency: { state: "PASS" | "FAIL" | "UNKNOWN" | "NOT_APPLICABLE"; armor?: string; confidence: "LIVE_VALIDATED" | "CLASSIC_DERIVED_HYPOTHESIS" | "UNKNOWN"; reason: string };
+    weaponProficiency: { state: "PASS" | "FAIL" | "UNKNOWN" | "NOT_APPLICABLE"; confidence: "LIVE_VALIDATED" | "CLASSIC_DERIVED_HYPOTHESIS" | "UNKNOWN"; matchingSkill?: string; observedSkillLines: string[]; reason: string };
     slotCompatibility: ForeverSlotCompatibility;
   };
+  eligibilityAssessment: { state: "INELIGIBLE" | "POSSIBLE_BY_RULE_SCREEN" | "UNKNOWN"; confidence: "DIRECT_OBSERVATION" | "CLASSIC_DERIVED_HYPOTHESIS" | "UNKNOWN"; reasons: string[] };
   suitability: "OBSERVED_SPEC_TAG_MATCH" | "OBSERVED_SPEC_TAG_MISMATCH" | "UNKNOWN";
   suitabilityEvidence: ReturnType<typeof assessForeverSuitability>;
   upgradeStatus: ReturnType<typeof classifyForeverRecordedUpgrade>["status"];
   upgradeConfidence: ReturnType<typeof classifyForeverRecordedUpgrade>["confidence"];
   rawStatComparisons: ForeverStatComparison[];
   statDeltaCalibrations: Array<ReturnType<typeof calibrateForeverStatDelta>>;
-  transferability: "BLOCKED_BOUND_TO_SOURCE" | "UNKNOWN";
+  transferability: "BLOCKED_BOUND_TO_SOURCE" | "POTENTIALLY_ACCOUNT_TRANSFERABLE" | "UNKNOWN";
+  bindingAssessment: { state: "SOULBOUND" | "ACCOUNT_BOUND" | "ACCOUNT_BOUND_UNTIL_EQUIP" | "NOT_CURRENTLY_BOUND" | "OTHER_BIND_RULE" | "UNKNOWN"; reason: string };
   transferabilityReason: string;
   allocationPriority: "LOCAL_REVIEW_CANDIDATE" | "BLOCKED_BY_BINDING" | "UNRANKED_UNKNOWN_SCOPE" | "UNRANKED";
   decision: "REVIEW_LOCAL_CANDIDATE" | "NO_RECOMMENDATION";
@@ -186,9 +190,9 @@ export function evaluateForeverTransferability(bound: boolean | undefined): {
   state: "BLOCKED_BOUND_TO_SOURCE" | "UNKNOWN";
   reason: string;
 } {
-  return bound === true
-    ? { state: "BLOCKED_BOUND_TO_SOURCE", reason: "The current container observation says this item is bound to the source character; ordinary transfer to another character is blocked." }
-    : { state: "UNKNOWN", reason: "An unbound or missing bound facet does not establish account membership, recipient access, a trade route, or the item's future binding behavior." };
+  return { state: "UNKNOWN", reason: bound === true
+    ? "The source container reports a bound item, but that boolean does not distinguish soulbound from account-bound or another bind type; transferability remains UNKNOWN."
+    : "An unbound or missing bound facet does not establish account membership, recipient access, a trade route, or the item's future binding behavior." };
 }
 
 export function assessForeverEligibility(input: {
