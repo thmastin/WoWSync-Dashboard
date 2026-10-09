@@ -4,6 +4,7 @@
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
+import { gateAllocationForProjectReservations } from "./projectReservationGate.ts";
 import type { AccountChangeSummary, AccountFacts, CharacterFacts, ProfessionFacts } from "./accountFacts.ts";
 import { buildAccountCurrencies, type AccountCurrencies, type CharacterCurrencies } from "./wowCurrencies.ts";
 import type { CapturedCharacterState, EquipmentSection, GearCandidatesSection, ProfessionsSection, SectionState, VersionOrUnknown } from "./types.ts";
@@ -1696,7 +1697,7 @@ export class DashboardReadModel {
       return { provenance: { state: "UNKNOWN", version: query.version, reason: "Explicit demand and allocation are Retail-only in this slice." } };
     }
     const active = this.store.getActiveDemand(query.version, "STOCK_TARGET", query.baseItemId);
-    const data = allocationForItem(projectAccountOwnedEvidenceMap(this.store, query.version), query.baseItemId, active ? [active] : []);
+    const data = gateAllocationForProjectReservations(allocationForItem(projectAccountOwnedEvidenceMap(this.store, query.version), query.baseItemId, active ? [active] : []), this.store.listErpProjects(query.version));
     return {
       data,
       provenance: {
@@ -1728,7 +1729,11 @@ export class DashboardReadModel {
     const review = buildAllocationReview(evidenceMap, this.store.listDemands(query.version));
     // Search filters unallocated entries BEFORE paging; whole-list counts above stay whole-account.
     const matchingUnallocated = filterUnallocatedByQuery(review.unallocated, query.q);
-    const demanded = review.demanded.slice(demandedPage.offset, demandedPage.offset + demandedPage.limit);
+    const projects = this.store.listErpProjects(query.version);
+    const gatedDemanded = review.demanded.map((result) => gateAllocationForProjectReservations(result, projects));
+    const dispositionCounts: DispositionCounts = { HOLD_ALLOCATED: 0, REQUIRES_REVIEW: 0, SEND_HELLOMAGS: 0, NO_ACTION: 0 };
+    for (const result of gatedDemanded) dispositionCounts[result.disposition]++;
+    const demanded = gatedDemanded.slice(demandedPage.offset, demandedPage.offset + demandedPage.limit);
     const unallocated = matchingUnallocated.slice(unallocatedPage.offset, unallocatedPage.offset + unallocatedPage.limit);
     const itemNames: Record<number, string> = {};
     for (const result of demanded) {
@@ -1742,7 +1747,7 @@ export class DashboardReadModel {
         unresolvedStorage: review.unresolvedStorage,
         hasUnresolvedStorage: review.unresolvedStorage.length > 0,
         unidentifiedItemRowCount: review.unidentifiedItemRowCount,
-        dispositionCounts: review.dispositionCounts,
+        dispositionCounts,
         unallocatedItemStringIdentityCounts: review.unallocatedItemStringIdentityCounts,
         demanded: { items: demanded, offset: demandedPage.offset, limit: demandedPage.limit, totalCount: review.demanded.length, truncated: demandedPage.offset + demanded.length < review.demanded.length },
         unallocated: {

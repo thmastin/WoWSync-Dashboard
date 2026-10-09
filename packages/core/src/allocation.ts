@@ -96,7 +96,8 @@ export type AllocationReasonCode =
   | "BINDING_UNKNOWN_PRESENT"
   // Slice 3 effects.
   | "BASE_ITEM_AGGREGATION_UNPROVEN"
-  | "SALE_DISPOSITION_GATED_BY_BINDING";
+  | "SALE_DISPOSITION_GATED_BY_BINDING"
+  | "PROJECT_RESERVATION_GATES_SALE";
 
 export interface AllocationReason {
   readonly code: AllocationReasonCode;

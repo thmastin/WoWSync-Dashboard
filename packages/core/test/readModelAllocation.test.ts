@@ -103,6 +103,38 @@ test("Scenario 2 — confirmed surplus: demand 20, OBSERVED 35, fully resolved e
   });
 });
 
+test("active explicit project reservation gates sale disposition across allocation reads without claiming transfer access", () => {
+  withFixture((store, readModel, imp) => {
+    const ITEM = 800022;
+    const GUILD_ITEM = ITEM + 1;
+    imp({ name: "Anchor", generated: T, bags: observedSection([itemRow(ITEM, 35), itemRow(GUILD_ITEM, 15)]), bank: observedSection([]), warband: warbandSection("OBSERVED", []) });
+    const sourceIdentityKey = store.listCharacters("retail")[0]!.identityKey;
+    store.createDemand({ baseItemId: ITEM, requiredQuantity: 20 });
+    const plan = store.createErpProject({
+      version: "retail", title: "Reserve for a craft", needs: [{ stableId: "stone_need", kind: "ITEM_ID", resourceKey: String(ITEM), label: "Mycobloom", requiredQuantity: 5, sourceIdentityKey }],
+      reservations: [{ stableId: "stone_hold", needId: "stone_need", sourceIdentityKey, quantity: 5, status: "ACTIVE", createdAt: NOW, updatedAt: NOW }], workOrders: [],
+    });
+    const result = readModel.getItemAllocation({ version: "retail", baseItemId: ITEM }).data!;
+    assert.equal(result.resolution, "RESOLVED");
+    if (result.resolution !== "RESOLVED") throw new Error("unreachable");
+    assert.equal(result.confirmedSurplus, 15, "stock-target arithmetic stays explicitly separate from project reservations");
+    assert.equal(result.disposition, "REQUIRES_REVIEW", "a project-reserved resource cannot be offered to the sale pipeline");
+    assert.ok(result.reasons.some((reason) => reason.code === "PROJECT_RESERVATION_GATES_SALE" && /Reserve for a craft.*5 reserved/.test(reason.detail ?? "")));
+    assert.doesNotMatch(JSON.stringify(result.reasons), /transferable|account-owned by Anchor/);
+    const review = readModel.getAllocationReview({ version: "retail" }).data!;
+    const entry = review.demanded.items.find((candidate) => candidate.commodity.baseItemId === ITEM)!;
+    assert.deepEqual(entry, result, "the single-item REST/core read and portfolio review apply the same reservation gate");
+    assert.equal(review.dispositionCounts.REQUIRES_REVIEW, 1);
+
+    store.updateErpProject({ ...plan, reservations: plan.reservations.map((reservation) => ({ ...reservation, status: "RELEASED" as const, updatedAt: NOW + 1 })) }, plan.revision);
+    assert.equal(readModel.getItemAllocation({ version: "retail", baseItemId: ITEM }).data?.disposition, "SEND_HELLOMAGS", "explicit release removes the project reservation gate");
+
+    store.createDemand({ baseItemId: GUILD_ITEM, requiredQuantity: 5 });
+    store.createErpProject({ version: "retail", title: "Guild-only plan", needs: [{ stableId: "guild_need", kind: "ITEM_ID", resourceKey: String(GUILD_ITEM), label: "Guild resource", requiredQuantity: 1, sourceOwnerKey: "retail::guild::opaque-42" }], reservations: [{ stableId: "guild_hold", needId: "guild_need", sourceOwnerKey: "retail::guild::opaque-42", quantity: 1, status: "ACTIVE", createdAt: NOW, updatedAt: NOW }], workOrders: [] });
+    assert.equal(readModel.getItemAllocation({ version: "retail", baseItemId: GUILD_ITEM }).data?.disposition, "SEND_HELLOMAGS", "guild reservations do not claim or reserve personal/account inventory");
+  });
+});
+
 test("Scenario 3 — historical ambiguity: demand 40, OBSERVED 27, LAST_SEEN Warband 25 never satisfies or creates surplus", () => {
   withFixture((store, readModel, imp) => {
     const ITEM = 800003;

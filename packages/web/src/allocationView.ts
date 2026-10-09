@@ -406,6 +406,7 @@ export function targetRowView(result: AllocationResult, name: string | undefined
   const notes: string[] = [];
   if (hasReason(result, "SALE_DISPOSITION_GATED_BY_UNRESOLVED_EVIDENCE")) notes.push(storageUnknown ? "Unseen storage could hold more, so this surplus is a minimum and is not cleared for sale yet." : "Some stack quantities are unknown, so this surplus is a minimum and is not cleared for sale yet.");
   if (hasReason(result, "SALE_DISPOSITION_GATED_BY_BINDING")) notes.push("Some confirmed rows are bound or have unknown binding, so this surplus is not recommended for sale.");
+  if (hasReason(result, "PROJECT_RESERVATION_GATES_SALE")) notes.push("An active project reservation overlaps this item. Review that plan before treating the stock-target remainder as available for sale.");
   notes.push(RECOMMENDATION_ONLY);
   return {
     ...common,
