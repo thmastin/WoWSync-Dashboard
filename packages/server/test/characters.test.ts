@@ -192,35 +192,76 @@ test("Forever allocation route exposes separate evidence-gated decisions without
 });
 
 const liveForeverSavedVariables = process.env.WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES;
-test("[LIVE REGRESSION] Hallo 70291 capture stays a cautious allocation plan across REST and AccountContext", { skip: !liveForeverSavedVariables && "Set WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES to the read-only Hallo GearExport.lua capture." }, async () => {
+test("[LIVE REGRESSION] Hallo/Fizzwick 70291 mail-test captures stay evidence-qualified across REST and AccountContext", { skip: !liveForeverSavedVariables && "Set WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES to the read-only Forever GearExport.lua capture." }, async () => {
   const saved = readSavedExports(liveForeverSavedVariables!);
-  const hallo = saved.find((entry) => entry.name === "Hallo" && entry.realm === "Classic Beta PvP 2");
-  const natokni = saved.find((entry) => entry.name === "Natokni" && entry.realm === "Classic Beta PvE");
+  const hallo = saved.find((entry) => entry.name === "Hallo" && entry.realm === "Classic Beta PvP 2") as any;
+  const fizzwick = saved.find((entry) => entry.name === "Fizzwick" && entry.realm === "Classic Beta PvP 2") as any;
   assert.ok(hallo?.text && hallo.foreverGearObservation, "the real capture contains Hallo's saved export and Forever 70291 sidecar");
-  assert.ok(natokni?.text && natokni.foreverGearObservation, "the same SavedVariables file contains Natokni's distinct Forever 70291 character capture");
+  assert.ok(fizzwick?.text && fizzwick.foreverGearObservation, "the real capture contains Fizzwick's saved export and Forever 70291 sidecar");
   assert.equal(hallo.sourceCharacterGuid, "Player-4613-007ED867");
-  assert.equal(natokni.sourceCharacterGuid, "Player-4618-01638BB0");
+  assert.equal(fizzwick.sourceCharacterGuid, "Player-4613-00B0888B");
+  assert.equal(hallo.foreverGearObservation.clientProfile, "Forever:1.60.1:70291:16001");
+  assert.equal(fizzwick.foreverGearObservation.clientProfile, "Forever:1.60.1:70291:16001");
+  assert.equal(fizzwick.foreverGearObservation.bags.completeness, "complete");
+  const miningPickRef = "item:2901::::::::4:1482::14:::::::";
+  assert.doesNotMatch(hallo.text, /item:2901[^\n]*\tMining Pick\t1\t/, "Hallo's current export no longer lists the Mining Pick in carried inventory");
+  assert.match(fizzwick.text, new RegExp(`${miningPickRef}\\tMining Pick\\t1\\tno`), "Fizzwick's current export observes one unbound Mining Pick in carried inventory");
+  const pick = fizzwick.foreverGearObservation.itemEvidence?.data?.items?.find((item: any) => item.itemString === miningPickRef);
+  assert.ok(pick, "the exact received itemString has a current raw item API observation");
+  assert.equal(pick.playerCanUseItem.returns[0].observation.value, true);
+  assert.equal(pick.isEquippableItem.returns[0].observation.value, true);
+  assert.equal(pick.itemInfoInstant.returns[1].observation.value, "Weapon");
+  assert.equal(pick.itemInfoInstant.returns[2].observation.value, "Miscellaneous");
+  assert.equal(pick.itemInfoInstant.returns[3].observation.value, "INVTYPE_WEAPONMAINHAND");
+  assert.equal(pick.itemInfo.returns[4].observation.value, 1, "the live GetItemInfo tuple reports required level 1");
+  assert.equal(pick.bindingEvidence.itemInfoBindType.observation.value, 0);
+  assert.equal(pick.bindingEvidence.isItemBindToAccount.returns[0].observation.value, false);
+  assert.equal(pick.bindingEvidence.isItemBindToAccountUntilEquip.returns[0].observation.value, false);
+  assert.equal(pick.itemStats.table.entries[0].observation.value, 1.5);
+  const pickDelta = fizzwick.foreverGearObservation.itemEvidence.data.statDeltaComparisons.comparisons.find((row: any) =>
+    row.input?.equippedItemString === "item:35::::::::4:1482::75:::::::" && row.input?.candidateItemString === miningPickRef);
+  assert.ok(pickDelta, "the capture includes a direct candidate-versus-equipped GetItemStatDelta call for Fizzwick");
+  const dpsDelta = pickDelta.table.entries.find((entry: any) => entry.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT");
+  assert.ok(Math.abs(dpsDelta.observation.value - (1.5 - 1.379310369491577)) < 1e-9, "the observed delta is candidate DPS minus equipped DPS");
   await withApp(async (api) => {
     const imported = await api.importCapture({ text: hallo.text, foreverGearObservation: hallo.foreverGearObservation });
     assert.equal(imported.status, 200);
-    const otherImport = await api.importCapture({ text: natokni.text, foreverGearObservation: natokni.foreverGearObservation });
+    const otherImport = await api.importCapture({ text: fizzwick.text, foreverGearObservation: fizzwick.foreverGearObservation });
     assert.equal(otherImport.status, 200);
-    const key = "forever::classic beta pvp 2::hallo";
-    const allocationResponse = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
-    assert.equal(allocationResponse.status, 200);
-    const allocation = allocationResponse.body.value.data;
-    assert.equal(allocation.version, "forever");
-    assert.equal(allocation.scope.accountMembership, "UNKNOWN");
-    assert.ok(allocation.candidateSources.every((source: any) => source.bank.state === "UNKNOWN"));
-    assert.ok(allocation.allocationPlan.some((row: any) => row.item.itemRef === "item:2901::::::::9:1485::14:::::::"));
-    assert.ok(allocation.allocationPlan.every((row: any) => row.disposition === "INSUFFICIENT_EVIDENCE" || row.disposition === "POSSIBLE_OTHER_CHARACTER"));
-    const natokniRows = allocation.allocationPlan.filter((row: any) => row.source.identityKey === "forever::classic beta pve::natokni");
-    assert.equal(natokniRows.length, 16, "eight observed carried variants without exact item API evidence remain unknown for both characters");
-    assert.ok(natokniRows.every((row: any) => row.disposition === "INSUFFICIENT_EVIDENCE" && row.evidence.provenance === "UNKNOWN"));
-    assert.ok(allocation.assessments.every((row: any) => row.transferability === "UNKNOWN" || row.source.identityKey === row.recipient.identityKey));
+    const identities = ["forever::classic beta pvp 2::hallo", "forever::classic beta pvp 2::fizzwick"];
+    const allocations = new Map<string, any>();
+    for (const key of identities) {
+      const allocationResponse = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
+      assert.equal(allocationResponse.status, 200);
+      allocations.set(key, allocationResponse.body.value.data);
+      const allocation = allocationResponse.body.value.data;
+      assert.equal(allocation.version, "forever");
+      assert.equal(allocation.scope.accountMembership, "UNKNOWN");
+      assert.ok(allocation.candidateSources.every((source: any) => source.bank.state === "UNKNOWN"));
+      assert.ok(allocation.assessments.every((row: any) => row.transferability === "UNKNOWN" || row.source.identityKey === row.recipient.identityKey));
+    }
+    const halloPlan = allocations.get(identities[0]).allocationPlan;
+    const fizzwickPlan = allocations.get(identities[1]).allocationPlan;
+    const crossScreen = halloPlan.find((row: any) => row.item.itemRef === miningPickRef && row.source.identityKey === identities[1] && row.recipient.identityKey === identities[0]);
+    assert.ok(crossScreen, "the exact observed item can be screened against Hallo");
+    assert.equal(crossScreen.disposition, "INSUFFICIENT_EVIDENCE");
+    assert.equal(crossScreen.evidence.transferability, "UNKNOWN");
+    assert.equal(crossScreen.comparison.upgradeStatus, "UNKNOWN", "a lower recorded DPS result is not promoted into an overall upgrade verdict");
+    const fizzwickAssessment = allocations.get(identities[1]).assessments.find((row: any) => row.candidate.itemRef === miningPickRef);
+    assert.equal(fizzwickAssessment.playerApiSignal, "TRUE");
+    assert.equal(fizzwickAssessment.eligibility, "UNKNOWN", "raw use/equippable signals do not erase unresolved weapon proficiency");
+    assert.equal(fizzwickAssessment.upgradeStatus, "UNKNOWN");
+    assert.equal(fizzwickAssessment.decision, "NO_RECOMMENDATION");
+    assert.equal(fizzwickAssessment.statDeltaCalibrations.length, 1, "the exact captured stat-delta pair is carried into evaluation");
+    const pickRecipients = allocations.get(identities[1]).recipientEvaluations.find((row: any) => row.itemRef === miningPickRef).recipients;
+    assert.equal(pickRecipients.find((row: any) => row.identityKey === identities[1]).transferability, "UNKNOWN", "source-local possession does not imply a transferability result");
+    assert.equal(pickRecipients.find((row: any) => row.identityKey === identities[0]).transferability, "UNKNOWN", "cross-character transferability remains unknown despite the observed earlier mail test");
+    assert.ok(fizzwickPlan.some((row: any) => row.item.itemRef === miningPickRef && row.disposition === "INSUFFICIENT_EVIDENCE"));
     const account = await api.get("/api/account-context");
-    const character = account.body.versions.forever.characters.find((entry: any) => entry.identityKey === key);
-    assert.deepEqual(character.foreverGearAllocation.value.data, allocation, "the current real capture yields the same plan through REST and AccountContext");
+    for (const key of identities) {
+      const character = account.body.versions.forever.characters.find((entry: any) => entry.identityKey === key);
+      assert.deepEqual(character.foreverGearAllocation.value.data, allocations.get(key), "the current real capture yields the same plan through REST and AccountContext");
+    }
   });
 });
 

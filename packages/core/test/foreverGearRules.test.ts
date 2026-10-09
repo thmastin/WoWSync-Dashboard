@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverWeaponProficiency, rankForeverRecipientFit } from "../src/foreverGearRules.ts";
+import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency, rankForeverRecipientFit } from "../src/foreverGearRules.ts";
 
 test("Classic-derived armor rules are implemented but labeled as an unvalidated hypothesis", () => {
   assert.deepEqual(evaluateForeverArmorProficiency({ itemClass: "Armor", itemSubclass: "Plate", recipientClass: "Warrior", recipientLevel: 39 }), {
@@ -66,4 +66,20 @@ test("recipient ranks are withheld under unknown transfer scope and exclusions a
     { identityKey: "first", validatedPriorityOrder: 1, eligibility: "ELIGIBLE", armor: "PASS", weapon: "PASS", level: "PASS", slot: "PASS", upgrade: "DOMINATES", transferability: "ALLOWED" },
   ]);
   assert.deepEqual(withPriority.map((row) => [row.identityKey, row.rank]), [["second", 2], ["first", 1]], "only an explicit validated comparable priority is ranked");
+});
+
+test("a local candidate does not imply that cross-character transferability is allowed", () => {
+  const eligibility = combineForeverEligibility({
+    requiredLevel: "MET",
+    explicitClassRestriction: "PASS",
+    armorProficiency: { state: "PASS", confidence: "CLASSIC_DERIVED_HYPOTHESIS", reason: "screen-only armor example" },
+    weaponProficiency: { state: "NOT_APPLICABLE", confidence: "UNKNOWN", reason: "not weapon" },
+    slotCompatibility: "MAPPED",
+    playerSpecificEquipCheck: "TRUE",
+  });
+  const fit = evaluateForeverRecipientFit({ identityKey: "character", eligibility, level: "MET", slotCompatibility: "MAPPED",
+    upgrade: "POSSIBLE_RECORDED_STAT_UPGRADE", sourceLocation: "LOCAL_CARRIED", transferability: "UNKNOWN" });
+  assert.equal(fit.state, "LOCAL_REVIEW");
+  assert.equal(fit.transferability, "UNKNOWN");
+  assert.match(fit.reasons.join(" "), /no cross-character transfer is required/);
 });

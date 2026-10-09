@@ -1252,7 +1252,7 @@ export class DashboardReadModel {
             : itemClass ? { state: "NOT_APPLICABLE", confidence: "UNKNOWN", reason: "Observed item is not a weapon." } : { state: "UNKNOWN", confidence: "UNKNOWN", reason: "Candidate class is stale or unknown." },
           slotCompatibility: slot.state });
         const fit = evaluateForeverRecipientFit({ identityKey: entry.character.identityKey, eligibility, level: levelCheck, slotCompatibility: slot.state,
-          upgrade: upgrade.status, sourceLocation: local ? "LOCAL_CARRIED" : "OTHER_CHARACTER", transferability: local ? "ALLOWED" : "UNKNOWN" });
+          upgrade: upgrade.status, sourceLocation: local ? "LOCAL_CARRIED" : "OTHER_CHARACTER", transferability: "UNKNOWN" });
         return { identityKey: entry.character.identityKey, name: entry.character.name, realm: entry.character.realm,
           eligibility: eligibility.state, armorProficiency: `${armor.state} (${armor.confidence})`, slotCompatibility: slot.state,
           upgradeStatus: upgrade.status, transferability: fit.transferability, fit: fit.state, reasons: fit.reasons };

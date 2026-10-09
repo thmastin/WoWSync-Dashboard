@@ -213,7 +213,7 @@ export function evaluateForeverRecipientFit(input: {
   }
   const gearSignal = input.upgrade === "POSSIBLE_RECORDED_STAT_UPGRADE" || input.upgrade === "POSSIBLE_EMPTY_SLOT_FILL";
   if (input.sourceLocation === "LOCAL_CARRIED" && gearSignal && input.eligibility.state === "POSSIBLE_BY_RULE_SCREEN") {
-    return { identityKey: input.identityKey, state: "LOCAL_REVIEW", transferability: "ALLOWED", reasons: ["Observed source-local item and gear comparison justify user review; this is not a confirmed equip/upgrade conclusion.", ...input.eligibility.reasons] };
+    return { identityKey: input.identityKey, state: "LOCAL_REVIEW", transferability: input.transferability, reasons: ["Observed source-local item and gear comparison justify user review; no cross-character transfer is required for this screen, and this is not a confirmed equip/upgrade conclusion.", ...input.eligibility.reasons] };
   }
   if (gearSignal && input.slotCompatibility === "MAPPED") {
     return { identityKey: input.identityKey, state: "POTENTIAL_GEAR_FIT", transferability: input.transferability, reasons: [
