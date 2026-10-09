@@ -95,7 +95,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const currencyCharacter = writer.listCharacters("retail").find((character) => character.name === "Virek" && character.realm === "Cairne");
     assert.ok(currencyCharacter);
     writer.createErpProject({ version: "retail", title: "Currency reservation protocol fixture", needs: [{ stableId: "currency_4", kind: "CURRENCY", resourceKey: "4", label: "Currency 4", requiredQuantity: 4, sourceIdentityKey: currencyCharacter.identityKey }] });
-    writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }] });
+    let ownerPlan = writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }], workOrders: [{ stableId: "manual_retrieve", kind: "TRANSFER", status: "PLANNED", title: "Review storage access manually", resourceNeedIds: ["warband_leather"], dependsOn: [] }] });
+    ownerPlan = writer.updateErpProject({ ...ownerPlan, workOrders: ownerPlan.workOrders.map((order) => ({ ...order, status: "WAITING_FOR_EVIDENCE" })) }, ownerPlan.revision)!;
   } finally {
     writer.close();
   }
@@ -154,7 +155,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
     const emptyErpProjects = structured<{ version: string; projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
     assert.deepEqual(emptyErpProjects, { version: "forever", projects: [], returnedCount: 0, totalCount: 0, truncated: false }, "MCP exposes planning through the bounded read-only contract");
-    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[] }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }> }>; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
+    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[]; workOrderStatusChanges?: Array<{ workOrderId: string; title: string; fromStatus?: string; toStatus: string }> }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }> }>; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
     const currencyPlan = retailErpProjects.projects.find((entry) => entry.title === "Currency reservation protocol fixture");
     assert.equal(currencyPlan?.needEvidence[0]?.state, "UNKNOWN", "MCP preserves the currency section's LAST_SEEN provenance instead of presenting it as current");
     assert.equal(currencyPlan?.needEvidence[0]?.potentialQuantity, 3);
@@ -162,11 +163,12 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(currencyPlan?.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
     assert.equal(currencyPlan?.needEvidence[0]?.sourceSections[0]?.observedAt, now);
     assert.equal(currencyPlan?.needEvidence[0]?.freshness, "stale");
-    const ownerPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner protocol fixture");
-    assert.equal(ownerPlan?.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
-    assert.equal(ownerPlan?.needEvidence[0]?.potentialQuantity, 3);
-    assert.equal(ownerPlan?.needEvidence[0]?.sourceOwnerKey, "retail::warband::local");
-    assert.deepEqual(ownerPlan?.history.map((event) => [event.revision, event.kind]), [[1, "CREATED"]], "MCP exposes the same project audit timeline as REST through the read-only contract");
+    const sharedOwnerPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner protocol fixture");
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.potentialQuantity, 3);
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.sourceOwnerKey, "retail::warband::local");
+    assert.deepEqual(sharedOwnerPlan?.history.map((event) => [event.revision, event.kind]), [[2, "UPDATED"], [1, "CREATED"]], "MCP exposes the same project audit timeline as REST through the read-only contract");
+    assert.deepEqual(sharedOwnerPlan?.history[0]?.workOrderStatusChanges, [{ workOrderId: "manual_retrieve", title: "Review storage access manually", fromStatus: "PLANNED", toStatus: "WAITING_FOR_EVIDENCE" }]);
     assert.equal(retailErpProjects.truncated, false);
     const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
     assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 2, true], "MCP callers can bound ERP project results without losing the total count");

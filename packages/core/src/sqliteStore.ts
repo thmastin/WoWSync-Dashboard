@@ -1598,10 +1598,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return row?.event_count ?? 0;
   }
 
-  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"]): void {
+  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"], workOrderStatusChanges?: ErpProjectEvent["workOrderStatusChanges"]): void {
     const event: ErpProjectEvent = {
       eventId: `project_event_${randomUUID()}`, projectId: project.stableId, version: project.version,
       revision: project.revision, occurredAt: project.updatedAt, kind, changedFields,
+      ...(workOrderStatusChanges !== undefined && workOrderStatusChanges.length > 0 ? { workOrderStatusChanges } : {}),
       ...(fromStatus !== undefined ? { fromStatus } : {}), toStatus: project.status,
     };
     this.db.prepare("INSERT INTO erp_project_events(event_id, project_id, game_version, revision, occurred_at, event_json) VALUES(?,?,?,?,?,?)")
@@ -1643,7 +1644,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
         .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
       if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
       const kind = existing.status !== updated.status ? "STATUS_CHANGED" : "UPDATED";
-      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined);
+      const previousWorkOrders = new Map(existing.workOrders.map((order) => [order.stableId, order]));
+      const workOrderStatusChanges = updated.workOrders.flatMap((order) => {
+        const previous = previousWorkOrders.get(order.stableId);
+        if (previous?.status === order.status) return [];
+        return [{ workOrderId: order.stableId, title: order.title, ...(previous ? { fromStatus: previous.status } : {}), toStatus: order.status }];
+      });
+      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined, workOrderStatusChanges);
       return updated;
     });
   }

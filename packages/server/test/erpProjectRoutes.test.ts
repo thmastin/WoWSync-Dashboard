@@ -42,6 +42,22 @@ test("project REST persists explicit plans and returns evidence from the shared 
   });
 });
 
+test("project REST preserves explicit work-order plan details and histories task status changes as saved intent", async () => {
+  await withServer(async (call, store) => {
+    const character = store.listCharacters("classic-era")[0]!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Provision", workOrders: [{ stableId: "manual", kind: "TRANSFER", status: "PLANNED", title: "Move materials manually", instructions: "Confirm the item in the source export before acting.", sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey, resourceNeedIds: [], dependsOn: [] }] });
+    const project = created.body.project;
+    assert.equal(project.workOrders[0].instructions, "Confirm the item in the source export before acting.");
+    assert.equal(project.workOrders[0].sourceIdentityKey, character.identityKey);
+    assert.equal(project.workOrders[0].destinationIdentityKey, character.identityKey);
+    const updated = await call("PUT", `/api/versions/classic-era/erp/projects/${project.stableId}`, { expectedRevision: project.revision, project: { ...project, workOrders: [{ ...project.workOrders[0], status: "IN_PROGRESS" }] } });
+    assert.equal(updated.status, 200);
+    assert.deepEqual(updated.body.project.history[0].workOrderStatusChanges, [{ workOrderId: "manual", title: "Move materials manually", fromStatus: "PLANNED", toStatus: "IN_PROGRESS" }]);
+    assert.equal(updated.body.project.workOrderReadiness[0].state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(updated.body.project.workOrderReadiness[0].reason, /does not establish access or a transfer route/);
+  });
+});
+
 test("project REST uses optimistic revisions and never writes completion without player evidence", async () => {
   await withServer(async (call) => {
     const created = await call("POST", "/api/versions/retail/erp/projects", { title: "Provision", workOrders: [{ stableId: "manual", kind: "TRANSFER", status: "PLANNED", title: "Move materials manually", resourceNeedIds: [], dependsOn: [] }] });

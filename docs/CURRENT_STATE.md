@@ -1,15 +1,18 @@
 # Current WoWSync state
 
-**Latest feature-branch checkpoint (2026-10-09):** project revision history is now append-only and
+**Latest feature-branch checkpoint (2026-10-09):** project revision history is append-only and
 transactional. Create, edit, and status changes commit a revision event atomically with the project;
+work-order status edits now include stable task IDs and from/to states, while the workbench can
+record player-authored instructions, assignee, planned source, and intended destination. These are
+plan fields only, not evidence of access, ownership, or transfer. REST and MCP share the event payload;
 REST/MCP and the Projects & Work Orders page expose the latest 50 entries with total/truncation
 metadata, while AccountContext schema 8 includes current revision and event count. Status and
 completion-note changes remain player-entered Dashboard intent. History does not claim a game action
 or infer causality. Exact Retail recipe learned-state rows can now satisfy a single recipe-knowledge
 need; partial catalogs, missing entries, historical data, other versions, current skill, unlocks,
 reagents, and craftability retain explicit uncertainty. The full validation command passes: core
-785/785, MCP 2/2, server 245 pass + 2
-skipped, web 289/289; TypeScript checks and production build pass (523.24 kB JavaScript bundle
+785/785, MCP 2/2, server 246 pass + 2
+skipped, web 289/289; TypeScript checks and production build pass (524.67 kB JavaScript bundle
 advisory). Focused independent review found and resolved status-transition display and separator
 issues. Work-order readiness now projects explicit dependencies and linked needs through the same read model, flags changed linked observations for review even after a player-marked completion, and exposes manual status controls for planned/in-progress/waiting. It is tested for unknown/stale/shortfall and manual review. Still no browser, persistent DEV, live-game, or production
 validation. Current HEAD and report are recorded in the latest durable truth checkpoint.

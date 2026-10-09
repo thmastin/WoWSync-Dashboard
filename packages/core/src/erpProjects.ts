@@ -93,6 +93,13 @@ export interface ErpProjectEvent {
   readonly occurredAt: number;
   readonly kind: "CREATED" | "UPDATED" | "STATUS_CHANGED";
   readonly changedFields: readonly string[];
+  /** Player-recorded task status edits. This is intent history, never game-action evidence. */
+  readonly workOrderStatusChanges?: readonly {
+    readonly workOrderId: string;
+    readonly title: string;
+    readonly fromStatus?: ErpWorkOrderStatus;
+    readonly toStatus: ErpWorkOrderStatus;
+  }[];
   readonly fromStatus?: ErpProjectStatus;
   readonly toStatus: ErpProjectStatus;
 }

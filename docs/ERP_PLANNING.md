@@ -33,6 +33,8 @@ Project history records saved intent changes, including resource needs, reservat
 
 When adding a manual work order, the player can link resource needs and prerequisite work orders. A readiness projection makes those recorded relationships visible and conservatively gates the workbench wording; it is not an automatic scheduler or game-action authorization.
 
+Manual work-order authoring also accepts player-entered instructions and explicit source, destination, and assignee character identities. These fields document intent and expected context only; they do not establish account membership, possession, accessibility, or transferability. Project history records task status transitions by stable work-order ID, rendering old events without the optional transition detail remains supported, and the UI labels these as saved plan status. No action is dispatched to the game.
+
 ## User workflow
 
 Open **Projects & Work Orders** from a version tab. Create a project, add an explicit resource requirement and source character or observed Retail shared owner, record a manual task, and optionally reserve a quantity from directly observed supply. The UI shows evidence date/freshness, current versus historical coverage, cross-project reservations, and section-level changes since the previous complete export. A reservation can be explicitly released. The feature never issues equip, transfer, mail, bank, craft, purchase, or sell operations.

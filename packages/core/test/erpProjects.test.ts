@@ -360,11 +360,14 @@ test("project persistence is version-isolated, survives reopen, and rejects stal
     assert.equal(created.version, "classic-era");
     assert.equal(store.listErpProjects("retail").length, 0);
     assert.equal(store.listErpProjects("classic-era")[0]?.stableId, created.stableId);
-    const changed = store.updateErpProject({ ...created, title: "Prepare the craft" }, created.revision)!;
+    const changed = store.updateErpProject({ ...created, title: "Prepare the craft", workOrders: created.workOrders.map((order) => ({ ...order, status: "IN_PROGRESS" as const })) }, created.revision)!;
     assert.equal(changed.revision, 2);
     const paused = store.setErpProjectStatus(created.stableId, "PAUSED", changed.revision)!;
     assert.equal(paused.revision, 3);
-    assert.deepEqual(store.listErpProjectHistory(created.stableId).map((event) => [event.revision, event.kind, event.changedFields]), [[3, "STATUS_CHANGED", ["status"]], [2, "UPDATED", ["title"]], [1, "CREATED", ["project"]]]);
+    const history = store.listErpProjectHistory(created.stableId);
+    assert.deepEqual(history.map((event) => [event.revision, event.kind, event.changedFields]), [[3, "STATUS_CHANGED", ["status"]], [2, "UPDATED", ["title", "workOrders"]], [1, "CREATED", ["project"]]]);
+    assert.deepEqual(history[1]?.workOrderStatusChanges, [{ workOrderId: "gather_stone", title: "Gather one more Rough Stone", fromStatus: "PLANNED", toStatus: "IN_PROGRESS" }]);
+    assert.equal(history[2]?.workOrderStatusChanges, undefined, "initial tasks are not falsely represented as status transitions");
     assert.throws(() => store.updateErpProject({ ...changed, title: "Stale edit" }, 1), ErpProjectConflictError);
     assert.equal(store.getErpProject(created.stableId)?.title, "Prepare the craft");
   } finally { store.close(); }
