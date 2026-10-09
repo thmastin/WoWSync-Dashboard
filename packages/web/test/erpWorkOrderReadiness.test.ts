@@ -44,3 +44,24 @@ test("work-order readiness uses qualified player-facing language and preserves a
   assert.match(reservationConflict, /Resource allocation requires review/);
   assert.match(reservationConflict, /intent does not prove locked stock/);
 });
+
+test("shared-storage sources use a readable owner label while preserving unresolved owners", () => {
+  const readiness: ErpWorkOrderReadiness = {
+    workOrderId: "retrieve",
+    state: "WAITING_FOR_EVIDENCE",
+    blockingWorkOrderIds: [],
+    unresolvedNeedIds: ["leather"],
+    actionTargetNeedIds: [],
+    changedNeedIds: [],
+    reason: "Shared storage evidence is historical.",
+    linkedNeeds: [{
+      needId: "leather", label: "Light Leather", kind: "ITEM_REF", resourceKey: "item:2318", state: "POTENTIAL_COVERAGE_LAST_SEEN",
+      requiredQuantity: 2, sourceOwnerKey: "retail::warband::local", freshness: "stale", sourceSections: [], unresolvedSections: [], reason: "Historical contents only.",
+    }],
+  };
+  const resolved = renderToStaticMarkup(React.createElement(ErpWorkOrderReadinessLine, { readiness, storageOwnerName: () => "Retail Warband (installation-local)" }));
+  assert.match(resolved, /Source: Retail Warband \(installation-local\)/);
+  const unresolved = renderToStaticMarkup(React.createElement(ErpWorkOrderReadinessLine, { readiness, storageOwnerName: (ownerKey) => `Shared owner ${ownerKey} \(not currently observed\)` }));
+  assert.match(unresolved, /Shared owner retail::warband::local/);
+  assert.match(unresolved, /not currently observed/);
+});
