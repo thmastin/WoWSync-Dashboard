@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { createApp } from "../src/app.ts";
+import { readSavedExports } from "../src/importSaved.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${fixtures}${path}`, "utf8");
@@ -44,6 +45,10 @@ async function withApp(run: (api: Api) => Promise<void>, seedStore?: (store: Sql
       });
       return { status: res.status, body: await res.json() };
     },
+    async importCapture(payload) {
+      const res = await fetch(base + "/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      return { status: res.status, body: await res.json() };
+    },
     async del(identityKey, body, rawBody) {
       const res = await fetch(`${base}/api/characters/${encodeURIComponent(identityKey)}`, {
         method: "DELETE",
@@ -72,6 +77,7 @@ interface Api {
   base: string;
   get(path: string): Promise<{ status: number; body: any }>;
   import(file: string): Promise<{ status: number; body: any }>;
+  importCapture(payload: unknown): Promise<{ status: number; body: any }>;
   del(identityKey: string, body?: unknown, rawBody?: string): Promise<{ status: number; body: Record<string, any> }>;
 }
 
@@ -132,7 +138,7 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
     equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
     bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 1777, itemString, count: 1, name: "Observed item" } } }] } },
     itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 1777, itemString,
-      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [1777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [1777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
       isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
     }] } },
   } }));
@@ -161,11 +167,14 @@ test("Forever allocation route exposes separate evidence-gated decisions without
     assert.equal(view.assessments[0].allocationPriority, "UNRANKED");
     assert.equal(view.assessments[0].decision, "NO_RECOMMENDATION");
     assert.equal(view.assessments[0].candidate.binding.value, true);
+    assert.ok(view.allocationPlan.length > 0);
+    assert.ok(view.allocationPlan.every((entry: any) => entry.item.itemRef?.startsWith("item:") && entry.recipient.identityKey), "REST includes exact-variant plan rows with recipient identity");
     assert.match(view.scope.reason, /WoW account ID/);
     assert.match(view.assessments[0].missingEvidence.join(" "), /class\/item restriction evidence/);
     const account = await api.get("/api/account-context");
     const characterContext = account.body.versions.forever.characters.find((character: any) => character.identityKey === key);
     assert.deepEqual(characterContext.foreverGearAllocation.value.data, view, "AccountContext carries the same canonical allocation read model");
+    assert.deepEqual(characterContext.foreverGearAllocation.value.data.allocationPlan, view.allocationPlan, "REST and AccountContext expose the identical allocation plan");
     const retailKey = encodeURIComponent("retail::forever realm::allocator");
     assert.equal((await api.get(`/api/characters/${retailKey}/forever-gear-allocation`)).body.code, "VERSION_NOT_SUPPORTED");
   }, (store) => {
@@ -176,9 +185,42 @@ test("Forever allocation route exposes separate evidence-gated decisions without
     bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString, count: 1, bound: true, bindingState: "OBSERVED_TRUE" } } }] } },
     bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
     itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "fixture API evidence", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 2901, itemString,
-      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
       isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] } },
     } });
+  });
+});
+
+const liveForeverSavedVariables = process.env.WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES;
+test("[LIVE REGRESSION] Hallo 70291 capture stays a cautious allocation plan across REST and AccountContext", { skip: !liveForeverSavedVariables && "Set WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES to the read-only Hallo GearExport.lua capture." }, async () => {
+  const saved = readSavedExports(liveForeverSavedVariables!);
+  const hallo = saved.find((entry) => entry.name === "Hallo" && entry.realm === "Classic Beta PvP 2");
+  const natokni = saved.find((entry) => entry.name === "Natokni" && entry.realm === "Classic Beta PvE");
+  assert.ok(hallo?.text && hallo.foreverGearObservation, "the real capture contains Hallo's saved export and Forever 70291 sidecar");
+  assert.ok(natokni?.text && natokni.foreverGearObservation, "the same SavedVariables file contains Natokni's distinct Forever 70291 character capture");
+  assert.equal(hallo.sourceCharacterGuid, "Player-4613-007ED867");
+  assert.equal(natokni.sourceCharacterGuid, "Player-4618-01638BB0");
+  await withApp(async (api) => {
+    const imported = await api.importCapture({ text: hallo.text, foreverGearObservation: hallo.foreverGearObservation });
+    assert.equal(imported.status, 200);
+    const otherImport = await api.importCapture({ text: natokni.text, foreverGearObservation: natokni.foreverGearObservation });
+    assert.equal(otherImport.status, 200);
+    const key = "forever::classic beta pvp 2::hallo";
+    const allocationResponse = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
+    assert.equal(allocationResponse.status, 200);
+    const allocation = allocationResponse.body.value.data;
+    assert.equal(allocation.version, "forever");
+    assert.equal(allocation.scope.accountMembership, "UNKNOWN");
+    assert.ok(allocation.candidateSources.every((source: any) => source.bank.state === "UNKNOWN"));
+    assert.ok(allocation.allocationPlan.some((row: any) => row.item.itemRef === "item:2901::::::::9:1485::14:::::::"));
+    assert.ok(allocation.allocationPlan.every((row: any) => row.disposition === "INSUFFICIENT_EVIDENCE" || row.disposition === "POSSIBLE_OTHER_CHARACTER"));
+    const natokniRows = allocation.allocationPlan.filter((row: any) => row.source.identityKey === "forever::classic beta pve::natokni");
+    assert.equal(natokniRows.length, 16, "eight observed carried variants without exact item API evidence remain unknown for both characters");
+    assert.ok(natokniRows.every((row: any) => row.disposition === "INSUFFICIENT_EVIDENCE" && row.evidence.provenance === "UNKNOWN"));
+    assert.ok(allocation.assessments.every((row: any) => row.transferability === "UNKNOWN" || row.source.identityKey === row.recipient.identityKey));
+    const account = await api.get("/api/account-context");
+    const character = account.body.versions.forever.characters.find((entry: any) => entry.identityKey === key);
+    assert.deepEqual(character.foreverGearAllocation.value.data, allocation, "the current real capture yields the same plan through REST and AccountContext");
   });
 });
 

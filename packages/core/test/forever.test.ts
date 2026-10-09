@@ -470,7 +470,7 @@ test("[SYNTHETIC] AccountContext includes the GUID-guarded Forever potential gea
       equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
       bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 777, itemString, count: 1, name: "Observed chest" } } }] } },
       itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 777, itemString,
-        itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+        itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
         isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
       }] } },
     } });

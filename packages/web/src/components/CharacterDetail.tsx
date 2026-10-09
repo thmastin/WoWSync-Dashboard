@@ -23,6 +23,43 @@ function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
 }
 
+function foreverPlanLabel(disposition: string): string {
+  switch (disposition) {
+    case "EQUIP_CANDIDATE": return "Worth reviewing for this character";
+    case "KEEP": return "Keep as the observed comparison item";
+    case "POSSIBLE_OTHER_CHARACTER": return "May merit review for another character";
+    case "NOT_AN_UPGRADE_ON_OBSERVED_METRICS": return "No gain in the recorded metrics";
+    default: return "More evidence needed";
+  }
+}
+
+function foreverPlanFacet(facet: "eligibility" | "suitability" | "transferability", state: string): string {
+  if (facet === "eligibility") {
+    if (state === "UNKNOWN") return "not established";
+    if (state === "POSSIBLE_BY_RULE_SCREEN") return "possible by a limited rule screen; not confirmed";
+    if (state === "INELIGIBLE") return "excluded by a supported check";
+  }
+  if (facet === "suitability") {
+    if (state === "UNKNOWN") return "build fit not established";
+    if (state === "OBSERVED_SPEC_TAG_MATCH") return "observed specialization hint";
+    if (state === "OBSERVED_SPEC_TAG_MISMATCH") return "observed specialization caution";
+  }
+  if (facet === "transferability") {
+    if (state === "UNKNOWN") return "transfer route not established";
+    if (state === "BLOCKED_BOUND_TO_SOURCE") return "observed as bound to its current source";
+    if (state === "No transfer needed for source character" || state === "not applicable") return state;
+  }
+  return state;
+}
+
+function foreverPlanProvenance(provenance: string): string {
+  if (provenance === "OBSERVED") return "directly observed";
+  if (provenance === "LAST_SEEN") return "last seen, potentially stale";
+  if (provenance === "HYPOTHESIS") return "hypothesis-based screen";
+  if (provenance === "DERIVED") return "derived from observations";
+  return "unknown evidence";
+}
+
 /** Relative age under a section heading; LAST_SEEN is "as of …", never current. */
 function SectionFreshnessLine({ status }: { status: SectionStatus }) {
   const caption = sectionFreshnessCaption(status, Date.now() / 1000);
@@ -333,6 +370,18 @@ export default function CharacterDetail({
                 return <>
                   <p>{allocation.conclusion}: {allocation.reason}</p>
                   <p className="muted small">Import-context roster scope: {allocation.scope.accountMembership}. {allocation.scope.reason}</p>
+                  <div className="forever-allocation-plan" aria-label="Forever gear review plan">
+                    <h4>Gear review plan</h4>
+                    {allocation.allocationPlan?.length ? allocation.allocationPlan.map((entry, index) => <article className="allocation-row" key={`${entry.disposition}:${entry.source.identityKey}:${entry.item.itemRef ?? index}:${entry.recipient.identityKey}`}>
+                      <strong>{foreverPlanLabel(entry.disposition)}: {entry.item.name ?? entry.item.itemRef ?? "Unknown item"}</strong>
+                      <p className="muted small">{entry.source.name} ({entry.source.realm}) · {entry.source.location === "CARRIED_INVENTORY" ? "observed in carried inventory" : entry.source.location === "EQUIPPED" ? "observed equipped" : "location unknown"} · {foreverPlanProvenance(entry.source.provenance)} · {entry.item.itemIdentity === "OBSERVED" ? `exact variant ${entry.item.itemRef ?? "UNKNOWN"}` : entry.item.itemIdentity === "PARTIAL" ? `partial item identifier ${entry.item.itemRef ?? "UNKNOWN"}; exact variant UNKNOWN` : "exact variant UNKNOWN"}{entry.source.observedAt ? ` · captured ${formatAbsoluteTime(entry.source.observedAt)} (${entry.source.freshness})` : " · capture time unknown"}</p>
+                      <p>{entry.evidence.reasons[0]}</p>
+                      <p className="muted small">For {entry.recipient.name} ({entry.recipient.realm}): eligibility {foreverPlanFacet("eligibility", entry.evidence.eligibility)}; suitability {foreverPlanFacet("suitability", entry.evidence.suitability)}; {foreverPlanFacet("transferability", entry.evidence.transferability)}. Evidence is {foreverPlanProvenance(entry.evidence.provenance)}; strength {entry.evidence.confidence.toLowerCase()}.</p>
+                      {entry.comparison?.rawComparisons.map((comparison, comparisonIndex) => <p className="muted small" key={`${comparison.slot}:${comparison.equippedItemRef}:${comparisonIndex}`}>Compared with observed slot {comparison.slot} item {comparison.equippedItemRef}: {comparison.classification}. {comparison.reason}</p>)}
+                      {entry.evidence.whatWouldChange.length > 0 && <details><summary>What could resolve this</summary><ul>{entry.evidence.whatWouldChange.map((fact, evidenceIndex) => <li key={`${evidenceIndex}:${fact}`}>{fact}</li>)}</ul></details>}
+                    </article>) : <p>No current gear-plan entries can be supported from the imported observations. Missing or inaccessible storage is not treated as empty.</p>}
+                    <p className="muted small">These are review outcomes, not commands. Cross-character rows do not establish shared account ownership or a transfer route.</p>
+                  </div>
                   <p className="muted small">Recipient: {allocation.recipient.class?.value ?? "class UNKNOWN"} · level {allocation.recipient.level?.value ?? "UNKNOWN"} · character snapshot {allocation.recipient.freshness}. Equipment {allocation.recipient.equipment.state}{allocation.recipient.equipment.observedAt ? ` observed ${formatAbsoluteTime(allocation.recipient.equipment.observedAt)} (${allocation.recipient.equipment.freshness ?? "unknown freshness"})` : " timestamp UNKNOWN"}:</p>
                   {allocation.recipient.observedSkillLines.length > 0 && <p className="muted small">Observed skill lines: {allocation.recipient.observedSkillLines.map((skill) => `${skill.name} ${skill.rank ?? "?"}/${skill.maxRank ?? "?"}${skill.rawCategoryID !== undefined ? ` (category ${skill.rawCategoryID})` : ""} · ${skill.provenance}`).join(", ")}. Category IDs are shown raw; these observations do not prove weapon proficiency.</p>}
                   {allocation.recipient.equipment.items.map((item, index) => <p key={`allocation-eq-${item.slot}-${index}`} className="muted small">{item.provenance} · {item.slotName}: {item.itemRef ?? "item identity UNKNOWN"}</p>)}

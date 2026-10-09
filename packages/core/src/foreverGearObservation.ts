@@ -307,9 +307,10 @@ export function buildForeverGearObservation(input: {
   const carriedCovered = observedCarried.filter((item) => item.itemRef && factsByRef.has(item.itemRef)).length;
   const itemFactCoverageComplete = itemFactsAvailable && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
     && observedCarried.every((item) => {
-      if (!item.itemRef) return false;
+      if (!item.itemRef || item.itemIdentity !== "OBSERVED") return false;
       const fact = factsByRef.get(item.itemRef);
       const instant = object(fact?.itemInfoInstant);
+      const instantInput = object(instant?.input);
       const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
       const apiID = object(object(returns[0])?.observation);
       const itemType = object(object(returns[1])?.observation);
@@ -319,6 +320,7 @@ export function buildForeverGearObservation(input: {
       const equippableReturns = equippableCall && Array.isArray(equippableCall.returns) ? equippableCall.returns : [];
       const equippable = object(object(equippableReturns[0])?.observation);
       return instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE"
+        && instantInput?.itemString === item.itemRef
         && apiID?.state === "OBSERVED" && apiID.type === "number" && apiID.value === (item.itemID ?? itemIdFromRef(item.itemRef))
         && itemType?.state === "OBSERVED" && itemType.type === "string"
         && itemSubType?.state === "OBSERVED" && itemSubType.type === "string"
@@ -327,10 +329,11 @@ export function buildForeverGearObservation(input: {
         && equippable?.state === "OBSERVED" && equippable.type === "boolean";
     });
   const evaluationItems = observedCarried.flatMap((item) => {
-    if (!item.itemRef) return [];
+    if (!item.itemRef || item.itemIdentity !== "OBSERVED") return [];
     const fact = factsByRef.get(item.itemRef);
     if (!fact) return [];
     const instant = object(fact.itemInfoInstant);
+    const instantInput = object(instant?.input);
     const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
     const observedReturn = (index: number) => object(object(returns[index - 1])?.observation);
     const returnedID = observedReturn(1);
@@ -342,6 +345,7 @@ export function buildForeverGearObservation(input: {
     const equippableRows = equippableCall && Array.isArray(equippableCall.returns) ? equippableCall.returns : [];
     const equippable = object(object(equippableRows[0])?.observation);
     const apiItemType = instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE"
+      && instantInput?.itemString === item.itemRef
       && returnedID?.state === "OBSERVED" && returnedID.type === "number" && returnedID.value === itemID;
     const usableEquipLocation = equipLocation?.state === "OBSERVED" && equipLocation.type === "string"
       && typeof equipLocation.value === "string" && equipLocation.value.length > 0 && equipLocation.value !== "INVTYPE_NON_EQUIP_IGNORE";
@@ -366,6 +370,40 @@ export function buildForeverGearObservation(input: {
       upgradeStatus: "UNKNOWN" as const, transferability: "UNKNOWN" as const,
       reason: "The client marked this item type equippable; this does not establish character eligibility, proficiency, suitability, upgrade value, or transferability." }];
   });
+  const candidateRefs = new Set(evaluationItems.flatMap((item) => item.itemRef ? [item.itemRef] : []));
+  // Preserve rows that cannot be classified because exact-variant API
+  // evidence is absent or malformed. Explicit non-equipment/projectile and
+  // observed IsEquippableItem=false rows remain outside the gear plan.
+  const unclassifiedItems = observedCarried.flatMap((item) => {
+    if (item.itemRef && candidateRefs.has(item.itemRef)) return [];
+    if (!item.itemRef || item.itemIdentity !== "OBSERVED") return [{ ...item, reason: "An exact item variant and matching exact-variant Forever item API result were not captured for this carried row; its item identity and equipment class are UNKNOWN." }];
+    const fact = factsByRef.get(item.itemRef);
+    if (!fact) return [{ ...item, reason: "No exact-variant Forever item API result was captured for this carried item; its equipment class and slot are UNKNOWN." }];
+    const instant = object(fact.itemInfoInstant);
+    const instantInput = object(instant?.input);
+    const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
+    const observedReturn = (index: number) => object(object(returns[index - 1])?.observation);
+    const returnedID = observedReturn(1);
+    const itemType = observedReturn(2);
+    const equipLocation = observedReturn(4);
+    const itemID = item.itemID ?? itemIdFromRef(item.itemRef);
+    const apiItemType = instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE"
+      && instantInput?.itemString === item.itemRef
+      && returnedID?.state === "OBSERVED" && returnedID.type === "number" && returnedID.value === itemID;
+    const nonEquipmentLocation = equipLocation?.state === "OBSERVED" && equipLocation.type === "string" && equipLocation.value === "INVTYPE_NON_EQUIP_IGNORE";
+    const usableEquipLocation = equipLocation?.state === "OBSERVED" && equipLocation.type === "string"
+      && typeof equipLocation.value === "string" && equipLocation.value.length > 0 && !nonEquipmentLocation;
+    const isProjectile = itemType?.state === "OBSERVED" && itemType.type === "string" && itemType.value === "Projectile";
+    if (apiItemType && (isProjectile || nonEquipmentLocation)) return [];
+    const equippableCall = object(fact.isEquippableItem);
+    const equippableRows = equippableCall && Array.isArray(equippableCall.returns) ? equippableCall.returns : [];
+    const equippable = object(object(equippableRows[0])?.observation);
+    const completeBoolean = equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
+      && equippable?.state === "OBSERVED" && equippable.type === "boolean" && typeof equippable.value === "boolean";
+    if (apiItemType && completeBoolean && equippable.value === false) return [];
+    if (apiItemType && usableEquipLocation && completeBoolean && equippable.value === true) return [];
+    return [{ ...item, reason: "Exact-variant item type, equip-location, or IsEquippableItem evidence is missing or inconsistent; equipment candidacy remains UNKNOWN." }];
+  });
   const evaluationState = itemFactsLastSeen ? "LAST_SEEN" as const
     : itemFactCoverageComplete ? "OBSERVED" as const
     : evaluationItems.length > 0 || evidence?.completeness === "partial" || (evidence !== undefined && bagsState === "OBSERVED" && structured?.bags?.completeness === "partial") ? "PARTIAL" as const : "UNKNOWN" as const;
@@ -384,7 +422,7 @@ export function buildForeverGearObservation(input: {
       return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;
     }) },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
-    evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
+    evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), reason: bank.status.state === "UNKNOWN" ? "Bank contents were not observed; unavailable is not empty." : undefined },
     metadataSource: structured?.itemMetadata ? "Forever WoWSyncDB itemMetadata" : "UNKNOWN",

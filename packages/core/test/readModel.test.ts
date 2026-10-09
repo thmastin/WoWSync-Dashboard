@@ -114,18 +114,18 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     const fact = (id: number, itemRef: string, name: string, subClass: string, equipLoc: string, subClassID: number, dps: number, itemLevel: number, requiredLevel: number, observedAt = NOW - 5) => {
       const className = "Weapon";
       const values = [name, `|H${itemRef}|h[${name}]|h`, 1, itemLevel, requiredLevel, className, subClass, 1, equipLoc, 1, 0, 2, subClassID, 0, 0, null, false, ""];
-      return { itemID: id, itemString: itemRef, name, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [id, className, subClass, equipLoc, 1, 2, subClassID].map((value) => ({ observation: observed(value) })) },
+      return { itemID: id, itemString: itemRef, name, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString: itemRef }, returns: [id, className, subClass, equipLoc, 1, 2, subClassID].map((value) => ({ observation: observed(value) })) },
         isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, returns: [{ observation: observed(true) }] },
         itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, observedAt, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
         itemSpecInfo: { api: "C_Item.GetItemSpecInfo", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "1", observation: observed(71) }] } },
         itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ keyType: "string", key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", observation: observed(dps) }] } } };
     };
-    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5, skillLines?: unknown[], skillLinesObservedAt?: number, equipmentObservedAt?: number) => {
+    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5, skillLines?: unknown[], skillLinesObservedAt?: number, equipmentObservedAt?: number, realm = "Classic Beta PvP 2") => {
       const generatedAt = NOW - 5;
-      const isReceiver = name === "Receiver" || name === "StaleEquipment";
-      const raw = buildWowSyncExport({ generatedAt, character: { name, realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: isReceiver ? "MAGE" : "HUNTER", level: isReceiver ? 8 : 9 }, equipment: { slots: isReceiver ? [{ slot: 16, slotName: "Main Hand", itemRef: equippedRef, name: "Observed Knife", itemLevel: 5 }] : [] }, bags: { containers: [] }, bank: { unknown: true } });
+      const isReceiver = name === "Receiver" || name === "StaleEquipment" || name === "Keeper";
+      const raw = buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: isReceiver ? "MAGE" : "HUNTER", level: isReceiver ? 8 : 9 }, equipment: { slots: isReceiver ? [{ slot: 16, slotName: "Main Hand", itemRef: equippedRef, name: "Observed Knife", itemLevel: 5 }] : [] }, bags: { containers: [] }, bank: { unknown: true } });
       store.importSnapshot(raw, { foreverGearObservation: {
-        clientProfile: "Forever:1.60.1:70291:16001", name, realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: guid,
+        clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: guid,
         equipment: { observedAt: equipmentObservedAt ?? generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
         bags: { observedAt: generatedAt, completeness: "complete", data: bags },
         bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
@@ -146,6 +146,11 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     make("MismatchCarrier", "Player-1-MISMATCH", { containers: [{ id: 0, slots: { "4": { itemID: 2904, itemString: mismatchRef, count: 1 } } }] }, [mismatchFact]);
     make("Receiver", "Player-1-RECEIVER", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
     make("StaleEquipment", "Player-1-STALE-EQUIP", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)], NOW - 5, undefined, undefined, NOW - 4 * 24 * 60 * 60);
+    const keeperRef = "item:2905::::::::8:1485::14:::::::";
+    make("Keeper", "Player-1-KEEPER", { containers: [{ id: 0, slots: { "2": { itemID: 2905, itemString: keeperRef, count: 1 } } }] }, [fact(2905, keeperRef, "Lower Metric Blade", "Daggers", "INVTYPE_WEAPONMAINHAND", 15, 1, 4, 1), fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
+    make("Carrier", "Player-1-CARRIER-OTHER-REALM", { containers: [] }, undefined, NOW - 5, undefined, undefined, undefined, "Other Beta Realm");
+    const unknownMetadataRef = "item:2906::::::::8:1485::14:::::::";
+    make("MetadataMissing", "Player-1-METADATA-MISSING", { containers: [{ id: 0, slots: { "1": { itemID: 2906, itemString: unknownMetadataRef, count: 1 } } }] });
     const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Receiver", realm: "Classic Beta PvP 2" });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data) return;
@@ -160,6 +165,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     if (carrierSelf.status === "FOUND" && carrierSelf.value.data) {
       assert.equal(carrierSelf.value.data.recipient.observedSkillLines[0]?.provenance, "UNKNOWN", "fresh item facts cannot make a skill row with no skill-specific timestamp observed");
       assert.equal(carrierSelf.value.data.assessments[0]?.eligibilityChecks.weaponProficiency.state, "UNKNOWN", "untimestamped positive-rank skill rows cannot pass the proficiency hypothesis");
+      assert.ok(carrierSelf.value.data.allocationPlan.some((row) => row.disposition === "EQUIP_CANDIDATE" && row.item.itemRef === carriedRef), "a local candidate is presented only as a review outcome");
     }
     const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
     assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);
@@ -168,7 +174,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(carrier?.candidates[0]?.binding.value, false);
     assert.equal(carrier?.candidates[0]?.transferability, "UNKNOWN");
     assert.equal(carrier?.candidates[0]?.transferabilityEvidence.state, "UNKNOWN");
-    assert.equal(view.assessments.length, 4);
+    assert.equal(view.assessments.length, 5);
     const currentAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === carriedRef);
     assert.equal(currentAssessment?.recipient.name, "Receiver");
     assert.equal(currentAssessment?.eligibility, "UNKNOWN");
@@ -197,8 +203,19 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(currentAssessment?.decision, "NO_RECOMMENDATION");
     assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
     assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
+    assert.ok(view.allocationPlan.length >= view.assessments.length, "the plan projects assessment evidence for the complete known Forever roster");
+    assert.ok(view.allocationPlan.every((row) => row.item.itemRef?.startsWith("item:") && row.source.identityKey && row.recipient.identityKey), "every plan entry preserves the exact item variant and both character identities");
+    assert.ok(view.allocationPlan.every((row) => row.evidence.provenance === "UNKNOWN" || row.evidence.provenance === "DERIVED" || row.evidence.provenance === "HYPOTHESIS"), "plan conclusions label derived screens separately from hypotheses and unknowns");
+    assert.ok(view.allocationPlan.some((row) => row.disposition === "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" && row.item.itemRef === carriedRef), "recorded worse stats produce a scoped no-gain result");
+    assert.ok(view.allocationPlan.some((row) => row.disposition === "POSSIBLE_OTHER_CHARACTER" && row.source.name === "Carrier" && row.recipient.name !== "Carrier"), "a different character can be surfaced for conditional review without asserting a transfer");
+    assert.ok(view.allocationPlan.every((row) => row.disposition !== "POSSIBLE_OTHER_CHARACTER" || row.evidence.transferability === "UNKNOWN"), "cross-character consideration never promotes unknown transferability");
     const rosterReview = view.recipientEvaluations.find((row) => row.itemRef === carriedRef && row.source.identityKey === carrier?.source.identityKey);
-    assert.equal(rosterReview?.recipients.length, 6, "candidate is screened against each known Forever character only");
+    assert.equal(rosterReview?.recipients.length, 9, "candidate is screened against each known Forever character only");
+    assert.equal(rosterReview?.recipients.filter((row) => row.name === "Carrier").length, 2, "same-name Forever characters on different realms remain separate recipients");
+    const unknownMetadataRows = view.allocationPlan.filter((row) => row.item.itemRef === unknownMetadataRef);
+    assert.equal(unknownMetadataRows.length, 9, "an observed carried item without exact item API metadata is preserved for each known recipient");
+    assert.ok(unknownMetadataRows.every((row) => row.disposition === "INSUFFICIENT_EVIDENCE" && row.evidence.provenance === "UNKNOWN"));
+    assert.ok(unknownMetadataRows.every((row) => row.evidence.whatWouldChange.some((fact) => /GetItemInfoInstant/.test(fact))));
     assert.ok(rosterReview?.recipients.some((row) => row.name === "Receiver" && row.upgradeStatus === "NO_RECORDED_STAT_GAIN"));
     assert.ok(rosterReview?.recipients.some((row) => row.name === "StaleCarrier" && row.transferability === "UNKNOWN"));
     assert.ok(rosterReview?.recipients.every((row) => row.fit !== "LOCAL_REVIEW" || row.name === "Carrier"));
@@ -219,6 +236,12 @@ test("Forever allocation keeps source location, unknown roster membership, and e
       assert.equal(selfAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact item tags and active specialization are joined only as a suitability hint");
       assert.equal(selfAssessment?.decision, "REVIEW_LOCAL_CANDIDATE");
       assert.notEqual(selfAssessment?.decision, "CONSIDER_EQUIPPING_ON_SOURCE");
+    }
+    const keeperPlan = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Keeper", realm: "Classic Beta PvP 2" });
+    assert.equal(keeperPlan.status, "FOUND");
+    if (keeperPlan.status === "FOUND" && keeperPlan.value.data) {
+      assert.ok(keeperPlan.value.data.allocationPlan.some((entry) => entry.disposition === "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" && entry.item.itemRef === keeperRef));
+      assert.ok(keeperPlan.value.data.allocationPlan.some((entry) => entry.disposition === "KEEP" && entry.item.itemRef === equippedRef && entry.source.location === "EQUIPPED"));
     }
   } finally { store.close(); }
 });
