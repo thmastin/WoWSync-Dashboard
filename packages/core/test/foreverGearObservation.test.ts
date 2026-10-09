@@ -80,9 +80,10 @@ test("carried location, ownership, binding, and transferability remain separate"
 
 function itemFact(itemString: string, itemID: number, equipLocation: string, equippable: boolean) {
   const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  const values = ["Synthetic", `|H${itemString}|h[Synthetic]|h`, 2, 3, 1, "Armor", "Leather", 1, equipLocation, 1, 0, 4, 2, 0, 0, null, false, ""];
   return { itemString, itemID,
-    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [itemID, "Armor", "Leather", equipLocation].map((value) => ({ observation: observed(value) })) },
-    itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, returns: ["Synthetic", itemString, 2, 3, 1, "Armor", "Leather", 1, equipLocation].map((value, index) => ({ index: index + 1, observation: observed(value) })) },
+    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [itemID, "Armor", "Leather", equipLocation, 1, 4, 2].map((value) => ({ observation: observed(value) })) },
+    itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
     itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ key: "ITEM_MOD_STAMINA_SHORT", observation: observed(5) }] } },
     isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(equippable) }] },
   };
@@ -102,9 +103,25 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT");
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemInfo.returns[4]?.observation.value, 1);
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemStats.entries[0]?.key, "ITEM_MOD_STAMINA_SHORT");
-  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "UNKNOWN");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "PARTIALLY_VALIDATED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.requiredLevel.value, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.itemClass.value, "Armor");
   assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
   assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
+});
+
+test("Forever GetItemInfo semantics remain UNKNOWN when the returned hyperlink conflicts with the observed variant", () => {
+  const itemString = "item:999:4:5";
+  const wrongLink = itemFact(itemString, 999, "INVTYPE_CHEST", true);
+  wrongLink.itemInfo.returns[1] = { index: 2, observation: { state: "OBSERVED", type: "string", value: "|Hitem:999:other:variant|h[Synthetic]|h" } };
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [wrongLink] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 5, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT", "raw discovery remains independent of metadata interpretation");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.contractState, "UNKNOWN");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.requiredLevel.state, "UNKNOWN");
 });
 
 test("candidate classification matches exact item variants and leaves missing rows partial", () => {

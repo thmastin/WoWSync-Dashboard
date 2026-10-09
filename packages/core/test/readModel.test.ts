@@ -108,28 +108,42 @@ test("Forever observation resolves within its version and reports observed varia
 test("Forever allocation keeps source location, unknown roster membership, and every decision dimension separate", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const carriedRef = "item:2901::::::::8:1485::14:::::::";
+  const equippedRef = "item:900001::::::::8:1485:::::::::";
   try {
-    const make = (name: string, guid: string, bags: unknown, itemEvidence?: unknown) => {
+    const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+    const fact = (id: number, itemRef: string, name: string, subClass: string, equipLoc: string, subClassID: number, dps: number, itemLevel: number, requiredLevel: number, observedAt = NOW - 5) => {
+      const className = "Weapon";
+      const values = [name, `|H${itemRef}|h[${name}]|h`, 1, itemLevel, requiredLevel, className, subClass, 1, equipLoc, 1, 0, 2, subClassID, 0, 0, null, false, ""];
+      return { itemID: id, itemString: itemRef, name, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [id, className, subClass, equipLoc, 1, 2, subClassID].map((value) => ({ observation: observed(value) })) },
+        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(true) }] },
+        itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, observedAt, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
+        itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ keyType: "string", key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", observation: observed(dps) }] } } };
+    };
+    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5) => {
       const generatedAt = NOW - 5;
-      const raw = buildWowSyncExport({ generatedAt, character: { name, realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: name === "Receiver" ? "MAGE" : "HUNTER", level: name === "Receiver" ? 8 : 9 }, bags: { containers: [] }, bank: { unknown: true } });
+      const isReceiver = name === "Receiver";
+      const raw = buildWowSyncExport({ generatedAt, character: { name, realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: isReceiver ? "MAGE" : "HUNTER", level: isReceiver ? 8 : 9 }, equipment: { slots: isReceiver ? [{ slot: 16, slotName: "Main Hand", itemRef: equippedRef, name: "Observed Knife", itemLevel: 5 }] : [] }, bags: { containers: [] }, bank: { unknown: true } });
       store.importSnapshot(raw, { foreverGearObservation: {
         clientProfile: "Forever:1.60.1:70291:16001", name, realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: guid,
-        equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+        equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
         bags: { observedAt: generatedAt, completeness: "complete", data: bags },
         bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
-        ...(itemEvidence ? { itemEvidence } : {}),
+        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: facts } } } : {}),
       } });
     };
-    const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
-    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: true, bindingState: "OBSERVED_TRUE" } } }] }, {
-      observedAt: NOW - 5, completeness: "complete", source: "fixture exact-item API evidence", data: {
-        sourceSections: { bags: { observedAt: NOW - 5, state: "complete" } },
-        items: [{ itemID: 2901, itemString: carriedRef,
-          itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: observed(value) })) },
-          isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(true) }] } }],
-      },
-    });
-    make("Receiver", "Player-1-RECEIVER", { containers: [] });
+    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: false, bindingState: "OBSERVED_FALSE" } } }] }, [fact(2901, carriedRef, "Mining Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 1.5, 4, 1)]);
+    const staleRef = "item:2902::::::::8:1485::14:::::::";
+    make("StaleCarrier", "Player-1-STALE", { containers: [{ id: 0, slots: { "2": { itemID: 2902, itemString: staleRef, count: 1 } } }] }, [fact(2902, staleRef, "Old Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.5, 4, 1, NOW - 4 * 24 * 60 * 60)], NOW - 4 * 24 * 60 * 60);
+    const statsStaleRef = "item:2903::::::::8:1485::14:::::::";
+    const statsStaleFact = fact(2903, statsStaleRef, "Stats Stale Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.75, 4, 1);
+    (statsStaleFact.itemStats as { observedAt?: number }).observedAt = NOW - 4 * 24 * 60 * 60;
+    make("StatsStaleCarrier", "Player-1-STATS-STALE", { containers: [{ id: 0, slots: { "3": { itemID: 2903, itemString: statsStaleRef, count: 1 } } }] }, [statsStaleFact]);
+    const mismatchRef = "item:2904::::::::8:1485::14:::::::";
+    const mismatchFact = fact(2904, mismatchRef, "Mismatch Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.9, 4, 1);
+    const mismatchedLink = mismatchFact.itemInfo.returns[1].observation as { state: string; value?: unknown };
+    mismatchedLink.value = "|Hitem:990004:wrong:variant|h[Mismatch Pick]|h";
+    make("MismatchCarrier", "Player-1-MISMATCH", { containers: [{ id: 0, slots: { "4": { itemID: 2904, itemString: mismatchRef, count: 1 } } }] }, [mismatchFact]);
+    make("Receiver", "Player-1-RECEIVER", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
     const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Receiver", realm: "Classic Beta PvP 2" });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data) return;
@@ -138,22 +152,40 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(view.scope.accountMembership, "UNKNOWN");
     assert.equal(view.recipient.class?.value, "MAGE");
     assert.equal(view.recipient.level?.value, 8);
+    assert.deepEqual(view.recipient.observedSkillLines, []);
     const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
     assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);
     assert.equal(carrier?.candidates[0]?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
     assert.equal(carrier?.candidates[0]?.ownership.state, "UNKNOWN");
-    assert.equal(carrier?.candidates[0]?.binding.value, true);
+    assert.equal(carrier?.candidates[0]?.binding.value, false);
     assert.equal(carrier?.candidates[0]?.transferability, "UNKNOWN");
     assert.equal(carrier?.candidates[0]?.transferabilityEvidence.state, "UNKNOWN");
-    assert.equal(view.assessments.length, 1);
-    assert.equal(view.assessments[0]?.recipient.name, "Receiver");
-    assert.equal(view.assessments[0]?.eligibility, "UNKNOWN");
-    assert.equal(view.assessments[0]?.suitability, "UNKNOWN");
-    assert.equal(view.assessments[0]?.upgradeStatus, "UNKNOWN");
-    assert.equal(view.assessments[0]?.transferability, "UNKNOWN");
-    assert.equal(view.assessments[0]?.allocationPriority, "UNKNOWN");
-    assert.equal(view.assessments[0]?.decision, "NO_RECOMMENDATION");
-    assert.match(view.assessments[0]?.missingEvidence.join(" ") ?? "", /account membership/);
+    assert.equal(view.assessments.length, 4);
+    const currentAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === carriedRef);
+    assert.equal(currentAssessment?.recipient.name, "Receiver");
+    assert.equal(currentAssessment?.eligibility, "UNKNOWN");
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.state, "MET");
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.itemRequiredLevel, 1);
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.recipientLevel, 8);
+    assert.equal(currentAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
+    assert.equal(currentAssessment?.eligibilityChecks.weaponProficiency.state, "UNKNOWN");
+    assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "UNKNOWN", "mainhand alias behavior is not inferred from an unmatched equipped location token");
+    assert.equal(currentAssessment?.suitability, "UNKNOWN");
+    assert.equal(currentAssessment?.upgradeStatus, "UNKNOWN");
+    assert.deepEqual(currentAssessment?.rawStatComparisons.map((row) => [row.key, row.candidateValue, row.equippedValue, row.delta]), [["ITEM_MOD_DAMAGE_PER_SECOND_SHORT", 1.5, 1.875, -0.375]]);
+    const staleAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === staleRef);
+    assert.equal(staleAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "stale item metadata cannot establish a current level gate");
+    assert.deepEqual(staleAssessment?.rawStatComparisons, [], "stale item metadata cannot enter raw comparisons");
+    const staleStatsAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === statsStaleRef);
+    assert.equal(staleStatsAssessment?.eligibilityChecks.requiredLevel.state, "MET", "fresh GetItemInfo can support its separate level gate");
+    assert.deepEqual(staleStatsAssessment?.rawStatComparisons, [], "stale GetItemStats cannot enter raw comparisons");
+    const mismatchAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === mismatchRef);
+    assert.equal(mismatchAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "a variant mismatch invalidates selected tuple fields");
+    assert.deepEqual(mismatchAssessment?.rawStatComparisons, [], "unvalidated exact-variant contracts cannot enter raw comparisons");
+    assert.equal(currentAssessment?.transferability, "UNKNOWN");
+    assert.equal(currentAssessment?.allocationPriority, "UNKNOWN");
+    assert.equal(currentAssessment?.decision, "NO_RECOMMENDATION");
+    assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
     assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
   } finally { store.close(); }
 });

@@ -100,6 +100,65 @@ function structuredState(section: Record<string, unknown> | undefined): ForeverS
   return section.completeness === "complete" || section.completeness === "partial" ? "OBSERVED" : "UNKNOWN";
 }
 
+function tupleObservation(call: Record<string, unknown> | undefined, index: number): Record<string, unknown> | undefined {
+  const rows = Array.isArray(call?.returns) ? call.returns : [];
+  const row = rows.map(object).find((entry) => entry?.index === index) ?? object(rows[index - 1]);
+  return object(row?.observation);
+}
+
+function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observedName?: string, itemFactsObservedAt?: number) {
+  const info = object(fact.itemInfo);
+  const instant = object(fact.itemInfoInstant);
+  const stats = object(fact.itemStats);
+  const statsTable = object(stats?.table);
+  const infoValue = (index: number) => tupleObservation(info, index);
+  const instantValue = (index: number) => tupleObservation(instant, index);
+  const value = (row: Record<string, unknown> | undefined) => row?.state === "OBSERVED" ? row.value : undefined;
+  const name = value(infoValue(1));
+  const hyperlink = value(infoValue(2));
+  const returnedVariantMatches = typeof hyperlink === "string" && hyperlink.includes(`|H${itemRef}|h`);
+  const instantAgreement = value(infoValue(6)) === value(instantValue(2))
+    && value(infoValue(7)) === value(instantValue(3))
+    && value(infoValue(9)) === value(instantValue(4))
+    && value(infoValue(12)) === value(instantValue(6))
+    && value(infoValue(13)) === value(instantValue(7));
+  const nameAgreement = typeof observedName !== "string" || name === observedName;
+  const tupleShapeObserved = info?.state === "OBSERVED_VALUE" && info?.returnCount === 18
+    && returnedVariantMatches && instantAgreement && nameAgreement;
+  const field = (index: number, type: string, semantic: string) => {
+    const row = infoValue(index);
+    if (tupleShapeObserved && row?.state === "OBSERVED" && row.type === type) {
+      return { state: "OBSERVED" as const, value: row.value, api: "C_Item.GetItemInfo", observedAt: info?.observedAt };
+    }
+    return { state: "UNKNOWN" as const, reason: tupleShapeObserved ? `The validated ${semantic} return was absent or had an unexpected type.` : "GetItemInfo tuple, exact item variant, or cross-API corroboration did not match the validated Forever 70291 capture contract." };
+  };
+  const infoReturns = Array.isArray(info?.returns) ? info.returns : [];
+  const statEntries = Array.isArray(statsTable?.entries) ? statsTable.entries : [];
+  return {
+    itemInfo: { state: info?.state ?? "UNKNOWN", api: info?.api ?? "UNKNOWN", returnCount: info?.returnCount ?? null, ...(typeof info?.observedAt === "number" ? { observedAt: info.observedAt } : {}), returns: infoReturns },
+    itemStats: { state: statsTable?.state ?? stats?.state ?? "UNKNOWN", callState: stats?.state ?? "UNKNOWN", api: stats?.api ?? "UNKNOWN", entryCount: statsTable?.entryCount ?? null, complete: statsTable?.complete ?? false, ...((typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt) !== undefined ? { observedAt: typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt } : {}), entries: statEntries },
+    validatedFields: {
+      contractState: tupleShapeObserved ? "OBSERVED" as const : "UNKNOWN" as const,
+      itemName: field(1, "string", "item name"),
+      itemLevel: field(4, "number", "item level"),
+      requiredLevel: field(5, "number", "required level"),
+      itemClass: field(6, "string", "item class"),
+      itemSubclass: field(7, "string", "item subclass"),
+      equipLocation: field(9, "string", "equipment location"),
+      classID: field(12, "number", "item class ID"),
+      subclassID: field(13, "number", "item subclass ID"),
+      crossChecks: { exactReturnedVariant: returnedVariantMatches, observedName: nameAgreement, instantAPIFieldsAgree: instantAgreement },
+      reason: tupleShapeObserved
+        ? "Tuple positions listed here were live-corroborated against exact item links, GetItemInfoInstant fields, observed names, and equipped level fields on Forever 1.60.1 build 70291. GetItemStats entries remain raw stat keys and values."
+        : "No item metadata is interpreted unless the 70291 tuple shape and independent cross-checks pass.",
+    },
+    semanticInterpretation: tupleShapeObserved ? "PARTIALLY_VALIDATED" as const : "UNKNOWN" as const,
+    reason: tupleShapeObserved
+      ? "Selected GetItemInfo fields are corroborated for Forever 70291. Raw GetItemStats keys are retained without translating them into upgrade or build conclusions."
+      : "Forever 70291 GetItemInfo/GetItemStats results are retained as raw API evidence; semantics remain UNKNOWN when tuple or cross-check evidence is incomplete.",
+  };
+}
+
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable((value as Record<string, unknown>)[key])]));
@@ -221,9 +280,6 @@ export function buildForeverGearObservation(input: {
     const isProjectile = itemType?.state === "OBSERVED" && itemType.type === "string" && itemType.value === "Projectile";
     const itemLevelVerdict = equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
       && equippable?.state === "OBSERVED" && equippable.type === "boolean" && equippable.value === true;
-    const rawItemInfo = object(fact.itemInfo);
-    const rawItemStats = object(fact.itemStats);
-    const itemStatsTable = object(rawItemStats?.table);
     if (!apiItemType || !usableEquipLocation || !itemLevelVerdict || isProjectile) return [];
     return [{ ...item,
       locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) },
@@ -234,12 +290,7 @@ export function buildForeverGearObservation(input: {
       itemType: itemType?.state === "OBSERVED" && itemType.type === "string" ? itemType.value as string : undefined,
       itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
       equipLocation: equipLocation.value as string,
-      itemApiEvidence: {
-        itemInfo: { state: rawItemInfo?.state ?? "UNKNOWN", api: rawItemInfo?.api ?? "UNKNOWN", returnCount: rawItemInfo?.returnCount ?? null, returns: Array.isArray(rawItemInfo?.returns) ? rawItemInfo.returns : [] },
-        itemStats: { state: itemStatsTable?.state ?? rawItemStats?.state ?? "UNKNOWN", api: rawItemStats?.api ?? "UNKNOWN", entryCount: itemStatsTable?.entryCount ?? null, complete: itemStatsTable?.complete ?? false, entries: Array.isArray(itemStatsTable?.entries) ? itemStatsTable.entries : [] },
-        semanticInterpretation: "UNKNOWN",
-        reason: "Forever 70291 GetItemInfo/GetItemStats results are retained as raw, exact-variant API evidence. Field semantics and tooltip/effective-stat agreement require live validation before eligibility or upgrade conclusions.",
-      },
+      itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined),
       evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
       ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
       provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
@@ -260,7 +311,10 @@ export function buildForeverGearObservation(input: {
   return {
     identity: { ...identity, accountScope: "UNKNOWN", accountScopeReason: "WoWSync character identity carries version, realm, and name but no WoW account identifier; this view is scoped to the Dashboard import context and does not assert Battle.net account identity." },
     snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
-    equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems },
+    equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems.map((item) => {
+      const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
+      return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined) } : item;
+    }) },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
