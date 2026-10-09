@@ -120,19 +120,19 @@ test("Forever allocation keeps source location, unknown roster membership, and e
         itemSpecInfo: { api: "C_Item.GetItemSpecInfo", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "1", observation: observed(71) }] } },
         itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ keyType: "string", key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", observation: observed(dps) }] } } };
     };
-    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5) => {
+    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5, skillLines?: unknown[], skillLinesObservedAt?: number, equipmentObservedAt?: number) => {
       const generatedAt = NOW - 5;
-      const isReceiver = name === "Receiver";
+      const isReceiver = name === "Receiver" || name === "StaleEquipment";
       const raw = buildWowSyncExport({ generatedAt, character: { name, realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: isReceiver ? "MAGE" : "HUNTER", level: isReceiver ? 8 : 9 }, equipment: { slots: isReceiver ? [{ slot: 16, slotName: "Main Hand", itemRef: equippedRef, name: "Observed Knife", itemLevel: 5 }] : [] }, bags: { containers: [] }, bank: { unknown: true } });
       store.importSnapshot(raw, { foreverGearObservation: {
         clientProfile: "Forever:1.60.1:70291:16001", name, realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: guid,
-        equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
+        equipment: { observedAt: equipmentObservedAt ?? generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
         bags: { observedAt: generatedAt, completeness: "complete", data: bags },
         bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
-        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, specialization: { capturedAt: generatedAt, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ observation: observed(1) }] }, activeInfo: { api: "C_SpecializationInfo.GetSpecializationInfo", state: "OBSERVED_VALUE", returns: [{ observation: observed(71) }] } }, items: facts } } } : {}),
+        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, specialization: { capturedAt: generatedAt, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ observation: observed(1) }] }, activeInfo: { api: "C_SpecializationInfo.GetSpecializationInfo", state: "OBSERVED_VALUE", returns: [{ observation: observed(71) }] } }, ...(skillLines ? { skillLines, ...(skillLinesObservedAt !== undefined ? { skillLinesObservedAt } : {}) } : {}), items: facts } } } : {}),
       } });
     };
-    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: false, bindingState: "OBSERVED_FALSE" } } }] }, [fact(2901, carriedRef, "Mining Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 1.5, 4, 1)]);
+    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: false, bindingState: "OBSERVED_FALSE" } } }] }, [fact(2901, carriedRef, "Mining Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 1.5, 4, 1)], NOW - 5, [{ name: "Miscellaneous", rank: 1, maxRank: 1 }]);
     const staleRef = "item:2902::::::::8:1485::14:::::::";
     make("StaleCarrier", "Player-1-STALE", { containers: [{ id: 0, slots: { "2": { itemID: 2902, itemString: staleRef, count: 1 } } }] }, [fact(2902, staleRef, "Old Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.5, 4, 1, NOW - 4 * 24 * 60 * 60)], NOW - 4 * 24 * 60 * 60);
     const statsStaleRef = "item:2903::::::::8:1485::14:::::::";
@@ -145,6 +145,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     mismatchedLink.value = "|Hitem:990004:wrong:variant|h[Mismatch Pick]|h";
     make("MismatchCarrier", "Player-1-MISMATCH", { containers: [{ id: 0, slots: { "4": { itemID: 2904, itemString: mismatchRef, count: 1 } } }] }, [mismatchFact]);
     make("Receiver", "Player-1-RECEIVER", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
+    make("StaleEquipment", "Player-1-STALE-EQUIP", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)], NOW - 5, undefined, undefined, NOW - 4 * 24 * 60 * 60);
     const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Receiver", realm: "Classic Beta PvP 2" });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data) return;
@@ -154,6 +155,12 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(view.recipient.class?.value, "MAGE");
     assert.equal(view.recipient.level?.value, 8);
     assert.deepEqual(view.recipient.observedSkillLines, []);
+    const carrierSelf = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
+    assert.equal(carrierSelf.status, "FOUND");
+    if (carrierSelf.status === "FOUND" && carrierSelf.value.data) {
+      assert.equal(carrierSelf.value.data.recipient.observedSkillLines[0]?.provenance, "UNKNOWN", "fresh item facts cannot make a skill row with no skill-specific timestamp observed");
+      assert.equal(carrierSelf.value.data.assessments[0]?.eligibilityChecks.weaponProficiency.state, "UNKNOWN", "untimestamped positive-rank skill rows cannot pass the proficiency hypothesis");
+    }
     const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
     assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);
     assert.equal(carrier?.candidates[0]?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
@@ -191,10 +198,17 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
     assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
     const rosterReview = view.recipientEvaluations.find((row) => row.itemRef === carriedRef && row.source.identityKey === carrier?.source.identityKey);
-    assert.equal(rosterReview?.recipients.length, 5, "candidate is screened against each known Forever character only");
+    assert.equal(rosterReview?.recipients.length, 6, "candidate is screened against each known Forever character only");
     assert.ok(rosterReview?.recipients.some((row) => row.name === "Receiver" && row.upgradeStatus === "NO_RECORDED_STAT_GAIN"));
     assert.ok(rosterReview?.recipients.some((row) => row.name === "StaleCarrier" && row.transferability === "UNKNOWN"));
     assert.ok(rosterReview?.recipients.every((row) => row.fit !== "LOCAL_REVIEW" || row.name === "Carrier"));
+    const staleEquipmentView = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "StaleEquipment", realm: "Classic Beta PvP 2" });
+    assert.equal(staleEquipmentView.status, "FOUND");
+    if (staleEquipmentView.status === "FOUND" && staleEquipmentView.value.data) {
+      const staleComparison = staleEquipmentView.value.data.assessments.find((row) => row.candidate.itemRef === carriedRef);
+      assert.deepEqual(staleComparison?.rawStatComparisons, [], "a recent item/delta call cannot refresh an older equipment snapshot");
+      assert.equal(staleComparison?.upgradeStatus, "UNKNOWN");
+    }
     const local = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
     assert.equal(local.status, "FOUND");
     if (local.status === "FOUND" && local.value.data) {

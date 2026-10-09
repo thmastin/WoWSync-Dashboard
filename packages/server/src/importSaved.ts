@@ -354,12 +354,32 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           ...(isLuaTable(foreverEvidence) ? (() => {
             const data = luaGet(foreverEvidence, "data");
             const itemFacts = luaGet(data, "itemFacts");
-            return isLuaTable(itemFacts) ? { itemEvidence: {
+            const skillLines = luaGet(data, "skillLines");
+            const skillLineCount = luaGet(data, "skillLineCount");
+            const skillLineCoverage = luaGet(data, "skillLineCoverage");
+            // Skill recency is independent from item API recency. Only the skill collector's own
+            // timestamp may establish when these character-specific rows were observed.
+            const skillLinesObservedAt = luaGet(skillLineCount, "observedAt");
+            const specialization = luaGet(data, "specialization");
+            if (!isLuaTable(itemFacts)) return {};
+            const itemFactsData = luaToPlain(itemFacts) as Record<string, unknown>;
+            // Keep the raw character skill/specialization observations beside the item facts because the
+            // Forever allocation read model consumes them for each recipient. Preserve their own timestamp;
+            // item-fact freshness must not silently refresh these character observations.
+            const dataWithCharacterEvidence = {
+              ...itemFactsData,
+              ...(isLuaTable(skillLines) ? { skillLines: luaToPlain(skillLines) } : {}),
+              ...(typeof skillLinesObservedAt === "number" ? { skillLinesObservedAt } : {}),
+              ...(isLuaTable(skillLineCount) ? { skillLineCount: luaToPlain(skillLineCount) } : {}),
+              ...(typeof skillLineCoverage === "string" ? { skillLineCoverage } : {}),
+              ...(isLuaTable(specialization) ? { specialization: luaToPlain(specialization) } : {}),
+            };
+            return { itemEvidence: {
               observedAt: luaGet(itemFacts, "observedAt"),
               completeness: luaGet(itemFacts, "completeness"),
               source: luaGet(itemFacts, "source"),
-              data: luaToPlain(itemFacts),
-            } } : {};
+              data: dataWithCharacterEvidence,
+            } };
           })() : {}),
           ...(isLuaTable(itemMetadata) ? { itemMetadata: luaToPlain(itemMetadata) } : {}),
         }

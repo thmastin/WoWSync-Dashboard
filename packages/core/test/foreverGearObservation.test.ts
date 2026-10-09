@@ -112,6 +112,18 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.itemClass.value, "Armor");
   assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
   assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
+  const partial = structuredClone(structured);
+  partial.equipment = { ...partial.equipment!, completeness: "partial" };
+  const partialData = partial.itemEvidence!.data as Record<string, any>;
+  partialData.sourceSections.equipment.state = "partial";
+  partialData.statDeltaComparisons.completeness = "partial";
+  const partialView = buildForeverGearObservation({ identity, snapshotId: 8, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: partial, now: 110 });
+  assert.equal(partialView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons.length, 1, "a complete exact-item pair remains useful when unrelated pairs or slots are partial");
+  assert.equal(partialView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.completeness, "partial");
+  const staleEquipment = structuredClone(partial);
+  staleEquipment.equipment = { ...staleEquipment.equipment!, observedAt: 1 };
+  const staleEquipmentView = buildForeverGearObservation({ identity, snapshotId: 9, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: staleEquipment, now: 10_000_000 });
+  assert.deepEqual(staleEquipmentView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "fresh item/delta calls cannot make a pair against stale equipment current");
   const stale = structuredClone(structured);
   const staleDelta = ((stale.itemEvidence?.data as Record<string, unknown>).statDeltaComparisons as Record<string, unknown>);
   staleDelta.observedAt = 1;

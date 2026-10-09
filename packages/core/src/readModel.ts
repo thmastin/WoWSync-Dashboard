@@ -978,7 +978,7 @@ export class DashboardReadModel {
     version: "forever";
     ruleset: "forever-70291-allocation-screen-v2";
     scope: { accountMembership: "UNKNOWN"; reason: string };
-    recipient: { identityKey: string; name: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; level?: { value: number; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: "OBSERVED" | "LAST_SEEN" }>; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
+    recipient: { identityKey: string; name: string; realm: string; snapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; class?: { value: string; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; level?: { value: number; provenance: "OBSERVED" | "LAST_SEEN"; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" }>; equipment: ReturnType<typeof buildForeverGearObservation>["equipment"] };
     candidateSources: Array<{ source: { identityKey: string; name: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"] }>;
     assessments: Array<ForeverGearAssessmentEvaluation & { candidate: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"][number]; source: { identityKey: string; name: string; realm: string }; recipient: { identityKey: string; name: string; realm: string }; eligibilityAssessment: ReturnType<typeof combineForeverEligibility> }>;
     recipientEvaluations: Array<{ source: { identityKey: string; name: string; realm: string }; itemRef?: string; recipients: Array<{ identityKey: string; name: string; realm: string; eligibility: string; armorProficiency: string; slotCompatibility: string; upgradeStatus: string; transferability: string; fit: "EXCLUDED" | "LOCAL_REVIEW" | "POTENTIAL_GEAR_FIT" | "UNRANKED"; reasons: string[] }> }>;
@@ -1000,11 +1000,12 @@ export class DashboardReadModel {
     const profileState = profile?.status.state === "LAST_SEEN" ? "LAST_SEEN" as const : "OBSERVED" as const;
     const itemEvidenceRecord = recipientSnapshot?.parsed.foreverGearObservation?.itemEvidence as Record<string, unknown> | undefined;
     const itemEvidenceData = itemEvidenceRecord?.data as Record<string, unknown> | undefined;
-    const skillEvidenceFreshness = typeof itemEvidenceRecord?.observedAt === "number" ? classifyFreshness(itemEvidenceRecord.observedAt, this.now()) : "unknown";
+    const skillLinesObservedAt = typeof itemEvidenceData?.skillLinesObservedAt === "number" ? itemEvidenceData.skillLinesObservedAt : undefined;
+    const skillEvidenceFreshness = skillLinesObservedAt === undefined ? "unknown" : classifyFreshness(skillLinesObservedAt, this.now());
     const observedSkillLines = (Array.isArray(itemEvidenceData?.skillLines) ? itemEvidenceData.skillLines : [])
       .map((row) => row as Record<string, unknown>)
       .filter((row) => row.isHeader !== true && typeof row.name === "string")
-      .map((row) => ({ name: row.name as string, ...(typeof row.rank === "number" ? { rank: row.rank } : {}), ...(typeof row.maxRank === "number" ? { maxRank: row.maxRank } : {}), ...(typeof row.skillLineCategoryID === "number" ? { rawCategoryID: row.skillLineCategoryID } : {}), ...(typeof itemEvidenceRecord?.observedAt === "number" ? { observedAt: itemEvidenceRecord.observedAt } : {}), provenance: itemEvidenceRecord?.lastAttemptStale === true || skillEvidenceFreshness === "stale" ? "LAST_SEEN" as const : "OBSERVED" as const }));
+      .map((row) => ({ name: row.name as string, ...(typeof row.rank === "number" ? { rank: row.rank } : {}), ...(typeof row.maxRank === "number" ? { maxRank: row.maxRank } : {}), ...(typeof row.skillLineCategoryID === "number" ? { rawCategoryID: row.skillLineCategoryID } : {}), ...(skillLinesObservedAt !== undefined ? { observedAt: skillLinesObservedAt } : {}), provenance: itemEvidenceRecord?.lastAttemptStale === true || skillEvidenceFreshness === "stale" ? "LAST_SEEN" as const : skillEvidenceFreshness === "recent" ? "OBSERVED" as const : "UNKNOWN" as const }));
     const recipient = {
       identityKey: recipientCharacter.identityKey, name: recipientCharacter.name, realm: recipientCharacter.realm,
       ...(recipientSnapshot ? { snapshotId: recipientSnapshot.id } : {}),
@@ -1088,7 +1089,8 @@ export class DashboardReadModel {
       const slotCompatibility = evaluateForeverSlotCompatibility({ equipLocation, equipment: recipientSlotEvidence, equipmentComplete: recipientEquipmentComplete });
       const matchingSlots = new Set(slotCompatibility.possibleSlots);
       const candidateStats = foreverStatTable(candidate.itemApiEvidence, this.now());
-      const rawStatComparisons = !candidate.provenance.includes("LAST_SEEN") && candidateStats && recipientEquipmentComplete
+      const recipientEquipmentCurrent = recipient.equipment.state === "OBSERVED" && recipient.equipment.freshness === "recent";
+      const rawStatComparisons = recipientEquipmentCurrent && !candidate.provenance.includes("LAST_SEEN") && candidateStats
         ? recipient.equipment.items.flatMap((equipped) => {
           if (!equipped.itemRef || !matchingSlots.has(equipped.slot) || equipped.provenance !== "OBSERVED") return [];
           const equippedEvidence = (equipped as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
@@ -1110,7 +1112,11 @@ export class DashboardReadModel {
         const equippedEvidence = equipped && (equipped as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
         return [calibrateForeverStatDelta({ candidate: candidateStats, equipped: foreverStatTable(equippedEvidence, this.now()), delta: table })];
       });
-      const upgrade = classifyForeverRecordedUpgrade(rawStatComparisons, slotCompatibility);
+      const upgrade = recipientEquipmentComplete
+        ? classifyForeverRecordedUpgrade(rawStatComparisons, slotCompatibility)
+        : { status: "UNKNOWN" as const, confidence: "UNKNOWN" as const, reason: rawStatComparisons.length > 0
+          ? "Exact observed same-slot raw stat comparisons are available, but the equipment scan is partial; an overall upgrade conclusion is withheld."
+          : "The equipment scan is partial, so neither all compatible slots nor an overall upgrade can be established." };
       const itemSpecInfo = (candidate.itemApiEvidence as Record<string, unknown> | undefined)?.itemSpecInfo as Record<string, unknown> | undefined;
       const itemSpecializationIDs = Array.isArray(itemSpecInfo?.specializationIDs) ? itemSpecInfo.specializationIDs.filter((value): value is number => typeof value === "number") : undefined;
       const suitabilityEvidence = assessForeverSuitability({ activeSpecializationID, itemSpecializationIDs, specializationEvidenceCurrent: recipientSpecializationCurrent && itemSpecInfo?.state === "OBSERVED_TABLE" && itemSpecInfo?.freshness === "recent" });
@@ -1193,11 +1199,12 @@ export class DashboardReadModel {
       const recent = at !== undefined && classifyFreshness(at, this.now()) === "recent" && profile?.status.state === "OBSERVED";
       const itemEvidence = snapshot?.parsed.foreverGearObservation?.itemEvidence as Record<string, unknown> | undefined;
       const evidenceData = itemEvidence?.data as Record<string, unknown> | undefined;
-      const skillAt = typeof itemEvidence?.observedAt === "number" ? classifyFreshness(itemEvidence.observedAt, this.now()) : "unknown";
+      const skillLinesObservedAt = typeof evidenceData?.skillLinesObservedAt === "number" ? evidenceData.skillLinesObservedAt : undefined;
+      const skillAt = skillLinesObservedAt === undefined ? "unknown" : classifyFreshness(skillLinesObservedAt, this.now());
       const skills = (Array.isArray(evidenceData?.skillLines) ? evidenceData.skillLines : []).flatMap((value) => {
         const row = asRecord(value);
         return row && row.isHeader !== true && typeof row.name === "string"
-          ? [{ name: row.name, rank: typeof row.rank === "number" ? row.rank : undefined, provenance: itemEvidence?.lastAttemptStale === true || skillAt !== "recent" ? "LAST_SEEN" : "OBSERVED" }]
+          ? [{ name: row.name, rank: typeof row.rank === "number" ? row.rank : undefined, provenance: itemEvidence?.lastAttemptStale === true || skillAt === "stale" ? "LAST_SEEN" : skillAt === "recent" ? "OBSERVED" : "UNKNOWN" }]
           : [];
       });
       const complete = snapshot?.parsed.foreverGearObservation?.equipment?.completeness === "complete"
@@ -1225,13 +1232,18 @@ export class DashboardReadModel {
           return { slot: item.slot, ...(item.itemRef ? { itemRef: item.itemRef } : {}), ...(field?.state === "OBSERVED" && typeof field.value === "string" ? { equipLocation: field.value } : {}), provenance: item.provenance };
         });
         const slot = evaluateForeverSlotCompatibility({ equipLocation, equipment: slotEvidence, equipmentComplete: entry.complete });
-        const comparisons = candidateStats && entry.complete ? entry.equipment.items.flatMap((item) => {
+        const equipmentCurrent = entry.equipment.state === "OBSERVED" && entry.equipment.freshness === "recent";
+        const comparisons = candidateStats && equipmentCurrent ? entry.equipment.items.flatMap((item) => {
           if (!item.itemRef || !slot.possibleSlots.includes(item.slot) || item.provenance !== "OBSERVED") return [];
           const evidence = (item as unknown as { itemApiEvidence?: unknown }).itemApiEvidence;
           const comparison = compareForeverStatTables(candidateStats, foreverStatTable(evidence, this.now()), item.slot, item.itemRef, itemClass);
           return comparison ? [comparison] : [];
         }) : [];
-        const upgrade = classifyForeverRecordedUpgrade(comparisons, slot);
+        const upgrade = entry.complete
+          ? classifyForeverRecordedUpgrade(comparisons, slot)
+          : { status: "UNKNOWN" as const, confidence: "UNKNOWN" as const, reason: comparisons.length > 0
+            ? "Exact observed same-slot raw stat comparisons are available, but the recipient equipment scan is partial; overall upgrade status remains unknown."
+            : "Recipient equipment evidence is partial; no overall upgrade conclusion is made." };
         const local = assessment.source.identityKey === entry.character.identityKey;
         const eligibility = combineForeverEligibility({ requiredLevel: levelCheck, explicitClassRestriction: "UNKNOWN", armorProficiency: armor,
           weaponProficiency: itemClass === "Weapon"

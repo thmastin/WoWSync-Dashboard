@@ -575,7 +575,14 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
-    forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: { itemFacts: { observedAt: generatedAt + 3, completeness: "complete", source: "C_Item live facts", items: [{ itemID: 124, itemString: "item:124:0:7", itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 124 } }, { index: 2, observation: { state: "OBSERVED", type: "string", value: "Weapon" } }, { index: 3, observation: { state: "OBSERVED", type: "string", value: "Sword" } }, { index: 4, observation: { state: "OBSERVED", type: "string", value: "INVTYPE_WEAPON" } }] }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] } } }),
+    forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
+      capturedAt: generatedAt + 6,
+      skillLineCount: { observedAt: generatedAt + 4, state: "OBSERVED_VALUE" },
+      skillLineCoverage: "OBSERVED_INDEXED_ROWS",
+      skillLines: [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }],
+      specialization: { capturedAt: generatedAt + 5, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 1 } }] } },
+      itemFacts: { observedAt: generatedAt + 3, completeness: "complete", source: "C_Item live facts", items: [{ itemID: 124, itemString: "item:124:0:7", itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 124 } }, { index: 2, observation: { state: "OBSERVED", type: "string", value: "Weapon" } }, { index: 3, observation: { state: "OBSERVED", type: "string", value: "Sword" } }, { index: 4, observation: { state: "OBSERVED", type: "string", value: "INVTYPE_WEAPON" } }] }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] },
+    } }),
   }]));
   await withServer(async (base, store) => {
     const result = await runImportSaved(["--character", "Hallo", "--file", file, "--url", base], live(base));
@@ -586,6 +593,9 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
     assert.equal(snapshot.parsed.foreverGearObservation?.itemEvidence?.observedAt, generatedAt + 3);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.items[0]?.itemString, "item:124:0:7");
+    assert.deepEqual((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLines, [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }]);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLinesObservedAt, generatedAt + 4, "skill evidence keeps its own count-call timestamp, not item-fact time");
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.specialization.capturedAt, generatedAt + 5);
   });
 });
 
@@ -670,6 +680,24 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
   const oldText = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "69913", interface: "16001" } });
   const wrongBuild = parseSavedExports(savedVariables([{ ...record, text: oldText }]), "fixture")[0];
   assert.equal(wrongBuild.foreverGearObservation, undefined);
+});
+
+test("Forever skill rows do not inherit a timestamp from unrelated fresh item evidence", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const row = record("Hallo", generatedAt, { guid: "Player-1-HALLO" });
+  row.captureProfile = "Forever:1.60.1:70291:16001";
+  row.forever70291Evidence = toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
+    capturedAt: generatedAt + 4,
+    skillLines: [{ name: "Daggers", rank: 42, maxRank: 45 }],
+    itemFacts: { observedAt: generatedAt + 5, completeness: "complete", items: [] },
+  } });
+  row.text = text;
+  row.generatedAt = generatedAt;
+  const [saved] = parseSavedExports(savedVariables([row]), "fixture");
+  const data = ((saved.foreverGearObservation as any)?.itemEvidence as any)?.data;
+  assert.deepEqual(data.skillLines, [{ name: "Daggers", rank: 42, maxRank: 45 }]);
+  assert.equal(data.skillLinesObservedAt, undefined, "sidecar and itemFacts times do not refresh skill evidence");
 });
 
 test("A41 the bridge never transports S.Attempt's lastAttemptAt / lastAttemptError", () => {

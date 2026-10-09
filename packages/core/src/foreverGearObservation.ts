@@ -106,7 +106,7 @@ function tupleObservation(call: Record<string, unknown> | undefined, index: numb
   return object(row?.observation);
 }
 
-function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observedName: string | undefined, itemFactsObservedAt: number | undefined, statDeltaComparisons: unknown, statDeltaSourceCurrent: boolean, equippedItemRefs: Set<string>, now: number) {
+function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observedName: string | undefined, itemFactsObservedAt: number | undefined, statDeltaComparisons: unknown, statDeltaSourceCurrent: boolean, statDeltaPairContextCurrent: boolean, equippedItemRefs: Set<string>, now: number) {
   const info = object(fact.itemInfo);
   const instant = object(fact.itemInfoInstant);
   const stats = object(fact.itemStats);
@@ -170,9 +170,14 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
   const bindingEvidence = object(fact.bindingEvidence);
   const deltaSection = object(statDeltaComparisons);
   const deltaRows = Array.isArray(deltaSection?.comparisons) ? deltaSection.comparisons : [];
+  const deltaObservedAt = typeof deltaSection?.observedAt === "number" ? deltaSection.observedAt : undefined;
+  const deltaPairEvidenceCurrent = deltaSection?.state === "OBSERVED_RAW_COMPARISONS"
+    && deltaObservedAt !== undefined && classifyFreshness(deltaObservedAt, now) === "recent"
+    && typeof itemFactsObservedAt === "number" && classifyFreshness(itemFactsObservedAt, now) === "recent"
+    && statDeltaPairContextCurrent;
   const exactPairDeltas = deltaRows.flatMap((entry) => {
     const row = object(entry); const pair = object(row?.input); const table = object(row?.table);
-    if (!statDeltaSourceCurrent || row?.api !== "C_Item.GetItemStatDelta" || row?.state !== "OBSERVED_VALUE"
+    if (!deltaPairEvidenceCurrent || row?.api !== "C_Item.GetItemStatDelta" || row?.state !== "OBSERVED_VALUE"
       || pair?.candidateItemString !== itemRef || typeof pair.equippedItemString !== "string" || !equippedItemRefs.has(pair.equippedItemString)
       || table?.state !== "OBSERVED_TABLE" || table.complete !== true) return [];
     return [{ api: row?.api ?? "UNKNOWN", state: row?.state ?? "UNKNOWN", candidateItemString: pair.candidateItemString,
@@ -187,7 +192,7 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
     itemSpecInfo,
     bindingEvidence: bindingEvidence ? { ...bindingEvidence, freshness: typeof bindingEvidence.observedAt === "number" ? classifyFreshness(bindingEvidence.observedAt, now) : "unknown" } : { state: "UNKNOWN", semanticInterpretation: "UNKNOWN_UNVALIDATED", reason: "No exact-item raw binding API calls are available." },
     itemStats: { state: statsTable?.state ?? stats?.state ?? "UNKNOWN", callState: stats?.state ?? "UNKNOWN", api: stats?.api ?? "UNKNOWN", entryCount: statsTable?.entryCount ?? null, complete: statsTable?.complete ?? false, ...((typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt) !== undefined ? { observedAt: typeof stats?.observedAt === "number" ? stats.observedAt : itemFactsObservedAt } : {}), entries: statEntries },
-    statDeltaEvidence: { api: deltaSection?.state === "API_MISSING" ? "API_MISSING" : "C_Item.GetItemStatDelta", state: deltaSection?.state ?? "UNKNOWN", completeness: deltaSection?.completeness ?? "unknown", ...(typeof deltaSection?.observedAt === "number" ? { observedAt: deltaSection.observedAt, freshness: classifyFreshness(deltaSection.observedAt, now) } : {}), reason: statDeltaSourceCurrent ? "Complete, recent pair observations are filtered to the candidate and exact equipped variants present in this equipment snapshot." : "Raw pair results are withheld unless item facts, bag/equipment sources, pair-section completeness, and freshness are all current." },
+    statDeltaEvidence: { api: deltaSection?.state === "API_MISSING" ? "API_MISSING" : "C_Item.GetItemStatDelta", state: deltaSection?.state ?? "UNKNOWN", completeness: deltaSection?.completeness ?? "unknown", ...(typeof deltaSection?.observedAt === "number" ? { observedAt: deltaSection.observedAt, freshness: classifyFreshness(deltaSection.observedAt, now) } : {}), reason: statDeltaSourceCurrent ? "Complete, recent pair observations are filtered to the candidate and exact equipped variants present in this equipment snapshot." : deltaPairEvidenceCurrent ? "This section is partial, but complete raw results for exact current candidate/equipped variants are retained individually; pairs not attempted remain unknown." : "Pair results require recent item facts, a recent pair capture, and an exact currently observed candidate/equipped variant match." },
     statDeltaComparisons: exactPairDeltas,
     validatedFields: {
       contractState: tupleShapeObserved ? "OBSERVED" as const : "UNKNOWN" as const,
@@ -286,6 +291,8 @@ export function buildForeverGearObservation(input: {
   const statDeltaSourceCurrent = evidence?.completeness === "complete" && deltaSection?.completeness === "complete"
     && freshness(typeof deltaSection.observedAt === "number" ? deltaSection.observedAt : undefined) === "recent"
     && evidenceBagComplete && evidenceEquipmentComplete;
+  const statDeltaPairContextCurrent = evidenceBagObservedAt !== undefined && evidenceBagFreshness === "recent" && bagsState === "OBSERVED" && freshness(bagsAt) === "recent"
+    && typeof evidenceEquipmentSource?.observedAt === "number" && freshness(evidenceEquipmentSource.observedAt) === "recent" && equipmentState === "OBSERVED" && freshness(equipmentAt) === "recent";
   const equippedItemRefs = new Set(equipmentItems.flatMap((item) => item.provenance === "OBSERVED" && typeof item.itemRef === "string" ? [item.itemRef] : []));
   const itemFactsLastSeen = evidence !== undefined && (bagsState === "LAST_SEEN" || evidence?.lastAttemptStale === true
     || evidenceBagSource?.state === "LAST_SEEN"
@@ -351,7 +358,7 @@ export function buildForeverGearObservation(input: {
       itemType: itemType?.state === "OBSERVED" && itemType.type === "string" ? itemType.value as string : undefined,
       itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
       equipLocation: equipLocation.value as string,
-      itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, equippedItemRefs, input.now),
+      itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now),
       evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
       ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
       provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
@@ -374,7 +381,7 @@ export function buildForeverGearObservation(input: {
     snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems.map((item) => {
       const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
-      return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, equippedItemRefs, input.now) } : item;
+      return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;
     }) },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
