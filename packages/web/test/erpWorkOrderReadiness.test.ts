@@ -21,6 +21,22 @@ test("work-order readiness uses qualified player-facing language and preserves a
   assert.match(manualSupply, /Manual supply step can address an observed gap/);
   assert.match(manualSupply, /Price and route remain unknown/);
   assert.doesNotMatch(manualSupply, /Purchase now|Gather now/);
+  const unmetCrafting = renderToStaticMarkup(React.createElement(ErpWorkOrderReadinessLine, { readiness: {
+    ...ready,
+    state: "OBSERVED_RESOURCE_SHORTFALL",
+    reason: "The assigned character does not meet an observed crafting prerequisite.",
+    capabilityChecks: [{ needId: "recipe", kind: "RECIPE", assignedIdentityKey: "forever:realm:Crafter", evidenceSourceIdentityKey: "forever:realm:Crafter", state: "REQUIREMENT_NOT_MET", reason: "Recipe knowledge is observed absent.", observedAt: 1_800_000_000, freshness: "recent", sourceSections: [{ section: "character", state: "OBSERVED", completeness: "complete", observedAt: 1_800_000_000 }] }],
+  } }));
+  assert.match(unmetCrafting, /Assigned character requirement not met/);
+  assert.match(unmetCrafting, /Checked on assigned character: forever:realm:Crafter/);
+  assert.match(unmetCrafting, /character: OBSERVED · complete/);
+  const closedWithHistoricalBlocker = renderToStaticMarkup(React.createElement(ErpWorkOrderReadinessLine, { readiness: {
+    ...ready,
+    state: "TERMINAL",
+    capabilityChecks: [{ needId: "recipe", kind: "RECIPE", state: "REQUIREMENT_NOT_MET", reason: "Historical requirement evidence.", freshness: "recent", sourceSections: [] }],
+  } }));
+  assert.match(closedWithHistoricalBlocker, /Work order is closed/);
+  assert.doesNotMatch(closedWithHistoricalBlocker, /Assigned character requirement not met/);
   const reservationConflict = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { workOrderId: "craft", recordedStatus: "IN_PROGRESS", completionRecorded: false, linkedNeedState: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", observationChange: "UNKNOWN", reconciliation: "RESOURCE_ALLOCATION_REQUIRES_REVIEW", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: [], allocationConflictNeedIds: ["ore"], changedNeedIds: [], reason: "Current reservations overlap this resource need; intent does not prove locked stock." } }));
   assert.match(reservationConflict, /Resource allocation requires review/);
   assert.match(reservationConflict, /intent does not prove locked stock/);

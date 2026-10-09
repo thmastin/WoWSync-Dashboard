@@ -77,6 +77,20 @@ test("REST and AccountContext expose paired transfer observations while preservi
   });
 });
 
+test("CRAFT readiness checks only the assigned character and preserves missing profession evidence through REST and AccountContext", async () => {
+  await withServer(async (call, store) => {
+    const character = store.listCharacters("classic-era")[0]!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Check an assigned crafter", needs: [{ stableId: "blacksmithing", kind: "PROFESSION", resourceKey: "Blacksmithing", label: "Blacksmithing skill 1", requiredQuantity: 1 }], workOrders: [{ stableId: "craft", kind: "CRAFT", status: "PLANNED", title: "Review crafter evidence", assignedIdentityKey: character.identityKey, resourceNeedIds: ["blacksmithing"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    const readiness = created.body.project.workOrderReadiness[0];
+    assert.equal(readiness.state, "WAITING_FOR_EVIDENCE");
+    assert.deepEqual(readiness.capabilityChecks.map((check: any) => [check.state, check.assignedIdentityKey, check.evidenceSourceIdentityKey, check.freshness]), [["EVIDENCE_UNKNOWN", character.identityKey, character.identityKey, "stale"]]);
+    assert.equal(readiness.linkedNeeds[0].sourceIdentityKey, character.identityKey, "the order's capability view uses only its assigned character's observation");
+    const context = await call("GET", "/api/account-context");
+    assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { WAITING_FOR_EVIDENCE: 1 });
+  });
+});
+
 test("manual supply readiness is summarized by AccountContext from the REST planning projection", async () => {
   await withServer(async (call, store) => {
     const generatedAt = Math.floor(Date.now() / 1000) + 1;

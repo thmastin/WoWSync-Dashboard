@@ -20,11 +20,11 @@ function seedRetailCurrency(options: { isAccountWide?: boolean; quantity?: numbe
   if (options.lastSeen) store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientFamily: "Retail", clientVersion: "12.1.0", moneyCopper: 5000 } }));
   return { store, identityKey: imported.character.identityKey };
 }
-function seedRetailRecipes(recipes: Array<{ recipeID: number; learned?: boolean; learnedState: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN"; evidence?: "OBSERVED" | "LAST_SEEN" }>, options: { second?: typeof recipes } = {}) {
+function seedRetailRecipes(recipes: Array<{ recipeID: number; learned?: boolean; learnedState: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN"; evidence?: "OBSERVED" | "LAST_SEEN" }>, options: { second?: typeof recipes; characterName?: string } = {}) {
   const store = new SqliteSnapshotStore(":memory:");
   const observedAt = 1_700_000_000;
   const capture = (rows: typeof recipes, generatedAt: number) => {
-    const raw = buildWowSyncExport({ generatedAt, character: { name: "Recipe Keeper", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } });
+    const raw = buildWowSyncExport({ generatedAt, character: { name: options.characterName ?? "Recipe Keeper", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } });
     const recipeRows = rows.map((row) => ({ recipeID: row.recipeID, ...(row.learned === undefined ? {} : { learned: row.learned }), learnedState: row.learnedState, recipeInfoResult: row.learned === undefined ? "NIL_RESULT" : "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", skillLineIDs: [], evidence: row.evidence ?? "OBSERVED", observedAt }));
     const profession = { baseSkillLineID: 171, skillLineID: 171, professionID: 171, parentProfessionID: 171, professionName: "Alchemy", evidence: "OBSERVED", observedAt, client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 }, coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, recipes: recipeRows };
     const data = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, professions: [profession] };
@@ -353,22 +353,38 @@ test("Retail recipe plans preserve LAST_SEEN history and never borrow recipe evi
 
 test("CRAFT readiness binds recipe and profession evidence to the assigned character without claiming craftability", () => {
   const recipeFixture = seedRetailRecipes([{ recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" }]);
+  const otherCrafterFixture = seedRetailRecipes([{ recipeID: 3001, learned: false, learnedState: "OBSERVED_FALSE" }], { characterName: "Other Crafter" });
   const professionFixture = seedStore({ professions: { entries: [{ name: "Leatherworking", skill: 100, maxSkill: 150 }] } });
   try {
-    const other = recipeFixture.store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_010, character: { name: "Other Crafter", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } })).character;
+    const other = otherCrafterFixture.store.listCharacters("retail")[0]!;
     const recipeNeed = { stableId: "recipe", kind: "RECIPE" as const, resourceKey: "3001", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: recipeFixture.identityKey };
     const recipeProject: ErpProject = { ...project(recipeFixture.identityKey), version: "retail", needs: [recipeNeed], reservations: [], workOrders: [{ stableId: "craft", kind: "CRAFT", status: "PLANNED", title: "Craft recipe", resourceNeedIds: ["recipe"], dependsOn: [], assignedIdentityKey: other.identityKey }] };
-    let readiness = evaluateErpProject(recipeProject, (key) => recipeFixture.store.listSnapshots(key), [recipeProject], 1_700_000_020).workOrderReadiness[0]!;
-    assert.equal(readiness.state, "WAITING_FOR_EVIDENCE", "a different roster character's learned recipe cannot satisfy the assigned crafter's capability check");
-    assert.equal(readiness.capabilityChecks?.[0]?.state, "SOURCE_DIFFERS_FROM_ASSIGNEE");
-    assert.deepEqual(readiness.linkedNeeds?.map((need) => [need.kind, need.state, need.freshness, need.requiredQuantity, need.sourceIdentityKey]), [["RECIPE", "COVERED_BY_OBSERVED", "recent", 1, recipeFixture.identityKey]], "the work-order view carries its own explicit recipe evidence without asserting craftability");
-    assert.ok(readiness.linkedNeeds?.[0]?.sourceSections.some((section) => section.section === "character" && section.state === "OBSERVED"), "the linked input retains the source section's provenance");
+    const snapshotsFor = (key: string) => key === other.identityKey ? otherCrafterFixture.store.listSnapshots(key) : recipeFixture.store.listSnapshots(key);
+    let readiness = evaluateErpProject(recipeProject, snapshotsFor, [recipeProject], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.state, "OBSERVED_RESOURCE_SHORTFALL", "the assigned crafter's own observed unlearned state blocks the step even though another character knows the recipe");
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "REQUIREMENT_NOT_MET");
+    assert.equal(readiness.capabilityChecks?.[0]?.evidenceSourceIdentityKey, other.identityKey);
+    assert.equal(readiness.capabilityChecks?.[0]?.freshness, "recent");
+    assert.deepEqual(readiness.linkedNeeds?.map((need) => [need.kind, need.state, need.freshness, need.requiredQuantity, need.sourceIdentityKey]), [["RECIPE", "SHORTFALL_OBSERVED", "recent", 1, other.identityKey]], "the work-order view uses the assigned crafter's own explicit recipe evidence");
+    assert.ok(readiness.linkedNeeds?.[0]?.sourceSections.some((section) => section.section === "character" && section.state === "OBSERVED"), "the linked input retains the assigned character section provenance");
+    assert.equal(evaluateErpProject(recipeProject, snapshotsFor, [recipeProject], 1_700_000_020).needEvidence[0]?.sourceIdentityKey, recipeFixture.identityKey, "the project-level source observation remains independent from the assignee check");
     const sameCrafter = { ...recipeProject, workOrders: [{ ...recipeProject.workOrders[0]!, assignedIdentityKey: recipeFixture.identityKey }] };
-    readiness = evaluateErpProject(sameCrafter, (key) => recipeFixture.store.listSnapshots(key), [sameCrafter], 1_700_000_020).workOrderReadiness[0]!;
+    readiness = evaluateErpProject(sameCrafter, snapshotsFor, [sameCrafter], 1_700_000_020).workOrderReadiness[0]!;
     assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE");
     assert.equal(readiness.linkedNeeds?.[0]?.observedQuantity, 1);
     assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
     assert.match(readiness.reason, /do not establish current skill, unlocks, or craftability/);
+    const assignedOnlyNeed = { ...recipeNeed, sourceIdentityKey: undefined };
+    const assignedOnlyProject = { ...sameCrafter, needs: [assignedOnlyNeed] };
+    readiness = evaluateErpProject(assignedOnlyProject, snapshotsFor, [assignedOnlyProject], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE", "the work order reads the assigned crafter directly even when a capability need has no inventory-style source selection");
+    assert.equal(readiness.linkedNeeds?.[0]?.observedQuantity, 1);
+    assert.equal(evaluateErpProject(assignedOnlyProject, snapshotsFor, [assignedOnlyProject], 1_700_000_020).workOrderProgress[0]?.linkedNeedState, "ALL_CURRENTLY_MET");
+    const crossVersionOrder = { ...sameCrafter, workOrders: [{ ...sameCrafter.workOrders[0]!, assignedIdentityKey: "classic-era::retail realm::recipe keeper" }] };
+    const queried = new Set<string>();
+    const crossVersionView = evaluateErpProject(crossVersionOrder, (key) => { queried.add(key); return snapshotsFor(key); }, [crossVersionOrder], 1_700_000_020);
+    assert.equal(crossVersionView.workOrderReadiness[0]?.capabilityChecks?.[0]?.state, "EVIDENCE_UNKNOWN");
+    assert.ok(!queried.has("classic-era::retail realm::recipe keeper"), "an incompatible assigned-character identity is rejected before reading snapshots");
 
     const skillNeed = { stableId: "profession", kind: "PROFESSION" as const, resourceKey: "Leatherworking", label: "Leatherworking", requiredQuantity: 90, sourceIdentityKey: professionFixture.identityKey };
     const skillProject: ErpProject = { ...project(professionFixture.identityKey), needs: [skillNeed], reservations: [], workOrders: [{ stableId: "craft_skill", kind: "CRAFT", status: "PLANNED", title: "Craft with observed skill", resourceNeedIds: ["profession"], dependsOn: [], assignedIdentityKey: professionFixture.identityKey }] };
@@ -379,7 +395,7 @@ test("CRAFT readiness binds recipe and profession evidence to the assigned chara
     readiness = evaluateErpProject(unmet, (key) => professionFixture.store.listSnapshots(key), [unmet], 1_700_000_020).workOrderReadiness[0]!;
     assert.equal(readiness.capabilityChecks?.[0]?.state, "REQUIREMENT_NOT_MET");
     assert.equal(readiness.state, "OBSERVED_RESOURCE_SHORTFALL");
-  } finally { recipeFixture.store.close(); professionFixture.store.close(); }
+  } finally { recipeFixture.store.close(); otherCrafterFixture.store.close(); professionFixture.store.close(); }
 });
 
 test("project persistence is version-isolated, survives reopen, and rejects stale revisions", () => {

@@ -253,6 +253,28 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(progressText, /Current linked resource shortfall/, progressText);
     assert.match(progressText, /INVESTIGATE · PLANNED/, "observed stock shortfall does not auto-complete the manual work order");
     assert.doesNotMatch(progressText, /COMPLETED/);
+
+    await orderForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const professionForm = projectCard.locator("form.erp-inline-form");
+    await professionForm.getByLabel("Kind").selectOption("PROFESSION");
+    await professionForm.getByLabel("Resource key").fill("Leatherworking");
+    await professionForm.getByLabel("Label").fill("Leatherworking skill 1");
+    await professionForm.getByLabel("Required skill").fill("1");
+    await professionForm.getByLabel("Source character or shared owner").selectOption({ label: "None — supply UNKNOWN" });
+    await professionForm.getByRole("button", { name: "Add requirement" }).click();
+    const craftForm = projectCard.locator("form.erp-inline-form");
+    await craftForm.getByLabel("Action type").selectOption("CRAFT");
+    await craftForm.getByLabel("Action", { exact: true }).fill("Check the assigned character's profession evidence");
+    await craftForm.getByLabel("Assigned character").selectOption({ label: "Other Potential Holder — Thrall" });
+    await craftForm.getByLabel("Linked resource needs").selectOption({ label: "Leatherworking skill 1" });
+    await craftForm.getByRole("button", { name: "Add work order" }).click();
+    const craftOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Check the assigned character's profession evidence" });
+    await craftOrder.waitFor();
+    const craftText = await craftOrder.innerText();
+    assert.match(craftText, /Checked on assigned character: Other Potential Holder — Thrall/);
+    assert.match(craftText, /unknown freshness/);
+    assert.match(craftText, /does not meet Exact profession Leatherworking at skill 1|assigned crafter is unknown/);
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
   } finally {
     if (browser) await browser.close();

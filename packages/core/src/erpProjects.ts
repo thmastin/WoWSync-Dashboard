@@ -725,6 +725,9 @@ export interface ErpCraftingCapabilityCheck {
   readonly state: "SUPPORTED_FOR_ASSIGNEE" | "ASSIGNED_CHARACTER_MISSING" | "SOURCE_NOT_SELECTED" | "SOURCE_DIFFERS_FROM_ASSIGNEE" | "REQUIREMENT_NOT_MET" | "EVIDENCE_UNKNOWN";
   readonly assignedIdentityKey?: string;
   readonly evidenceSourceIdentityKey?: string;
+  readonly observedAt?: number;
+  readonly freshness: Freshness;
+  readonly sourceSections: ErpNeedEvidence["sourceSections"];
   readonly reason: string;
 }
 
@@ -929,23 +932,35 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     return applyReservationAssessment(need, raw, allProjects, project.version);
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
+  const evidenceForOrderNeed = (order: ErpWorkOrder, needId: string): ErpNeedEvidence | undefined => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    const baseEvidence = needEvidenceById.get(needId);
+    if (!need || !baseEvidence) return undefined;
+    if (order.kind !== "CRAFT" || (need.kind !== "PROFESSION" && need.kind !== "RECIPE")) return baseEvidence;
+    if (!order.assignedIdentityKey) return assessErpNeed({ ...need, sourceIdentityKey: undefined }, [], now, currencies, project.version);
+    if (!order.assignedIdentityKey.startsWith(`${project.version}::`)) return {
+      needId, state: "UNKNOWN", requiredQuantity: need.requiredQuantity, freshness: "unknown", sourceSections: [], unresolvedSections: ["assigned character version"], unknownQuantityRowCount: 0,
+      reason: "The assigned character is outside this project's version. No cross-version observations were read.",
+    };
+    return assessErpNeed({ ...need, sourceIdentityKey: order.assignedIdentityKey, sourceOwnerKey: undefined }, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
+  };
   const workOrderReadiness: ErpWorkOrderReadiness[] = project.workOrders.map((order) => {
     const capabilityChecks: ErpCraftingCapabilityCheck[] = order.kind === "CRAFT" ? order.resourceNeedIds.flatMap<ErpCraftingCapabilityCheck>((needId): ErpCraftingCapabilityCheck[] => {
       const need = project.needs.find((entry) => entry.stableId === needId);
       if (!need || (need.kind !== "PROFESSION" && need.kind !== "RECIPE")) return [];
-      const evidence = needEvidenceById.get(needId);
-      const context = need.kind === "RECIPE" ? `Exact recipe ${need.resourceKey}` : `Exact profession “${need.resourceKey}” at skill ${need.requiredQuantity}`;
-      if (!order.assignedIdentityKey) return [{ needId, kind: need.kind, state: "ASSIGNED_CHARACTER_MISSING", evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} cannot be screened against a crafter until a character is assigned.` }];
-      if (!need.sourceIdentityKey) return [{ needId, kind: need.kind, state: "SOURCE_NOT_SELECTED", assignedIdentityKey: order.assignedIdentityKey, reason: `${context} has no character-specific evidence source; other roster observations are not substituted.` }];
-      if (need.sourceIdentityKey !== order.assignedIdentityKey) return [{ needId, kind: need.kind, state: "SOURCE_DIFFERS_FROM_ASSIGNEE", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} was observed for a different character than the assigned crafter; character capabilities are not shared across the roster.` }];
-      if (!evidence || evidence.freshness !== "recent") return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} evidence is missing, historical, stale, or has unknown freshness for the assigned character.` }];
-      if (evidence.state === "COVERED_BY_OBSERVED") return [{ needId, kind: need.kind, state: "SUPPORTED_FOR_ASSIGNEE", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `${context} is directly observed recently for the assigned character. This supports only the recorded skill/learned fact, not unlocks or craftability.` }];
-      if (evidence.state === "SHORTFALL_OBSERVED") return [{ needId, kind: need.kind, state: "REQUIREMENT_NOT_MET", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: `Current evidence does not meet ${context} for the assigned character.` }];
-      return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: need.sourceIdentityKey, reason: evidence.reason }];
+      const context = need.kind === "RECIPE" ? `Exact recipe ${need.resourceKey}` : `Exact profession ${need.resourceKey} at skill ${need.requiredQuantity}`;
+      if (!order.assignedIdentityKey) return [{ needId, kind: need.kind, state: "ASSIGNED_CHARACTER_MISSING", freshness: "unknown", sourceSections: [], reason: `${context} cannot be screened against a crafter until a character is assigned.` }];
+      if (!order.assignedIdentityKey.startsWith(`${project.version}::`)) return [{ needId, kind: need.kind, state: "EVIDENCE_UNKNOWN", assignedIdentityKey: order.assignedIdentityKey, evidenceSourceIdentityKey: order.assignedIdentityKey, freshness: "unknown", sourceSections: [], reason: `${context} cannot use a character from another version; no cross-version observations were read.` }];
+      const evidence = evidenceForOrderNeed(order, needId)!;
+      const check = { needId, kind: need.kind, assignedIdentityKey: order.assignedIdentityKey, ...(evidence.sourceIdentityKey ? { evidenceSourceIdentityKey: evidence.sourceIdentityKey } : {}), ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), freshness: evidence.freshness, sourceSections: evidence.sourceSections };
+      if (evidence.freshness !== "recent") return [{ ...check, state: "EVIDENCE_UNKNOWN", reason: `${context} evidence for the assigned crafter is ${evidence.freshness}; refresh that character before relying on it. ${evidence.reason}` }];
+      if (evidence.state === "COVERED_BY_OBSERVED") return [{ ...check, state: "SUPPORTED_FOR_ASSIGNEE", reason: `${context} is directly observed recently on the assigned character. This supports only the recorded skill/learned fact, not unlocks or craftability.` }];
+      if (evidence.state === "SHORTFALL_OBSERVED") return [{ ...check, state: "REQUIREMENT_NOT_MET", reason: `Current evidence for the assigned character does not meet ${context}.` }];
+      return [{ ...check, state: "EVIDENCE_UNKNOWN", reason: evidence.reason }];
     }) : [];
     const linkedNeeds: ErpWorkOrderNeedCheck[] = order.resourceNeedIds.flatMap((needId) => {
       const need = project.needs.find((entry) => entry.stableId === needId);
-      const evidence = needEvidenceById.get(needId);
+      const evidence = evidenceForOrderNeed(order, needId);
       if (!need || !evidence) return [];
       return [{ needId, label: need.label, kind: need.kind, resourceKey: need.resourceKey, state: evidence.state, requiredQuantity: evidence.requiredQuantity,
         ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}),
@@ -954,7 +969,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
         ...(evidence.reservationAssessment ? { reservationState: evidence.reservationAssessment.state, activeReservationQuantity: evidence.reservationAssessment.activeQuantity } : {}), reason: evidence.reason }];
     });
     const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}) };
-    const linkedEvidence = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
+    const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));
     if (order.status === "CANCELLED") return { ...base, state: "TERMINAL", reason: "This work order is cancelled in the saved plan; cancellation is not an in-game action." };
@@ -989,7 +1004,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     return { ...base, state: "READY_FOR_PLAYER_REVIEW", reason: `No incomplete plan dependency or linked resource-evidence blocker is recorded.${actionLimit}` };
   });
   const workOrderProgress: ErpWorkOrderProgress[] = project.workOrders.map((order) => {
-    const linked = order.resourceNeedIds.map((needId) => needEvidenceById.get(needId)!).filter(Boolean);
+    const linked = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);
     const allocationConflictNeedIds = workOrderAllocationConflicts(project, linked, allProjects);
     const current = linked.filter((evidence) => evidence.freshness === "recent");
     const coveredNeedIds = current.filter((evidence) => evidence.state === "COVERED_BY_OBSERVED").map((evidence) => evidence.needId);
