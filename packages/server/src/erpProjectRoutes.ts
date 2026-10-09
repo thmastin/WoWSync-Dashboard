@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, WOW_VERSIONS, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
+import { buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, WOW_VERSIONS, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
 
 function isVersion(value: string): value is WowVersion { return (WOW_VERSIONS as readonly string[]).includes(value); }
 
@@ -9,7 +9,8 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
   app.get("/api/versions/:version/erp/projects", (req, res) => {
     const { version } = req.params;
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
-    res.json({ version, projects: read(version) });
+    const projects = read(version);
+    res.json({ version, projects, resourceCommitments: buildErpResourceCommitmentSummary(projects) });
   });
   app.post("/api/versions/:version/erp/projects", (req, res) => {
     const { version } = req.params;

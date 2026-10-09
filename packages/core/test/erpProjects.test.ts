@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { assessErpNeed, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
+import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
 
 const ITEM = "item:159";
@@ -589,6 +589,52 @@ test("progress preserves evidence-quality and shortfall precedence over ambiguou
     assert.equal(progress.reconciliation, "MIXED_LINKED_EVIDENCE");
     assert.deepEqual(progress.allocationConflictNeedIds, [], "a real shortfall takes precedence over a static ambiguity claim");
   } finally { shortfall.store.close(); }
+});
+
+test("resource commitment summary aggregates plan asks by explicit source but reports observed stock once", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const makeProject = (stableId: string, needId: string, quantity: number, status: ErpProject["status"] = "ACTIVE"): ErpProject => ({
+      ...project(identityKey), stableId, status,
+      needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: quantity, sourceIdentityKey: identityKey }],
+      reservations: [], workOrders: [],
+    });
+    const first = { ...makeProject("plan_a", "need_a", 3), reservations: [{ stableId: "hold_a", needId: "need_a", sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const second = makeProject("plan_b", "need_b", 2);
+    const variant = { ...makeProject("plan_variant", "need_variant", 1), needs: [{ stableId: "need_variant", kind: "ITEM_REF" as const, resourceKey: "item:159:123", label: "Rough Stone variant", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ stableId: "hold_variant", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const broad = { ...makeProject("plan_base_id", "need_base_id", 1), needs: [{ stableId: "need_base_id", kind: "ITEM_ID" as const, resourceKey: "159", label: "Rough Stone base ID", requiredQuantity: 1, sourceIdentityKey: identityKey }] };
+    const unknownA = { ...makeProject("unknown_a", "unknown_need_a", 4), needs: [{ stableId: "unknown_need_a", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source A", requiredQuantity: 4 }] };
+    const unknownB = { ...makeProject("unknown_b", "unknown_need_b", 5), needs: [{ stableId: "unknown_need_b", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source B", requiredQuantity: 5 }] };
+    const plans = [first, second, variant, broad, unknownA, unknownB];
+    const views = plans.map((plan) => ({ ...evaluateErpProject(plan, (key) => store.listSnapshots(key), plans, 1_700_000_010), history: [], historyEventCount: 0, historyTruncated: false }));
+    const summary = buildErpResourceCommitmentSummary(views);
+    const exact = summary.items.find((line) => line.sourceIdentityKey === identityKey && line.kind === "ITEM_REF" && line.resourceKey === ITEM)!;
+    assert.equal(exact.activeNeedCount, 2);
+    assert.equal(exact.activeNeedQuantity, 5, "planned quantities aggregate across active projects");
+    assert.equal(exact.observedQuantity, 4, "the same character observation appears once, not once per project");
+    assert.equal(exact.activeReservationQuantity, 2, "reservation intent stays separate from planned requirement totals");
+    assert.equal(exact.availableObservedLowerBound, 2);
+    assert.deepEqual(exact.overlappingResourceKeys, ["159"], "an exact base itemString overlaps only the broader ITEM_ID scope, not another exact variant");
+    const exactVariant = summary.items.find((line) => line.resourceKey === "item:159:123")!;
+    assert.deepEqual(exactVariant.overlappingResourceKeys, ["159"]);
+    assert.equal(exactVariant.activeReservationQuantity, 1);
+    const broadItem = summary.items.find((line) => line.kind === "ITEM_ID" && line.resourceKey === "159")!;
+    assert.equal(broadItem.activeReservationQuantity, 0);
+    assert.equal(broadItem.overlappingReservationQuantity, 3, "a base-ID line calls out reservations on matching exact-itemString scopes");
+    assert.equal(summary.linesWithReservations, 3);
+    const unknownSourceLines = summary.items.filter((line) => line.sourceScope === "UNKNOWN_SOURCE" && line.resourceKey === "item:999");
+    assert.equal(unknownSourceLines.length, 2, "unsourced plans are not merged as though they share a source");
+    const manyUnknown = Array.from({ length: 105 }, (_, index) => ({
+      ...makeProject(`unscoped_${index}`, `unscoped_need_${index}`, 1),
+      needs: [{ stableId: `unscoped_need_${index}`, kind: "ITEM_REF" as const, resourceKey: `item:${10000 + index}`, label: `Unknown ${index}`, requiredQuantity: 1 }],
+    }));
+    const manyViews = manyUnknown.map((plan) => ({ ...evaluateErpProject(plan, (key) => store.listSnapshots(key), manyUnknown, 1_700_000_010), history: [], historyEventCount: 0, historyTruncated: false }));
+    const bounded = buildErpResourceCommitmentSummary(manyViews);
+    assert.equal(bounded.returnedCount, 100);
+    assert.equal(bounded.totalCount, 105);
+    assert.equal(bounded.unknownSourceLines, 105, "whole-set summary counters are exact even when the returned rows are truncated");
+    assert.equal(bounded.truncated, true);
+  } finally { store.close(); }
 });
 
 test("validation rejects cross-version character references, unsupported assumptions, and unrecorded completion", () => {

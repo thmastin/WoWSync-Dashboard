@@ -134,6 +134,13 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await needEvidence.waitFor();
     const needEvidenceText = await needEvidence.innerText();
     assert.match(needEvidenceText, /Covered by observed supply/, needEvidenceText);
+    const commitmentPanel = page.getByRole("region", { name: "Resource commitments" });
+    await commitmentPanel.waitFor();
+    const commitmentText = await commitmentPanel.innerText();
+    assert.match(commitmentText, /Mycobloom/);
+    assert.match(commitmentText, /20 requested/, "planning intent is visible as its own quantity");
+    assert.match(commitmentText, /40/, "observed stock is shown independently from planned demand");
+    assert.match(commitmentText, /Freshness:/);
 
     await needForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();

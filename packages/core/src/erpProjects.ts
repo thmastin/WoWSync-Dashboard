@@ -518,6 +518,115 @@ export interface ErpProjectView extends ErpProject {
   readonly reservationReview: readonly { reservationId: string; state: "WITHIN_OBSERVED_SUPPLY" | "EXCEEDS_OBSERVED_SUPPLY" | "SUPPLY_UNKNOWN"; reservedQuantity: number; observedQuantity?: number; reason: string }[];
 }
 
+export interface ErpResourceCommitmentLine {
+  readonly version: WowVersion;
+  readonly sourceScope: "CHARACTER" | "SHARED_OWNER" | "UNKNOWN_SOURCE";
+  readonly sourceIdentityKey?: string;
+  readonly sourceOwnerKey?: string;
+  readonly kind: ErpResourceKind;
+  readonly resourceKey: string;
+  readonly label: string;
+  /** Planned need quantities are intent and are kept separate from observed supply and reservations. */
+  readonly activeNeedCount: number;
+  readonly activeNeedQuantity: number;
+  readonly pausedNeedCount: number;
+  readonly pausedNeedQuantity: number;
+  readonly otherPlanNeedCount: number;
+  /** Active reservations recorded on needs with this exact identity. */
+  readonly activeReservationQuantity: number;
+  /** Active reservations found on overlapping base/variant scopes; do not add across overlapping rows. */
+  readonly overlappingReservationQuantity?: number;
+  readonly reservationState: "UNRESERVED" | "WITHIN_OBSERVED_SUPPLY" | "OVER_RESERVED" | "UNKNOWN";
+  readonly availableObservedLowerBound?: number;
+  readonly observedQuantity?: number;
+  readonly potentialQuantity?: number;
+  readonly observedAt?: number;
+  readonly freshness: "recent" | "stale" | "unknown";
+  readonly needStates: Readonly<Record<NeedSupplyState, number>>;
+  readonly sourceSections: readonly ErpNeedEvidence["sourceSections"][number][];
+  readonly unresolvedSections: readonly string[];
+  /** Other resource keys with which this source/item scope may overlap. Do not total these rows together. */
+  readonly overlappingResourceKeys: readonly string[];
+  readonly contributorCount: number;
+  readonly contributors: readonly { projectId: string; projectTitle: string; projectStatus: ErpProjectStatus; priority: number; needId: string; label: string; requiredQuantity: number; destinationIdentityKey?: string; activeReservationQuantity: number }[];
+  readonly contributorsTruncated: boolean;
+}
+
+export interface ErpResourceCommitmentSummary {
+  readonly items: readonly ErpResourceCommitmentLine[];
+  readonly totalCount: number;
+  readonly returnedCount: number;
+  readonly truncated: boolean;
+  readonly linesWithReservations: number;
+  readonly unknownSourceLines: number;
+  readonly overlappingScopeLines: number;
+}
+
+/** Groups explicit plans by source and exact identity; observed stock is represented once, never summed across projects. */
+export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectView[], limit = 100): ErpResourceCommitmentSummary {
+  const groups = new Map<string, Array<{ project: ErpProjectView; need: ErpResourceNeed; evidence: ErpNeedEvidence; activeReservationQuantity: number }>>();
+  for (const project of projects) for (const need of project.needs) {
+    const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);
+    if (!evidence) continue;
+    const explicitSourceScope = sourceScope(need);
+    const key = JSON.stringify([project.version, explicitSourceScope ?? `unknown:${project.stableId}:${need.stableId}`, need.kind, need.resourceKey]);
+    const activeReservationQuantity = project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === need.stableId).reduce((sum, reservation) => sum + reservation.quantity, 0);
+    groups.set(key, [...(groups.get(key) ?? []), { project, need, evidence, activeReservationQuantity }]);
+  }
+  const entries = [...groups.values()].map((group): ErpResourceCommitmentLine => {
+    const first = group[0]!;
+    const evidence = group.map((entry) => entry.evidence);
+    const observed = new Set(evidence.map((entry) => entry.observedQuantity));
+    const potential = new Set(evidence.map((entry) => entry.potentialQuantity));
+    const freshnesses = new Set(evidence.map((entry) => entry.freshness));
+    const reservationStates = new Set(evidence.map((entry) => entry.reservationAssessment?.state ?? "UNKNOWN"));
+    const reservationQuantities = new Set(evidence.map((entry) => entry.reservationAssessment?.activeQuantity));
+    const reservationAvailable = new Set(evidence.map((entry) => entry.reservationAssessment?.availableObservedLowerBound));
+    const needStates = Object.fromEntries((['COVERED_BY_OBSERVED', 'SHORTFALL_OBSERVED', 'POTENTIAL_COVERAGE_LAST_SEEN', 'UNKNOWN', 'UNSUPPORTED_EVIDENCE'] as const).map((state) => [state, evidence.filter((entry) => entry.state === state).length])) as Record<NeedSupplyState, number>;
+    const sections = evidence.flatMap((entry) => entry.sourceSections);
+    const unresolvedSections = [...new Set(evidence.flatMap((entry) => entry.unresolvedSections))].sort();
+    const identityId = first.need.kind === "ITEM_ID" ? Number(first.need.resourceKey) : first.need.kind === "ITEM_REF" ? needItemId(first.need) : undefined;
+    const explicitSource = sourceScope(first.need);
+    const overlaps = identityId === undefined || !explicitSource ? [] : projects.flatMap((project) => project.needs.filter((need) => {
+      if (sourceScope(need) !== explicitSource || need.resourceKey === first.need.resourceKey && need.kind === first.need.kind || needItemId(need) !== identityId) return false;
+      // ITEM_REF is always an exact identity, including the bare item:<id> form.
+      // Only a base ITEM_ID overlaps its matching ITEM_REF scopes, as used by reservation assessment.
+      return first.need.kind !== need.kind;
+    }).map((need) => need.resourceKey));
+    const contributors = group.map(({ project, need, activeReservationQuantity }) => ({ projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, priority: project.priority, needId: need.stableId, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), activeReservationQuantity })).sort((a, b) => b.priority - a.priority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
+    const active = group.filter((entry) => entry.project.status === "ACTIVE");
+    const paused = group.filter((entry) => entry.project.status === "PAUSED");
+    const other = group.filter((entry) => entry.project.status !== "ACTIVE" && entry.project.status !== "PAUSED");
+    const activeReservationQuantity = group.reduce((sum, entry) => sum + entry.activeReservationQuantity, 0);
+    const assessedReservationQuantity = reservationQuantities.size === 1 ? [...reservationQuantities][0] : undefined;
+    const overlappingReservationQuantity = assessedReservationQuantity !== undefined && assessedReservationQuantity >= activeReservationQuantity ? assessedReservationQuantity - activeReservationQuantity : undefined;
+    return {
+      version: first.project.version,
+      sourceScope: first.need.sourceIdentityKey ? "CHARACTER" : first.need.sourceOwnerKey ? "SHARED_OWNER" : "UNKNOWN_SOURCE",
+      ...(first.need.sourceIdentityKey ? { sourceIdentityKey: first.need.sourceIdentityKey } : {}),
+      ...(first.need.sourceOwnerKey ? { sourceOwnerKey: first.need.sourceOwnerKey } : {}),
+      kind: first.need.kind, resourceKey: first.need.resourceKey, label: first.need.label,
+      activeNeedCount: active.length, activeNeedQuantity: active.reduce((sum, entry) => sum + entry.need.requiredQuantity, 0),
+      pausedNeedCount: paused.length, pausedNeedQuantity: paused.reduce((sum, entry) => sum + entry.need.requiredQuantity, 0), otherPlanNeedCount: other.length,
+      activeReservationQuantity,
+      ...(overlappingReservationQuantity !== undefined && overlappingReservationQuantity > 0 ? { overlappingReservationQuantity } : {}),
+      reservationState: reservationStates.size === 1 && (assessedReservationQuantity === undefined || assessedReservationQuantity >= activeReservationQuantity) ? [...reservationStates][0]! as ErpResourceCommitmentLine['reservationState'] : "UNKNOWN",
+      ...(reservationAvailable.size === 1 && evidence[0]?.reservationAssessment?.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: evidence[0].reservationAssessment.availableObservedLowerBound } : {}),
+      ...(observed.size === 1 && evidence[0]?.observedQuantity !== undefined ? { observedQuantity: evidence[0].observedQuantity } : {}),
+      ...(potential.size === 1 && evidence[0]?.potentialQuantity !== undefined ? { potentialQuantity: evidence[0].potentialQuantity } : {}),
+      ...(new Set(evidence.map((entry) => entry.observedAt)).size === 1 && evidence[0]?.observedAt !== undefined ? { observedAt: evidence[0].observedAt } : {}),
+      freshness: freshnesses.size === 1 ? [...freshnesses][0]! : "unknown", needStates,
+      sourceSections: [...new Map(sections.map((section) => [JSON.stringify(section), section])).values()],
+      unresolvedSections,
+      overlappingResourceKeys: [...new Set(overlaps)].sort(), contributorCount: contributors.length,
+      contributors: contributors.slice(0, 25), contributorsTruncated: contributors.length > 25,
+    };
+  }).sort((a, b) => a.sourceScope.localeCompare(b.sourceScope) || (a.sourceIdentityKey ?? a.sourceOwnerKey ?? "").localeCompare(b.sourceIdentityKey ?? b.sourceOwnerKey ?? "") || a.kind.localeCompare(b.kind) || a.resourceKey.localeCompare(b.resourceKey));
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 100;
+  const items = entries.slice(0, safeLimit);
+  return { items, totalCount: entries.length, returnedCount: items.length, truncated: items.length < entries.length, linesWithReservations: entries.filter((line) => line.activeReservationQuantity > 0 || (line.overlappingReservationQuantity ?? 0) > 0).length, unknownSourceLines: entries.filter((line) => line.sourceScope === "UNKNOWN_SOURCE").length, overlappingScopeLines: entries.filter((line) => line.overlappingResourceKeys.length > 0).length };
+}
+
 export interface ErpWorkOrderReadiness {
   readonly workOrderId: string;
   readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "MANUAL_SUPPLY_STEP_RECOMMENDED" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";

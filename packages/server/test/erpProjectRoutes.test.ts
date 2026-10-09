@@ -36,6 +36,10 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.deepEqual(created.body.project.history.map((event: any) => [event.revision, event.kind]), [[1, "CREATED"]]);
     const listed = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.equal(listed.body.projects[0].stableId, created.body.project.stableId);
+    assert.equal(listed.body.resourceCommitments.totalCount, 1);
+    assert.equal(listed.body.resourceCommitments.items[0].activeNeedQuantity, 5);
+    assert.equal(listed.body.resourceCommitments.items[0].activeReservationQuantity, 2);
+    assert.equal(listed.body.resourceCommitments.items[0].observedQuantity, 3, "REST commitment view reuses one observed source quantity rather than multiplying it by projects");
     const context = await call("GET", "/api/account-context");
     assert.equal(context.body.planning.projects[0].title, "Prepare first craft");
     assert.equal(context.body.planning.projects[0].version, "classic-era");
@@ -56,8 +60,9 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "10");
+    assert.equal(context.body.schemaVersion, "11");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
+    assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
 });
 

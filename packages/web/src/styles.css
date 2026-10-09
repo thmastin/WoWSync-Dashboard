@@ -1353,6 +1353,18 @@ button.roster-name-link {
 .erp-need-list li p { margin: 6px 0; color: #c2cad6; }
 .erp-need-list li .erp-change-note { padding: 8px 10px; border-left: 2px solid #8096b0; background: #ffffff08; color: #cbd4df; font-size: .82rem; }
 .erp-need-list small, .erp-work-order-list small { display: block; margin-top: 5px; color: #9da8b8; }
+.erp-resource-commitments { margin: 20px 0 26px; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
+.erp-resource-commitments > p { color: #b8c2d0; max-width: 1000px; }
+.erp-commitment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 12px; }
+.erp-commitment-card { min-width: 0; padding: 14px; border: 1px solid #ffffff1e; border-radius: 7px; background: #00000018; }
+.erp-commitment-card h3 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.erp-commitment-card h3 small { display: block; margin-top: 4px; color: #aab5c4; font-weight: 400; }
+.erp-commitment-card p, .erp-commitment-card li { overflow-wrap: anywhere; }
+.erp-commitment-card dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.erp-commitment-card dl div { padding: 8px; background: #ffffff08; border-radius: 4px; }
+.erp-commitment-card dt { color: #9da8b8; font-size: .8rem; }
+.erp-commitment-card dd { margin: 3px 0 0; font-weight: 600; }
+.erp-commitment-card [role="note"] { padding: 8px; border-left: 2px solid #d2a85b; background: #ffffff08; }
 .erp-card-actions { margin-top: 14px; }
 .erp-status-active { color: #a7e4b2; }
 .erp-status-paused { color: #ffd486; }

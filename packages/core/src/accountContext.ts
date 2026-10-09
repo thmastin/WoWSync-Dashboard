@@ -33,7 +33,7 @@ import type { CharacterResolution, ReadValue } from "./readModel.ts";
 import type { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import type { DashboardReadModel } from "./readModel.ts";
 import { WOW_VERSIONS } from "./version.ts";
-import type { ErpProjectView } from "./erpProjects.ts";
+import { buildErpResourceCommitmentSummary, type ErpProjectView } from "./erpProjects.ts";
 
 // Bumped to "3" (additive, on top of the v2 changes below): gold/playtime
 // totals gained freshness fields (staleCharactersWith*/oldest*ObservedAt),
@@ -47,7 +47,7 @@ import type { ErpProjectView } from "./erpProjects.ts";
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "10";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "11";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -141,7 +141,7 @@ export interface AccountContext {
   currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
   /** Player-authored ERP intent, separate from observed facts; evidence is summarized by the planning read model. */
-  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; needStates: Record<string, number> }> };
+  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; needStates: Record<string, number> }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }> };
 }
 
 export interface AccountContextInput {
@@ -262,6 +262,9 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
       workOrderReadinessStates: Object.fromEntries([...new Set(p.workOrderReadiness.map((w) => w.state))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.state === state).length])),
       workOrderProgressStates: Object.fromEntries([...new Set(p.workOrderProgress.map((w) => w.reconciliation))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.reconciliation === state).length])),
       needStates: Object.fromEntries([...new Set(p.needEvidence.map((n) => n.state))].sort().map((state) => [state, p.needEvidence.filter((n) => n.state === state).length])),
-    })) },
+    })), resourceCommitments: Object.fromEntries(WOW_VERSIONS.map((version) => {
+      const summary = buildErpResourceCommitmentSummary((input.erpProjects ?? []).filter((project) => project.version === version));
+      return [version, { lineCount: summary.totalCount, linesWithReservations: summary.linesWithReservations, unknownSourceLines: summary.unknownSourceLines, overlappingScopeLines: summary.overlappingScopeLines, truncated: summary.truncated }];
+    })) as AccountContext["planning"]["resourceCommitments"] },
   };
 }

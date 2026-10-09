@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { McpServer, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import {
   DASHBOARD_RESEARCH_REGISTRATIONS,
+  buildErpResourceCommitmentSummary,
   DashboardReadModel,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
@@ -128,7 +129,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async ({ version, limit }) => {
     const projects = readModel.getErpProjects({ version });
     const resolvedLimit = limit ?? 10;
-    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit });
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects) });
   });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
