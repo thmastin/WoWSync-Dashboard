@@ -41,6 +41,14 @@ export interface ErpReservation {
   readonly updatedAt: number;
 }
 
+/** Player-declared intended result of a manual craft; never an observed resource or guaranteed craft output. */
+export interface ErpPlannedCraftOutput {
+  readonly kind: "ITEM_ID" | "ITEM_REF";
+  readonly resourceKey: string;
+  readonly label: string;
+  readonly quantity: number;
+}
+
 export interface ErpWorkOrder {
   readonly stableId: string;
   readonly kind: ErpWorkOrderType;
@@ -52,6 +60,8 @@ export interface ErpWorkOrder {
   readonly destinationIdentityKey?: string;
   readonly resourceNeedIds: readonly string[];
   readonly dependsOn: readonly string[];
+  /** Optional player intent. A plan does not add output to observed supply. */
+  readonly plannedOutput?: ErpPlannedCraftOutput;
   /** Required when status is COMPLETED: user-entered evidence of the manual action/outcome. */
   readonly completionNote?: string;
 }
@@ -160,6 +170,13 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (!hasValue(w.title) || w.title.length > 160 || (w.instructions !== undefined && w.instructions.length > 4000)) fail("INVALID_WORK_ORDER_TEXT", "Work order title/instructions exceed their limits.");
     if (!Array.isArray(w.dependsOn) || !Array.isArray(w.resourceNeedIds)) fail("INVALID_WORK_ORDER_LINKS", "Work order dependencies and resource links must be arrays.");
     identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.destinationIdentityKey, "Work order destination");
+    if (w.plannedOutput !== undefined) {
+      const output = w.plannedOutput;
+      if (w.kind !== "CRAFT") fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned output is supported only on a CRAFT work order.");
+      if (!output || typeof output !== "object" || !(output.kind === "ITEM_ID" || output.kind === "ITEM_REF") || !hasValue(output.resourceKey) || output.resourceKey.length > 512 || !hasValue(output.label) || output.label.length > 160 || !Number.isSafeInteger(output.quantity) || output.quantity < 1) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned craft output requires a bounded item identity, label, and positive integer quantity.");
+      if (output.kind === "ITEM_ID" && !/^[1-9]\d*$/.test(output.resourceKey)) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned ITEM_ID output must use a positive numeric item ID.");
+      if (output.kind === "ITEM_REF" && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(output.resourceKey)) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned ITEM_REF output must preserve an exact itemString.");
+    }
     for (const id of [...w.dependsOn, ...w.resourceNeedIds]) if (!hasValue(id)) fail("INVALID_WORK_ORDER_LINKS", "Work order links must use non-empty IDs.");
     if (w.resourceNeedIds.some((id) => !needIds.has(id))) fail("UNKNOWN_WORK_ORDER_NEED", "Every work order resource link must refer to a need in this project.");
     if (w.dependsOn.some((id) => !workIds.has(id) && !p.workOrders.some((candidate) => candidate.stableId === id))) fail("UNKNOWN_WORK_ORDER_DEPENDENCY", "Work order dependencies must refer to a work order in this project.");
@@ -744,6 +761,21 @@ export interface ErpWorkOrderProgress {
   readonly allocationConflictNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly transferObservationReviews?: readonly ErpTransferObservationReview[];
+  readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
+  readonly reason: string;
+}
+
+export interface ErpPlannedOutputAssessment {
+  readonly plannedOutput: ErpPlannedCraftOutput;
+  readonly recipientIdentityKey?: string;
+  readonly state: NeedSupplyState;
+  readonly observedQuantity?: number;
+  readonly potentialQuantity?: number;
+  readonly observedAt?: number;
+  readonly freshness: Freshness;
+  readonly sourceSections: ErpNeedEvidence["sourceSections"];
+  readonly unresolvedSections: readonly string[];
+  readonly observationChange: "CHANGED" | "UNCHANGED" | "UNKNOWN";
   readonly reason: string;
 }
 
@@ -821,6 +853,30 @@ function transferObservationReviews(project: ErpProject, order: ErpWorkOrder, sn
       : "Recent comparable observations show no quantity change for this resource scope; this does not prove that no unobserved action occurred.");
     return [{ needId, kind: need.kind, resourceKey: need.resourceKey, source, destination, state, interpretation: "CAUSE_UNKNOWN" as const, reason }];
   });
+}
+
+function assessPlannedCraftOutput(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpPlannedOutputAssessment | undefined {
+  const plannedOutput = order.plannedOutput;
+  if (order.kind !== "CRAFT" || !plannedOutput) return undefined;
+  const explicitTargets = [...new Set([order.assignedIdentityKey, order.destinationIdentityKey].filter((key): key is string => Boolean(key)))];
+  const unknown = (reason: string, recipientIdentityKey?: string): ErpPlannedOutputAssessment => ({
+    plannedOutput, ...(recipientIdentityKey ? { recipientIdentityKey } : {}), state: "UNKNOWN", freshness: "unknown", sourceSections: [], unresolvedSections: ["explicit same-version output character observation"], observationChange: "UNKNOWN", reason,
+  });
+  if (explicitTargets.length === 0) return unknown("This is a player-declared intended output. No crafter or destination character is explicitly selected, so current output inventory is UNKNOWN.");
+  if (explicitTargets.length > 1) return unknown("The assigned crafter and intended destination differ. The plan does not specify where the crafted output should be observed; current output inventory is UNKNOWN.");
+  const recipientIdentityKey = explicitTargets[0]!;
+  if (!recipientIdentityKey.startsWith(`${project.version}::`)) return unknown("The selected output character does not match the project's version. No cross-version inventory was queried.", recipientIdentityKey);
+  const evidence = assessErpNeed({ stableId: `planned-output:${order.stableId}`, kind: plannedOutput.kind, resourceKey: plannedOutput.resourceKey, label: plannedOutput.label, requiredQuantity: plannedOutput.quantity, sourceIdentityKey: recipientIdentityKey }, snapshotsFor(recipientIdentityKey), now, undefined, project.version);
+  const observationChange = evidence.observationChange?.state ?? "UNKNOWN";
+  const changeDescription = observationChange === "CHANGED" ? "Comparable observations changed; the cause is unknown." : observationChange === "UNCHANGED" ? "Comparable observations show no quantity change." : "No comparable before/after result is available.";
+  return {
+    plannedOutput, recipientIdentityKey, state: evidence.state,
+    ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}),
+    ...(evidence.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}),
+    ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}),
+    freshness: evidence.freshness, sourceSections: evidence.sourceSections, unresolvedSections: evidence.unresolvedSections, observationChange,
+    reason: `${evidence.reason} ${changeDescription} A planned output is not added to resource supply, does not prove that crafting occurred, and does not auto-complete this work order.`,
+  };
 }
 
 function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvidence, allProjects: readonly ErpProject[], version: WowVersion): ErpNeedEvidence {
@@ -1049,7 +1105,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
         ? `Recent covered linked needs share or ambiguously identify observed source quantities for: ${allocationConflictNeedIds.join(", ")}. Their combined independent availability is not established. Reservations record player intent; they do not lock inventory or prove possession.`
         : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
     const transferReviews = transferObservationReviews(project, order, snapshotsFor, now, currencies);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), reason };
+    const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

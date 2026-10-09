@@ -50,6 +50,31 @@ test("project REST persists explicit plans and returns evidence from the shared 
   });
 });
 
+test("planned craft outputs are returned through REST as intent plus character-scoped evidence", async () => {
+  await withServer(async (call, store) => {
+    const character = store.listCharacters("classic-era")[0]!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", {
+      title: "Record planned craft result",
+      workOrders: [{ stableId: "craft_result", kind: "CRAFT", status: "PLANNED", title: "Craft manually", assignedIdentityKey: character.identityKey, resourceNeedIds: [], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", quantity: 2 } }],
+    });
+    assert.equal(created.status, 201);
+    const view = created.body.project;
+    assert.deepEqual(view.workOrders[0].plannedOutput, { kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", quantity: 2 });
+    const assessment = view.workOrderProgress[0].plannedOutputAssessment;
+    assert.equal(assessment.recipientIdentityKey, character.identityKey);
+    assert.equal(assessment.state, "COVERED_BY_OBSERVED");
+    assert.equal(assessment.observedQuantity, 3);
+    assert.match(assessment.reason, /does not prove that crafting occurred/);
+    assert.equal(view.workOrderProgress[0].recordedStatus, "PLANNED");
+    const context = await call("GET", "/api/account-context");
+    const summary = context.body.planning.projects.find((entry: any) => entry.stableId === view.stableId);
+    assert.deepEqual(summary.workOrderProgressStates, { NO_LINKED_NEEDS: 1 }, "AccountContext summarizes the same progress projection without treating output as an input requirement");
+    assert.deepEqual(summary.plannedCraftOutputStates, { COVERED_BY_OBSERVED: 1 }, "AccountContext exposes a compact count of the same output evidence");
+    const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
+    assert.deepEqual(listed.workOrderProgress[0].plannedOutputAssessment, assessment, "REST read-after-write returns the same core projection");
+  });
+});
+
 test("project REST preserves RETRIEVE as a distinct manual action and keeps storage access unknown", async () => {
   await withServer(async (call, store) => {
     const character = store.listCharacters("classic-era")[0]!;
@@ -123,7 +148,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "12");
+    assert.equal(context.body.schemaVersion, "13");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });

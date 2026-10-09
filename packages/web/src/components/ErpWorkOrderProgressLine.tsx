@@ -11,17 +11,25 @@ const LABELS: Record<ErpWorkOrderProgress["reconciliation"], string> = {
   NO_LINKED_NEEDS: "No linked resource evidence",
   RESOURCE_ALLOCATION_REQUIRES_REVIEW: "Resource allocation requires review",
 };
+const OUTPUT_LABELS: Record<NonNullable<ErpWorkOrderProgress["plannedOutputAssessment"]>["state"], string> = {
+  COVERED_BY_OBSERVED: "the recorded observation covers the planned quantity",
+  SHORTFALL_OBSERVED: "complete observation shows less than planned",
+  POTENTIAL_COVERAGE_LAST_SEEN: "historical possible quantity only",
+  UNKNOWN: "current quantity unknown",
+  UNSUPPORTED_EVIDENCE: "evidence type unsupported",
+};
 
 export function ErpWorkOrderProgressLine({ progress, characterName }: { progress?: ErpWorkOrderProgress; characterName?: (identityKey?: string) => string }) {
   if (!progress) return <p className="erp-readiness">Progress reconciliation is unknown; no assessment is available.</p>;
   const name = characterName ?? ((identityKey?: string) => identityKey ?? "Unspecified character");
   const reviews = progress.transferObservationReviews ?? [];
+  const output = progress.plannedOutputAssessment;
   return <div className={`erp-readiness erp-progress-${progress.reconciliation.toLowerCase()}`}><p><strong>{LABELS[progress.reconciliation]}:</strong> {progress.reason}</p>{reviews.length > 0 && <details className="erp-transfer-observation-review"><summary>Compare planned source and destination observations (relationship unknown)</summary><ul>{reviews.map((review) => <li key={review.needId}>
     <strong>{review.kind} {review.resourceKey} · {review.state.replaceAll("_", " ")}</strong>
     <p>Source — {name(review.source.identityKey)}: {sideDescription(review.source)}</p>
     <p>Destination — {name(review.destination.identityKey)}: {sideDescription(review.destination)}</p>
     <p>{review.reason} The comparison does not establish account membership, ownership, access, transferability, or that the planned action caused either change.</p>
-  </li>)}</ul></details>}</div>;
+  </li>)}</ul></details>}{output && <section className="erp-craft-output" aria-label="Planned craft output evidence"><h4>Planned craft output (intent only)</h4><p><strong>{output.plannedOutput.label}</strong> Â· <code>{output.plannedOutput.resourceKey}</code> Â· {output.plannedOutput.quantity} planned</p><p>Checked character: {name(output.recipientIdentityKey)} Â· {OUTPUT_LABELS[output.state]} Â· {output.freshness} freshness{output.observedAt ? ` Â· evidence ${new Date(output.observedAt * 1000).toLocaleString()}` : ""}</p>{output.observedQuantity !== undefined && <p>Quantity in recorded evidence: {output.observedQuantity}</p>}{output.potentialQuantity !== undefined && <p>Historical possible quantity: {output.potentialQuantity} (LAST_SEEN)</p>}{output.unresolvedSections.length > 0 && <p>Unresolved: {output.unresolvedSections.join(", ")}</p>}<p>{output.reason}</p><p>Output observation changes are non-causal and do not verify this craft or complete the work order.</p></section>}</div>;
 }
 
 function sideDescription(side: NonNullable<ErpWorkOrderProgress["transferObservationReviews"]>[number]["source"]): string {

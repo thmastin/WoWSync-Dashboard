@@ -76,6 +76,61 @@ test("LAST_SEEN stock is potential, never current coverage", () => {
   } finally { store.close(); }
 });
 
+test("planned craft output checks only the explicitly assigned character and stays separate from task completion", () => {
+  const { store, identityKey } = seedStore({ bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2901::::::::", name: "Fixture item", qty: 2 }] }] }, bank: { unknown: true } });
+  try {
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_output", kind: "CRAFT", status: "IN_PROGRESS", title: "Craft a planned item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: "item:2901::::::::", label: "Fixture item", quantity: 1 } }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const output = result.workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(output?.state, "COVERED_BY_OBSERVED");
+    assert.equal(output?.observedQuantity, 2);
+    assert.equal(output?.plannedOutput.resourceKey, "item:2901::::::::", "the exact item variant is retained");
+    assert.equal(output?.observationChange, "UNKNOWN", "one observation does not establish a change");
+    assert.equal(result.workOrders[0]?.status, "IN_PROGRESS");
+    assert.equal(result.workOrderProgress[0]?.completionRecorded, false, "output stock does not auto-complete manual work");
+  } finally { store.close(); }
+});
+
+test("planned craft output conflicts and absent targets stay UNKNOWN instead of selecting a recipient", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const otherKey = "classic-era::realm-b::other";
+    const baseOrder = { stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], plannedOutput: { kind: "ITEM_ID" as const, resourceKey: "159", label: "Rough Stone", quantity: 2 } };
+    const noTarget: ErpProject = { ...project(identityKey), reservations: [], workOrders: [baseOrder] };
+    assert.equal(evaluateErpProject(noTarget, (key) => store.listSnapshots(key), [noTarget], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment?.state, "UNKNOWN");
+    const conflict: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ ...baseOrder, assignedIdentityKey: identityKey, destinationIdentityKey: otherKey }] };
+    const result = evaluateErpProject(conflict, (key) => store.listSnapshots(key), [conflict], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(result?.state, "UNKNOWN");
+    assert.match(result?.reason ?? "", /assigned crafter and intended destination differ/);
+    assert.equal(result?.observedQuantity, undefined);
+  } finally { store.close(); }
+});
+
+test("planned craft output validation rejects malformed and non-crafting declarations", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const base = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF" as const, resourceKey: "item:159:variant", label: "Rough Stone", quantity: 2 } }] };
+    validateErpProject(base, (key) => store.getCharacter(key)?.version === "classic-era");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, plannedOutput: { ...base.workOrders[0]!.plannedOutput!, resourceKey: "159" } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
+  } finally { store.close(); }
+});
+
+test("planned output change remains non-causal and stale output evidence is not current", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { unknown: true } });
+  try {
+    const output = { stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", quantity: 1 } };
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [output] };
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] }, bank: { unknown: true } }));
+    const changed = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(changed?.state, "COVERED_BY_OBSERVED");
+    assert.equal(changed?.observationChange, "CHANGED");
+    assert.match(changed?.reason ?? "", /cause is unknown/);
+    assert.equal(evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_100 + 5 * 86400).workOrderProgress[0]?.plannedOutputAssessment?.freshness, "stale");
+    assert.equal(evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]?.recordedStatus, "PLANNED");
+  } finally { store.close(); }
+});
+
 test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {
   const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
   try {

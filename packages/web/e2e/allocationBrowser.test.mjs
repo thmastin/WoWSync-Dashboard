@@ -267,6 +267,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     const craftForm = projectCard.locator("form.erp-inline-form");
     await craftForm.getByLabel("Action type").selectOption("CRAFT");
     await craftForm.getByLabel("Action", { exact: true }).fill("Check the assigned character's profession evidence");
+    await craftForm.getByLabel("Item identity").selectOption("ITEM_ID");
+    await craftForm.getByRole("textbox", { name: "Base item ID" }).fill(String(ITEM_ID));
+    await craftForm.getByLabel("Output label").fill("Planned Mycobloom output");
+    await craftForm.getByLabel("Planned quantity").fill("2");
     await craftForm.getByLabel("Assigned character").selectOption({ label: "Other Potential Holder — Thrall" });
     await craftForm.getByLabel("Linked resource needs").selectOption({ label: "Leatherworking skill 1" });
     await craftForm.getByRole("button", { name: "Add work order" }).click();
@@ -276,6 +280,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(craftText, /Checked on assigned character: Other Potential Holder — Thrall/);
     assert.match(craftText, /unknown freshness/);
     assert.match(craftText, /does not meet Exact profession Leatherworking at skill 1|assigned crafter is unknown/);
+    assert.match(craftText, /Planned craft output \(intent only\)/);
+    assert.match(craftText, /Quantity in recorded evidence: 2/);
+    assert.match(craftText, /do not verify this craft or complete the work order/);
+    const persistedCraft = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter").workOrders.find((entry) => entry.title === "Check the assigned character's profession evidence"));
+    assert.deepEqual(persistedCraft.plannedOutput, { kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Planned Mycobloom output", quantity: 2 });
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
   } finally {
     if (browser) await browser.close();
