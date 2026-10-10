@@ -106,6 +106,7 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
     const defaultQuantity = observedGap ?? target?.requiredQuantity ?? 1;
     const rawAmount = window.prompt("Total player-reported quote in whole copper for the quantity below (not verified by WoWSync)");
     if (rawAmount === null) return;
+    if (!/^\d+$/.test(rawAmount.trim())) { setError("Enter a non-negative whole-copper amount; leave the prompt blank to cancel."); return; }
     const amountCopper = Number(rawAmount);
     if (!Number.isSafeInteger(amountCopper) || amountCopper < 0) { setError("Enter a non-negative whole-copper amount."); return; }
     const rawQuantity = window.prompt("How many units does that total quote cover?", String(defaultQuantity));

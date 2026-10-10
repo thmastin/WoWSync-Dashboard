@@ -212,6 +212,25 @@ test("a player-reported purchase quote is compared with its ceiling but never tr
     assert.equal(stale?.playerQuote?.freshness, "stale", "the old player-entered amount remains visible with its age");
   } finally { store.close(); }
 });
+test("procurement review exposes only the buyer's same-version recorded gold reservations and keeps stale affordability unknown", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
+  try {
+    const targetNeed = { stableId: "item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const purchase: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review purchase", assignedIdentityKey: identityKey, resourceNeedIds: ["item"], dependsOn: [], procurementPlan: { targetNeedId: "item", spendingCeilingCopper: 500 } }] };
+    const cashNeed = { stableId: "cash", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Project budget intent", requiredQuantity: 700, sourceIdentityKey: identityKey };
+    const reserve: ErpProject = { ...project(identityKey), stableId: "reserve-cash", title: "Tracked cash commitment", needs: [cashNeed], reservations: [{ stableId: "cash-reservation", needId: "cash", sourceIdentityKey: identityKey, quantity: 700, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const otherCharacter = { ...reserve, stableId: "other-character-reserve", needs: [{ ...cashNeed, stableId: "other-cash", sourceIdentityKey: "classic-era::realm a::other" }], reservations: [{ ...reserve.reservations[0]!, stableId: "other-cash-reservation", needId: "other-cash", sourceIdentityKey: "classic-era::realm a::other", quantity: 900 }] };
+    const assessment = evaluateErpProject(purchase, (key) => store.listSnapshots(key), [purchase, reserve, otherCharacter], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.recordedGoldReservationsCopper, 700, "a different character's reservation is not combined");
+    assert.equal(assessment?.recordedGoldReservationState, "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS");
+    assert.equal(assessment?.recordedGoldAfterReservationsCopper, 300, "the remainder is derived only from the buyer's recent snapshot and exact recorded reservation");
+    assert.equal(assessment?.affordability, "UNKNOWN", "the plan remainder is not asserted to be live spendable funds");
+    const stale = evaluateErpProject(purchase, (key) => store.listSnapshots(key), [purchase, reserve], 1_700_000_000 + 5 * 86400).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(stale?.recordedGoldReservationsCopper, 700, "recorded plan intent remains visible when the observation ages");
+    assert.equal(stale?.recordedGoldReservationState, "GROSS_GOLD_NOT_RECENT");
+    assert.equal(stale?.recordedGoldAfterReservationsCopper, undefined);
+  } finally { store.close(); }
+});
 test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {
   const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
   try {

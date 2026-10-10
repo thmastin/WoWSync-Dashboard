@@ -763,6 +763,10 @@ export interface ErpProcurementAssessment {
   readonly reviewState: "OBSERVED_ITEM_GAP" | "NO_OBSERVED_ITEM_GAP" | "ITEM_GAP_UNKNOWN";
   readonly budgetState: "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING" | "GROSS_OBSERVED_GOLD_BELOW_CEILING" | "GOLD_EVIDENCE_UNKNOWN";
   readonly budgetEvidence: { readonly observedCopper?: number; readonly observedAt?: number; readonly freshness: Freshness; readonly reason: string };
+  /** Only explicit active WoWSync reservations scoped to this buyer/version are counted. */
+  readonly recordedGoldReservationState: "NO_RECORDED_RESERVATIONS" | "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS" | "RECENT_GROSS_GOLD_BELOW_RECORDED_RESERVATIONS" | "GROSS_GOLD_NOT_RECENT";
+  readonly recordedGoldReservationsCopper: number;
+  readonly recordedGoldAfterReservationsCopper?: number;
   /** Player-entered upper bound; never counted as an amount needed or reserved. */
   readonly spendingCeilingCopper: number;
   readonly quoteState: "NO_PLAYER_REPORTED_QUOTE" | "PLAYER_REPORTED_WITHIN_CEILING" | "PLAYER_REPORTED_ABOVE_CEILING";
@@ -1064,7 +1068,13 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const procurementAssessment: ErpProcurementAssessment | undefined = order.kind === "PURCHASE" && order.procurementPlan && order.assignedIdentityKey ? (() => {
       const targetNeed = linkedNeeds.find((need) => need.needId === order.procurementPlan!.targetNeedId);
       if (!targetNeed) return undefined;
-      const goldEvidence = assessErpNeed({ stableId: `procurement-gold-evidence:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed buyer gold evidence", requiredQuantity: 1, sourceIdentityKey: order.assignedIdentityKey }, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
+      const goldNeed: ErpResourceNeed = { stableId: `procurement-gold-evidence:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed buyer gold evidence", requiredQuantity: 1, sourceIdentityKey: order.assignedIdentityKey };
+      const goldEvidence = assessErpNeed(goldNeed, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
+      const goldReservationEvidence = applyReservationAssessment(goldNeed, goldEvidence, allProjects, project.version).reservationAssessment!;
+      const recordedGoldReservationState: ErpProcurementAssessment["recordedGoldReservationState"] = goldReservationEvidence.activeQuantity === 0 ? "NO_RECORDED_RESERVATIONS"
+        : goldEvidence.freshness !== "recent" || goldEvidence.observedQuantity === undefined ? "GROSS_GOLD_NOT_RECENT"
+        : goldReservationEvidence.availableObservedLowerBound === undefined ? "RECENT_GROSS_GOLD_BELOW_RECORDED_RESERVATIONS"
+        : "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS";
       const reviewState: ErpProcurementAssessment["reviewState"] = targetNeed.freshness !== "recent" ? "ITEM_GAP_UNKNOWN"
         : targetNeed.state === "SHORTFALL_OBSERVED" ? "OBSERVED_ITEM_GAP"
         : targetNeed.state === "COVERED_BY_OBSERVED" ? "NO_OBSERVED_ITEM_GAP" : "ITEM_GAP_UNKNOWN";
@@ -1080,7 +1090,14 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       const quoteFreshness = playerQuote ? evidenceFreshness(playerQuote.recordedAt, now) : undefined;
       const quoteState: ErpProcurementAssessment["quoteState"] = !playerQuote ? "NO_PLAYER_REPORTED_QUOTE" : playerQuote.amountCopper <= order.procurementPlan.spendingCeilingCopper ? "PLAYER_REPORTED_WITHIN_CEILING" : "PLAYER_REPORTED_ABOVE_CEILING";
       const quoteText = playerQuote ? ` A player-reported total quote of ${playerQuote.amountCopper} copper for ${playerQuote.quantity} unit(s) was recorded ${quoteFreshness} (${quoteState.replaceAll("_", " ")})${playerQuote.sourceNote ? ` from “${playerQuote.sourceNote}”` : ""}; this is user-entered evidence, not a live market feed or current availability check.` : " No player-reported quote is recorded.";
-      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, quoteState, ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${quoteText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
+      const reservationText = goldReservationEvidence.activeQuantity === 0
+        ? " No active same-version WoWSync gold reservation is recorded for this buyer."
+        : recordedGoldReservationState === "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS"
+          ? ` WoWSync records ${goldReservationEvidence.activeQuantity} copper in active same-version plan reservations for this buyer; the recent gross snapshot leaves ${goldReservationEvidence.availableObservedLowerBound} copper after those recorded reservations. This is not a complete obligation ledger or proof of spendable funds.`
+          : recordedGoldReservationState === "RECENT_GROSS_GOLD_BELOW_RECORDED_RESERVATIONS"
+            ? ` WoWSync records ${goldReservationEvidence.activeQuantity} copper in active same-version plan reservations, exceeding the recent gross gold snapshot. Review the plan conflict; no spendable amount is inferred.`
+            : ` WoWSync records ${goldReservationEvidence.activeQuantity} copper in active same-version plan reservations, but gross gold evidence is not recent enough to compare them.`;
+      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, recordedGoldReservationState, recordedGoldReservationsCopper: goldReservationEvidence.activeQuantity, ...(recordedGoldReservationState === "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS" ? { recordedGoldAfterReservationsCopper: goldReservationEvidence.availableObservedLowerBound } : {}), spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, quoteState, ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${quoteText}${reservationText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
     })() : undefined;
     const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);

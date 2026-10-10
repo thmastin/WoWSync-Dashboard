@@ -88,14 +88,16 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.reviewState, assessment.budgetState], ["OBSERVED_ITEM_GAP", "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING"]);
     assert.deepEqual([assessment.quoteState, assessment.playerQuote.amountCopper, assessment.playerQuote.provenance], ["PLAYER_REPORTED_WITHIN_CEILING", 100, "PLAYER_REPORTED"]);
     assert.equal(assessment.playerQuote.quantity, 5);
+    assert.deepEqual([assessment.recordedGoldReservationsCopper, assessment.recordedGoldReservationState], [0, "NO_RECORDED_RESERVATIONS"]);
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "15");
+    assert.equal(account.body.schemaVersion, "16");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
     assert.deepEqual(summary.procurementQuoteStates, { PLAYER_REPORTED_WITHIN_CEILING: 1 });
     assert.deepEqual(summary.procurementQuoteFreshnessStates, { recent: 1 });
+    assert.deepEqual(summary.procurementGoldReservationStates, { NO_RECORDED_RESERVATIONS: 1 });
     const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
     assert.deepEqual(listed.workOrderReadiness[0].procurementAssessment, assessment);
   });
@@ -174,7 +176,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "15");
+    assert.equal(context.body.schemaVersion, "16");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
