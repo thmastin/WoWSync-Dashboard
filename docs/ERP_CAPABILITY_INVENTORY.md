@@ -26,3 +26,7 @@ Updated: 2026-10-10, Phase 49. This is a cumulative status view, not a claim tha
 Open **Projects & Work Orders** for an active version, choose **Build grouped review** when at least two requirements have no current linked task, select up to four, optionally assign a same-version reviewer and open prerequisites, then create the review. The task retains each linked need and its evidence snapshot. The player must reopen linked needs after new imports before deciding whether to reserve, retrieve, craft, gather, procure, or leave them unresolved.
 
 This workflow was exercised with synthetic data in a disposable SQLite database and a headless browser. It has not been live-game or production-validated.
+
+## Next substantial milestone
+
+Build a player-authored multi-need work-order composer. For each selected need, the player chooses an existing manual work type and supplies its required details. Show evidence, reservation, and dependency constraints before saving linked orders. Do not automatically select a source or infer route, craftability, market availability, or execution.
