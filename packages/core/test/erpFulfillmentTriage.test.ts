@@ -16,7 +16,7 @@ test("saved planning batches compare later same-version evidence without attribu
     const createdProject = store.createErpProject({ version: "classic-era", title: "Saved multi-need plan", needs: [
       { stableId: "stone-a", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone A", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
       { stableId: "stone-b", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone B", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
-    ], workOrders: ["stone-a", "stone-b"].map((needId) => ({ stableId: `work-${needId}`, kind: "PROVISION" as const, status: "PLANNED" as const, title: `Review ${needId}`, resourceNeedIds: [needId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: now + 10, version: "classic-era" as const, needEvidence: { resourceKind: "ITEM_REF" as const, resourceKey: "item:159:0:0", state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } })) });
+    ], workOrders: ["stone-a", "stone-b"].map((needId) => ({ stableId: `work-${needId}`, kind: "PROVISION" as const, status: "PLANNED" as const, title: `Review ${needId}`, resourceNeedIds: [needId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: now + 10, version: "classic-era" as const, needEvidence: { resourceKind: "ITEM_REF" as const, resourceKey: "item:159:0:0", sourceScope: { kind: "CHARACTER" as const, identityKey: first.character.identityKey }, state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } })) });
     const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
     const review = buildErpSavedPlanningBatchReview(views, "classic-era");
     assert.equal(review.totalCount, 1);
@@ -47,7 +47,7 @@ test("saved planning batches compare later same-version evidence without attribu
         needs: [{ stableId: "mining", kind: "PROFESSION", resourceKey: "Mining", label: "Mining skill", requiredQuantity: 75, sourceIdentityKey: professionCharacter.character.identityKey }],
         workOrders: [{
           stableId: "review-mining", kind: "OTHER", status: "PLANNED", title: "Review Mining progress", resourceNeedIds: ["mining"], dependsOn: [],
-          planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: professionAt + 10, version: "classic-era", needEvidence: { resourceKind: "PROFESSION", resourceKey: "Mining", state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 72, observedAt: professionAt } },
+          planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: professionAt + 10, version: "classic-era", needEvidence: { resourceKind: "PROFESSION", resourceKey: "Mining", sourceScope: { kind: "CHARACTER", identityKey: professionCharacter.character.identityKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 72, observedAt: professionAt } },
         }],
       });
       professionStore.importSnapshot(professionCapture(professionAt + 20, { skill: 74, partial: true }));
@@ -76,6 +76,12 @@ test("saved planning batches compare later same-version evidence without attribu
     assert.equal(changedIdentityBatch?.state, "CONFLICTING_BATCH_CONTEXT");
     assert.equal(changedIdentityBatch?.steps.find((step) => step.needId === "stone-a")?.evidenceReview, "NEED_IDENTITY_CHANGED", "a later quantity must never be compared against a different resource identity");
     assert.equal(buildErpSavedNeedHistoryReview(changedIdentityBatch ? [changedIdentityBatch] : [], "classic-era").histories.find((history) => history.needId === "stone-a")?.identityState, "REQUIREMENT_IDENTITY_CHANGED", "the history compares frozen identity with the current requirement identity");
+    const alternateSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now + 40, character: { name: "Alternate Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: 2 }] }] }, bank: { containers: [], unknown: true } }));
+    const beforeSourceEdit = store.getErpProject(createdProject.stableId)!;
+    store.updateErpProject({ ...beforeSourceEdit, needs: beforeSourceEdit.needs.map((need) => need.stableId === "stone-b" ? { ...need, sourceIdentityKey: alternateSource.character.identityKey } : need) }, beforeSourceEdit.revision);
+    const sourceChangedStep = buildErpSavedPlanningBatchReview(new DashboardReadModel(store).getErpProjects({ version: "classic-era" }), "classic-era").batches[0]?.steps.find((step) => step.needId === "stone-b");
+    assert.equal(sourceChangedStep?.evidenceReview, "NEED_IDENTITY_CHANGED", "a different source character cannot be compared against the frozen source baseline");
+    assert.equal(sourceChangedStep?.observationInterval?.state, "IDENTITY_CONFLICT");
     const legacyViews = views.map((project) => ({ ...project, workOrders: project.workOrders.map((order) => order.planningBatch ? { ...order, planningBatch: { ...order.planningBatch, needEvidence: { state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } } : order) }));
     const legacyBatch = buildErpSavedPlanningBatchReview(legacyViews, "classic-era").batches[0];
     assert.equal(legacyBatch?.state, "CURRENT_EVIDENCE_REVIEW");
@@ -108,6 +114,35 @@ test("saved follow-up lineage marks cycles and all descendants as conflicting", 
     assert.equal(review.batches.find((batch) => batch.stableId === batchIds[3])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "legacy lineage with a null reference fails closed without throwing");
     assert.equal(review.batches.find((batch) => batch.stableId === batchIds[4])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "legacy lineage with a non-array reference field fails closed without throwing");
     assert.deepEqual(review.batches.find((batch) => batch.stableId === batchIds[1])?.followUpBatchIds, [batchIds[0], batchIds[2]].sort(), "structural child links remain visible for audit despite conflicted lineage");
+  } finally { store.close(); }
+});
+
+test("saved Retail currency intervals use each source snapshot and withhold account-wide or missing currency values", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 100;
+  const capture = (at: number, currencyID: number, quantity: number, isAccountWide = false) => {
+    const text = buildWowSyncExport({ generatedAt: at, character: { name: "Currency Timeline", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } });
+    return store.importSnapshot(text, { currencies: { observedAt: at, completeness: "complete", data: { listRead: true, formatVersion: 1, currencies: [{ currencyID, name: `Currency ${currencyID}`, quantity, isAccountWide }] } } });
+  };
+  try {
+    const first = capture(now, 1822, 8);
+    const need = { stableId: "currency_need", kind: "CURRENCY" as const, resourceKey: "1822", label: "Character currency", requiredQuantity: 10, sourceIdentityKey: first.character.identityKey };
+    const accountWideNeed = { ...need, stableId: "accountwide_need", resourceKey: "1823", label: "Account-wide currency", requiredQuantity: 1 };
+    store.createErpProject({ version: "retail", title: "Currency timeline", needs: [need, accountWideNeed], workOrders: [
+      { stableId: "currency_review", kind: "OTHER", status: "PLANNED", title: "Review currency", resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c1", reviewedAt: now + 10, version: "retail", needEvidence: { resourceKind: "CURRENCY", resourceKey: "1822", sourceScope: { kind: "CHARACTER", identityKey: first.character.identityKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 8, observedAt: now } } },
+      { stableId: "accountwide_review", kind: "OTHER", status: "PLANNED", title: "Review account currency", resourceNeedIds: [accountWideNeed.stableId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c2", reviewedAt: now + 19, version: "retail", needEvidence: { resourceKind: "CURRENCY", resourceKey: "1823", sourceScope: { kind: "CHARACTER", identityKey: first.character.identityKey }, state: "UNKNOWN", freshness: "unknown" } } },
+    ] });
+    capture(now + 20, 1822, 4);
+    capture(now + 30, 1822, 8);
+    capture(now + 31, 1823, 99, true);
+    const project = new DashboardReadModel(store, () => now + 40).getErpProjects({ version: "retail" })[0]!;
+    const currencyBatchId = "erp_batch_00000000-0000-4000-8000-0000000000c1";
+    const interval = buildErpSavedPlanningBatchReview([project], "retail").batches.find((batch) => batch.stableId === currencyBatchId)?.steps[0]?.observationInterval;
+    assert.equal(interval?.state, "SAMPLES_AVAILABLE");
+    assert.deepEqual(interval?.points.map((point) => [point.sections[0]?.section, point.sections[0]?.state, point.sections[0]?.quantity]), [["currencies", "OBSERVED", 4], ["currencies", "OBSERVED", 8], ["currencies", "PARTIAL", undefined]], "character-scoped currency history stays source-snapshot-specific; a missing ID is not interpreted as zero");
+    const accountWideProject = new DashboardReadModel(store, () => now + 40).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === project.stableId)!;
+    const accountWideInterval = buildErpSavedPlanningBatchReview([accountWideProject], "retail").batches.find((batch) => batch.stableId === "erp_batch_00000000-0000-4000-8000-0000000000c2")?.steps[0]?.observationInterval;
+    assert.ok(accountWideInterval?.points.every((point) => point.sections[0]?.state !== "OBSERVED" && point.sections[0]?.quantity === undefined), "missing and account-wide currency rows cannot be repackaged as character-owned requirement quantities");
   } finally { store.close(); }
 });
 

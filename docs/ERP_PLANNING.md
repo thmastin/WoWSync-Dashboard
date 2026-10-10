@@ -2,6 +2,16 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Phase 104 - source-scoped resource history
+
+Saved grouped plans now freeze the exact requirement source scope alongside resource kind and key: a canonical same-version character, an explicit Retail shared-storage owner, or UNSCOPED. Later edits to the requirement source become an identity conflict instead of comparing a new source's evidence to the old plan. Legacy baselines without source scope remain UNKNOWN and have no comparable interval. The Projects workbench shows reviewed and current source scopes.
+
+Intervening evidence now includes per-character Retail currency from each snapshot and owner-scoped Retail shared-storage journal history. Currency is observed only for an explicit character-scoped row; missing currency IDs do not become zero and account-wide balances never become character resources. Shared-storage samples preserve exact owner identity, snapshot provenance, partial lower bounds, same-time content conflicts, and guild scan incompleteness. Neither shared ownership nor access is inferred, and changed quantities do not establish an action or cause.
+
+Core project projections carry the intervals into REST, AccountContext, MCP, and the Dashboard. Synthetic coverage includes source reassignment, legacy source omission, repeated/restored currency and Warband quantities, account-wide currency, missing values, partial guild/storage evidence, and browser rendering. See `ERP_CHECKPOINT_20261010_PHASE104.md`. No live-game or production validation was performed.
+
+Next substantial milestone: make intervening evidence changes actionable in portfolio review: surface exact-source quantity variation even when a later capture returns to the saved baseline, guide the player to reconcile or replan, and preserve a clear boundary between observed changes and task completion/cause.
+
 ## Phase 103 - bounded intervening evidence for saved fulfillment reviews
 
 Saved item and gold requirements now retain a bounded sequence of same-character imports between the frozen review and current state, with section timestamps and explicit OBSERVED, PARTIAL, LAST_SEEN, and UNKNOWN states. Exact item variants remain exact for `ITEM_REF`; `ITEM_ID` remains base-item scope; gold remains copper. Partial sections expose only known lower bounds, while inaccessible or missing banks remain UNKNOWN. The UI describes each section's timing relative to the saved review, retained-sample truncation, and explicitly leaves action cause UNKNOWN. Unsupported source/resource timelines are reported as unavailable instead of being conflated with no newer imports.

@@ -2247,6 +2247,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     assert.equal(new Set(saved.map((project) => project.workOrders[0].planningBatch.stableId)).size, 1, "the server links separate project writes to the same confirmed planning batch");
     assert.ok(saved.every((project) => project.workOrders[0].planningBatch.needEvidence?.state === "SHORTFALL_OBSERVED"), "the batch freezes a minimal evidence baseline at confirmation");
     assert.deepEqual(saved.map((project) => [project.workOrders[0].planningBatch.needEvidence?.resourceKind, project.workOrders[0].planningBatch.needEvidence?.resourceKey]), [["ITEM_REF", fullRef(ITEM_ID)], ["ITEM_REF", fullRef(ITEM_ID + 1)]], "the batch freezes each exact need identity alongside its evidence baseline");
+    assert.ok(saved.every((project) => project.workOrders[0].planningBatch.needEvidence.sourceScope.kind === "CHARACTER" && project.workOrders[0].planningBatch.needEvidence.sourceScope.identityKey === source.character.identityKey), "the baseline freezes the exact source character as well as the resource identity");
     let batch = rest.portfolioFulfillment.savedPlanningBatches[0];
     assert.equal(batch.steps.length, 2);
     assert.equal(batch.state, "AWAITING_NEW_OBSERVATION");
@@ -2304,6 +2305,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     assert.match(await page.getByTestId("erp-saved-planning-batches").innerText(), /NEWER OBSERVATION REVIEW/);
     const intervalPanel = page.getByTestId(`erp-history-interval-${encodeURIComponent(batch.stableId)}-${encodeURIComponent("queue_myco")}`);
     await intervalPanel.waitFor();
+    const savedNeedHistory = page.getByTestId(`erp-saved-need-history-${encodeURIComponent(first.stableId)}-${encodeURIComponent("queue_myco")}`);
+    assert.match(await savedNeedHistory.innerText(), /Source scope MATCH/);
+    assert.match(await savedNeedHistory.innerText(), new RegExp(source.character.identityKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(await intervalPanel.innerText(), /Intervening imports/);
     assert.match(await intervalPanel.innerText(), /bags: OBSERVED 2/);
     assert.match(await intervalPanel.innerText(), /bags: OBSERVED 1/);

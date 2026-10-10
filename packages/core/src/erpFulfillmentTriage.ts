@@ -1,4 +1,4 @@
-import type { ErpNeedEvidence, ErpProjectView, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpNeedEvidence, ErpNeedSourceScope, ErpProjectView, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpWorkOrder } from "./erpProjects.ts";
 import type { VersionOrUnknown, WowVersion } from "./types.ts";
 import type { Freshness } from "./freshness.ts";
 
@@ -137,6 +137,9 @@ export interface ErpSavedPlanningBatch {
     readonly currentResourceKind?: ErpResourceNeed["kind"];
     readonly reviewedResourceKind?: ErpResourceNeed["kind"];
     readonly reviewedResourceKey?: string;
+    readonly reviewedSourceScope?: ErpNeedSourceScope;
+    readonly currentSourceScope: ErpNeedSourceScope;
+    readonly sourceScopeReview: "MATCH" | "CHANGED" | "UNKNOWN";
     readonly workOrderId: string;
     readonly workOrderTitle: string;
     readonly workOrderKind: ErpWorkOrder["kind"];
@@ -152,7 +155,7 @@ export interface ErpSavedPlanningBatch {
     readonly currentObservedAt?: number;
     /** Imported source snapshots after this saved generation; measurements do not imply an action or cause. */
     readonly observationInterval?: {
-      readonly state: "SAMPLES_AVAILABLE" | "NO_NEWER_IMPORTS" | "IDENTITY_CONFLICT" | "HISTORY_TRUNCATED" | "INTERVAL_UNAVAILABLE";
+      readonly state: "SAMPLES_AVAILABLE" | "NO_NEWER_IMPORTS" | "IDENTITY_CONFLICT" | "SOURCE_SCOPE_UNKNOWN" | "HISTORY_TRUNCATED" | "INTERVAL_UNAVAILABLE";
       readonly points: readonly (Omit<NonNullable<ErpNeedEvidence["observationHistory"]>[number], "sections"> & {
         readonly sections: readonly (NonNullable<ErpNeedEvidence["observationHistory"]>[number]["sections"][number] & { readonly relativeToReview: "AFTER_REVIEW" | "AT_OR_BEFORE_REVIEW" })[];
       })[];
@@ -201,6 +204,9 @@ export interface ErpSavedNeedHistory {
     /** Exact resource identity frozen for this generation; older generations may lack it. */
     readonly reviewedResourceKind?: ErpResourceNeed["kind"];
     readonly reviewedResourceKey?: string;
+    readonly reviewedSourceScope?: ErpNeedSourceScope;
+    readonly currentSourceScope: ErpNeedSourceScope;
+    readonly sourceScopeReview: "MATCH" | "CHANGED" | "UNKNOWN";
     readonly reviewedQuantity?: number;
     readonly reviewedEvidenceState?: ErpNeedEvidence["state"];
     readonly reviewedFreshness?: Freshness;
@@ -249,7 +255,7 @@ export function buildErpSavedNeedHistoryReview(batches: readonly ErpSavedPlannin
         if (!candidate.currentResourceKind || candidate.resourceKey === "UNKNOWN") history.identityUnknown = true;
         else history.identities.add(JSON.stringify([candidate.currentResourceKind, candidate.resourceKey]));
       }
-      history.entries.push({ batchId: batch.stableId, reviewedAt: batch.reviewedAt, ...(batch.replanFrom && batch.replanFrom.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId) ? { predecessorBatchId: batch.replanFrom.batchId } : {}), followUpBatchIds: batch.followUpBatchIds.filter((followUpId) => scoped.some((candidate) => candidate.stableId === followUpId && candidate.replanFrom?.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId))), lineageState: batch.lineageState, batchState: batch.state, taskIds: steps.map((candidate) => candidate.workOrderId), taskTitles: steps.map((candidate) => candidate.workOrderTitle), taskStatuses: steps.map((candidate) => candidate.workOrderStatus), evidenceReview: step.evidenceReview, ...(step.reviewedResourceKind ? { reviewedResourceKind: step.reviewedResourceKind } : {}), ...(step.reviewedResourceKey ? { reviewedResourceKey: step.reviewedResourceKey } : {}), ...(step.reviewedQuantity !== undefined ? { reviewedQuantity: step.reviewedQuantity } : {}), ...(step.reviewedEvidenceState ? { reviewedEvidenceState: step.reviewedEvidenceState } : {}), ...(step.reviewedFreshness ? { reviewedFreshness: step.reviewedFreshness } : {}), ...(step.reviewedObservedAt !== undefined ? { reviewedObservedAt: step.reviewedObservedAt } : {}), currentEvidenceState: step.currentEvidenceState, currentFreshness: step.currentFreshness, ...(step.currentQuantity !== undefined ? { currentQuantity: step.currentQuantity } : {}), ...(step.currentObservedAt !== undefined ? { currentObservedAt: step.currentObservedAt } : {}), activeReservationQuantity: step.activeReservationQuantity, actionCausality: "UNKNOWN" as const });
+      history.entries.push({ batchId: batch.stableId, reviewedAt: batch.reviewedAt, ...(batch.replanFrom && batch.replanFrom.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId) ? { predecessorBatchId: batch.replanFrom.batchId } : {}), followUpBatchIds: batch.followUpBatchIds.filter((followUpId) => scoped.some((candidate) => candidate.stableId === followUpId && candidate.replanFrom?.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId))), lineageState: batch.lineageState, batchState: batch.state, taskIds: steps.map((candidate) => candidate.workOrderId), taskTitles: steps.map((candidate) => candidate.workOrderTitle), taskStatuses: steps.map((candidate) => candidate.workOrderStatus), evidenceReview: step.evidenceReview, ...(step.reviewedResourceKind ? { reviewedResourceKind: step.reviewedResourceKind } : {}), ...(step.reviewedResourceKey ? { reviewedResourceKey: step.reviewedResourceKey } : {}), ...(step.reviewedSourceScope ? { reviewedSourceScope: step.reviewedSourceScope } : {}), currentSourceScope: step.currentSourceScope, sourceScopeReview: step.sourceScopeReview, ...(step.reviewedQuantity !== undefined ? { reviewedQuantity: step.reviewedQuantity } : {}), ...(step.reviewedEvidenceState ? { reviewedEvidenceState: step.reviewedEvidenceState } : {}), ...(step.reviewedFreshness ? { reviewedFreshness: step.reviewedFreshness } : {}), ...(step.reviewedObservedAt !== undefined ? { reviewedObservedAt: step.reviewedObservedAt } : {}), currentEvidenceState: step.currentEvidenceState, currentFreshness: step.currentFreshness, ...(step.currentQuantity !== undefined ? { currentQuantity: step.currentQuantity } : {}), ...(step.currentObservedAt !== undefined ? { currentObservedAt: step.currentObservedAt } : {}), activeReservationQuantity: step.activeReservationQuantity, actionCausality: "UNKNOWN" as const });
       histories.set(stableId, history);
     }
   }
@@ -306,8 +312,11 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
       const evidence = project.needEvidence.find((candidate) => candidate.needId === needId);
       const baseline = order.planningBatch?.needEvidence;
       const newer = evidence?.observedAt !== undefined && evidence.observedAt > context.reviewedAt;
-      const identityKnown = baseline?.resourceKind !== undefined && baseline.resourceKey !== undefined;
-      const identityChanged = identityKnown && (baseline.resourceKind !== need.kind || baseline.resourceKey !== need.resourceKey);
+      const currentSourceScope = need.sourceOwnerKey ? { kind: "SHARED_OWNER" as const, ownerKey: need.sourceOwnerKey } : need.sourceIdentityKey ? { kind: "CHARACTER" as const, identityKey: need.sourceIdentityKey } : { kind: "UNSCOPED" as const };
+      const sourceScopeChanged = baseline?.sourceScope !== undefined && JSON.stringify(baseline.sourceScope) !== JSON.stringify(currentSourceScope);
+      const sourceScopeReview: "MATCH" | "CHANGED" | "UNKNOWN" = baseline?.sourceScope === undefined ? "UNKNOWN" : sourceScopeChanged ? "CHANGED" : "MATCH";
+      const identityKnown = baseline?.resourceKind !== undefined && baseline.resourceKey !== undefined && baseline.sourceScope !== undefined;
+      const identityChanged = (baseline?.resourceKind !== undefined && baseline.resourceKey !== undefined && (baseline.resourceKind !== need.kind || baseline.resourceKey !== need.resourceKey)) || sourceScopeChanged;
       const evidenceReview: ErpSavedPlanningBatch["steps"][number]["evidenceReview"] = identityChanged
         ? "NEED_IDENTITY_CHANGED"
         : !identityKnown ? "NEED_IDENTITY_UNKNOWN"
@@ -316,7 +325,7 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
               : baseline?.observedQuantity === undefined || evidence.observedQuantity === undefined ? "NEWER_OBSERVATION_NO_BASELINE"
                 : baseline.observedQuantity === evidence.observedQuantity ? "NEWER_OBSERVATION_UNCHANGED" : "NEWER_OBSERVATION_QUANTITY_CHANGED";
       const activeReservationQuantity = project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === needId).reduce((sum, reservation) => sum + reservation.quantity, 0);
-      const exactIdentity = identityKnown && !identityChanged && !need.sourceOwnerKey && !!need.sourceIdentityKey;
+      const exactIdentity = identityKnown && !identityChanged && ((currentSourceScope.kind === "CHARACTER" && currentSourceScope.identityKey === need.sourceIdentityKey) || (currentSourceScope.kind === "SHARED_OWNER" && currentSourceScope.ownerKey === need.sourceOwnerKey && version === "retail"));
       const pointObservedAt = (point: NonNullable<ErpNeedEvidence["observationHistory"]>[number]) => {
         const sectionTimes = point.sections.map((section) => section.observedAt).filter((value): value is number => value !== undefined);
         return sectionTimes.length ? Math.max(...sectionTimes) : point.generatedAt ?? point.importedAt;
@@ -325,14 +334,15 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
       const intervalLimit = 20;
       const retainedOldestAt = evidence?.observationHistory?.[0] && pointObservedAt(evidence.observationHistory[0]);
       const intervalHistoryTruncated = !!evidence?.observationHistoryTruncated && retainedOldestAt !== undefined && retainedOldestAt > context.reviewedAt;
-      const intervalResourceSupported = need.kind === "ITEM_ID" || need.kind === "ITEM_REF" || need.kind === "GOLD_COPPER" || need.kind === "PROFESSION";
+      const intervalResourceSupported = need.kind === "ITEM_ID" || need.kind === "ITEM_REF" || need.kind === "GOLD_COPPER" || need.kind === "PROFESSION" || (need.kind === "CURRENCY" && version === "retail");
       const observationInterval = exactIdentity && intervalResourceSupported ? {
         state: intervalHistoryTruncated ? "HISTORY_TRUNCATED" as const : intervalCandidates.length ? "SAMPLES_AVAILABLE" as const : "NO_NEWER_IMPORTS" as const,
         points: intervalCandidates.slice(-intervalLimit).map((point) => ({ ...point, sections: point.sections.map((section) => ({ ...section, relativeToReview: (section.observedAt ?? point.generatedAt ?? point.importedAt) > context.reviewedAt ? "AFTER_REVIEW" as const : "AT_OR_BEFORE_REVIEW" as const })) })),
         omittedEarlierPointCount: Math.max(0, intervalCandidates.length - intervalLimit),
-      } : !identityKnown || identityChanged ? { state: "IDENTITY_CONFLICT" as const, points: [], omittedEarlierPointCount: 0 }
+      } : !identityKnown ? { state: "SOURCE_SCOPE_UNKNOWN" as const, points: [], omittedEarlierPointCount: 0 }
+        : identityChanged ? { state: "IDENTITY_CONFLICT" as const, points: [], omittedEarlierPointCount: 0 }
         : { state: "INTERVAL_UNAVAILABLE" as const, points: [], omittedEarlierPointCount: 0 };
-      return [{ projectId: project.stableId, projectTitle: project.title, needId, needLabel: need.label, resourceKey: need.resourceKey, currentResourceKind: need.kind, ...(baseline?.resourceKind ? { reviewedResourceKind: baseline.resourceKind } : {}), ...(baseline?.resourceKey ? { reviewedResourceKey: baseline.resourceKey } : {}), workOrderId: order.stableId, workOrderTitle: order.title, workOrderKind: order.kind, workOrderStatus: order.status, evidenceReview, ...(baseline?.state ? { reviewedEvidenceState: baseline.state } : {}), ...(baseline?.freshness ? { reviewedFreshness: baseline.freshness } : {}), ...(baseline?.observedAt !== undefined ? { reviewedObservedAt: baseline.observedAt } : {}), currentEvidenceState: evidence?.state ?? "UNKNOWN", currentFreshness: evidence?.freshness ?? "unknown", ...(baseline?.observedQuantity !== undefined ? { reviewedQuantity: baseline.observedQuantity } : {}), ...(evidence?.observedQuantity !== undefined ? { currentQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { currentObservedAt: evidence.observedAt } : {}), observationInterval, activeReservationQuantity, actionCausality: "UNKNOWN" as const }];
+      return [{ projectId: project.stableId, projectTitle: project.title, needId, needLabel: need.label, resourceKey: need.resourceKey, currentResourceKind: need.kind, ...(baseline?.resourceKind ? { reviewedResourceKind: baseline.resourceKind } : {}), ...(baseline?.resourceKey ? { reviewedResourceKey: baseline.resourceKey } : {}), ...(baseline?.sourceScope ? { reviewedSourceScope: baseline.sourceScope } : {}), currentSourceScope, sourceScopeReview, workOrderId: order.stableId, workOrderTitle: order.title, workOrderKind: order.kind, workOrderStatus: order.status, evidenceReview, ...(baseline?.state ? { reviewedEvidenceState: baseline.state } : {}), ...(baseline?.freshness ? { reviewedFreshness: baseline.freshness } : {}), ...(baseline?.observedAt !== undefined ? { reviewedObservedAt: baseline.observedAt } : {}), currentEvidenceState: evidence?.state ?? "UNKNOWN", currentFreshness: evidence?.freshness ?? "unknown", ...(baseline?.observedQuantity !== undefined ? { reviewedQuantity: baseline.observedQuantity } : {}), ...(evidence?.observedQuantity !== undefined ? { currentQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { currentObservedAt: evidence.observedAt } : {}), observationInterval, activeReservationQuantity, actionCausality: "UNKNOWN" as const }];
     }));
     const newerObservationReviewCount = steps.filter((step) => step.evidenceReview.startsWith("NEWER_OBSERVATION_")).length;
     const state: ErpSavedPlanningBatch["state"] = conflictingContext || steps.some((step) => step.evidenceReview === "NEED_IDENTITY_CHANGED") ? "CONFLICTING_BATCH_CONTEXT" : newerObservationReviewCount ? "NEWER_OBSERVATION_REVIEW" : steps.some((step) => step.evidenceReview === "CURRENT_EVIDENCE_STALE_OR_UNKNOWN" || step.evidenceReview === "NEED_IDENTITY_UNKNOWN") ? "CURRENT_EVIDENCE_REVIEW" : "AWAITING_NEW_OBSERVATION";

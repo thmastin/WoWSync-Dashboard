@@ -5,7 +5,7 @@ import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
 import { buildErpNeedObservationChangeReview } from "../src/erpObservationChanges.ts";
-import { buildErpNeedReviewSnapshot } from "../src/erpFulfillmentTriage.ts";
+import { buildErpNeedReviewSnapshot, buildErpSavedPlanningBatchReview } from "../src/erpFulfillmentTriage.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
 import { guild, itemRow, warband } from "./sharedStorageBuilders.ts";
 import { renderExport } from "./sharedStorageExports.ts";
@@ -1181,6 +1181,36 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
     const chronologyReview = chronologyView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(chronologyReview?.recipientBagObservation?.state, "UNKNOWN", `a newer export with an equal section timestamp cannot establish a before/after comparison: ${JSON.stringify({ projects: chronologyView?.stableId, progress: chronologyView?.workOrderProgress, review: chronologyReview })}`);
     assert.match(chronologyReview?.recipientBagObservation?.reason ?? "", /timestamps are equal or out of order/);
+  } finally { store.close(); }
+});
+
+test("saved Retail shared-storage intervals use the frozen exact owner and retain partial and restored quantities", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = Math.floor(Date.now() / 1000) - 100;
+  const itemRef = itemRow("Rough Stone", 1).itemRef;
+  const capture = (name: string, at: number, quantity: number, completeness: "complete" | "partial" = "complete") => renderExport({ name, realm: "Retail Realm", generated: at, warband: warband({ observedAt: at, completeness, items: [["Rough Stone", quantity]] }) });
+  try {
+    const carrier = store.importSnapshot(capture("Interval Carrier", baseAt, 4));
+    const need = { stableId: "warband_need", kind: "ITEM_REF" as const, resourceKey: itemRef, label: "Rough Stone", requiredQuantity: 5, sourceOwnerKey: "retail::warband::local" };
+    store.createErpProject({ version: "retail", title: "Warband interval review", needs: [need], workOrders: [{ stableId: "warband_review", kind: "OTHER", status: "PLANNED", title: "Review Warband stock", resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c3", reviewedAt: baseAt + 10, version: "retail", needEvidence: { resourceKind: "ITEM_REF", resourceKey: itemRef, sourceScope: { kind: "SHARED_OWNER", ownerKey: need.sourceOwnerKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 4, observedAt: baseAt } } }] });
+    store.importSnapshot(capture("Second Carrier", baseAt + 20, 2));
+    store.importSnapshot(capture("Third Carrier", baseAt + 30, 4));
+    store.importSnapshot(capture("Fourth Carrier", baseAt + 40, 1, "partial"));
+    const projectView = new DashboardReadModel(store, () => baseAt + 50).getErpProjects({ version: "retail" })[0]!;
+    const batch = buildErpSavedPlanningBatchReview([projectView], "retail").batches[0]!;
+    const step = batch.steps[0]!;
+    assert.deepEqual(step.reviewedSourceScope, { kind: "SHARED_OWNER", ownerKey: "retail::warband::local" });
+    assert.equal(step.sourceScopeReview, "MATCH");
+    assert.equal(step.observationInterval?.state, "SAMPLES_AVAILABLE");
+    assert.deepEqual(step.observationInterval?.points.map((point) => [point.sourceOwnerKey, point.sections[0]?.state, point.sections[0]?.quantity, point.sections[0]?.lowerBound]), [
+      ["retail::warband::local", "OBSERVED", 2, undefined],
+      ["retail::warband::local", "OBSERVED", 4, undefined],
+      ["retail::warband::local", "PARTIAL", undefined, 1],
+    ], "owner history shows changed/restored exact variants and a partial lower bound without merging the samples");
+    assert.equal(step.actionCausality, "UNKNOWN");
+    assert.equal(step.observationInterval?.points[0]?.sourceOwnerKey, "retail::warband::local", "the timeline names the installation-local Warband owner rather than a carrier character");
+    assert.match(projectView.needEvidence[0]?.reason ?? "", /does not identify personal ownership or a usable transfer route/);
+    assert.equal(carrier.character.version, "retail");
   } finally { store.close(); }
 });
 

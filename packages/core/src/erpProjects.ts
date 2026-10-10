@@ -1,5 +1,5 @@
 import type { StoredCharacterSummary, StoredSnapshot } from "./store.ts";
-import type { AccountCurrencies } from "./wowCurrencies.ts";
+import type { AccountCurrencies, CharacterCurrencies } from "./wowCurrencies.ts";
 import { ownerObservationHistoryFromJournal, parseOwnerKey, projectOwnerFromJournal, type ProjectedObservation, type SharedJournal, type SharedStorageProjection } from "./sharedStorage.ts";
 import type { WowVersion } from "./types.ts";
 import { snapshotObservedAt } from "./chronology.ts";
@@ -15,6 +15,7 @@ export const ERP_WORK_ORDER_STATUSES = ["PLANNED", "IN_PROGRESS", "WAITING_FOR_E
 export type ErpWorkOrderStatus = typeof ERP_WORK_ORDER_STATUSES[number];
 export const ERP_RESOURCE_KINDS = ["ITEM_ID", "ITEM_REF", "GOLD_COPPER", "CURRENCY", "PROFESSION", "RECIPE"] as const;
 export type ErpResourceKind = typeof ERP_RESOURCE_KINDS[number];
+export type ErpNeedSourceScope = { readonly kind: "CHARACTER"; readonly identityKey: string } | { readonly kind: "SHARED_OWNER"; readonly ownerKey: string } | { readonly kind: "UNSCOPED" };
 
 /** Explicit player intent. No field here is an observation or proof of possession. */
 export interface ErpResourceNeed {
@@ -96,6 +97,8 @@ export interface ErpWorkOrderPlanningBatchContext {
     /** Requirement identity at confirmation; optional only for legacy saved batches. */
     readonly resourceKind?: ErpResourceKind;
     readonly resourceKey?: string;
+    /** Exact source scope reviewed with the requirement; absent only on legacy baselines. */
+    readonly sourceScope?: ErpNeedSourceScope;
     readonly state: NeedSupplyState;
     readonly freshness: Freshness;
     readonly observedQuantity?: number;
@@ -250,6 +253,10 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
       if (!batch || typeof batch !== "object" || !/^erp_batch_[0-9a-f-]{36}$/.test(batch.stableId) || batch.version !== p.version || !Number.isSafeInteger(batch.reviewedAt) || batch.reviewedAt < 1 || w.resourceNeedIds.length !== 1) fail("INVALID_PLANNING_BATCH_CONTEXT", "A planning batch must be a same-version server batch linked to one reviewed requirement and timestamp.");
       if (batch.needEvidence !== undefined && (!batch.needEvidence || typeof batch.needEvidence !== "object" || (batch.needEvidence.resourceKind !== undefined && !ERP_RESOURCE_KINDS.includes(batch.needEvidence.resourceKind)) || (batch.needEvidence.resourceKey !== undefined && (!hasValue(batch.needEvidence.resourceKey) || batch.needEvidence.resourceKey.length > 512)) || (batch.needEvidence.resourceKind === "ITEM_REF" && batch.needEvidence.resourceKey !== undefined && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(batch.needEvidence.resourceKey)) || (batch.needEvidence.resourceKind === "ITEM_ID" && batch.needEvidence.resourceKey !== undefined && !/^[1-9]\d*$/.test(batch.needEvidence.resourceKey)) || !("COVERED_BY_OBSERVED POTENTIAL_COVERAGE_LAST_SEEN SHORTFALL_OBSERVED UNKNOWN UNSUPPORTED_EVIDENCE".split(" ").includes(batch.needEvidence.state)) || !("recent stale unknown".split(" ").includes(batch.needEvidence.freshness)) || (batch.needEvidence.observedQuantity !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedQuantity) || batch.needEvidence.observedQuantity < 0)) || (batch.needEvidence.observedAt !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedAt) || batch.needEvidence.observedAt < 1)))) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve a supported need identity, state, freshness, and optional nonnegative observed quantity and timestamp.");
       if (batch.needEvidence?.resourceKind !== undefined !== (batch.needEvidence?.resourceKey !== undefined)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve both requirement kind and resource key together.");
+      if (batch.needEvidence?.sourceScope !== undefined) {
+        const source = batch.needEvidence.sourceScope;
+        if (!source || typeof source !== "object" || (source.kind === "CHARACTER" && (!hasValue(source.identityKey) || !source.identityKey.startsWith(`${p.version}::`) || !identityExists(source.identityKey))) || (source.kind === "SHARED_OWNER" && (!hasValue(source.ownerKey) || p.version !== "retail" || parseOwnerKey(source.ownerKey) === undefined)) || !["CHARACTER", "SHARED_OWNER", "UNSCOPED"].includes(source.kind)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A saved evidence baseline must preserve a valid same-version character, shared owner, or unscoped source scope.");
+      }
       if (batch.replanFrom !== undefined && (!batch.replanFrom || typeof batch.replanFrom !== "object" || !/^erp_batch_[0-9a-f-]{36}$/.test(batch.replanFrom.batchId) || batch.replanFrom.batchId === batch.stableId || !Array.isArray(batch.replanFrom.needReferences) || batch.replanFrom.needReferences.length < 1 || batch.replanFrom.needReferences.length > 20 || batch.replanFrom.needReferences.some((ref) => !ref || typeof ref !== "object" || !hasValue(ref.projectId) || ref.projectId.length > 120 || !hasValue(ref.needId) || ref.needId.length > 120) || new Set(batch.replanFrom.needReferences.map((ref) => `${ref.projectId}\u0000${ref.needId}`)).size !== batch.replanFrom.needReferences.length)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A follow-up batch must retain one distinct prior batch and 1 to 20 exact project/need references.");
     }
     if (w.pathwayContext !== undefined) {
@@ -344,8 +351,9 @@ export interface ErpNeedObservationPoint {
   readonly snapshotId: number;
   readonly generatedAt?: number;
   readonly importedAt: number;
+  readonly sourceOwnerKey?: string;
   readonly sections: readonly {
-    readonly section: "character gold" | "bags" | "character bank" | "professions";
+    readonly section: "character gold" | "bags" | "character bank" | "professions" | "currencies" | "shared storage";
     readonly state: "OBSERVED" | "PARTIAL" | "LAST_SEEN" | "UNKNOWN";
     readonly observedAt?: number;
     /** Exact quantity only for a complete observation. */
@@ -463,8 +471,36 @@ function sectionItemQuantity(snapshot: StoredSnapshot, sectionName: "bags" | "ch
 
 const ERP_NEED_OBSERVATION_HISTORY_LIMIT = 40;
 /** Exact-resource timeline from imported character snapshots. Partial sections expose only a lower bound. */
-function needObservationHistory(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[]): ErpNeedObservationPoint[] {
-  if (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF" && need.kind !== "GOLD_COPPER" && need.kind !== "PROFESSION") return [];
+function needObservationHistory(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[], version: WowVersion, currencyForSnapshot?: (identityKey: string, snapshotId: number) => CharacterCurrencies | undefined, sharedJournal?: SharedJournal): ErpNeedObservationPoint[] {
+  if (need.kind === "CURRENCY" && version !== "retail") return [];
+  if (need.sourceOwnerKey) {
+    if ((need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF") || version !== "retail" || !sharedJournal) return [];
+    const owner = parseOwnerKey(need.sourceOwnerKey);
+    if (!owner) return [];
+    const history = ownerObservationHistoryFromJournal(sharedJournal, need.sourceOwnerKey);
+    const ordered = [...history].sort((a, b) => a.effectiveObservedAt - b.effectiveObservedAt || a.identity.localeCompare(b.identity));
+    return ordered.slice(-ERP_NEED_OBSERVATION_HISTORY_LIMIT).map((observation) => {
+      const sameTime = ordered.filter((candidate) => candidate.effectiveObservedAt === observation.effectiveObservedAt);
+      const conflicted = sameTime.some((candidate) => candidate.contentHash !== observation.contentHash);
+      let lowerBound = 0;
+      let unquantifiedMatchingRows = 0;
+      let unidentifiedRows = 0;
+      for (const row of observation.content.items) {
+        if (!row.itemRef) { unidentifiedRows++; continue; }
+        const matches = need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : itemId(row.itemRef) === Number(need.resourceKey);
+        if (!matches) continue;
+        if (row.qty === undefined) unquantifiedMatchingRows++;
+        else lowerBound += row.qty;
+      }
+      const guildScopeIncomplete = owner.kind === "guild" && (observation.coverage.inaccessibleTabs.length > 0 || observation.coverage.unconfirmedTabs.length > 0 || observation.coverage.unidentifiedTabs > 0);
+      const complete = observation.completeness === "complete" && !guildScopeIncomplete && !unidentifiedRows && !unquantifiedMatchingRows;
+      const live = observation.liveAtExport;
+      const state: ErpNeedObservationPoint["sections"][number]["state"] = conflicted ? "UNKNOWN" : complete && live ? "OBSERVED" : !live ? "LAST_SEEN" : "PARTIAL";
+      const carrier = observation.sources.find((source) => source.carrierState === "OBSERVED") ?? observation.sources[0];
+      return { snapshotId: carrier?.snapshotId ?? 0, generatedAt: carrier?.exportObservedAt ?? observation.effectiveObservedAt, importedAt: carrier?.exportObservedAt ?? observation.effectiveObservedAt, sourceOwnerKey: need.sourceOwnerKey, sections: [{ section: "shared storage", state, observedAt: observation.effectiveObservedAt, ...(complete && live && !conflicted ? { quantity: lowerBound } : state === "PARTIAL" ? { lowerBound, ...(unquantifiedMatchingRows ? { unquantifiedMatchingRows } : {}) } : state === "LAST_SEEN" && complete ? { lowerBound } : {}), completeness: observation.completeness }] };
+    });
+  }
+  if (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF" && need.kind !== "GOLD_COPPER" && need.kind !== "PROFESSION" && need.kind !== "CURRENCY") return [];
   const ordered = [...snapshots].sort((a, b) => snapshotObservedAt(a.generatedAt, a.importedAt) - snapshotObservedAt(b.generatedAt, b.importedAt) || a.id - b.id);
   return ordered.slice(-ERP_NEED_OBSERVATION_HISTORY_LIMIT).map((snapshot) => {
     const sections: ErpNeedObservationPoint["sections"][number][] = [];
@@ -501,6 +537,15 @@ function needObservationHistory(need: ErpResourceNeed, snapshots: readonly Store
           : section.status.state === "OBSERVED" ? "PARTIAL" : "UNKNOWN";
       const quantity = match?.skill ?? (complete && !match ? 0 : undefined);
       sections.push({ section: "professions", state, ...(observedAt !== undefined ? { observedAt } : {}), ...(state === "OBSERVED" && quantity !== undefined ? { quantity } : state === "PARTIAL" && quantity !== undefined ? { lowerBound: quantity } : {}), ...(section.status.completeness ? { completeness: section.status.completeness } : {}) });
+    } else if (need.kind === "CURRENCY") {
+      const currency = currencyForSnapshot?.(need.sourceIdentityKey!, snapshot.id);
+      const observedAt = currency?.observedAt ?? undefined;
+      const row = currency?.currencies?.find((entry) => entry.currencyID === Number(need.resourceKey));
+      const listedValue = row?.quantity ?? undefined;
+      const characterScoped = row?.isAccountWide === false;
+      const exact = currency?.state === "OBSERVED" && characterScoped && listedValue !== undefined;
+      const state: ErpNeedObservationPoint["sections"][number]["state"] = exact ? "OBSERVED" : row?.isAccountWide === true ? "UNKNOWN" : currency?.state === "LAST_SEEN" && characterScoped && listedValue !== undefined ? "LAST_SEEN" : currency?.state === "OBSERVED" ? "PARTIAL" : "UNKNOWN";
+      sections.push({ section: "currencies", state, ...(observedAt !== undefined ? { observedAt } : {}), ...(exact && listedValue !== undefined ? { quantity: listedValue } : state === "LAST_SEEN" && listedValue !== undefined ? { lowerBound: listedValue } : {}), ...(currency?.completeness ? { completeness: currency.completeness } : {}) });
     } else {
       pushItemSection("bags", "bags");
       pushItemSection("character bank", "character bank");
@@ -1615,11 +1660,11 @@ function resourceSourceScreens(project: ErpProject, snapshotsFor: (identityKey: 
 }
 
 /** Read-time projection; recorded plans never mutate or claim observed inventory. */
-export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection, candidateSources: readonly StoredCharacterSummary[] = [], sharedJournal?: SharedJournal): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
+export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection, candidateSources: readonly StoredCharacterSummary[] = [], sharedJournal?: SharedJournal, currencyForSnapshot?: (identityKey: string, snapshotId: number) => CharacterCurrencies | undefined): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
   const needEvidence = project.needs.map((need) => {
     const snapshots = !need.sourceOwnerKey && need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [];
     const assessed = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, snapshots, now, currencies, project.version);
-    const raw = !need.sourceOwnerKey && need.sourceIdentityKey ? { ...assessed, observationHistory: needObservationHistory(need, snapshots), observationHistoryTruncated: snapshots.length > ERP_NEED_OBSERVATION_HISTORY_LIMIT } : assessed;
+    const raw = (need.sourceIdentityKey || need.sourceOwnerKey) ? { ...assessed, observationHistory: needObservationHistory(need, snapshots, project.version, need.sourceIdentityKey ? (identityKey, snapshotId) => currencyForSnapshot?.(identityKey, snapshotId) : undefined, sharedJournal), observationHistoryTruncated: need.sourceOwnerKey ? ownerObservationHistoryFromJournal(sharedJournal ?? { entries: new Map() }, need.sourceOwnerKey).length > ERP_NEED_OBSERVATION_HISTORY_LIMIT : snapshots.length > ERP_NEED_OBSERVATION_HISTORY_LIMIT } : assessed;
     return applyReservationAssessment(need, raw, allProjects, project.version);
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
