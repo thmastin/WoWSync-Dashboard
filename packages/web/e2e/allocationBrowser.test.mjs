@@ -1429,11 +1429,18 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
+    const portfolioQueue = page.getByTestId("erp-portfolio-next-actions");
+    const briarAction = portfolioQueue.locator("article").filter({ hasText: "Briarthorn" }).first();
+    await briarAction.getByRole("checkbox", { name: "Select for grouped planning" }).check();
+    await portfolioQueue.getByRole("button", { name: "Add 1 selected requirements to grouped planning" }).click();
+    await page.waitForFunction(() => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes("Prepare the second recipe") && input.closest("label")?.innerText.includes("Briarthorn")));
+    assert.equal(await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).isChecked(), true, "the portfolio queue seeds the exact fully-qualified requirement into the existing grouped planner");
     await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).check();
     await page.getByTestId(`erp-fulfillment-pathways-${first.stableId}-mycobloom_need`).getByRole("button", { name: "Plan manual review from investigate other character location", exact: true }).click();
     await page.waitForFunction(() => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes("Provision the crafter") && input.closest("label")?.innerText.includes("Mycobloom")));
     assert.equal(await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).isChecked(), true, "the per-need pathway review selects the exact requirement in the existing grouped planner");
     const firstTask = composer.getByRole("group", { name: "Provision the crafter: Mycobloom" });
+    await page.waitForFunction(() => document.querySelector('select[aria-label="Evidence pathway for Mycobloom"]')?.value === "INVESTIGATE_OTHER_CHARACTER_LOCATION");
     assert.equal(await firstTask.getByLabel("Evidence pathway for Mycobloom").inputValue(), "INVESTIGATE_OTHER_CHARACTER_LOCATION", "a pathway handoff refreshes an already-selected, untouched generic draft");
     await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
     const secondTask = composer.getByRole("group", { name: "Prepare the second recipe: Briarthorn" });
@@ -2184,6 +2191,76 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
       const mcpReviews = mcp.structuredContent.projects.find((entry) => entry.stableId === packagedProject.stableId).workOrders.filter((order) => order.kind === "PROVISION");
       assert.deepEqual(mcpReviews, restReviews, "REST and MCP expose the same grouped reviews");
     }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one atomic multi-project plan", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-portfolio-plan-handoff-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const source = store.importSnapshot(renderExport({ name: "Queue Plan Fixture", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now), bank: observedSection([], now) }));
+    const first = store.createErpProject({ version: "retail", title: "Queue herb stock", needs: [{ stableId: "queue_myco", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    const second = store.createErpProject({ version: "retail", title: "Queue thorn stock", needs: [{ stableId: "queue_briar", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const queue = page.getByTestId("erp-portfolio-next-actions");
+    for (const label of ["Mycobloom", "Briarthorn"]) {
+      const review = queue.locator("article").filter({ hasText: label }).first();
+      await review.getByRole("checkbox", { name: "Select for grouped planning" }).check();
+    }
+    await queue.getByRole("button", { name: "Add 2 selected requirements to grouped planning" }).click();
+    const composer = page.getByTestId("erp-cross-project-plan");
+    for (const [project, label] of [["Queue herb stock", "Mycobloom"], ["Queue thorn stock", "Briarthorn"]]) {
+      const choice = composer.getByRole("checkbox", { name: new RegExp(`${project} · ${label}`) });
+      await page.waitForFunction((text) => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes(text)), `${project} · ${label}`);
+      assert.equal(await choice.isChecked(), true);
+    }
+    await composer.getByRole("button", { name: "Review 2 planned manual steps" }).click();
+    const preview = composer.getByTestId("erp-cross-project-plan-review");
+    assert.match(await preview.innerText(), /Queue herb stock: INVESTIGATE · Mycobloom/);
+    assert.match(await preview.innerText(), /Queue thorn stock: INVESTIGATE · Briarthorn/);
+    const beforeSave = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.deepEqual(beforeSave.projects.filter((project) => ["Queue herb stock", "Queue thorn stock"].includes(project.title)).map((project) => project.workOrders.length), [0, 0], "queue selection and frozen review persist no work before player confirmation");
+    await preview.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).click();
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const saved = [first, second].map((project) => rest.projects.find((entry) => entry.stableId === project.stableId));
+    assert.deepEqual(saved.map((project) => [project.workOrders.length, project.workOrders[0]?.status, project.workOrders[0]?.resourceNeedIds]), [[1, "PLANNED", ["queue_myco"]], [1, "PLANNED", ["queue_briar"]]]);
+    assert.ok(saved.every((project) => project.reservations.length === 0), "queue handoff makes no reservation unless the player explicitly requested one");
+    assert.equal(rest.resourceCommitments.items.find((line) => line.resourceKey === fullRef(ITEM_ID))?.observedQuantity, 1, "planning leaves observed stock unchanged");
+    const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.ok(account.planning.projects.some((project) => project.stableId === first.stableId && project.workOrderCounts.PLANNED === 1));
+    assert.ok(account.planning.projects.some((project) => project.stableId === second.stableId && project.workOrderCounts.PLANNED === 1));
+    mcpClient = new Client({ name: "wowsync-portfolio-plan-handoff-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    for (const project of saved) assert.deepEqual(mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId).workOrders, project.workOrders, "MCP and REST return the same saved player-authored plan");
+    assert.deepEqual(mcp.structuredContent.portfolioNextActions, rest.portfolioNextActions, "MCP and REST retain identical remaining queue state after planning");
+    store.importSnapshot(renderExport({ name: "Queue Plan Fixture", realm: "Cairne", generated: now + 60, bags: observedSection([row(ITEM_ID, 3, { name: "Mycobloom" }), row(ITEM_ID + 1, 4, { name: "Briarthorn" })], now + 60), bank: observedSection([], now + 60) }));
+    await page.reload();
+    const afterObservation = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const reviewRows = afterObservation.portfolioNextActions.items.filter((item) => item.action === "RECONCILE_OBSERVATIONS");
+    assert.equal(reviewRows.length, 2, "the same queue reflects both changed requirement observations after the next import");
+    assert.ok(reviewRows.every((item) => item.needReferences.length === 1 && item.needReferences[0].observationChanges?.length), "reconciliation preserves an exact per-need observation comparison");
+    assert.ok(reviewRows.every((item) => item.needReferences[0].observationChanges.every((change) => !Object.hasOwn(change, "cause"))), "reconciliation preserves exact needs without inventing an action-cause field");
+    assert.ok(afterObservation.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders[0]?.status === "PLANNED"), "observed quantity changes do not claim either player-authored step was executed or completed");
+    const refreshedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(refreshedMcp.structuredContent.portfolioNextActions, afterObservation.portfolioNextActions, "MCP and REST report the same post-import queue and reconciliation state");
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

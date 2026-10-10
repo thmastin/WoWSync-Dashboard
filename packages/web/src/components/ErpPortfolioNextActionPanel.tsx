@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ErpPortfolioNextActionReview } from "@wowsync-dashboard/core";
 import { erpNeedAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
 
@@ -12,17 +13,26 @@ const labels: Record<ErpPortfolioNextActionReview["items"][number]["action"], st
 };
 
 /** Portfolio entry queue: a shared-core review projection, never a selected route or action executor. */
-export function ErpPortfolioNextActionPanel({ review }: { review: ErpPortfolioNextActionReview }) {
+type NeedRef = { projectId: string; needId: string };
+export function ErpPortfolioNextActionPanel({ review, busy = false, onPlanNeeds }: { review: ErpPortfolioNextActionReview; busy?: boolean; onPlanNeeds?: (needs: readonly NeedRef[]) => void }) {
+  const [selected, setSelected] = useState<NeedRef[]>([]);
+  const isSelected = (need: NeedRef) => selected.some((entry) => entry.projectId === need.projectId && entry.needId === need.needId);
+  const toggle = (need: NeedRef) => setSelected((current) => isSelected(need)
+    ? current.filter((entry) => entry.projectId !== need.projectId || entry.needId !== need.needId)
+    : current.length < 20 ? [...current, need] : current);
   return <section className="erp-fulfillment-triage" aria-labelledby="erp-next-actions-title" data-testid="erp-portfolio-next-actions">
     <h2 id="erp-next-actions-title">Portfolio next actions</h2>
     <p>Start here for requirements that need attention across projects. Rows combine only requirements with the same explicitly selected source and exact resource identity. Missing source identity remains separate and UNKNOWN.</p>
     <p>{review.returnedCount} of {review.totalCount} review items in {review.version}.</p>
     <ul aria-label="Portfolio next action counts">{Object.entries(review.counts).filter(([, count]) => count > 0).map(([action, count]) => <li key={action}>{labels[action as keyof typeof labels]}: {count}</li>)}</ul>
+    {onPlanNeeds && selected.length > 0 && <button type="button" disabled={busy} onClick={() => { onPlanNeeds(selected); setSelected([]); }}>Add {selected.length} selected requirements to grouped planning</button>}
     {review.items.length === 0 ? <p>No current portfolio review items.</p> : <ol>{review.items.map((item) => <li key={item.stableId}><article>
       <h3>{labels[item.action]}{item.resource ? ` · ${item.resource.label}` : ""}</h3>
       {item.resource && <p>{item.resource.kind} <code>{item.resource.resourceKey}</code>{item.source ? ` · source ${item.source.scope === "CHARACTER" ? item.source.identityKey : `shared owner ${item.source.identityKey}`}` : " · source UNKNOWN; this row was not combined with other requirements"}</p>}
       {item.recordedSourceIdentity && !item.source && <p>Recorded source reference, retained verbatim but not groupable: {item.recordedSourceScope?.sourceIdentityKey && <><code>{item.recordedSourceScope.sourceIdentityKey}</code>{item.recordedSourceScope.sourceOwnerKey && " · "}</>}{item.recordedSourceScope?.sourceOwnerKey && <code>{item.recordedSourceScope.sourceOwnerKey}</code>} · {item.sourceScopeIssue?.replaceAll("_", " ")}</p>}
-      {item.needReferences.length > 0 && <ul aria-label="Requirements in this review item">{item.needReferences.map((need) => <li key={`${need.projectId}:${need.needId}`}><a href={`#${erpNeedAnchorId(need.projectId, need.needId)}`}>{need.projectTitle}: {need.needId}</a> · priority {need.projectPriority} · need {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · {need.freshness} freshness{need.observedAt === undefined ? " · timestamp UNKNOWN" : ` · observed ${new Date(need.observedAt * 1000).toLocaleString()}`}{need.observationChanges?.length ? ` · ${need.observationChanges.map((change) => `${change.section} ${change.previousQuantity} → ${change.currentQuantity} (${change.delta > 0 ? "+" : ""}${change.delta}; cause UNKNOWN)`).join("; ")}` : ""}</li>)}</ul>}
+      {item.needReferences.length > 0 && <ul aria-label="Requirements in this review item">{item.needReferences.map((need) => <li key={`${need.projectId}:${need.needId}`}>
+        {item.action === "PLAN_MANUAL_WORK" && onPlanNeeds && <label><input type="checkbox" checked={isSelected(need)} disabled={busy || (!isSelected(need) && selected.length >= 20)} onChange={() => toggle(need)} /> Select for grouped planning </label>}
+        <a href={`#${erpNeedAnchorId(need.projectId, need.needId)}`}>{need.projectTitle}: {need.needId}</a> · priority {need.projectPriority} · need {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · {need.freshness} freshness{need.observedAt === undefined ? " · timestamp UNKNOWN" : ` · observed ${new Date(need.observedAt * 1000).toLocaleString()}`}{need.observationChanges?.length ? ` · ${need.observationChanges.map((change) => `${change.section} ${change.previousQuantity} → ${change.currentQuantity} (${change.delta > 0 ? "+" : ""}${change.delta}; cause UNKNOWN)`).join("; ")}` : ""}</li>)}</ul>}
       {item.signals.length > 0 && <p>Related findings: {item.signals.map((signal) => signal.replaceAll("_", " ").toLowerCase()).join(", ")}.</p>}
       {item.workOrders.length > 0 && <p>Open work orders: {item.workOrders.map((order) => <a key={`${order.projectId}:${order.stableId}`} href={`#${erpWorkOrderAnchorId(order.projectId, order.stableId)}`}>{order.stableId}</a>)}</p>}
       <p>{item.reason}</p>

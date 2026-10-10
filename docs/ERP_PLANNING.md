@@ -266,3 +266,15 @@ Automated validation: `npm.cmd run validate:erp` passed with Core 843, MCP 3, Se
 ## Current next substantial milestone
 
 Use the portfolio queue as the entry point for one player-reviewed multi-need fulfillment session: select exact queue items, prepare source alternatives and craft/procurement/retrieval work, review competing reservations and prerequisites, then follow saved work through a later import and evidence-qualified reconciliation. Keep source selection, task authoring, and every game action player-controlled; preserve UNKNOWN for unproven access, recipe, market, route, and causality. Exercise stale, partial, conflicting, and restored evidence through browser acceptance and the shared REST/AccountContext/MCP model. The ERP mission remains active.
+
+## Phase 96: queue-seeded multi-project planning and reconciliation
+
+The player can select one or more exact requirements from eligible `PLAN_MANUAL_WORK` rows in the portfolio queue and add them to the existing cross-project planner. This passes fully qualified project/need references; it does not choose a source or task. The planner continues to expose per-need pathway evidence and player-authored task/source/reservation/dependency choices, then freezes the exact request for review and performs its existing transaction-time evidence/revision checks on explicit confirmation.
+
+The integrated browser journey selected two distinct requirements from the portfolio queue, reviewed one atomic multi-project plan, confirmed it, and read the same work orders through REST, AccountContext, and MCP. No work or reservation was persisted before confirmation; no reservation was created by this fixture; observed supply was unchanged. After a later synthetic import changed both quantities, the portfolio queue emitted exact per-need comparisons while both work orders remained PLANNED. No action cause or completion was inferred.
+
+Validation: full `npm.cmd run validate:erp` passed with Core 843, MCP 3, Server 268 passed and 2 Windows platform skips, Web 315, TypeScript, production build, and 20 synthetic browser acceptances. The queue-seeded multi-project scenario passed again after adding the later-import reconciliation assertions. Independent review found no blockers. Review fixed inaccurate stale-selection wording that had implied an automatic refresh. The Vite large-chunk advisory remains. No live-game or production validation was performed.
+
+## Current next substantial milestone
+
+Extend the queue-seeded planning journey into a single explainable fulfillment package that compares selected source alternatives alongside task pathways and reservation conflicts before freezing the plan. Then exercise the whole queue-to-plan-to-later-import workflow with stale, partial, conflicting, and restored evidence across browser, REST, AccountContext, and MCP. Keep task authoring and every game action player-controlled; preserve UNKNOWN for unproven recipe knowledge, access, market facts, routes, and causality. The ERP mission remains active.

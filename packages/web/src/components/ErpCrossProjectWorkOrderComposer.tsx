@@ -44,7 +44,7 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 }
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
-export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; onPrefillConsumed?: () => void }) {
+export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.length === 0 && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
@@ -101,6 +101,31 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     onPrefillConsumed?.();
     requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(prefillNeed.projectId)}-${encodeURIComponent(prefillNeed.needId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
   }, [prefillNeed, editedDraftKeys]);
+  useEffect(() => {
+    if (!prefillNeeds?.length) return;
+    const unique = [...new Map(prefillNeeds.map((need) => [keyOf(need.projectId, need.needId), need])).values()];
+    const available = unique.flatMap((need) => {
+      const key = keyOf(need.projectId, need.needId);
+      const row = rowFor(key);
+      return row?.need ? [{ key, row }] : [];
+    });
+    const missingCount = unique.length - available.length;
+    const capacity = Math.max(0, 20 - selected.length);
+    const additions = available.filter(({ key }) => !selected.includes(key)).slice(0, capacity);
+    setError(missingCount || additions.length < available.filter(({ key }) => !selected.includes(key)).length
+      ? "Some selected portfolio requirements are no longer available or exceed the 20-requirement planning limit. Current eligible requirements were added; review the current evidence before continuing."
+      : "");
+    setReview(null);
+    setSelected((current) => [...new Set([...current, ...additions.map(({ key }) => key)])]);
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const { key, row } of additions) next[key] = next[key] ?? defaultDraft(row.need!.label);
+      return next;
+    });
+    onPrefillConsumed?.();
+    const first = additions[0]?.row;
+    if (first) requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(first.projectId)}-${encodeURIComponent(first.need!.stableId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
+  }, [prefillNeeds]);
   const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setEditedDraftKeys((current) => current.includes(key) ? current : [...current, key]); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
   function prepareReview() {
     if (!selected.length || saving || busy) return;
@@ -208,7 +233,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
       {selected.length > 1 && <label>Portfolio prerequisites (optional)<select multiple aria-label={`Portfolio prerequisites for ${need.label}`} value={draft.prerequisiteKeys.filter((dependency) => selected.includes(dependency))} onChange={(event) => updateDraft(key, { prerequisiteKeys: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{selected.filter((dependency) => dependency !== key).flatMap((dependency) => { const prerequisite = rowFor(dependency); return prerequisite ? <option key={dependency} value={dependency}>{projectById.get(prerequisite.projectId)?.title}: {prerequisite.need!.label}</option> : []; })}</select><small>Choose earlier package requirements that must be observed as met before this step is ready. Work-order completion notes do not satisfy this evidence gate.</small></label>}
     </fieldset>; })}
     {hasPackageCycle && <p role="alert">Portfolio prerequisites contain a cycle. Remove one or more links before saving the package.</p>}
-    {error && <p role="alert">{error} The workbench is refreshing so you can review current evidence.</p>}
+    {error && <p role="alert">{error} Review the current evidence and available requirements before continuing.</p>}
     {!review && <button type="button" className="primary-button" disabled={!selected.length || hasPackageCycle || saving || busy || selected.some((key) => { const row = rowFor(key); const draft = drafts[key]; if (!row?.need || !draft?.title.trim() || !draft.instructions.trim()) return true; const need = row.need; const itemNeed = need.kind === "ITEM_ID" || need.kind === "ITEM_REF"; const structured = itemNeed && Boolean(need.sourceIdentityKey && need.destinationIdentityKey && need.sourceIdentityKey === need.destinationIdentityKey && need.sourceIdentityKey.startsWith(`${version}::`)); if (draft.kind !== "PURCHASE" || !structured) return false; const ceiling = Number(draft.spendingCeilingCopper); return draft.assignedIdentityKey !== need.sourceIdentityKey || !Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > 1_000_000_000; })} onClick={prepareReview}>Review {selected.length} planned manual step{selected.length === 1 ? "" : "s"}</button>}
     {review && <section className="erp-cross-project-plan-review" aria-label="Review planned work batch" data-testid="erp-cross-project-plan-review">
       <h3>Review the complete planning request</h3>
