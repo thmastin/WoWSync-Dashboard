@@ -32,6 +32,8 @@ test("purchase budget review aggregates open ceilings against explicit need inte
     assert.equal(review.lines[0]?.plannedBudgetCopper, 1000);
     assert.equal(review.lines[0]?.remainingPlannedCopper, -200);
     assert.equal(review.lines[0]?.state, "CEILINGS_EXCEED_PLANNED_BUDGET");
+    assert.equal(review.lines[0]?.quoteReview.state, "NO_PLAYER_QUOTES");
+    assert.equal(review.lines[0]?.quoteReview.recentQuoteSubtotalCopper, undefined, "no quotes are not rendered as a zero-copper quote");
     assert.equal(review.lines[0]?.evidence.observedCopper, 12000, "gross observed money stays separate from planned ceilings");
     assert.equal(review.lines[0]?.evidence.projectLocalReservedCopper, 100, "reservations are shown as intent and are not subtracted twice");
     assert.deepEqual(review.lines[0]?.orders.map((order) => [order.targetNeedId, order.targetKind, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", "ITEM_REF", "item:159:0:0", 700], ["cloth", "ITEM_ID", "2589", 500]]);
@@ -59,5 +61,27 @@ test("purchase budget review aggregates open ceilings against explicit need inte
     assert.equal(overflow.linesOverPlannedBudget, 1);
     assert.equal(overflow.lines[0]?.evidence.projectLocalReservedCopper, undefined);
     assert.equal(overflow.lines[0]?.evidence.reservedCopperExceedsSafeInteger, true);
+
+    const quoteByOrder = new Map([["buy-stone", { amountCopper: 650, quantity: 4 }], ["buy-cloth", { amountCopper: 400, quantity: 2 }]]);
+    const quotedProject = {
+      ...base,
+      workOrders: base.workOrders.map((order) => {
+        const quote = quoteByOrder.get(order.stableId);
+        return quote ? { ...order, procurementPlan: { ...order.procurementPlan!, playerQuote: { ...quote, recordedAt: at + 30 } } } : order;
+      }),
+      workOrderReadiness: base.workOrderReadiness.map((entry) => {
+        const quote = quoteByOrder.get(entry.workOrderId);
+        return quote && entry.procurementAssessment ? { ...entry, procurementAssessment: { ...entry.procurementAssessment, playerQuote: { ...quote, recordedAt: at + 30, freshness: "recent" as const, provenance: "PLAYER_REPORTED" as const } } } : entry;
+      }),
+    };
+    const quoted = buildErpProcurementBudgetPortfolioReview([quotedProject], "classic-era");
+    assert.equal(quoted.lines[0]?.quoteReview.state, "RECENT_QUOTES_COVER_OBSERVED_GAPS");
+    assert.equal(quoted.lines[0]?.quoteReview.recentQuoteSubtotalCopper, 1050);
+    assert.equal(quoted.lines[0]?.quoteReview.comparisonToPlannedBudget, "RECENT_QUOTES_ABOVE_PLANNED_BUDGET");
+    const undercoveredProject = { ...quotedProject, workOrders: quotedProject.workOrders.map((order) => order.stableId === "buy-cloth" ? { ...order, procurementPlan: { ...order.procurementPlan!, playerQuote: { amountCopper: 400, quantity: 1, recordedAt: at + 30 } } } : order) };
+    const undercovered = buildErpProcurementBudgetPortfolioReview([undercoveredProject], "classic-era");
+    assert.equal(undercovered.lines[0]?.quoteReview.state, "INCOMPLETE_OR_STALE_QUOTES");
+    assert.equal(undercovered.lines[0]?.quoteReview.quantityInsufficientNeedCount, 1, "quote total for fewer units cannot be compared with the entire need budget");
+    assert.equal(undercovered.lines[0]?.quoteReview.comparisonToPlannedBudget, undefined);
   } finally { store.close(); }
 });
