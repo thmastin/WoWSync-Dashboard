@@ -918,6 +918,83 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] stale observed stock cannot enable a new re
   }
 });
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] a partial source scan allows reservation reduction but blocks increases through UI, REST, AccountContext, and MCP", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-partial-reservation-adjustment-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const initial = store.importSnapshot(renderExport({
+      name: "Partial Evidence Holder", realm: "Cairne", generated: now,
+      bags: observedSection([row(ITEM_ID, 4, { name: "Mycobloom" })], now), bank: observedSection([], now),
+    }));
+    const project = store.createErpProject({ version: "retail", title: "Review a partial reservation", needs: [{
+      stableId: "myco_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 4,
+      sourceIdentityKey: initial.character.identityKey,
+    }], reservations: [{ stableId: "myco_hold", needId: "myco_need", sourceIdentityKey: initial.character.identityKey, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    assert.ok(project);
+    store.importSnapshot(renderExport({
+      name: "Partial Evidence Holder", realm: "Cairne", generated: now + 1,
+      bags: observedSection([row(ITEM_ID, 4, { name: "Mycobloom" })], now + 1),
+      bank: { ...observedSection([], now + 1), status: { state: "OBSERVED", completeness: "partial", observedAt: now + 1 } },
+    }));
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const card = page.locator(".erp-project-card").filter({ hasText: "Review a partial reservation" });
+    const restBefore = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const projectBefore = restBefore.projects.find((entry) => entry.title === "Review a partial reservation");
+    assert.deepEqual(projectBefore.needEvidence[0].sourceSections.map((section) => [section.section, section.state, section.completeness]), [["bags", "OBSERVED", "complete"], ["character bank", "OBSERVED", "partial"]]);
+    assert.equal(projectBefore.needEvidence[0].reservationAssessment.availableObservedLowerBound, 2, "the model may preserve a known lower bound while still recording incomplete evidence");
+
+    await page.evaluate(() => { window.__reservationAdjustmentPrompt = ""; window.__reservationAdjustmentValue = "3"; window.prompt = (message) => { window.__reservationAdjustmentPrompt = message; return window.__reservationAdjustmentValue; }; });
+    await card.getByRole("button", { name: "Adjust 2" }).click();
+    await page.getByRole("alert").getByText(/Current evidence does not support a larger reservation/).waitFor();
+    const prompt = await page.evaluate(() => window.__reservationAdjustmentPrompt);
+    assert.match(prompt, /New reservation quantity \(1–2\)/, "the UI does not use a partial-scan lower bound to authorize an increase");
+
+    const bypass = await page.evaluate(async ({ projectId, project }) => {
+      const next = { ...project, reservations: project.reservations.map((reservation) => ({ ...reservation, quantity: 3 })) };
+      const response = await fetch(`/api/versions/retail/erp/projects/${encodeURIComponent(projectId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: project.revision, project: next }) });
+      return { status: response.status, body: await response.json() };
+    }, { projectId: projectBefore.stableId, project: projectBefore });
+    assert.equal(bypass.status, 409, "the generic REST mutation path enforces evidence and capacity independently of the browser");
+    assert.equal(bypass.body.code, "RESERVATION_EVIDENCE_UNAVAILABLE");
+    let current = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Review a partial reservation"));
+    assert.equal(current.reservations[0].quantity, 2, "rejected UI and REST increases preserve the original hold");
+
+    await page.evaluate(() => { window.__reservationAdjustmentValue = "1"; });
+    await card.getByRole("button", { name: "Adjust 2" }).click();
+    await page.waitForFunction(async (stableId) => {
+      const projects = await (await fetch("/api/versions/retail/erp/projects")).json();
+      return projects.projects.find((entry) => entry.stableId === stableId)?.reservations[0]?.quantity === 1;
+    }, projectBefore.stableId);
+    current = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Review a partial reservation"));
+    const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.deepEqual(context.planning.projects.find((entry) => entry.stableId === current.stableId).reservationReviewStates, { WITHIN_OBSERVED_SUPPLY: 1 }, "AccountContext carries only the same review state represented by the reduced hold");
+    assert.equal(current.reservations[0].quantity, 1, "a player-requested reduction remains allowed despite incomplete evidence");
+    assert.equal(current.reservationReview[0].state, "WITHIN_OBSERVED_SUPPLY");
+    mcpClient = new Client({ name: "wowsync-partial-reservation-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 10 } });
+    const mcpProject = mcp.structuredContent.projects.find((entry) => entry.stableId === current.stableId);
+    assert.deepEqual(mcpProject.reservations, current.reservations);
+    assert.deepEqual(mcpProject.needEvidence, current.needEvidence);
+    assert.deepEqual(mcpProject.reservationReview, current.reservationReview);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("[SYNTHETIC BROWSER ACCEPTANCE] group multiple assessed requirements into one linked fulfillment review", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-multi-need-review-browser-"));
