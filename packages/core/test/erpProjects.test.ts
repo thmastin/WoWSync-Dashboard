@@ -887,6 +887,10 @@ test("RETRIEVE reviews paired personal bags and bank observations without claimi
     const need = { stableId: "retrieve_stone", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
     const order = { stableId: "retrieve_step", kind: "RETRIEVE" as const, status: "PLANNED" as const, title: "Review bank retrieval", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
     const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [order] };
+    const evidence = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).needEvidence[0]!;
+    assert.equal(evidence.sourceSections.find((section) => section.section === "bags")?.matchingQuantity, 1, "complete current bags expose their own matching count");
+    assert.equal(evidence.sourceSections.find((section) => section.section === "character bank")?.matchingQuantity, 2, "complete current bank exposes its own matching count without merging locations");
+    assert.equal(evidence.sourceSections.find((section) => section.section === "bags")?.matchingPotentialQuantity, undefined, "current counts are not duplicated as historical potential supply");
     const read = (now: number) => evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], now).workOrderProgress[0]!;
     const review = read(baseAt + 110).retrievalObservationReviews?.[0];
     assert.equal(review?.state, "BAGS_AND_BANK_CHANGED", JSON.stringify(review));

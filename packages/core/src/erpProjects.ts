@@ -248,7 +248,7 @@ export interface ErpNeedEvidence {
   readonly freshness: "recent" | "stale" | "unknown";
   readonly sourceOwnerKey?: string;
   readonly ownerScope?: "warband-installation-local" | "guild";
-  readonly sourceSections: readonly { section: "character" | "bags" | "character bank" | "currencies" | "shared storage"; state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; completeness?: string }[];
+  readonly sourceSections: readonly { section: "character" | "bags" | "character bank" | "currencies" | "shared storage"; state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; completeness?: string; /** Matching count only when this exact section was complete and fully quantified. */ matchingQuantity?: number; /** Historical matching count, kept separate from current supply. */ matchingPotentialQuantity?: number }[];
   readonly unresolvedSections: readonly string[];
   readonly unknownQuantityRowCount: number;
   readonly observationChange?: ResourceObservationChange;
@@ -546,16 +546,22 @@ export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredS
   let anyObserved = false;
   const sourceSections: ErpNeedEvidence["sourceSections"][number][] = [];
   for (const [name, section] of [["bags", snapshot.parsed.bags], ["character bank", snapshot.parsed.bank]] as const) {
+    const sourceSectionIndex = sourceSections.length;
     sourceSections.push({ section: name, state: section.status.state, ...(section.status.observedAt !== undefined ? { observedAt: section.status.observedAt } : {}), ...(section.status.completeness ? { completeness: section.status.completeness } : {}) });
     if (section.status.state === "UNKNOWN") { unresolvedSections.push(name); continue; }
     const target = section.status.state === "OBSERVED" ? "observed" : "potential";
     if (target === "observed") anyObserved = true;
+    let sectionMatches = 0;
+    let sectionFullyQuantified = section.status.completeness?.toLowerCase() === "complete";
     for (const row of section.items) {
       const matches = need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : itemId(row.itemRef) === Number(need.resourceKey);
-      if (!matches) { if (!row.itemRef) unresolvedSections.push(`${name}: unidentified item row`); continue; }
-      if (row.qty === undefined) { unknownQuantityRowCount++; continue; }
+      if (!row.itemRef) { unresolvedSections.push(`${name}: unidentified item row`); sectionFullyQuantified = false; continue; }
+      if (!matches) continue;
+      if (row.qty === undefined) { unknownQuantityRowCount++; sectionFullyQuantified = false; continue; }
+      sectionMatches += row.qty;
       if (target === "observed") observedQuantity += row.qty; else potentialQuantity += row.qty;
     }
+    if (sectionFullyQuantified) sourceSections[sourceSectionIndex] = { ...sourceSections[sourceSectionIndex]!, ...(target === "observed" ? { matchingQuantity: sectionMatches } : { matchingPotentialQuantity: sectionMatches }) };
   }
   const allCurrentSectionsComplete = [snapshot.parsed.bags, snapshot.parsed.bank].every((section) => section.status.state === "OBSERVED" && section.status.completeness?.toLowerCase() === "complete");
   if (!anyObserved) unresolvedSections.push("no currently observed storage section");

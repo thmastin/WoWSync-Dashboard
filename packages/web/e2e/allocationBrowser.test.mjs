@@ -759,3 +759,64 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retrieval only from fresh complete section evidence", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-personal-bank-plan-"));
+  let store; let server; let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const capture = (name, realm, generated, bags, bank) => renderExport({ name, realm, generated, bags: observedSection(bags ? [row(ITEM_ID, bags, { name: "Mycobloom" })] : [], generated), bank: observedSection(bank ? [row(ITEM_ID, bank, { name: "Mycobloom" })] : [], generated), guild: guildSection(`gclub-${name.toLowerCase().replaceAll(" ", "-")}`, [], generated) });
+    const freshIdentity = store.importSnapshot(capture("Bank Planner", "Cairne", now, 1, 3)).character.identityKey;
+    const staleIdentity = store.importSnapshot(capture("Stale Planner", "Cairne", now - 14 * 86400, 1, 3)).character.identityKey;
+    const reservedIdentity = store.importSnapshot(capture("Reserved Planner", "Cairne", now, 1, 3)).character.identityKey;
+    store.createErpProject({ version: "retail", title: "Review fresh bank supply", needs: [{ stableId: "fresh_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
+    store.createErpProject({ version: "retail", title: "Review base-id bank supply", needs: [{ stableId: "base_id_bank_need", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom base ID", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
+    store.createErpProject({ version: "retail", title: "Review stale bank supply", needs: [{ stableId: "stale_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: staleIdentity, destinationIdentityKey: staleIdentity }] });
+    store.createErpProject({ version: "retail", title: "Competing reservation", needs: [{ stableId: "reserved_elsewhere", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 2, sourceIdentityKey: reservedIdentity }], reservations: [{ stableId: "hold_reserved_supply", needId: "reserved_elsewhere", sourceIdentityKey: reservedIdentity, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    store.createErpProject({ version: "retail", title: "Review reserved bank supply", needs: [{ stableId: "reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: reservedIdentity, destinationIdentityKey: reservedIdentity }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const errors = []; page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const fresh = page.locator(".erp-project-card").filter({ hasText: "Review fresh bank supply" }); await fresh.waitFor();
+    await fresh.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).click();
+    const form = fresh.locator("form.erp-inline-form");
+    await form.getByRole("textbox", { name: "Action" }).waitFor();
+    await form.getByLabel("Manual instructions").waitFor();
+    const instructions = await form.getByLabel("Manual instructions").inputValue();
+    assert.match(instructions, /Recent complete OBSERVED sections show 1 matching unit in Bank Planner.* bags and 3 in that character's personal bank/);
+    assert.match(instructions, /planning comparison, not proof of current access, bank interaction, or retrieval/);
+    assert.equal(await form.getByLabel("Assigned character").inputValue(), freshIdentity);
+    assert.equal(await form.getByLabel("Planned source character").inputValue(), freshIdentity);
+    assert.equal(await form.getByLabel("Intended destination character").inputValue(), freshIdentity);
+    await form.getByRole("button", { name: "Add work order" }).click();
+    const planned = fresh.locator(".erp-work-order-list li").filter({ hasText: "Review personal-bank retrieval: Mycobloom" });
+    await planned.waitFor();
+    assert.match(await planned.innerText(), /RETRIEVE · PLANNED/);
+    assert.match(await planned.innerText(), /No action is executed/);
+    await fresh.getByText("An active personal-bank RETRIEVE review is already linked to this character and need.").waitFor();
+    const stale = page.locator(".erp-project-card").filter({ hasText: "Review stale bank supply" }); await stale.waitFor();
+    assert.equal(await stale.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "stale snapshots do not create retrieval plans");
+    const baseId = page.locator(".erp-project-card").filter({ hasText: "Review base-id bank supply" }); await baseId.waitFor();
+    assert.equal(await baseId.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "base-ID needs do not collapse exact item variants for retrieval planning");
+    const reserved = page.locator(".erp-project-card").filter({ hasText: "Review reserved bank supply" }); await reserved.waitFor();
+    assert.equal(await reserved.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "competing reservations do not imply that the full bank quantity is available to this project");
+    const record = await page.evaluate(async () => { const projects = (await (await fetch("/api/versions/retail/erp/projects")).json()).projects; const project = projects.find((entry) => entry.title === "Review fresh bank supply"); return project.workOrders.find((entry) => entry.kind === "RETRIEVE"); });
+    assert.equal(record.status, "PLANNED");
+    assert.equal(record.sourceIdentityKey, freshIdentity);
+    assert.equal(record.destinationIdentityKey, freshIdentity);
+    assert.equal(record.assignedIdentityKey, freshIdentity);
+    assert.match(record.instructions, /not proof of current access/);
+    assert.deepEqual(errors, []);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
