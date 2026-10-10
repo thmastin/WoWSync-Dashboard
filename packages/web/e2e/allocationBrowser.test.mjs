@@ -1339,7 +1339,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
-    await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).check();
+    await page.getByRole("button", { name: "Add Mycobloom to grouped planning", exact: true }).click();
+    await page.waitForFunction(() => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes("Provision the crafter") && input.closest("label")?.innerText.includes("Mycobloom")));
+    assert.equal(await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).isChecked(), true, "the per-need pathway review selects the exact requirement in the existing grouped planner");
     await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
     await composer.getByRole("checkbox", { name: /Provision the reserve crafter · Mycobloom reserve/ }).check();
     const firstEvidence = composer.locator(".erp-cross-project-choice").filter({ hasText: /Provision the crafter · Mycobloom/ }).first();

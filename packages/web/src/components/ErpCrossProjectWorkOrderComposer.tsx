@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
 import { ERP_WORK_ORDER_TYPES } from "@wowsync-dashboard/core/erpWorkOrderTypes.ts";
 import type { ErpFulfillmentTriage, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
@@ -29,7 +29,7 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 }
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
-export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, commitments, characters, busy, onSaved }: { version: Version; triage: ErpFulfillmentTriage; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void }) {
+export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, commitments, characters, busy, onSaved, prefillNeed, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string } | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.length === 0 && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
@@ -57,6 +57,26 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
       return selected.includes(key) ? current : { ...current, [key]: current[key] ?? defaultDraft(row.need!.label) };
     });
   };
+  useEffect(() => {
+    if (!prefillNeed) return;
+    const key = keyOf(prefillNeed.projectId, prefillNeed.needId);
+    const row = rowFor(key);
+    if (!row?.need) {
+      setError("This requirement is not available for grouped planning in the current version and project state. Reload current project evidence before planning it.");
+      onPrefillConsumed?.();
+      return;
+    }
+    if (!selected.includes(key) && selected.length >= 20) {
+      setError("The grouped planning session already contains its 20-requirement limit. Remove one selection before adding this requirement.");
+      onPrefillConsumed?.();
+      return;
+    }
+    setError(""); setReview(null);
+    setSelected((current) => current.includes(key) || current.length >= 20 ? current : [...current, key]);
+    setDrafts((current) => ({ ...current, [key]: current[key] ?? defaultDraft(row.need!.label) }));
+    onPrefillConsumed?.();
+    requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(prefillNeed.projectId)}-${encodeURIComponent(prefillNeed.needId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
+  }, [prefillNeed]);
   const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
   function prepareReview() {
     if (!selected.length || saving || busy) return;
@@ -131,7 +151,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
       const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);
       const exactLine = commitments.items.find((line) => line.version === version && line.kind === need.kind && line.resourceKey === need.resourceKey && (need.sourceIdentityKey ? line.sourceScope === "CHARACTER" && line.sourceIdentityKey === need.sourceIdentityKey : need.sourceOwnerKey ? line.sourceScope === "SHARED_OWNER" && line.sourceOwnerKey === need.sourceOwnerKey : line.sourceScope === "UNKNOWN_SOURCE" && line.contributors.some((entry) => entry.projectId === project.stableId && entry.needId === need.stableId)));
       const displayedEvidence = evidence ? `Current-source evidence: ${evidence.state.replaceAll("_", " ")} · ${evidence.observedQuantity === undefined ? "observed quantity UNKNOWN" : `${evidence.observedQuantity} observed`} · ${evidence.freshness} freshness${evidence.observedAt === undefined ? " · time UNKNOWN" : ` · ${new Date(evidence.observedAt * 1000).toLocaleString()}`}.` : "Current-source evidence: UNKNOWN (no matching evidence row).";
-      return <label key={key} className="erp-cross-project-choice"><input type="checkbox" checked={selected.includes(key)} disabled={!selected.includes(key) && selected.length >= 20} onChange={() => toggle(row)} /><span><strong>{project.title} · {need.label}</strong><small>{need.kind} <code>{need.resourceKey}</code> · requires {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · freshness {need.freshness}</small><small>Source: {need.sourceIdentityKey ?? need.sourceOwnerKey ?? "UNKNOWN"} · destination: {need.destinationIdentityKey ?? "unassigned"}</small><small>{displayedEvidence} {evidence?.unresolvedSections.length ? `Unresolved: ${evidence.unresolvedSections.join(", ")}.` : ""}</small>
+      return <label key={key} id={`erp-cross-project-need-${encodeURIComponent(row.projectId)}-${encodeURIComponent(need.stableId)}`} className="erp-cross-project-choice"><input type="checkbox" checked={selected.includes(key)} disabled={!selected.includes(key) && selected.length >= 20} onChange={() => toggle(row)} /><span><strong>{project.title} · {need.label}</strong><small>{need.kind} <code>{need.resourceKey}</code> · requires {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · freshness {need.freshness}</small><small>Source: {need.sourceIdentityKey ?? need.sourceOwnerKey ?? "UNKNOWN"} · destination: {need.destinationIdentityKey ?? "unassigned"}</small><small>{displayedEvidence} {evidence?.unresolvedSections.length ? `Unresolved: ${evidence.unresolvedSections.join(", ")}.` : ""}</small>
         {exactLine ? <small>Same-source exact-scope commitments: {exactLine.activeNeedCount} active needs / {exactLine.activeNeedQuantity} planned units · {exactLine.activeReservationQuantity} exact-scope units reserved · {exactLine.reservationState.replaceAll("_", " ")} · {exactLine.availableObservedLowerBound === undefined ? "unreserved observed lower bound UNKNOWN" : `${exactLine.availableObservedLowerBound} observed lower-bound units not reserved under this scope`} · {exactLine.freshness} freshness. Other contributing projects: {exactLine.contributors.filter((entry) => entry.projectId !== project.stableId || entry.needId !== need.stableId).map((entry) => entry.projectTitle).join(", ") || (exactLine.contributorsTruncated ? "additional contributors omitted by bound" : "none recorded in this exact source/resource scope")}.</small>
           : <small>Combined exact-source commitment line unavailable{commitments.truncated ? " because the commitment summary is bounded" : " for this source and resource"}; reservation and available quantity remain UNKNOWN in this session view.</small>}
         {exactLine?.overlappingReservations.length ? <small>Overlapping reservations need separate review and may not be added{exactLine.overlappingReservationQuantity === undefined ? " (overlapping quantity UNKNOWN)" : ` (${exactLine.overlappingReservationQuantity} overlapping units assessed)`}: {exactLine.overlappingReservations.map((entry) => `${entry.projectTitle} ${entry.quantity} ${entry.kind} ${entry.resourceKey}${entry.ambiguous ? " (scope ambiguous)" : ""}`).join("; ")}.</small> : exactLine?.overlappingResourceKeys.length ? <small>Potentially overlapping planned resource scopes: {exactLine.overlappingResourceKeys.join(", ")}; do not add these quantities into the exact-scope stock line.</small> : null}
