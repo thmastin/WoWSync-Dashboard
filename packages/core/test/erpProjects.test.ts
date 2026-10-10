@@ -673,6 +673,63 @@ test("RETRIEVE work orders are first-class manual actions and never imply storag
     assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
     assert.match(readiness.reason, /does not establish current access or retrieval eligibility/);
     assert.equal(read.workOrderProgress[0]?.transferObservationReviews, undefined, "retrieval is not treated as a character-to-character transfer");
+    assert.equal(read.workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "one snapshot and inaccessible bank data cannot establish a retrieval comparison");
+  } finally { store.close(); }
+});
+
+test("RETRIEVE reviews paired personal bags and bank observations without claiming a retrieval occurred", () => {
+  const baseAt = 1_700_300_000;
+  const capture = (bags: number, bank: number | undefined, at: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: bags ? [{ itemRef: ITEM, name: "Rough Stone", qty: bags }] : [] }] }, bank: bank === undefined ? { unknown: true } : { containers: [{ id: 0, capacity: 28, items: bank ? [{ itemRef: ITEM, name: "Rough Stone", qty: bank }] : [] }] } });
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const identityKey = store.importSnapshot(capture(0, 3, baseAt)).character.identityKey;
+    store.importSnapshot(capture(1, 2, baseAt + 100));
+    const need = { stableId: "retrieve_stone", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const order = { stableId: "retrieve_step", kind: "RETRIEVE" as const, status: "PLANNED" as const, title: "Review bank retrieval", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [order] };
+    const read = (now: number) => evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], now).workOrderProgress[0]!;
+    const review = read(baseAt + 110).retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "BAGS_AND_BANK_CHANGED", JSON.stringify(review));
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(review?.freshness, "recent");
+    assert.deepEqual(review?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 0, 1, 1], ["character bank", 3, 2, -1]]);
+    assert.deepEqual(review?.unresolvedSections, []);
+    assert.equal(read(baseAt + 110).completionRecorded, false);
+    assert.match(review?.reason ?? "", /do not establish a retrieval, access, ownership, or cause/);
+    assert.equal(read(baseAt + 5 * 86400).retrievalObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "stale pairs retain no current retrieval conclusion");
+    assert.equal(read(baseAt + 5 * 86400).retrievalObservationReviews?.[0]?.freshness, "stale");
+    store.importSnapshot(capture(1, 2, baseAt + 200));
+    assert.equal(read(baseAt + 210).retrievalObservationReviews?.[0]?.state, "NO_COMPARABLE_CHANGE", "unchanged complete storage is reported without concluding no action occurred");
+    store.importSnapshot(capture(2, undefined, baseAt + 300));
+    const partialNeed = { ...need, destinationIdentityKey: undefined };
+    const partialPlan: ErpProject = { ...plan, needs: [partialNeed] };
+    const partial = evaluateErpProject(partialPlan, (key) => store.listSnapshots(key), [partialPlan], baseAt + 310).workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(partial?.state, "PARTIAL_COMPARISON", "a fresh bag delta remains visible while an unobserved bank is explicitly unresolved");
+    assert.deepEqual(partial?.unresolvedSections, ["character bank"]);
+    assert.deepEqual(partial?.comparisons.map((entry) => entry.section), ["bags"]);
+    const conflicting: ErpProject = { ...plan, workOrders: [{ ...order, destinationIdentityKey: "classic-era::realm a::another" }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], baseAt + 210).workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "IDENTITY_CONFLICT");
+    store.importSnapshot(capture(2, 1, baseAt + 350));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 400, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: baseAt + 1_000, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { observedAt: baseAt + 400, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } }));
+    const mixedTimestamp = read(baseAt + 410).retrievalObservationReviews?.[0];
+    assert.equal(mixedTimestamp?.state, "EVIDENCE_UNKNOWN", "a future-dated bag section cannot be masked by a recent bank timestamp");
+    assert.equal(mixedTimestamp?.freshness, "unknown");
+    assert.deepEqual(mixedTimestamp?.comparisons.map(({ section }) => section), ["bags", "character bank"], "both independently timestamped sections participate in this regression case");
+  } finally { store.close(); }
+});
+
+test("a shared-storage RETRIEVE plan remains valid UNKNOWN instead of comparing a character as the owner", () => {
+  const { store, identityKey } = seedRetailCurrency();
+  try {
+    const need = { stableId: "shared_retrieve", kind: "ITEM_REF" as const, resourceKey: "item:159", label: "Observed item", requiredQuantity: 1, sourceOwnerKey: "retail::warband::local", destinationIdentityKey: identityKey };
+    const order = { stableId: "retrieve_shared", kind: "RETRIEVE" as const, status: "PLANNED" as const, title: "Review Warband retrieval", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), version: "retail", needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "EVIDENCE_UNKNOWN");
+    assert.deepEqual(review?.comparisons, []);
+    assert.match(review?.reason ?? "", /shared storage.*Historical owner observations are not available/);
+    const conflicting: ErpProject = { ...plan, workOrders: [{ ...order, sourceIdentityKey: identityKey }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "a character source cannot replace the explicitly selected shared owner");
   } finally { store.close(); }
 });
 

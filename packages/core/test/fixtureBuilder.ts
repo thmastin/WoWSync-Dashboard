@@ -123,11 +123,13 @@ export interface FixtureOptions {
     slots?: FixtureEquipmentSlot[];
     unknown?: boolean;
     partial?: boolean;
+    observedAt?: number;
   };
   bags?: {
     containers?: FixtureContainer[];
     unknown?: boolean;
     partial?: boolean;
+    observedAt?: number;
   };
   bank?: {
     containers?: FixtureContainer[];
@@ -137,6 +139,7 @@ export interface FixtureOptions {
     lastSeen?: boolean;
     unknown?: boolean;
     partial?: boolean;
+    observedAt?: number;
   };
   professions?: {
     entries?: FixtureProfession[];
@@ -276,7 +279,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", `OBSERVED; ${e.partial ? "partial" : "complete"}; observed=` + generatedAt));
+      out.push(field("State", `OBSERVED; ${e.partial ? "partial" : "complete"}; observed=${e.observedAt ?? generatedAt}`));
       out.push(row("slot", "itemRef", "name", "ilvl", "requiredLevel", "effectiveStats"));
       const bySlot = new Map((e.slots ?? []).map((s) => [s.slot, s]));
       for (const [slot, defaultName] of ALL_EQUIP_SLOTS) {
@@ -300,7 +303,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", `OBSERVED; ${b.partial ? "partial" : "complete"}; observed=` + generatedAt));
+      out.push(field("State", `OBSERVED; ${b.partial ? "partial" : "complete"}; observed=${b.observedAt ?? generatedAt}`));
       out.push(...inventoryBody(b.containers ?? []));
     }
     sections.push(out.join("\n"));
@@ -315,7 +318,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("Reason", "Not observed"));
     } else {
       if (bk.snapshotVisit !== undefined) out.push(field("LastVisit", bk.snapshotVisit));
-      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; ${bk.partial ? "partial" : "complete"}; observed=` + generatedAt));
+      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; ${bk.partial ? "partial" : "complete"}; observed=${bk.observedAt ?? generatedAt}`));
       if (bk.coverage) out.push(field("Coverage", bk.coverage));
       if (bk.snapshotVisit !== undefined) out.push(field("SnapshotVisit", bk.snapshotVisit));
       if (bk.purchasedBagSlots !== undefined) out.push(field("PurchasedBankBagSlots", bk.purchasedBagSlots));

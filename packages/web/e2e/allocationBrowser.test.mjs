@@ -254,28 +254,27 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await provisionOrder.getByText("Compare planned provisioning source and recipient observations (relationship unknown)").click();
     const provisionReview = await provisionOrder.innerText();
     assert.match(provisionReview, /BOTH SIDES CHANGED/);
-    assert.match(provisionReview, /Source .*Other Potential Holder.*recent comparable quantity change/);
-    assert.match(provisionReview, /Recipient .*Project Fixture.*recent comparable quantity change/);
+    assert.match(provisionReview, /Source: Other Potential Holder.*recent comparable quantity change/);
+    assert.match(provisionReview, /Recipient: Project Fixture.*recent comparable quantity change/);
     assert.match(provisionReview, /does not establish that the resources moved/);
     assert.match(provisionReview, /PROVISION.*PLANNED/);
     assert.doesNotMatch(provisionReview, /PROVISION.*COMPLETED/);
 
     await provisionForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
-    const orderForm = projectCard.locator("form.erp-inline-form");
+    const orderForm = projectCard.locator("form.erp-inline-form").last();
     await orderForm.getByLabel("Action", { exact: true }).fill("Manually review possible retrieval of observed supply");
     await orderForm.getByLabel("Action type").selectOption("RETRIEVE");
-    assert.match(await projectCard.locator("form.erp-inline-form").last().innerText(), /Retrieval from bank or shared storage remains player-controlled and requires the player to confirm current access/);
+    assert.match(await orderForm.innerText(), /Retrieval from bank or shared storage remains player-controlled and requires the player to confirm current access/);
     await orderForm.getByLabel("Linked resource needs").selectOption({ label: "Mycobloom" });
     await orderForm.getByRole("button", { name: "Add work order" }).click();
     const order = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Manually review possible retrieval of observed supply" });
     await order.waitFor();
     const progressText = await order.innerText();
     assert.match(progressText, /Current linked resource shortfall/, progressText);
-    assert.match(progressText, /RETRIEVE · PLANNED/, "observed stock shortfall does not auto-complete the manual work order");
+    assert.match(progressText, /RETRIEVE .*PLANNED/);
     assert.doesNotMatch(progressText, /COMPLETED/);
-
-    await orderForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Hide forms" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const professionForm = projectCard.locator("form.erp-inline-form");
     await professionForm.getByLabel("Kind").selectOption("PROFESSION");
@@ -362,6 +361,52 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(persistedProject.needs.find((entry) => entry.stableId === persistedPurchase.procurementPlan.targetNeedId).destinationIdentityKey, persistedPurchase.assignedIdentityKey);
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank and bag evidence without declaring the work complete", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-retrieval-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const snapshot = (bags, bank, generated) => renderExport({ name: "Retrieval Fixture", realm: "Cairne", generated, bags: observedSection(bags ? [row(ITEM_ID, bags, { name: "Mycobloom" })] : [], generated), bank: observedSection(bank ? [row(ITEM_ID, bank, { name: "Mycobloom" })] : [], generated), warband: warbandSection("OBSERVED", [], generated), guild: guildSection("gclub-retrieval-fixture", [], generated) });
+    store.importSnapshot(snapshot(0, 3, now - 100));
+    const character = store.listCharacters("retail").find((entry) => entry.name === "Retrieval Fixture");
+    assert.ok(character);
+    store.importSnapshot(snapshot(1, 2, now));
+    store.createErpProject({ version: "retail", title: "Review personal bank retrieval", needs: [{ stableId: "retrieval_item", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom", requiredQuantity: 1, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "retrieve_step", kind: "RETRIEVE", status: "PLANNED", title: "Check personal storage observations", resourceNeedIds: ["retrieval_item"], dependsOn: [], assignedIdentityKey: character.identityKey, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const projectCard = page.locator(".erp-project-card").filter({ hasText: "Review personal bank retrieval" });
+    await projectCard.waitFor();
+    const workOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Check personal storage observations" });
+    await workOrder.getByText("Compare planned retrieval across personal bags and bank (cause unknown)").click();
+    const review = await workOrder.innerText();
+    assert.match(review, /BAGS AND BANK CHANGED/);
+    assert.match(review, /bags: 0 to 1 \(\+1\)/);
+    assert.match(review, /character bank: 3 to 2 \(-1\)/);
+    assert.match(review, /The changes do not establish a retrieval, access, ownership, or cause/);
+    assert.match(review, /RETRIEVE · PLANNED/);
+    assert.doesNotMatch(review, /RETRIEVE.*COMPLETED/);
+    assert.deepEqual(pageErrors, []);
   } finally {
     if (browser) await browser.close();
     if (server) await new Promise((resolve) => server.close(() => resolve()));

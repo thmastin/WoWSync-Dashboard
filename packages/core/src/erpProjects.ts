@@ -806,6 +806,7 @@ export interface ErpWorkOrderProgress {
   readonly changedNeedIds: readonly string[];
   readonly transferObservationReviews?: readonly ErpTransferObservationReview[];
   readonly provisioningObservationReviews?: readonly ErpTransferObservationReview[];
+  readonly retrievalObservationReviews?: readonly ErpRetrievalObservationReview[];
   readonly procurementObservationReview?: ErpProcurementObservationReview;
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
   readonly reason: string;
@@ -842,6 +843,19 @@ export interface ErpPlannedOutputAssessment {
   readonly sourceSections: ErpNeedEvidence["sourceSections"];
   readonly unresolvedSections: readonly string[];
   readonly observationChange: "CHANGED" | "UNCHANGED" | "UNKNOWN";
+  readonly reason: string;
+}
+
+export interface ErpRetrievalObservationReview {
+  readonly needId: string;
+  readonly kind: "ITEM_ID" | "ITEM_REF";
+  readonly resourceKey: string;
+  readonly characterIdentityKey?: string;
+  readonly state: "BAGS_AND_BANK_CHANGED" | "BANK_ONLY_CHANGED" | "BAGS_ONLY_CHANGED" | "NO_COMPARABLE_CHANGE" | "PARTIAL_COMPARISON" | "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT";
+  readonly interpretation: "CAUSE_UNKNOWN";
+  readonly freshness: Freshness;
+  readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly unresolvedSections: readonly ("bags" | "character bank")[];
   readonly reason: string;
 }
 
@@ -883,7 +897,7 @@ function transferSideObservation(need: ErpResourceNeed, identityKey: string | un
 
 function resourceMovementObservationReviews(project: ErpProject, order: ErpWorkOrder, movementKind: "TRANSFER" | "PROVISION", snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies): ErpTransferObservationReview[] {
   if (order.kind !== movementKind) return [];
-  return order.resourceNeedIds.flatMap((needId) => {
+  return order.resourceNeedIds.flatMap<ErpTransferObservationReview>((needId) => {
     const need = project.needs.find((entry) => entry.stableId === needId);
     if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
     const sharedOwnerSourceConflict = Boolean(need.sourceOwnerKey && order.sourceIdentityKey);
@@ -919,6 +933,46 @@ function resourceMovementObservationReviews(project: ErpProject, order: ErpWorkO
       : state === "DESTINATION_ONLY_CHANGED" ? `Only the explicitly named destination changed in comparable evidence. Appearance does not establish ${movementAction}, ownership, or cause.`
       : `Recent comparable observations show no quantity change for this resource scope; this does not prove that no unobserved ${movementAction} occurred.`);
     return [{ needId, kind: need.kind, resourceKey: need.resourceKey, source, destination, state, interpretation: "CAUSE_UNKNOWN" as const, reason }];
+  });
+}
+
+function retrievalObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies): ErpRetrievalObservationReview[] {
+  if (order.kind !== "RETRIEVE") return [];
+  return order.resourceNeedIds.flatMap<ErpRetrievalObservationReview>((needId) => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const selected = [order.assignedIdentityKey, order.sourceIdentityKey, order.destinationIdentityKey, need.sourceIdentityKey, need.destinationIdentityKey].filter((key): key is string => Boolean(key));
+    const characterIdentityKey = selected[0];
+    const sharedOwnerSourceConflict = Boolean(need.sourceOwnerKey && (order.sourceIdentityKey || need.sourceIdentityKey));
+    const conflicts = new Set(selected).size > 1 || sharedOwnerSourceConflict;
+    let unresolvedSections: Array<"bags" | "character bank"> = ["bags", "character bank"];
+    const identityConflict = conflicts || Boolean(characterIdentityKey && !characterIdentityKey.startsWith(`${project.version}::`));
+    if (identityConflict) return [{ needId, kind: need.kind, resourceKey: need.resourceKey, ...(characterIdentityKey ? { characterIdentityKey } : {}), state: "IDENTITY_CONFLICT" as const, interpretation: "CAUSE_UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], unresolvedSections, reason: sharedOwnerSourceConflict ? "The retrieval work order names a character source while the linked need names shared storage. These scopes conflict; no character inventory is compared as the owner source." : "The retrieval plan names conflicting character identities or a character from another game version; no comparison is made." }];
+    if (need.sourceOwnerKey) return [{ needId, kind: need.kind, resourceKey: need.resourceKey, ...(characterIdentityKey ? { characterIdentityKey } : {}), state: "EVIDENCE_UNKNOWN" as const, interpretation: "CAUSE_UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], unresolvedSections, reason: "The linked need selects shared storage. Historical owner observations are not available as a paired before/after retrieval comparison; ownership, access, and a retrieval outcome remain UNKNOWN." }];
+    if (!characterIdentityKey) return [{ needId, kind: need.kind, resourceKey: need.resourceKey, state: "EVIDENCE_UNKNOWN" as const, interpretation: "CAUSE_UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], unresolvedSections, reason: "No explicit same-version character is selected for this retrieval review." }];
+    const evidence = assessErpNeed({ ...need, sourceIdentityKey: characterIdentityKey, destinationIdentityKey: undefined, sourceOwnerKey: undefined }, snapshotsFor(characterIdentityKey), now, currencies, project.version);
+    const comparisons = evidence.observationChange?.comparisons ?? [];
+    const bySection = new Map(comparisons.map((comparison) => [comparison.section, comparison]));
+    unresolvedSections = unresolvedSections.filter((section) => !bySection.has(section));
+    const comparisonFreshness = comparisons.flatMap((comparison) => [
+      evidenceFreshness(comparison.previousObservedAt, now),
+      evidenceFreshness(comparison.currentObservedAt, now),
+    ]);
+    const freshness: Freshness = !comparisons.length || comparisonFreshness.includes("unknown") ? "unknown"
+      : comparisonFreshness.includes("stale") ? "stale" : "recent";
+    const bagsChanged = (bySection.get("bags")?.delta ?? 0) !== 0;
+    const bankChanged = (bySection.get("character bank")?.delta ?? 0) !== 0;
+    const completePair = unresolvedSections.length === 0;
+    const state: ErpRetrievalObservationReview["state"] = freshness !== "recent" ? "EVIDENCE_UNKNOWN"
+      : !completePair ? "PARTIAL_COMPARISON"
+      : bagsChanged && bankChanged ? "BAGS_AND_BANK_CHANGED"
+      : bankChanged ? "BANK_ONLY_CHANGED"
+      : bagsChanged ? "BAGS_ONLY_CHANGED" : "NO_COMPARABLE_CHANGE";
+    const reason = state === "EVIDENCE_UNKNOWN" ? `${evidence.reason} A stale or missing before/after section does not establish a current retrieval result.`
+      : state === "PARTIAL_COMPARISON" ? `Only ${comparisons.map((entry) => entry.section).join(" and ") || "no personal storage sections"} had comparable complete observations; ${unresolvedSections.join(" and ")} remain UNKNOWN. ${evidence.observationChange?.reason ?? evidence.reason}`
+      : state === "NO_COMPARABLE_CHANGE" ? "Recent complete bags and character-bank observations show no quantity change for this item scope; this does not prove no retrieval or other action occurred."
+      : `Recent complete bags and character-bank observations changed (${comparisons.map((entry) => `${entry.section}: ${entry.previousQuantity} to ${entry.currentQuantity} (${entry.delta > 0 ? "+" : ""}${entry.delta})`).join("; ")}). The changes do not establish a retrieval, access, ownership, or cause.`;
+    return [{ needId, kind: need.kind, resourceKey: need.resourceKey, characterIdentityKey, state, interpretation: "CAUSE_UNKNOWN" as const, freshness, comparisons, unresolvedSections, reason }];
   });
 }
 
@@ -1255,9 +1309,10 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
         : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
     const transferReviews = resourceMovementObservationReviews(project, order, "TRANSFER", snapshotsFor, now, currencies);
     const provisioningReviews = resourceMovementObservationReviews(project, order, "PROVISION", snapshotsFor, now, currencies);
+    const retrievalReviews = retrievalObservationReviews(project, order, snapshotsFor, now, currencies);
     const procurementReview = procurementObservationReview(project, order, snapshotsFor, now);
     const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

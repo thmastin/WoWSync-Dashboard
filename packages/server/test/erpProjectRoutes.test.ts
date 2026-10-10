@@ -128,6 +128,27 @@ test("project REST preserves RETRIEVE as a distinct manual action and keeps stor
   });
 });
 
+test("REST and AccountContext expose paired RETRIEVE bag and bank observations without completing the manual order", async () => {
+  await withServer(async (call, store) => {
+    const now = Math.floor(Date.now() / 1000);
+    const capture = (bags: number, bank: number | undefined, generatedAt: number) => buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: bags ? [{ itemRef: "item:159", name: "Rough Stone", qty: bags }] : [] }] }, bank: bank === undefined ? { unknown: true } : { containers: [{ id: 0, capacity: 28, items: bank ? [{ itemRef: "item:159", name: "Rough Stone", qty: bank }] : [] }] } });
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    store.importSnapshot(capture(0, 3, now - 20));
+    store.importSnapshot(capture(1, 2, now));
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review personal bank retrieval", needs: [{ stableId: "retrieve_stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey }], workOrders: [{ stableId: "retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Check personal bank and bags", assignedIdentityKey: identityKey, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey, resourceNeedIds: ["retrieve_stone"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    const progress = created.body.project.workOrderProgress[0];
+    const review = progress.retrievalObservationReviews[0];
+    assert.equal(review.state, "BAGS_AND_BANK_CHANGED");
+    assert.equal(review.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(progress.recordedStatus, "PLANNED");
+    const readback = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
+    assert.deepEqual(readback.workOrderProgress[0].retrievalObservationReviews, progress.retrievalObservationReviews);
+    const context = (await call("GET", "/api/account-context")).body.planning.projects[0];
+    assert.deepEqual(context.workOrderProgressStates, { OBSERVATION_CHANGED_CAUSE_UNKNOWN: 1 });
+  });
+});
+
 test("REST and AccountContext expose paired transfer observations while preserving unknown causality", async () => {
   await withServer(async (call, store) => {
     const currentAt = Math.floor(Date.now() / 1000);
@@ -161,7 +182,7 @@ test("REST and AccountContext expose paired transfer observations while preservi
     const provisionedRead = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((entry: any) => entry.title === "Review paired provisioning observations");
     assert.deepEqual(provisionedRead.workOrderProgress[0].provisioningObservationReviews, provisioned.body.project.workOrderProgress[0].provisioningObservationReviews, "REST read-after-write returns the same provisioning comparison");
     const provisionContext = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.title === "Review paired provisioning observations");
-    assert.deepEqual(provisionContext.workOrderProgressStates, { NO_LINKED_NEEDS: 1 }, "AccountContext keeps paired provisioning separate from transfer completion states");
+    assert.deepEqual(provisionContext.workOrderProgressStates, { OBSERVATION_CHANGED_CAUSE_UNKNOWN: 1 }, "AccountContext uses the same non-causal progress reconciliation summary");
   });
 });
 
