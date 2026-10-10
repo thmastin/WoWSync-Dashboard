@@ -5,7 +5,7 @@ Repository: `WoWSync-Dashboard`
 Worktree: `D:\dev\wow-addons\WoWSync-Dashboard-Forever-Gear`  
 Branch: `feature/forever-gear-observation`  
 Starting commit: `330d33592ccb12e8708c656e131d5caed0d4ee43`  
-Status: implementation and validation complete; commit and push pending.
+Status: implementation, validation, commit, and push complete.
 
 ## Product outcome
 
@@ -45,4 +45,4 @@ Extend saved-plan intervals to character-scoped currency and shared-storage obse
 
 ## Delivery status
 
-No commit or push has yet been made at the time this file was drafted. Update this section and canonical truth with the resulting commit SHA and push result before delivery.
+Commit `8460d95113d630d5681a468e9b20e3586dfb9672` is pushed to `origin/feature/forever-gear-observation`.
