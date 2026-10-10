@@ -365,6 +365,32 @@ function sectionItemQuantity(snapshot: StoredSnapshot, sectionName: "bags" | "ch
   }
   return quantity;
 }
+function retrievalRecipientBagObservation(need: ErpResourceNeed, identityKey: string | undefined, project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpTransferSideObservation {
+  const unknown = (reason: string): ErpTransferSideObservation => ({ ...(identityKey ? { identityKey } : {}), state: "UNKNOWN", freshness: "unknown", comparisons: [], reason });
+  if (!identityKey) return unknown("No explicit recipient character is recorded for this shared-storage retrieval review.");
+  if (!identityKey.startsWith(`${project.version}::`)) return unknown("The planned recipient does not match the project version; no character observation is compared.");
+  const recipientSnapshots = snapshotsFor(identityKey);
+  const current = newest(recipientSnapshots);
+  const previous = current && previousSnapshot(recipientSnapshots, current);
+  if (!previous || !current) return unknown("Two recipient exports are required before comparing bags; the recipient bag result is UNKNOWN.");
+  const previousQuantity = sectionItemQuantity(previous, "bags", need);
+  const currentQuantity = sectionItemQuantity(current, "bags", need);
+  if (previousQuantity === undefined || currentQuantity === undefined) return unknown("A recent pair of complete OBSERVED recipient bag sections for this resource scope is unavailable.");
+  const previousStatus = previous.parsed.bags.status;
+  const currentStatus = current.parsed.bags.status;
+  const previousObservedAt = previousStatus.observedAt ?? snapshotObservedAt(previous.generatedAt, previous.importedAt);
+  const currentObservedAt = currentStatus.observedAt ?? snapshotObservedAt(current.generatedAt, current.importedAt);
+  if (currentObservedAt <= previousObservedAt) return unknown("Recipient bag section timestamps are equal or out of order; a before/after comparison is not established.");
+  const freshnessValues = [evidenceFreshness(previousObservedAt, now), evidenceFreshness(currentObservedAt, now)];
+  const freshness: Freshness = freshnessValues.includes("unknown") ? "unknown" : freshnessValues.includes("stale") ? "stale" : "recent";
+  const comparison = { section: "bags" as const, previousQuantity, currentQuantity, delta: currentQuantity - previousQuantity, previousObservedAt, currentObservedAt };
+  const state = freshness !== "recent" ? "UNKNOWN" as const : comparison.delta === 0 ? "COMPARABLE_UNCHANGED" as const : "COMPARABLE_CHANGED" as const;
+  const itemScopeLimit = need.kind === "ITEM_ID" ? "The base item comparison groups itemString variants. " : "The comparison uses the exact declared itemString. ";
+  return {
+    identityKey, state, freshness, comparisons: [comparison],
+    reason: `${itemScopeLimit}${state === "UNKNOWN" ? "The recipient bag pair is stale or future-dated at the review time." : state === "COMPARABLE_CHANGED" ? "Recent complete OBSERVED recipient bag snapshots changed for this item scope; the change does not establish that retrieval occurred or that the shared owner supplied the item." : "Recent complete OBSERVED recipient bag snapshots show no change for this item scope; this does not establish that no retrieval occurred."}`,
+  };
+}
 function observationChange(need: ErpResourceNeed, previous: StoredSnapshot | undefined, current: StoredSnapshot): ResourceObservationChange {
   if (!previous) return { state: "UNKNOWN", comparisons: [], reason: "Only one export is available; no before/after comparison can be made." };
   const previousAt = snapshotObservedAt(previous.generatedAt, previous.importedAt);
@@ -919,6 +945,8 @@ export interface ErpRetrievalObservationReview {
   readonly sourceOwnerKey?: string;
   readonly ownerScope?: "warband-installation-local" | "guild";
   readonly carrierCharacterKeys?: readonly string[];
+  /** Independent recipient bags comparison; it does not establish access, retrieval, or cause. */
+  readonly recipientBagObservation?: ErpTransferSideObservation;
   readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
   readonly unresolvedSections: readonly ("bags" | "character bank" | "shared storage")[];
   readonly reason: string;
@@ -1011,12 +1039,15 @@ function sharedOwnerItemQuantity(observation: ProjectedObservation, need: ErpRes
   return quantity;
 }
 
-function sharedOwnerRetrievalReview(need: ErpResourceNeed & { kind: "ITEM_ID" | "ITEM_REF" }, project: ErpProject, journal: SharedJournal | undefined, now: number, identityConflict: boolean): ErpRetrievalObservationReview {
+function sharedOwnerRetrievalReview(need: ErpResourceNeed & { kind: "ITEM_ID" | "ITEM_REF" }, project: ErpProject, journal: SharedJournal | undefined, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, identityConflict: boolean, recipientIdentityKey?: string): ErpRetrievalObservationReview {
   const sourceOwnerKey = need.sourceOwnerKey!;
   const owner = parseOwnerKey(sourceOwnerKey);
   const ownerScope = owner?.kind === "guild" ? "guild" as const : owner?.kind === "warband" ? "warband-installation-local" as const : undefined;
   const unresolvedSections = ["shared storage"] as const;
-  const unknown = (reason: string, state: "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT" = "EVIDENCE_UNKNOWN"): ErpRetrievalObservationReview => ({ needId: need.stableId, kind: need.kind as "ITEM_ID" | "ITEM_REF", resourceKey: need.resourceKey, sourceOwnerKey, ...(ownerScope ? { ownerScope } : {}), state, interpretation: "CAUSE_UNKNOWN", freshness: "unknown", comparisons: [], unresolvedSections, reason });
+  const recipientBagObservation = identityConflict
+    ? { ...(recipientIdentityKey ? { identityKey: recipientIdentityKey } : {}), state: "UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], reason: "The retrieval plan contains conflicting identities; no recipient character is selected for comparison." }
+    : retrievalRecipientBagObservation(need, recipientIdentityKey, project, snapshotsFor, now);
+  const unknown = (reason: string, state: "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT" = "EVIDENCE_UNKNOWN"): ErpRetrievalObservationReview => ({ needId: need.stableId, kind: need.kind as "ITEM_ID" | "ITEM_REF", resourceKey: need.resourceKey, sourceOwnerKey, ...(ownerScope ? { ownerScope } : {}), recipientBagObservation, state, interpretation: "CAUSE_UNKNOWN", freshness: "unknown", comparisons: [], unresolvedSections, reason });
   if (identityConflict) return unknown("The retrieval plan names conflicting character identities or a character as the shared-storage source. No character is substituted for the owner.", "IDENTITY_CONFLICT");
   if (project.version !== "retail" || !owner || !journal) return unknown("No supported same-version observation history exists for the explicitly selected shared-storage owner.");
   const projection = projectOwnerFromJournal(journal, owner);
@@ -1041,7 +1072,7 @@ function sharedOwnerRetrievalReview(need: ErpResourceNeed & { kind: "ITEM_ID" | 
   const reason = state === "EVIDENCE_UNKNOWN" ? "The owner-scoped before/after evidence is stale or future-dated at the evaluation time."
     : state === "NO_COMPARABLE_CHANGE" ? "Recent complete live observations show no quantity change for this shared owner; this does not establish access or prove no action occurred."
     : `The explicit ${ownerScope === "guild" ? "guild-owned" : "installation-local Warband"} scope changed from ${previousQuantity} to ${currentQuantity}. Carrier character identities show which exports delivered observations; they do not establish ownership, access, recipient, or cause.`;
-  return { needId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, sourceOwnerKey, ownerScope, carrierCharacterKeys, state, interpretation: "CAUSE_UNKNOWN", freshness, comparisons, unresolvedSections: state === "EVIDENCE_UNKNOWN" ? unresolvedSections : [], reason };
+  return { needId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, sourceOwnerKey, ownerScope, carrierCharacterKeys, recipientBagObservation, state, interpretation: "CAUSE_UNKNOWN", freshness, comparisons, unresolvedSections: state === "EVIDENCE_UNKNOWN" ? unresolvedSections : [], reason };
 }
 
 function retrievalObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies, sharedJournal?: SharedJournal): ErpRetrievalObservationReview[] {
@@ -1052,7 +1083,7 @@ function retrievalObservationReviews(project: ErpProject, order: ErpWorkOrder, s
     if (need.sourceOwnerKey) {
       const recipientKeys = [order.assignedIdentityKey, order.destinationIdentityKey, need.destinationIdentityKey].filter((key): key is string => Boolean(key));
       const identityConflict = Boolean(order.sourceIdentityKey || need.sourceIdentityKey) || new Set(recipientKeys).size > 1 || recipientKeys.some((key) => !key.startsWith(`${project.version}::`));
-      return [sharedOwnerRetrievalReview(need as ErpResourceNeed & { kind: "ITEM_ID" | "ITEM_REF" }, project, sharedJournal, now, identityConflict)];
+      return [sharedOwnerRetrievalReview(need as ErpResourceNeed & { kind: "ITEM_ID" | "ITEM_REF" }, project, sharedJournal, snapshotsFor, now, identityConflict, identityConflict ? undefined : recipientKeys[0])];
     }
     const selected = [order.assignedIdentityKey, order.sourceIdentityKey, order.destinationIdentityKey, need.sourceIdentityKey, need.destinationIdentityKey].filter((key): key is string => Boolean(key));
     const characterIdentityKey = selected[0];

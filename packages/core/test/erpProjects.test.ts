@@ -938,14 +938,16 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
   const baseAt = 1_700_600_000;
   const sharedItem = itemRow("Rough Stone", 1).itemRef;
   const capture = (carrier: string, at: number, quantity: number, completeness = "complete", sectionObservedAt = at) => renderExport({ name: carrier, realm: "Retail Realm", generated: at, warband: warband({ observedAt: sectionObservedAt, completeness, items: [["Rough Stone", quantity]] }) });
+  const recipientCapture = (at: number, quantity: number, partial = false, observedAt = at) => buildWowSyncExport({ generatedAt: at, character: { name: "Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt, partial, containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: sharedItem, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { unknown: true } });
   try {
-    store.importSnapshot(renderExport({ name: "Recipient", realm: "Retail Realm", generated: baseAt + 100 }));
+    store.importSnapshot(recipientCapture(baseAt - 10, 0));
+    store.importSnapshot(recipientCapture(baseAt + 25, 2));
     store.importSnapshot(capture("Carrier One", baseAt, 4));
     store.importSnapshot(capture("Carrier Two", baseAt + 50, 2));
     const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
     const sourceOwnerKey = ownerKey(warbandOwner());
     const plan: ErpProject = { ...project(recipient.identityKey), stableId: "shared_retrieval", version: "retail", needs: [{ stableId: "shared_need", kind: "ITEM_REF", resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey, destinationIdentityKey: recipient.identityKey }], reservations: [], workOrders: [{ stableId: "shared_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review Warband retrieval", resourceNeedIds: ["shared_need"], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] };
-    store.createErpProject(plan);
+    const storedPlan = store.createErpProject(plan);
     const view = new DashboardReadModel(store, () => baseAt + 60).getErpProjects({ version: "retail" })[0]!;
     const review = view.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(review?.state, "SHARED_OWNER_CONTENT_CHANGED");
@@ -955,13 +957,19 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
     assert.deepEqual(review?.carrierCharacterKeys, ["retail::retail realm::carrier one", "retail::retail realm::carrier two"]);
     assert.deepEqual(review?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["shared storage", 4, 2, -2]]);
     assert.equal(review?.freshness, "recent");
+    assert.equal(review?.recipientBagObservation?.identityKey, recipient.identityKey);
+    assert.equal(review?.recipientBagObservation?.state, "COMPARABLE_CHANGED");
+    assert.deepEqual(review?.recipientBagObservation?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 0, 2, 2]]);
+    assert.match(review?.recipientBagObservation?.reason ?? "", /does not establish that retrieval occurred or that the shared owner supplied the item/);
     assert.equal(view.workOrders[0]?.status, "PLANNED", "shared storage deltas never complete the player's manual retrieval task");
     assert.match(review?.reason ?? "", /do not establish ownership, access, recipient, or cause/);
 
     store.importSnapshot(capture("Carrier Three", baseAt + 70, 1, "partial"));
+    store.importSnapshot(recipientCapture(baseAt + 75, 3, true));
     const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(afterPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial shared observation hides the previous complete comparison as current");
     assert.equal(afterPartial?.comparisons.length, 0);
+    assert.equal(afterPartial?.recipientBagObservation?.state, "UNKNOWN", "an incomplete recipient bag section cannot support a current comparison");
 
     store.importSnapshot(capture("Carrier Four", baseAt + 90, 3));
     store.importSnapshot(capture("Carrier Five", baseAt + 90, 1, "partial", baseAt + 91));
@@ -986,6 +994,13 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
     const guildReview = guildView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(guildReview?.state, "EVIDENCE_UNKNOWN", `inaccessible guild tabs prevent a whole-owner quantity delta: ${JSON.stringify({ projectCount: guildProjects.length, guildView, guildReview, owners: store.projectSharedStorage().guilds.map((owner) => owner.ownerKey) })}`);
     assert.match(guildReview?.reason ?? "", /inaccessible, unconfirmed, or unidentified guild tab/);
+
+    store.importSnapshot(recipientCapture(baseAt + 160, 2, false, baseAt + 76));
+    store.importSnapshot(recipientCapture(baseAt + 200, 3, false, baseAt + 76));
+    const chronologyView = new DashboardReadModel(store, () => baseAt + 210).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId);
+    const chronologyReview = chronologyView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(chronologyReview?.recipientBagObservation?.state, "UNKNOWN", `a newer export with an equal section timestamp cannot establish a before/after comparison: ${JSON.stringify({ projects: chronologyView?.stableId, progress: chronologyView?.workOrderProgress, review: chronologyReview })}`);
+    assert.match(chronologyReview?.recipientBagObservation?.reason ?? "", /timestamps are equal or out of order/);
   } finally { store.close(); }
 });
 

@@ -206,7 +206,9 @@ test("REST exposes owner-scoped shared-storage retrieval history without inferri
     const now = Math.floor(Date.now() / 1000);
     const sharedItem = itemRow("Rough Stone", 1).itemRef;
     const capture = (carrier: string, at: number, quantity: number) => renderExport({ name: carrier, realm: "Retail Realm", generated: at, warband: warband({ observedAt: at, items: [["Rough Stone", quantity]] }) });
-    store.importSnapshot(renderExport({ name: "Recipient", realm: "Retail Realm", generated: now }));
+    const recipientCapture = (at: number, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: sharedItem, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { unknown: true } });
+    store.importSnapshot(recipientCapture(now - 20, 0));
+    store.importSnapshot(recipientCapture(now - 5, 2));
     store.importSnapshot(capture("Carrier One", now - 20, 4));
     store.importSnapshot(capture("Carrier Two", now - 10, 2));
     const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
@@ -218,12 +220,17 @@ test("REST exposes owner-scoped shared-storage retrieval history without inferri
     assert.equal(review.sourceOwnerKey, "retail::warband::local");
     assert.equal(review.ownerScope, "warband-installation-local");
     assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.previousQuantity, entry.currentQuantity, entry.delta]), [["shared storage", 4, 2, -2]]);
+    assert.equal(review.recipientBagObservation.identityKey, recipient.identityKey);
+    assert.equal(review.recipientBagObservation.state, "COMPARABLE_CHANGED");
+    assert.deepEqual(review.recipientBagObservation.comparisons.map((entry: any) => [entry.section, entry.previousQuantity, entry.currentQuantity, entry.delta]), [["bags", 0, 2, 2]]);
     assert.match(review.reason, /do not establish ownership, access, recipient, or cause/);
     const readback = (await call("GET", "/api/versions/retail/erp/projects")).body.projects[0];
     assert.deepEqual(readback.workOrderProgress[0].retrievalObservationReviews, progress.retrievalObservationReviews);
     assert.equal(readback.workOrderProgress[0].recordedStatus, "PLANNED");
     const context = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.equal(context.workOrderProgressStates.CURRENT_LINKED_NEEDS_MET, 1, "AccountContext summarizes the shared source's same core current-state projection without claiming recipient access");
+    assert.deepEqual(context.retrievalObservationStates, { SHARED_OWNER_CONTENT_CHANGED: 1 });
+    assert.deepEqual(context.retrievalRecipientBagObservationStates, { COMPARABLE_CHANGED: 1 });
   });
 });
 

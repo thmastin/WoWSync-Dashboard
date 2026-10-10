@@ -274,12 +274,14 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(retrievalReview?.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(retrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["bags", 1], ["character bank", -1]]);
     assert.equal(retrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "retrieve_check")?.recordedStatus, "PLANNED");
-    const sharedRetrievalPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner retrieval protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; retrievalObservationReviews?: Array<{ state: string; sourceOwnerKey: string; ownerScope: string; carrierCharacterKeys: string[]; comparisons: Array<{ section: string; delta: number }>; reason: string }> }> } | undefined;
+    const sharedRetrievalPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner retrieval protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; retrievalObservationReviews?: Array<{ state: string; sourceOwnerKey: string; ownerScope: string; carrierCharacterKeys: string[]; comparisons: Array<{ section: string; delta: number }>; recipientBagObservation?: { state: string; freshness: string; comparisons: Array<{ section: string; delta: number }>; reason: string }; reason: string }> }> } | undefined;
     const sharedRetrievalReview = sharedRetrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "guild_retrieve_check")?.retrievalObservationReviews?.[0];
     assert.equal(sharedRetrievalReview?.state, "SHARED_OWNER_CONTENT_CHANGED");
     assert.equal(sharedRetrievalReview?.sourceOwnerKey, "retail::guild::mcp-retrieval-guild");
     assert.equal(sharedRetrievalReview?.ownerScope, "guild");
     assert.deepEqual(sharedRetrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["shared storage", -2]]);
+    assert.equal(sharedRetrievalReview?.recipientBagObservation?.state, "COMPARABLE_UNCHANGED");
+    assert.match(sharedRetrievalReview?.recipientBagObservation?.reason ?? "", /does not establish that no retrieval occurred/);
     assert.match(sharedRetrievalReview?.reason ?? "", /Carrier character identities show which exports delivered observations/);
     assert.equal(retailErpProjects.resourceCommitments.totalCount, 10, "the explicit procurement budget need joins retrieval and crafter-input commitments; the spending ceiling alone does not; MCP exposes the same version-scoped core commitment view as REST");
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.kind === "CURRENCY" && line.resourceKey === "4" && line.sourceScope === "CHARACTER"));
