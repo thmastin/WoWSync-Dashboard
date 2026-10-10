@@ -49,6 +49,13 @@ export interface ErpPlannedCraftOutput {
   readonly quantity: number;
 }
 
+/** Explicit link between an item need and a player-set copper spending ceiling for one buyer. */
+export interface ErpProcurementPlan {
+  readonly targetNeedId: string;
+  /** Player-entered maximum quote to consider; this is not a resource demand or observed balance. */
+  readonly spendingCeilingCopper: number;
+}
+
 export interface ErpWorkOrder {
   readonly stableId: string;
   readonly kind: ErpWorkOrderType;
@@ -62,6 +69,8 @@ export interface ErpWorkOrder {
   readonly dependsOn: readonly string[];
   /** Optional player intent. A plan does not add output to observed supply. */
   readonly plannedOutput?: ErpPlannedCraftOutput;
+  /** Optional procurement intent; market availability and price remain unknown until observed by the player. */
+  readonly procurementPlan?: ErpProcurementPlan;
   /** Required when status is COMPLETED: user-entered evidence of the manual action/outcome. */
   readonly completionNote?: string;
 }
@@ -176,6 +185,13 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
       if (!output || typeof output !== "object" || !(output.kind === "ITEM_ID" || output.kind === "ITEM_REF") || !hasValue(output.resourceKey) || output.resourceKey.length > 512 || !hasValue(output.label) || output.label.length > 160 || !Number.isSafeInteger(output.quantity) || output.quantity < 1) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned craft output requires a bounded item identity, label, and positive integer quantity.");
       if (output.kind === "ITEM_ID" && !/^[1-9]\d*$/.test(output.resourceKey)) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned ITEM_ID output must use a positive numeric item ID.");
       if (output.kind === "ITEM_REF" && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(output.resourceKey)) fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned ITEM_REF output must preserve an exact itemString.");
+    }
+    if (w.procurementPlan !== undefined) {
+      const plan = w.procurementPlan;
+      if (w.kind !== "PURCHASE" || !plan || typeof plan !== "object" || !hasValue(plan.targetNeedId) || !Number.isSafeInteger(plan.spendingCeilingCopper) || plan.spendingCeilingCopper < 1 || !w.assignedIdentityKey) fail("INVALID_PROCUREMENT_PLAN", "A procurement plan requires a PURCHASE work order, an explicit buyer, an item target, and a positive integer copper ceiling.");
+      if (!w.resourceNeedIds.includes(plan.targetNeedId)) fail("INVALID_PROCUREMENT_PLAN", "The procurement item target must be linked to the PURCHASE work order.");
+      const target = p.needs.find((need) => need.stableId === plan.targetNeedId);
+      if (!target || (target.kind !== "ITEM_ID" && target.kind !== "ITEM_REF") || target.sourceIdentityKey !== w.assignedIdentityKey || target.destinationIdentityKey !== w.assignedIdentityKey) fail("INVALID_PROCUREMENT_PLAN", "The item target must be an item need explicitly scoped to the same buyer/recipient character.");
     }
     for (const id of [...w.dependsOn, ...w.resourceNeedIds]) if (!hasValue(id)) fail("INVALID_WORK_ORDER_LINKS", "Work order links must use non-empty IDs.");
     if (w.resourceNeedIds.some((id) => !needIds.has(id))) fail("UNKNOWN_WORK_ORDER_NEED", "Every work order resource link must refer to a need in this project.");
@@ -713,6 +729,7 @@ export interface ErpWorkOrderReadiness {
   readonly changedNeedIds: readonly string[];
   readonly capabilityChecks?: readonly ErpCraftingCapabilityCheck[];
   readonly linkedNeeds?: readonly ErpWorkOrderNeedCheck[];
+  readonly procurementAssessment?: ErpProcurementAssessment;
   readonly reason: string;
 }
 
@@ -733,6 +750,20 @@ export interface ErpWorkOrderNeedCheck {
   readonly unresolvedSections: readonly string[];
   readonly reservationState?: NonNullable<ErpNeedEvidence["reservationAssessment"]>["state"];
   readonly activeReservationQuantity?: number;
+  readonly reason: string;
+}
+
+export interface ErpProcurementAssessment {
+  readonly buyerIdentityKey: string;
+  readonly targetNeed: ErpWorkOrderNeedCheck;
+  readonly reviewState: "OBSERVED_ITEM_GAP" | "NO_OBSERVED_ITEM_GAP" | "ITEM_GAP_UNKNOWN";
+  readonly budgetState: "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING" | "GROSS_OBSERVED_GOLD_BELOW_CEILING" | "GOLD_EVIDENCE_UNKNOWN";
+  readonly budgetEvidence: { readonly observedCopper?: number; readonly observedAt?: number; readonly freshness: Freshness; readonly reason: string };
+  /** Player-entered upper bound; never counted as an amount needed or reserved. */
+  readonly spendingCeilingCopper: number;
+  readonly marketAvailability: "UNKNOWN";
+  readonly quotedPrice: "UNKNOWN";
+  readonly affordability: "UNKNOWN";
   readonly reason: string;
 }
 
@@ -1024,7 +1055,24 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
         ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), freshness: evidence.freshness, sourceSections: evidence.sourceSections, unresolvedSections: evidence.unresolvedSections,
         ...(evidence.reservationAssessment ? { reservationState: evidence.reservationAssessment.state, activeReservationQuantity: evidence.reservationAssessment.activeQuantity } : {}), reason: evidence.reason }];
     });
-    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}) };
+    const procurementAssessment: ErpProcurementAssessment | undefined = order.kind === "PURCHASE" && order.procurementPlan && order.assignedIdentityKey ? (() => {
+      const targetNeed = linkedNeeds.find((need) => need.needId === order.procurementPlan!.targetNeedId);
+      if (!targetNeed) return undefined;
+      const goldEvidence = assessErpNeed({ stableId: `procurement-gold-evidence:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed buyer gold evidence", requiredQuantity: 1, sourceIdentityKey: order.assignedIdentityKey }, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
+      const reviewState: ErpProcurementAssessment["reviewState"] = targetNeed.freshness !== "recent" ? "ITEM_GAP_UNKNOWN"
+        : targetNeed.state === "SHORTFALL_OBSERVED" ? "OBSERVED_ITEM_GAP"
+        : targetNeed.state === "COVERED_BY_OBSERVED" ? "NO_OBSERVED_ITEM_GAP" : "ITEM_GAP_UNKNOWN";
+      const budgetState: ErpProcurementAssessment["budgetState"] = goldEvidence.freshness !== "recent" || goldEvidence.observedQuantity === undefined ? "GOLD_EVIDENCE_UNKNOWN"
+        : goldEvidence.observedQuantity >= order.procurementPlan!.spendingCeilingCopper ? "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING" : "GROSS_OBSERVED_GOLD_BELOW_CEILING";
+      const gapText = reviewState === "OBSERVED_ITEM_GAP" ? `Recent complete item evidence is below the target quantity (${targetNeed.observedQuantity} observed of ${targetNeed.requiredQuantity} required).`
+        : reviewState === "NO_OBSERVED_ITEM_GAP" ? `Recent item evidence covers the target quantity (${targetNeed.observedQuantity} observed of ${targetNeed.requiredQuantity} required).`
+        : "A current complete item shortfall is not established; refresh or complete the evidence before treating this as a purchase gap.";
+      const budgetText = budgetState === "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING" ? `The buyer's gross gold observation (${goldEvidence.observedQuantity} copper) is at or above the player-set ceiling (${order.procurementPlan!.spendingCeilingCopper} copper). This is an observation only; reservations and spendable balance are not calculated here.`
+        : budgetState === "GROSS_OBSERVED_GOLD_BELOW_CEILING" ? `The buyer's gross gold observation (${goldEvidence.observedQuantity} copper) is below the player-set ceiling (${order.procurementPlan!.spendingCeilingCopper} copper). A ceiling is not a minimum balance or resource requirement.`
+        : "Buyer gold or its freshness is unknown; no affordability result is inferred.";
+      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, marketAvailability: "UNKNOWN", quotedPrice: "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText} Current market/vendor availability, quoted price, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
+    })() : undefined;
+    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));

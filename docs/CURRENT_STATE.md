@@ -1,6 +1,6 @@
 # Current WoWSync state
 
-**Latest feature-branch checkpoint (2026-10-09):** Manual CRAFT work orders can record an explicit intended item output. The shared core projection compares it with only one explicitly selected same-version character's source-scoped observation, preserving exact `ITEM_REF`, observed versus LAST_SEEN quantity, timestamps/freshness, unresolved sections, and non-causal adjacent changes. Conflicting crafter/destination identities remain UNKNOWN. Output intent is not a recipe guarantee, supply, reservation, proof of crafting, or completion. REST/MCP expose details; AccountContext schema 13 summarizes output-evidence states; the existing Projects & Work Orders UI supports authoring and review. `npm.cmd run validate:erp` passed: Core 802, MCP 3, Server 253 plus 2 platform skips, Web 292, typechecks/build, and 2 synthetic browser acceptances. Independent review found and fixed stale-evidence wording; follow-up review found no blockers. No production browser, live-game, or deployment validation occurred. The validated Dashboard checkpoint is recorded in wow-stuff truth.
+**Latest feature-branch checkpoint (2026-10-09):** Projects & Work Orders now supports explicit manual procurement review: the player can link an item need, a same-character buyer/recipient, and a copper spending ceiling stored as an upper-bound plan field (not a resource need). The shared projection reports complete current item gaps and gross observed gold separately from reservations; unavailable stock, price, purchase routes, spendable balance, and affordability remain UNKNOWN. REST, MCP, AccountContext schema 14, and the workbench share the same evidence. E2E testing found and fixed the GOLD_COPPER form silently rejecting its keyless input and disabling the user-entered copper amount. No market lookup or purchase action is implemented. The previous Phase 13 planned-craft-output feature remains. Full `npm.cmd run validate:erp` results and the reviewed checkpoint are recorded in wow-stuff truth.
 
 **Previous feature branch ERP planning checkpoint (2026-10-09; automated validation and focused review complete):**
 `feature/forever-gear-observation` extends the shared core with version-scoped persistent projects,
@@ -25,7 +25,7 @@ work-order flows remain open; this slice does not complete the ERP program.
 **Describes commit `5b3b0558447872c51974106e7f18144ab82b6263` on `main`
 (ops: track full wowsync-dev systemd topology).** Application behavior has not changed since that
 commit as of this documentation milestone (documentation-only commits may follow it on
-`docs/phase2-durable-documentation` without invalidating this stamp — check `git log
+`docs/phase2-durable-documentation` without invalidating this stamp â€” check `git log
 docs/phase2-durable-documentation` if you need the exact set of commits that produced this file).
 If this SHA is not an ancestor of the branch you're reading this on, treat this document as
 possibly stale and re-verify against source (use `git ls-remote origin main` rather than a
@@ -66,7 +66,7 @@ The live inline tunnel-ID drift is unmodified and separate.
 
 ## What's shipped
 
-- **Core Dashboard**: import (manual paste, `import:saved` CLI, `watch:saved`/capture receiver —
+- **Core Dashboard**: import (manual paste, `import:saved` CLI, `watch:saved`/capture receiver â€”
   three transports converging on one `SqliteSnapshotStore.importSnapshot()` call), version
   isolation (`classic-era`/`tbc-anniversary`/`retail`/`forever`, with unrecognized clients
   quarantined rather than guessed), the diff engine, `AccountFacts`/`AccountContext`, shared
@@ -78,32 +78,32 @@ The live inline tunnel-ID drift is unmodified and separate.
   and the `get_item_allocation` MCP tool. Retail-only, one commodity per demand, account-scoped.
   See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) for the full semantics
   contract and the live-validation record.
-- **Azeroth ERP Vertical Slice 2 — Account Allocation Review**: `DashboardReadModel.getAllocationReview`
+- **Azeroth ERP Vertical Slice 2 â€” Account Allocation Review**: `DashboardReadModel.getAllocationReview`
   (`packages/core/src/allocationReview.ts`) and the read-only `get_allocation_review` MCP tool. One
   account-wide, independently paged view of every active demand's allocation result (identical to
-  `get_item_allocation`) and of account-owned holdings with no active demand (`unallocated` — evidence
+  `get_item_allocation`) and of account-owned holdings with no active demand (`unallocated` â€” evidence
   only, never surplus, no disposition). Retail-only, explicit version, no new durable state. The shared
   evidence projection (`projectAccountOwnedEvidenceMap` / `evidenceForItem`) now serves both slices,
   and a present item row with an unreported quantity is no longer summed as 0: in observed storage it
   is unresolved item-quantity evidence (reason `ITEM_QUANTITY_UNKNOWN_PRESENT`, distinct from unknown
   storage) that gates sale disposition; in LAST_SEEN storage it changes no number or disposition and is
-  reported by `potentialUnknownQuantityRowCount` and the LAST_SEEN reasons. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §23.
+  reported by `potentialUnknownQuantityRowCount` and the LAST_SEEN reasons. See [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) Â§23.
   **Shipped and live-validated 2026-10-03** through the full chain to ChatGPT (record:
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-2)).
   Its temporary validation demand was deactivated afterward; no ACTIVE validation demand remains, and
   the record does not describe current demand state.
-- **Azeroth ERP Vertical Slice 3 — Held-item identity and binding** (**shipped and live-validated** at
+- **Azeroth ERP Vertical Slice 3 â€” Held-item identity and binding** (**shipped and live-validated** at
   `81f66eeb8a035acf3c633f6fa9d8693cc4f9a009`): base-item allocation arithmetic is performed only when the confirmed rows' normalized
   item strings prove aggregation valid (otherwise the new `BASE_ITEM_AGGREGATION_UNPROVEN` result, with no
   allocation numbers), and confirmed bound or binding-unknown rows withhold `SEND_HELLOMAGS` from a
   confirmed surplus. No new MCP tool and no persistence change. See
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §24 and its Slice 3 live-validation record.
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) Â§24 and its Slice 3 live-validation record.
   Binding-only live isolation remains covered by automated tests; the real binding validation composed
   binding with unresolved character-bank evidence.
-- **ERP Allocation Tab — Dashboard stock targets + allocation review** (**shipped and DEV-validated** at
+- **ERP Allocation Tab â€” Dashboard stock targets + allocation review** (**shipped and DEV-validated** at
   `51628e4514448bb9cfdb56c1214d27ee38fa92e3`): a Retail-only top-level tab at `#/retail/allocation` that authors `STOCK_TARGET` demands (set
   "Keep N" with an optional purpose, edit, remove = deactivate, add by item ID for items not held) and
-  presents the Slice 1–3 allocation review: account-level unseen-storage status shown once, Your
+  presents the Slice 1â€“3 allocation review: account-level unseen-storage status shown once, Your
   targets (every result variant, including `BASE_ITEM_AGGREGATION_UNPROVEN` as "Allocation: not
   computed" and `CONFLICTING_DEMAND` as needing review), Held with no target (explicitly not surplus;
   searchable by name or exact item ID; paged), and a collapsed read-only Removed targets history. It
@@ -111,13 +111,13 @@ The live inline tunnel-ID drift is unmodified and separate.
   `DashboardReadModel.getAllocationReview` (see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)); MCP
   sees the same persisted demands. The demand routes reject wrong-version and INACTIVE mutations
   before changing anything. Allocation semantics are unchanged. See
-  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) §25 and its DEV validation record.
+  [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) Â§25 and its DEV validation record.
 - **MCP**: read-only STDIO server over `DashboardReadModel`. Current tool count: run
   `grep -c "server.registerTool(" packages/mcp/src/server.ts` yourself rather than trusting a
-  number here — it changes as tools are added. With Slice 2 it is **26**, including
+  number here â€” it changes as tools are added. With Slice 2 it is **26**, including
   `get_allocation_review` as the newest addition (25 at the Slice 1 baseline). See
   [`MCP_DEVELOPMENT.md`](MCP_DEVELOPMENT.md) for the registered-tool table.
-- **Live ChatGPT MCP validation**: Slices 1–3 passed live ChatGPT MCP validation. Slice 3 used a blind
+- **Live ChatGPT MCP validation**: Slices 1â€“3 passed live ChatGPT MCP validation. Slice 3 used a blind
   external conversation and passed allocation-review parity; the real-data record and separate
   OBSERVED/LAST_SEEN prevalence are in [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md#live-validation-record-azeroth-erp-slice-3).
   The Azeroth ERP Slice 1 live validation (Void-Tempered Leather,
@@ -132,13 +132,13 @@ The live inline tunnel-ID drift is unmodified and separate.
   `wowsync-dev-dashboard.service` + drop-in, `wowsync-dev-mcp-tunnel.service`,
   `wowsync-dev-herdr.service`, plus `tools/omarchy/install-wowsync-dev.sh` and the `wowsync-dev`
   operator CLI). The install script reconstructs those definitions and brings up the dashboard
-  path; it deliberately does not enable/start the mcp-tunnel or herdr services — that remains a
+  path; it deliberately does not enable/start the mcp-tunnel or herdr services â€” that remains a
   separate manual operator step. See [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md) for the
   full topology, exactly what's installed vs. enabled vs. started vs. still manual/host-only, and
   safe validation commands.
 - Omarchy DEV is operational under Unix identity `wowsync-dev`: writable DEV checkout, DEV
   Dashboard on loopback port 4174, DEV-only Herdr control plane, and the accepted read-only MCP
-  connection. The current tunnel ID is **not** written here or anywhere else in this repository —
+  connection. The current tunnel ID is **not** written here or anywhere else in this repository â€”
   see `OPERATIONS_RUNBOOK.md`, "Do not hard-code the live tunnel ID," for how to check it live.
   Windows sign-in continues to run the capture supervisor, SavedVariables watcher, and SSH
   forwarding; its old MCP tunnel ownership was retired after Omarchy acceptance. See
@@ -158,7 +158,7 @@ The live inline tunnel-ID drift is unmodified and separate.
   not value or rank unallocated inventory, and treats Hellomags as an ordinary character. See
   [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) for everything
   explicitly deferred beyond it.
-- Warband account scope is `installation-local`, not a true Battle.net account ID — two Battle.net
+- Warband account scope is `installation-local`, not a true Battle.net account ID â€” two Battle.net
   accounts imported into one installation are currently indistinguishable.
 - `DashboardReadModel` serves MCP and the one Dashboard Allocation route (see [`SYSTEM_REFERENCE.md`](SYSTEM_REFERENCE.md)). There is no public
   Dashboard/MCP endpoint of any kind.
@@ -180,6 +180,6 @@ Character Bank owned by character, Warband by account, and Guild Bank by guild. 
 set, including the Azeroth ERP additions, is in
 [`ARCHITECTURE_INVARIANTS.md`](ARCHITECTURE_INVARIANTS.md).
 
-Hardcore/SSF version handling is **not implemented** — it was previously (incorrectly) stated here
+Hardcore/SSF version handling is **not implemented** â€” it was previously (incorrectly) stated here
 as current behavior. It is a deferred design intent only; see
 [`ROADMAP.md`](ROADMAP.md#deferred--future) for the correctly-framed version.

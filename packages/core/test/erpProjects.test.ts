@@ -131,6 +131,69 @@ test("planned output change remains non-causal and stale output evidence is not 
   } finally { store.close(); }
 });
 
+test("procurement ceiling is a limit, not a gold resource requirement or reservation", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 300 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } });
+  try {
+    const targetNeed = { stableId: "target_stone", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase_stone", kind: "PURCHASE", status: "PLANNED", title: "Review purchase manually", assignedIdentityKey: identityKey, resourceNeedIds: [targetNeed.stableId], dependsOn: [], procurementPlan: { targetNeedId: targetNeed.stableId, spendingCeilingCopper: 500 } }] };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const readiness = read.workOrderReadiness[0]!;
+    const assessment = readiness.procurementAssessment;
+    assert.equal(assessment?.reviewState, "OBSERVED_ITEM_GAP");
+    assert.equal(assessment?.targetNeed.observedQuantity, 3);
+    assert.equal(assessment?.budgetState, "GROSS_OBSERVED_GOLD_BELOW_CEILING");
+    assert.equal(assessment?.budgetEvidence.observedCopper, 300);
+    assert.equal(assessment?.spendingCeilingCopper, 500);
+    assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED", "a spending ceiling is not incorrectly surfaced as a missing gold requirement");
+    const commitmentView = { ...read, history: [], historyEventCount: 0, historyTruncated: false };
+    assert.equal(buildErpResourceCommitmentSummary([commitmentView]).items.some((line) => line.kind === "GOLD_COPPER"), false, "the ceiling creates no resource demand or commitment");
+    assert.deepEqual([assessment?.marketAvailability, assessment?.quotedPrice, assessment?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+    assert.match(assessment?.reason ?? "", /A ceiling is not a minimum balance or resource requirement/);
+    assert.match(assessment?.reason ?? "", /not a purchase recommendation or action/);
+  } finally { store.close(); }
+});
+
+test("procurement declarations validate the positive copper ceiling and explicit same-character item need", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const target = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [target], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Purchase manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    validateErpProject(p, (key) => store.getCharacter(key)?.version === "classic-era");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 0 } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, assignedIdentityKey: undefined }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    const differentBuyer = "classic-era::realm b::another buyer";
+    assert.throws(() => validateErpProject({ ...p, needs: [{ ...target, destinationIdentityKey: differentBuyer }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+  } finally { store.close(); }
+});
+
+test("procurement keeps incomplete item and gold evidence unknown", () => {
+  const { store, identityKey } = seedStore({ bags: { partial: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true }, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" } });
+  try {
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(result?.reviewState, "ITEM_GAP_UNKNOWN", "partial storage is not treated as a confirmed shortage");
+    assert.equal(result?.targetNeed.observedQuantity, 4, "the observed lower bound remains visible");
+    assert.equal(result?.budgetState, "GOLD_EVIDENCE_UNKNOWN");
+    assert.equal(result?.budgetEvidence.observedCopper, undefined);
+    assert.deepEqual([result?.marketAvailability, result?.quotedPrice, result?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+  } finally { store.close(); }
+});
+
+test("procurement reports item coverage separately from a gross gold amount below the ceiling", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 50 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 6 }] }] }, bank: { containers: [] } }));
+    const identityKey = imported.character.identityKey;
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    const readiness = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]!;
+    assert.equal(readiness.procurementAssessment?.reviewState, "NO_OBSERVED_ITEM_GAP");
+    assert.equal(readiness.procurementAssessment?.budgetState, "GROSS_OBSERVED_GOLD_BELOW_CEILING");
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW", "gross gold below the player's ceiling is not a shortfall against a nonexistent minimum");
+    assert.deepEqual([readiness.procurementAssessment?.marketAvailability, readiness.procurementAssessment?.quotedPrice, readiness.procurementAssessment?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+  } finally { store.close(); }
+});
 test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {
   const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
   try {
