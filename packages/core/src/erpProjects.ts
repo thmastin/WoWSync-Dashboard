@@ -958,8 +958,20 @@ export interface ErpRetrievalObservationReview {
   readonly carrierCharacterKeys?: readonly string[];
   /** Independent recipient bags comparison; it does not establish access, retrieval, or cause. */
   readonly recipientBagObservation?: ErpTransferSideObservation;
+  /** A time-overlapping direction pattern only; it never proves access, movement, or causation. */
+  readonly pairedObservationPattern?: ErpPairedRetrievalObservationPattern;
   readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
   readonly unresolvedSections: readonly ("bags" | "character bank" | "shared storage")[];
+  readonly reason: string;
+}
+
+export interface ErpPairedRetrievalObservationPattern {
+  readonly state: "OWNER_DECREASE_RECIPIENT_INCREASE" | "NO_MATCHED_PATTERN" | "OBSERVATION_WINDOWS_DISJOINT" | "UNKNOWN";
+  readonly interpretation: "CORRELATED_OBSERVATIONS_ONLY";
+  readonly ownerDelta?: number;
+  readonly recipientDelta?: number;
+  readonly overlapStartedAt?: number;
+  readonly overlapEndedAt?: number;
   readonly reason: string;
 }
 
@@ -1058,7 +1070,8 @@ function sharedOwnerRetrievalReview(need: ErpResourceNeed & { kind: "ITEM_ID" | 
   const recipientBagObservation = identityConflict
     ? { ...(recipientIdentityKey ? { identityKey: recipientIdentityKey } : {}), state: "UNKNOWN" as const, freshness: "unknown" as const, comparisons: [], reason: "The retrieval plan contains conflicting identities; no recipient character is selected for comparison." }
     : retrievalRecipientBagObservation(need, recipientIdentityKey, project, snapshotsFor, now);
-  const unknown = (reason: string, state: "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT" = "EVIDENCE_UNKNOWN"): ErpRetrievalObservationReview => ({ needId: need.stableId, kind: need.kind as "ITEM_ID" | "ITEM_REF", resourceKey: need.resourceKey, sourceOwnerKey, ...(ownerScope ? { ownerScope } : {}), recipientBagObservation, state, interpretation: "CAUSE_UNKNOWN", freshness: "unknown", comparisons: [], unresolvedSections, reason });
+  const unknownPattern = (reason: string): ErpPairedRetrievalObservationPattern => ({ state: "UNKNOWN", interpretation: "CORRELATED_OBSERVATIONS_ONLY", reason });
+  const unknown = (reason: string, state: "EVIDENCE_UNKNOWN" | "IDENTITY_CONFLICT" = "EVIDENCE_UNKNOWN"): ErpRetrievalObservationReview => ({ needId: need.stableId, kind: need.kind as "ITEM_ID" | "ITEM_REF", resourceKey: need.resourceKey, sourceOwnerKey, ...(ownerScope ? { ownerScope } : {}), recipientBagObservation, pairedObservationPattern: unknownPattern(reason), state, interpretation: "CAUSE_UNKNOWN", freshness: "unknown", comparisons: [], unresolvedSections, reason });
   if (identityConflict) return unknown("The retrieval plan names conflicting character identities or a character as the shared-storage source. No character is substituted for the owner.", "IDENTITY_CONFLICT");
   if (project.version !== "retail" || !owner || !journal) return unknown("No supported same-version observation history exists for the explicitly selected shared-storage owner.");
   const projection = projectOwnerFromJournal(journal, owner);
@@ -1079,11 +1092,23 @@ function sharedOwnerRetrievalReview(need: ErpResourceNeed & { kind: "ITEM_ID" | 
   const freshness: Freshness = freshnessValues.includes("unknown") ? "unknown" : freshnessValues.includes("stale") ? "stale" : "recent";
   const state = freshness !== "recent" ? "EVIDENCE_UNKNOWN" as const : previousQuantity === currentQuantity ? "NO_COMPARABLE_CHANGE" as const : "SHARED_OWNER_CONTENT_CHANGED" as const;
   const comparisons: ResourceObservationChange["comparisons"][number][] = [{ section: "shared storage", previousQuantity, currentQuantity, delta: currentQuantity - previousQuantity, previousObservedAt: previous.effectiveObservedAt, currentObservedAt: current.effectiveObservedAt }];
+  const ownerComparison = comparisons[0]!;
+  const recipientComparison = recipientBagObservation.comparisons.find((entry) => entry.section === "bags");
+  let pairedObservationPattern: ErpPairedRetrievalObservationPattern;
+  if (freshness !== "recent" || recipientBagObservation.state === "UNKNOWN" || recipientBagObservation.freshness !== "recent" || !recipientComparison) {
+    pairedObservationPattern = unknownPattern("A recent complete owner change and recipient bag change are both required before comparing directions; no paired result is established.");
+  } else {
+    const overlapStartedAt = Math.max(ownerComparison.previousObservedAt, recipientComparison.previousObservedAt);
+    const overlapEndedAt = Math.min(ownerComparison.currentObservedAt, recipientComparison.currentObservedAt);
+    if (overlapStartedAt >= overlapEndedAt) pairedObservationPattern = { state: "OBSERVATION_WINDOWS_DISJOINT", interpretation: "CORRELATED_OBSERVATIONS_ONLY", ownerDelta: ownerComparison.delta, recipientDelta: recipientComparison.delta, reason: "The complete owner and recipient comparisons have no overlapping time interval; touching boundary timestamps alone do not pair the changes." };
+    else if (ownerComparison.delta < 0 && recipientComparison.delta > 0) pairedObservationPattern = { state: "OWNER_DECREASE_RECIPIENT_INCREASE", interpretation: "CORRELATED_OBSERVATIONS_ONLY", ownerDelta: ownerComparison.delta, recipientDelta: recipientComparison.delta, overlapStartedAt, overlapEndedAt, reason: "Recent complete observations overlap in time and show owner quantity decreasing while recipient bags increased for the declared resource scope. This is a correlation signal only; it does not establish account membership, access, transfer, item provenance, or causation." };
+    else pairedObservationPattern = { state: "NO_MATCHED_PATTERN", interpretation: "CORRELATED_OBSERVATIONS_ONLY", ownerDelta: ownerComparison.delta, recipientDelta: recipientComparison.delta, overlapStartedAt, overlapEndedAt, reason: "Recent complete observations overlap in time, but their quantity directions do not show an owner decrease paired with a recipient increase. This does not establish whether retrieval or another action occurred." };
+  }
   const carrierCharacterKeys = [...new Set([...previous.sourceCharacterKeys, ...current.sourceCharacterKeys])].sort();
   const reason = state === "EVIDENCE_UNKNOWN" ? "The owner-scoped before/after evidence is stale or future-dated at the evaluation time."
     : state === "NO_COMPARABLE_CHANGE" ? "Recent complete live observations show no quantity change for this shared owner; this does not establish access or prove no action occurred."
     : `The explicit ${ownerScope === "guild" ? "guild-owned" : "installation-local Warband"} scope changed from ${previousQuantity} to ${currentQuantity}. Carrier character identities show which exports delivered observations; they do not establish ownership, access, recipient, or cause.`;
-  return { needId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, sourceOwnerKey, ownerScope, carrierCharacterKeys, recipientBagObservation, state, interpretation: "CAUSE_UNKNOWN", freshness, comparisons, unresolvedSections: state === "EVIDENCE_UNKNOWN" ? unresolvedSections : [], reason };
+  return { needId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, sourceOwnerKey, ownerScope, carrierCharacterKeys, recipientBagObservation, pairedObservationPattern, state, interpretation: "CAUSE_UNKNOWN", freshness, comparisons, unresolvedSections: state === "EVIDENCE_UNKNOWN" ? unresolvedSections : [], reason };
 }
 
 function retrievalObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies, sharedJournal?: SharedJournal): ErpRetrievalObservationReview[] {

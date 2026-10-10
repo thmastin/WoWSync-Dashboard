@@ -42,3 +42,13 @@ test("gather presentation shows assigned-gatherer bag deltas as non-causal evide
   assert.match(html, /bags: 1/);
   assert.match(html, /does not complete the work order/);
 });
+
+test("shared retrieval presentation labels an overlapping owner decrease and recipient increase as correlation only", () => {
+  const review = { needId: "ore", kind: "ITEM_REF" as const, resourceKey: "item:159:variant", sourceOwnerKey: "retail::warband::local", ownerScope: "warband-installation-local" as const, state: "SHARED_OWNER_CONTENT_CHANGED" as const, interpretation: "CAUSE_UNKNOWN" as const, freshness: "recent" as const, comparisons: [{ section: "shared storage" as const, previousQuantity: 4, currentQuantity: 2, delta: -2, previousObservedAt: 100, currentObservedAt: 200 }], unresolvedSections: [], reason: "Observed owner quantity changed; cause remains unknown.", recipientBagObservation: { identityKey: "retail::realm::character", state: "COMPARABLE_CHANGED" as const, freshness: "recent" as const, comparisons: [{ section: "bags" as const, previousQuantity: 0, currentQuantity: 2, delta: 2, previousObservedAt: 110, currentObservedAt: 190 }], reason: "Recipient bag quantity changed; source relationship remains unknown." }, pairedObservationPattern: { state: "OWNER_DECREASE_RECIPIENT_INCREASE" as const, interpretation: "CORRELATED_OBSERVATIONS_ONLY" as const, ownerDelta: -2, recipientDelta: 2, overlapStartedAt: 110, overlapEndedAt: 190, reason: "This is a correlation signal only; access, item provenance, and cause are UNKNOWN." } };
+  const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { ...progress, retrievalObservationReviews: [review] } }));
+  assert.match(html, /Paired observation pattern:/);
+  assert.match(html, /OWNER DECREASE RECIPIENT INCREASE/);
+  assert.match(html, /correlation signal only/);
+  assert.match(html, /does not establish retrieval/);
+  assert.doesNotMatch(html, /Retrieval confirmed|Transfer completed/);
+});

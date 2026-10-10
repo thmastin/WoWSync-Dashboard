@@ -942,6 +942,8 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
   try {
     store.importSnapshot(recipientCapture(baseAt - 10, 0));
     store.importSnapshot(recipientCapture(baseAt + 25, 2));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 50, character: { name: "Touching Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt: baseAt + 50, containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { unknown: true } }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 75, character: { name: "Touching Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt: baseAt + 75, containers: [{ id: 0, capacity: 16, items: [{ itemRef: sharedItem, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
     store.importSnapshot(capture("Carrier One", baseAt, 4));
     store.importSnapshot(capture("Carrier Two", baseAt + 50, 2));
     const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
@@ -960,15 +962,24 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
     assert.equal(review?.recipientBagObservation?.identityKey, recipient.identityKey);
     assert.equal(review?.recipientBagObservation?.state, "COMPARABLE_CHANGED");
     assert.deepEqual(review?.recipientBagObservation?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 0, 2, 2]]);
+    assert.deepEqual(review?.pairedObservationPattern, { state: "OWNER_DECREASE_RECIPIENT_INCREASE", interpretation: "CORRELATED_OBSERVATIONS_ONLY", ownerDelta: -2, recipientDelta: 2, overlapStartedAt: baseAt, overlapEndedAt: baseAt + 25, reason: "Recent complete observations overlap in time and show owner quantity decreasing while recipient bags increased for the declared resource scope. This is a correlation signal only; it does not establish account membership, access, transfer, item provenance, or causation." });
     assert.match(review?.recipientBagObservation?.reason ?? "", /does not establish that retrieval occurred or that the shared owner supplied the item/);
     assert.equal(view.workOrders[0]?.status, "PLANNED", "shared storage deltas never complete the player's manual retrieval task");
     assert.match(review?.reason ?? "", /do not establish ownership, access, recipient, or cause/);
+    const touchingRecipient = store.listCharacters("retail").find((character) => character.name === "Touching Recipient")!;
+    const touchingPlan: ErpProject = { ...storedPlan, stableId: "shared_retrieval_touching", needs: [{ ...storedPlan.needs[0]!, stableId: "shared_need_touching", destinationIdentityKey: touchingRecipient.identityKey }], workOrders: [{ ...storedPlan.workOrders[0]!, stableId: "shared_retrieve_touching", resourceNeedIds: ["shared_need_touching"], assignedIdentityKey: touchingRecipient.identityKey, destinationIdentityKey: touchingRecipient.identityKey }] };
+    const touchingStoredPlan = store.createErpProject(touchingPlan);
+    const touchingView = new DashboardReadModel(store, () => baseAt + 60).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === touchingStoredPlan.stableId);
+    const touching = touchingView?.workOrderProgress[0]?.retrievalObservationReviews?.[0]?.pairedObservationPattern;
+    assert.equal(touching?.state, "OBSERVATION_WINDOWS_DISJOINT", JSON.stringify(touchingView?.workOrderProgress[0]));
+    assert.match(touching?.reason ?? "", /touching boundary timestamps alone do not pair/);
 
     store.importSnapshot(capture("Carrier Three", baseAt + 70, 1, "partial"));
     store.importSnapshot(recipientCapture(baseAt + 75, 3, true));
     const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(afterPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial shared observation hides the previous complete comparison as current");
     assert.equal(afterPartial?.comparisons.length, 0);
+    assert.equal(afterPartial?.pairedObservationPattern?.state, "UNKNOWN", "a newer partial owner or recipient capture prevents a paired change signal");
     assert.equal(afterPartial?.recipientBagObservation?.state, "UNKNOWN", "an incomplete recipient bag section cannot support a current comparison");
 
     store.importSnapshot(capture("Carrier Four", baseAt + 90, 3));
