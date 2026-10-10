@@ -1468,7 +1468,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const exportText = renderExport({ name: "Budget Buyer", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }).replace("MoneyCopper: ?", "MoneyCopper: 12000");
     const imported = store.importSnapshot(exportText);
     const buyer = imported.character.identityKey;
-    store.importSnapshot(renderExport({ name: "Observed Source", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
+    const sourceImported = store.importSnapshot(renderExport({ name: "Observed Source", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
     const project = store.createErpProject({ version: "retail", title: "Two-item provision", needs: [
       { stableId: "stone", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom exact variant", requiredQuantity: 3, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
       { stableId: "cloth", kind: "ITEM_ID", resourceKey: String(ITEM_ID + 1), label: "Linen Cloth", requiredQuantity: 2, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
@@ -1483,6 +1483,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     ], workOrders: [
       { stableId: "purchase-potion", kind: "PURCHASE", status: "PLANNED", title: "Review provisioning quote", assignedIdentityKey: buyer, resourceNeedIds: ["potion", "potion-budget"], dependsOn: [], procurementPlan: { targetNeedId: "potion", budgetNeedId: "potion-budget", spendingCeilingCopper: 11000 } },
     ] });
+    const separateSourcePlan = store.createErpProject({ version: "retail", title: "Provision a different character", priority: 4, needs: [
+      { stableId: "same-herb", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Herbs explicitly planned from this source", requiredQuantity: 4, sourceIdentityKey: sourceImported.character.identityKey },
+    ], workOrders: [{ stableId: "review-other-provision", kind: "PROVISION", status: "PLANNED", title: "Review the separate provisioning need", resourceNeedIds: ["same-herb"], dependsOn: [], sourceIdentityKey: sourceImported.character.identityKey, destinationIdentityKey: buyer }] });
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address(); assert.ok(address && typeof address !== "string");
     const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
@@ -1527,6 +1530,19 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await resourcePackage.innerText(), /item:940101::::::::80/);
     assert.match(await resourcePackage.innerText(), /Account membership: UNKNOWN · access: UNKNOWN · transferability: UNKNOWN/);
     assert.match(await resourcePackage.innerText(), /location lead; review access and route before changing the purchase plan/);
+    assert.match(await resourcePackage.innerText(), /Other project plans explicitly naming this source \(1\)/);
+    assert.match(await resourcePackage.innerText(), /Provision a different character.*Herbs explicitly planned from this source/);
+    assert.match(await resourcePackage.innerText(), /Review the separate provisioning need.*PROVISION.*PLANNED/);
+    assert.match(await resourcePackage.innerText(), /These are separate plans, not reservations/);
+    const accountContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(accountContext.schemaVersion, "35");
+    assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedSourceCoverageReviewsWithOtherProjectNeeds, 1);
+    assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedOtherSourceScopedNeedCount, 1);
+    const otherPlanReview = resourcePackage.getByRole("button", { name: "Review this project need" });
+    await otherPlanReview.click();
+    const separateNeedAnchor = `erp-need-${separateSourcePlan.stableId.replaceAll("-", "%2D")}-same%2Dherb`;
+    await page.waitForFunction((id) => document.activeElement?.id === id, separateNeedAnchor);
+    assert.match(await page.locator(`[id="${separateNeedAnchor}"]`).innerText(), /Herbs explicitly planned from this source/);
     const sourceReviewButton = resourcePackage.getByRole("button", { name: /Open .* source review/ }).first();
     await sourceReviewButton.click();
     await page.waitForFunction(() => document.activeElement?.id?.startsWith("erp-need-"));
@@ -1606,10 +1622,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "34");
+    assert.equal(context.schemaVersion, "35");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
-    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, unresolvedBuyerOrderCount: 0, truncated: false });
+    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, returnedSourceCoverageReviewsWithOtherProjectNeeds: 1, returnedOtherSourceScopedNeedCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });
     assert.equal(rest.procurementBuyerReview.buyers[0].resourcePackages[0].resourceKey, fullRef(ITEM_ID), "the package preserves the exact itemString variant rather than collapsing to its base item ID");
     await line.getByRole("button", { name: "Review project plans" }).click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);
@@ -1620,6 +1636,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview, rest.procurementBuyerReview);
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].needReviews, rest.procurementBuyerReview.buyers[0].resourcePackages[0].needReviews, "MCP and REST expose the same per-project requirements, evidence, reservations, and linked work");
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews, rest.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews, "MCP and REST expose the same conservative source-capacity screening");
+    assert.equal(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews[0].otherSourceScopedNeeds[0].projectId, separateSourcePlan.stableId, "MCP preserves explicit source-scoped intent across another project");
+    assert.deepEqual(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews[0].otherSourceScopedNeeds[0].linkedWorkOrders.map((order) => [order.workOrderId, order.kind, order.status]), [["review-other-provision", "PROVISION", "PLANNED"]], "REST/MCP carry the linked manual step with the explicit source-scoped need");
+    assert.equal(mcp.structuredContent.projects.find((entry) => entry.stableId === separateSourcePlan.stableId).needs.find((need) => need.stableId === "same-herb").sourceIdentityKey, sourceImported.character.identityKey, "MCP preserves the same explicit source identity as Dashboard and REST");
     const mcpProvisioning = mcp.structuredContent.projects.flatMap((entry) => entry.workOrders).find((order) => order.stableId === plannedProvisioning.stableId);
     assert.deepEqual(mcpProvisioning, plannedProvisioning, "the explicitly created manual provisioning intent is consistent in REST and MCP");
     for (const packagedProject of packagedProjects) {

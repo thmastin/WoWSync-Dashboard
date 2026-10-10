@@ -12,6 +12,8 @@ test("cross-project buyer review totals only complete recent quotes against one 
   try {
     const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Quote Buyer", realm: "Realm A", clientVersion: "11.2.7", clientBuild: "63854", clientFamily: "Retail", interface: "110207", moneyCopper: 12000 }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [] } }));
     const buyer = imported.character.identityKey;
+    const sourceImport = store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Observed Source", realm: "Realm A", clientVersion: "11.2.7", clientBuild: "63854", clientFamily: "Retail", interface: "110207" } }));
+    const sourceIdentity = sourceImport.character.identityKey;
     for (const [projectId, itemId, needQty, budgetQty, reserveQty, ceiling, amount] of [
       ["gear-a", "1001", 3, 1000, 100, 700, 650],
       ["gear-b", "1001", 2, 12000, 150, 12000, 11200],
@@ -23,6 +25,9 @@ test("cross-project buyer review totals only complete recent quotes against one 
         { stableId: `purchase-${projectId}`, kind: "PURCHASE", status: "PLANNED", title: `Quote ${itemId}`, assignedIdentityKey: buyer, resourceNeedIds: [`item-${projectId}`, `gold-${projectId}`], dependsOn: [], procurementPlan: { targetNeedId: `item-${projectId}`, budgetNeedId: `gold-${projectId}`, spendingCeilingCopper: ceiling, playerQuote: { amountCopper: amount, quantity: needQty, recordedAt: at - 10 } } },
       ] });
     }
+    store.createErpProject({ version: "retail", title: "Provision the third character", status: "ACTIVE", priority: 5, needs: [
+      { stableId: "third-character-potion", kind: "ITEM_ID", resourceKey: "1001", label: "Provisioning stock", requiredQuantity: 4, sourceIdentityKey: sourceIdentity },
+    ], workOrders: [{ stableId: "review-provisioning", kind: "PROVISION", status: "PLANNED", title: "Review the source before provisioning", resourceNeedIds: ["third-character-potion"], dependsOn: [], sourceIdentityKey: sourceIdentity, destinationIdentityKey: buyer }] });
     const projects = new DashboardReadModel(store).getErpProjects({ version: "retail" });
     const review = buildErpProcurementBuyerPortfolioReview(projects, "retail");
     assert.equal(review.totalBuyerCount, 1);
@@ -39,7 +44,7 @@ test("cross-project buyer review totals only complete recent quotes against one 
       ["ITEM_ID", "1001", 2, 2, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", 5, 5],
     ], "the exact same item ID need is grouped without applying a generic item-level heuristic");
     const potentialSource = {
-      sourceIdentityKey: "retail::source-character::realm-a", sourceName: "Observed Source", sourceRealm: "Realm A", needId: "item-gear-a",
+      sourceIdentityKey: sourceIdentity, sourceName: "Observed Source", sourceRealm: "Realm A", needId: "item-gear-a",
       kind: "ITEM_ID" as const, resourceKey: "1001", state: "OBSERVED" as const, observedQuantity: 1, activeReservationQuantity: 0,
       reservationState: "UNRESERVED" as const, availableObservedLowerBound: 1, freshness: "recent" as const, observedAt: at,
       locations: [
@@ -65,14 +70,26 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(sourcedOrder.sourceReview.sources.length, 1);
     assert.equal(sourcedOrder.sourceReview.sources[0]!.needReferences[0]!.needId, sourcedOrder.targetNeedId);
     assert.deepEqual(sourcedPackage.observedSources.map((source) => [source.sourceIdentityKey, source.access, source.transferability]), [
-      ["retail::source-character::realm-a", "UNKNOWN", "UNKNOWN"],
+      [sourceIdentity, "UNKNOWN", "UNKNOWN"],
     ]);
     assert.equal(sourcedPackage.observedSources[0]!.matchingItems[0]!.itemRef, "item:1001:0:0:0:0:0:0:0", "exact item variant remains available for route review");
     assert.deepEqual(sourcedPackage.sourceCoverageReviews.map((entry) => [entry.sourceIdentityKey, entry.state, entry.availableObservedLowerBound, entry.combinedObservedGapQuantity]), [
-      ["retail::source-character::realm-a", "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS", 1, 5],
+      [sourceIdentity, "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS", 1, 5],
     ], "one complete matching source is screened against the current gaps without satisfying them");
     assert.equal(sourcedPackage.sourceCoverageReviews[0]!.kind, "ITEM_ID");
     assert.match(sourcedPackage.sourceCoverageReviews[0]!.reason, /access, transferability.*UNKNOWN/);
+    assert.equal(sourcedPackage.sourceCoverageReviews[0]!.otherSourceScopedNeedCount, 1, "a separate active project naming this exact source and resource is shown for human review");
+    assert.deepEqual(sourcedPackage.sourceCoverageReviews[0]!.otherSourceScopedNeeds.map((need) => [need.projectTitle, need.needId, need.requiredQuantity]), [["Provision the third character", "third-character-potion", 4]]);
+    assert.deepEqual(sourcedPackage.sourceCoverageReviews[0]!.otherSourceScopedNeeds[0]!.linkedWorkOrders.map((order) => [order.workOrderId, order.kind, order.status]), [["review-provisioning", "PROVISION", "PLANNED"]], "the source review exposes existing player-authored work without treating it as a transfer");
+    assert.equal(sourcedPackage.sourceCoverageReviews[0]!.availableObservedLowerBound, 1, "other project intent is not silently deducted from observed lower-bound quantity");
+    assert.match(sourcedPackage.sourceCoverageReviews[0]!.reason, /other active or paused requirement/);
+    const pausedOtherPlan = withSourceReview.map((project) => project.title === "Provision the third character" ? { ...project, status: "PAUSED" as const } : project);
+    assert.equal(buildErpProcurementBuyerPortfolioReview(pausedOtherPlan, "retail").buyers[0]!.resourcePackages[0]!.sourceCoverageReviews[0]!.otherSourceScopedNeedCount, 1, "paused plans remain reviewable");
+    const completedOtherPlan = withSourceReview.map((project) => project.title === "Provision the third character" ? { ...project, status: "COMPLETED" as const } : project);
+    assert.equal(buildErpProcurementBuyerPortfolioReview(completedOtherPlan, "retail").buyers[0]!.resourcePackages[0]!.sourceCoverageReviews[0]!.otherSourceScopedNeedCount, 0, "completed plans are not shown as active source demand");
+    const missingOtherNeedEvidence = withSourceReview.map((project) => project.title === "Provision the third character" ? { ...project, needEvidence: [] } : project);
+    const unknownOtherNeed = buildErpProcurementBuyerPortfolioReview(missingOtherNeedEvidence, "retail").buyers[0]!.resourcePackages[0]!.sourceCoverageReviews[0]!.otherSourceScopedNeeds[0]!;
+    assert.deepEqual([unknownOtherNeed.state, unknownOtherNeed.freshness, unknownOtherNeed.requiredQuantity], ["UNKNOWN", "unknown", 4], "missing evidence on a linked project stays explicitly unknown");
     assert.equal(sourcedPackage.combinedObservedGapQuantity, 5, "observed source leads do not reduce or satisfy destination needs");
     assert.equal(sourcedPackage.state, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", "source location evidence does not replace quote coverage evidence");
     assert.deepEqual(sourcedPackage.needReviews.map((need) => [need.projectTitle, need.needId, need.state, need.requiredQuantity, need.observedQuantity, need.freshness]), [
@@ -107,7 +124,7 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(noOtherSourceReview.orders[0]!.sourceReview.state, "NO_OTHER_CHARACTERS_TO_SCAN");
     assert.equal(buildErpProcurementBuyerPortfolioReview(projects, "classic-era").totalBuyerCount, 0, "project quotes never cross versions");
 
-    const conflictingGold = projects.map((project, index) => index === 1 ? {
+    const conflictingGold = projects.map((project) => project.title === "gear-b" ? {
       ...project,
       workOrderReadiness: project.workOrderReadiness.map((entry) => entry.procurementAssessment ? {
         ...entry,
@@ -138,14 +155,14 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(staleGapReview.orders[0]!.targetGap, "UNKNOWN");
     assert.equal(staleGapReview.resourcePackages[0]!.state, "EVIDENCE_INCOMPLETE");
 
-    const firstProject = projects[0]!;
+    const firstProject = projects.find((project) => project.workOrders.some((order) => order.kind === "PURCHASE"))!;
     const originalOrder = firstProject.workOrders[0]!;
     const originalReadiness = firstProject.workOrderReadiness.find((entry) => entry.workOrderId === originalOrder.stableId)!;
     const duplicateOrder = { ...originalOrder, stableId: "duplicate-purchase", title: "Additional quote for the same need", procurementPlan: { ...originalOrder.procurementPlan!, playerQuote: { amountCopper: 100, quantity: 1, recordedAt: at - 5, sourceNote: "Second quote line" } } };
     const duplicateReadiness = { ...originalReadiness, workOrderId: duplicateOrder.stableId, procurementAssessment: { ...originalReadiness.procurementAssessment!, playerQuote: { ...originalReadiness.procurementAssessment!.playerQuote!, amountCopper: 100, quantity: 1, recordedAt: at - 5 } } };
     const duplicateOrderReview = buildErpProcurementBuyerPortfolioReview([
       { ...firstProject, workOrders: [...firstProject.workOrders, duplicateOrder], workOrderReadiness: [...firstProject.workOrderReadiness, duplicateReadiness] },
-      ...projects.slice(1),
+      ...projects.filter((project) => project.stableId !== firstProject.stableId),
     ], "retail").buyers[0]!;
     assert.deepEqual(duplicateOrderReview.resourcePackages.map((entry) => [entry.needCount, entry.combinedObservedGapQuantity, entry.recentQuotedQuantity]), [[2, 5, 6]], "multiple quotes for one need add quote quantity but count that need's observed gap only once");
   } finally { store.close(); }
@@ -181,6 +198,8 @@ test("AccountContext labels buyer quote aggregates as returned-page counts when 
       returnedPackagesWithOpenProvisioningReview: 0,
       returnedPackageSourceCoverageReviewCount: 0,
       returnedPackageSourceCoverageReviewStates: {},
+      returnedSourceCoverageReviewsWithOtherProjectNeeds: 0,
+      returnedOtherSourceScopedNeedCount: 0,
       unresolvedBuyerOrderCount: 0,
       truncated: true,
     });

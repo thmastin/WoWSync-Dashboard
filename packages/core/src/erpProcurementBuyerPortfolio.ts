@@ -66,6 +66,33 @@ export interface ErpProcurementBuyerResourcePackage {
     readonly combinedObservedGapQuantity?: number;
     readonly observedAt?: number;
     readonly freshness: string;
+    /** Other explicit same-source project intent; shown as competing plans, not deducted unless already represented by reservations. */
+    readonly otherSourceScopedNeedCount: number;
+    readonly otherSourceScopedNeedsTruncated: boolean;
+    readonly otherSourceScopedNeeds: readonly {
+      readonly projectId: string;
+      readonly projectTitle: string;
+      readonly projectStatus: ErpProjectStatus;
+      readonly projectPriority: number;
+      readonly needId: string;
+      readonly label: string;
+      readonly state: ErpNeedEvidence["state"];
+      readonly freshness: ErpNeedEvidence["freshness"];
+      readonly requiredQuantity: number;
+      readonly observedQuantity?: number;
+      readonly activeReservationQuantity?: number;
+      readonly observedAt?: number;
+      readonly reason: string;
+      readonly linkedWorkOrders: readonly {
+        readonly workOrderId: string;
+        readonly kind: ErpWorkOrder["kind"];
+        readonly status: ErpWorkOrderStatus;
+        readonly title: string;
+        readonly readinessState?: ErpProjectView["workOrderReadiness"][number]["state"];
+        readonly progressState?: ErpProjectView["workOrderProgress"][number]["reconciliation"];
+        readonly reason?: string;
+      }[];
+    }[];
     readonly reason: string;
   }[];
   /** Per-project demand and existing-work context; requirements are never merged merely because item identity matches. */
@@ -313,6 +340,17 @@ export function buildErpProcurementBuyerPortfolioReview(
         const gap = gapsKnown ? relatedNeeds.reduce((sum, need) => sum + BigInt(need.requiredQuantity - need.observedQuantity!), 0n) : undefined;
         const locationsComplete = source.locations.length === 2 && source.locations.every((location) => location.state === "OBSERVED" && location.quantity !== undefined && location.completeness?.toLowerCase() === "complete");
         const sourceConsistent = candidates.length === 1 && source.state === "OBSERVED" && source.freshness === "recent" && source.availableObservedLowerBound !== undefined && source.reservationState !== "UNKNOWN" && source.reservationState !== "OVER_RESERVED" && locationsComplete && referencedNeedKeys.size === needKeys.size && [...needKeys].every((key) => referencedNeedKeys.has(key));
+        const otherSourceScopedNeeds = projects.filter((project) => project.version === version && (project.status === "ACTIVE" || project.status === "PAUSED")).flatMap((project) => project.needs.filter((need) => need.kind === first.targetKind && need.resourceKey === first.targetResourceKey && need.sourceIdentityKey === sourceIdentityKey && !needKeys.has(`${project.stableId}\u0000${need.stableId}`)).flatMap((need) => {
+          const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);
+          const linkedWorkOrders = project.workOrders.filter((order) => order.resourceNeedIds.includes(need.stableId)).map((order) => {
+            const readiness = project.workOrderReadiness.find((entry) => entry.workOrderId === order.stableId);
+            const progress = project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId);
+            return { workOrderId: order.stableId, kind: order.kind, status: order.status, title: order.title, ...(readiness ? { readinessState: readiness.state } : {}), ...(progress ? { progressState: progress.reconciliation } : {}), ...(readiness?.reason ?? progress?.reason ? { reason: readiness?.reason ?? progress?.reason } : {}) };
+          });
+          const context = { linkedWorkOrders };
+          if (!evidence) return [{ projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority, needId: need.stableId, label: need.label, state: "UNKNOWN" as const, freshness: "unknown" as const, requiredQuantity: need.requiredQuantity, reason: "Need assessment is unavailable; this explicit source-scoped plan needs review.", ...context }];
+          return [{ projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority, needId: need.stableId, label: need.label, state: evidence.state, freshness: evidence.freshness, requiredQuantity: evidence.requiredQuantity, ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence.reservationAssessment ? { activeReservationQuantity: evidence.reservationAssessment.activeQuantity } : {}), ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), reason: evidence.reason, ...context }];
+        })).sort((a, b) => b.projectPriority - a.projectPriority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
         const safeGap = gap !== undefined && gap <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(gap) : undefined;
         const complete = sourceConsistent && gapsKnown && safeGap !== undefined && !unsafe;
         const state: ErpProcurementBuyerResourcePackage["sourceCoverageReviews"][number]["state"] = complete
@@ -323,9 +361,10 @@ export function buildErpProcurementBuyerPortfolioReview(
           ...(sourceConsistent ? { availableObservedLowerBound: source.availableObservedLowerBound } : {}),
           ...(safeGap !== undefined && !unsafe ? { combinedObservedGapQuantity: safeGap } : {}),
           ...(source.observedAt !== undefined ? { observedAt: source.observedAt } : {}), freshness: source.freshness,
+          otherSourceScopedNeedCount: otherSourceScopedNeeds.length, otherSourceScopedNeedsTruncated: otherSourceScopedNeeds.length > 20, otherSourceScopedNeeds: otherSourceScopedNeeds.slice(0, 20),
           reason: complete
-            ? state === "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS" ? `One recent, complete observed character source has an unreserved lower bound at least as large as these separately recorded current gaps${first.targetKind === "ITEM_ID" ? ". This quantity is matched by base item ID and can include distinct itemString variants; variant interchangeability and suitability are not established" : ""}. This is only a location and quantity lead; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN.`
-              : "The one recent, complete observed character source has fewer unreserved lower-bound units than the combined current gaps. Review these needs separately; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN; no transfer is inferred."
+            ? state === "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS" ? `One recent, complete observed character source has an unreserved lower bound at least as large as these separately recorded current gaps${first.targetKind === "ITEM_ID" ? ". This quantity is matched by base item ID and can include distinct itemString variants; variant interchangeability and suitability are not established" : ""}${otherSourceScopedNeeds.length ? `, but ${otherSourceScopedNeeds.length} other active or paused requirement(s) explicitly plan to draw on this exact source/resource and must be reviewed separately` : ""}. This is only a location and quantity lead; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN.`
+              : `The one recent, complete observed character source has fewer unreserved lower-bound units than the combined current gaps${otherSourceScopedNeeds.length ? `; ${otherSourceScopedNeeds.length} other active or paused requirement(s) explicitly plan to draw on this exact source/resource and require separate review` : ""}. Review these needs separately; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN; no transfer is inferred.`
             : "A current complete source snapshot, consistent same-source evidence across every grouped need, or recent complete shortfall evidence is missing. Combined source coverage is UNKNOWN; inspect the per-need evidence and location leads.",
         };
       });
