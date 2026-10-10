@@ -748,6 +748,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
     const sharedReview = await sharedWorkOrder.innerText();
     assert.match(sharedReview, /SHARED OWNER CONTENT CHANGED/);
     assert.match(sharedReview, /warband-installation-local \(retail::warband::local\)/);
+    assert.match(sharedReview, /retail::warband::local\) - Retail Warband \(installation-local\)/);
     assert.match(sharedReview, /shared storage: 4 to 2 \(-2\)/);
     assert.match(sharedReview, /do not establish ownership, access, recipient, or cause/);
     assert.deepEqual(pageErrors, []);
