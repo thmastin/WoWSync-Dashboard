@@ -2,6 +2,16 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Phase 103 - bounded intervening evidence for saved fulfillment reviews
+
+Saved item and gold requirements now retain a bounded sequence of same-character imports between the frozen review and current state, with section timestamps and explicit OBSERVED, PARTIAL, LAST_SEEN, and UNKNOWN states. Exact item variants remain exact for `ITEM_REF`; `ITEM_ID` remains base-item scope; gold remains copper. Partial sections expose only known lower bounds, while inaccessible or missing banks remain UNKNOWN. The UI describes each section's timing relative to the saved review, retained-sample truncation, and explicitly leaves action cause UNKNOWN. Unsupported source/resource timelines are reported as unavailable instead of being conflated with no newer imports.
+
+Profession requirements now use the same interval review against the exact case-insensitive profession name and captured skill. A matching skill row remains an observed value even when the overall list is partial; absence means skill zero only where the source explicitly declares a complete OBSERVED profession list. It does not establish recipes, craftability, or that a project task caused a skill change. The common saved-batch projection keeps REST, AccountContext, MCP, and the workbench aligned.
+
+Validation: full ERP validation and synthetic browser acceptance are recorded in `ERP_CHECKPOINT_20261010_PHASE103.md`. Review covered timing boundaries, source identity, truncation, identity conflicts, partial/unknown storage, exact variants, copper, profession list completeness, and non-causal wording. No live-game or production validation was performed.
+
+The player can now inspect intervening resource and profession evidence across saved reviews, including restored quantities and partial scans, without treating a change as proof that planned work occurred. Next substantial milestone: extend interval reconciliation to historical currency and shared-storage sources using their own snapshot journals, then make those changes directly actionable in project triage while retaining UNKNOWN ownership and action cause.
+
 ## Phases 58-59 - cross-project reservation and procurement planning
 
 The portfolio manual-work session can now attach a player-selected reservation quantity to each selected requirement. The reservation and its PLANNED work order are written in the same all-or-nothing SQLite transaction across the selected active projects. The server and transaction recheck the exact need/evidence snapshot, explicit version and source, recent freshness, fully quantified complete source sections, per-need remaining requirement, and aggregate availability across every selected request. Requests that exceed the observed unreserved lower bound, overlap a base `ITEM_ID` with an exact `ITEM_REF`, exceed a need, or depend on incomplete/unknown storage fail without changing any project. Same exact resource scopes aggregate once; distinct exact item variants remain distinct according to the existing reservation rules. A reservation is a plan commitment, not a lock or inventory operation.

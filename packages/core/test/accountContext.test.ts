@@ -37,7 +37,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
-    assert.equal(ctx.schemaVersion, "44");
+    assert.equal(ctx.schemaVersion, "45");
     assert.equal(ctx.generatedAt, FIXED_NOW);
     assert.equal(ctx.currency.unit, "copper");
     assert.match(ctx.currency.note, /never gold/);
@@ -47,7 +47,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
     assert.equal(ctx.versions["forever"].facts.characterCount, 0);
     assert.deepEqual(ctx.planning.needObservationChangeReviews.forever, { changedNeedCount: 0, affectedProjectCount: 0, truncated: false });
     assert.deepEqual(ctx.planning.fulfillmentTriage.forever, { totalCount: 0, affectedProjectCount: 0, counts: { CHANGED_OBSERVATION: 0, UNWORKED_REQUIREMENT: 0, RESERVATION_REVIEW: 0, OPEN_WORK_ORDER: 0 }, truncated: false });
-    assert.deepEqual(ctx.planning.portfolioFulfillment.forever, { packageCount: 0, stepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, savedBatchCount: 0, savedBatchReviewStates: {}, savedBatchTaskCount: 0, replanFollowUpCount: 0, replanLineageConflictCount: 0, batchesWithFollowUps: 0, savedNeedHistoryCount: 0, savedNeedHistoriesTruncated: false, savedBatchesTruncated: false, pathwayReviewTruncated: false, truncated: false }, "portfolio planning summary remains present and empty for this version without plans");
+    assert.deepEqual(ctx.planning.portfolioFulfillment.forever, { packageCount: 0, stepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, savedBatchCount: 0, savedBatchReviewStates: {}, savedBatchTaskCount: 0, replanFollowUpCount: 0, replanLineageConflictCount: 0, batchesWithFollowUps: 0, savedNeedHistoryCount: 0, savedBatchIntervalSampleCount: 0, savedBatchIntervalsWithPartialEvidence: 0, savedBatchIntervalsTruncated: 0, savedNeedHistoriesTruncated: false, savedBatchesTruncated: false, pathwayReviewTruncated: false, truncated: false }, "portfolio planning summary remains present and empty for this version without plans");
     assert.deepEqual(ctx.planning.sourceFulfillment.forever, { sourceCount: 0, needCount: 0, needsReviewCount: 0, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0 }, pathwayStates: {}, pathwayOptionKinds: {}, groupsWithAlternativeLocations: 0, alternativeLocationCount: 0, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 0, truncated: false }, "source review remains present and empty for a version without explicit source-scoped needs");
     assert.deepEqual(ctx.planning.portfolioNextActions.forever, { totalCount: 0, counts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, REVIEW_MANUAL_WORK: 0, PLAN_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0, REVIEW_UNSCOPED_ITEM: 0 }, truncated: false }, "the next-action summary is present and empty for versions without plans");
 

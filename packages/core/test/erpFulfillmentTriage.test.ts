@@ -8,10 +8,11 @@ import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfoli
 test("saved planning batches compare later same-version evidence without attributing task completion", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const now = Math.floor(Date.now() / 1000) - 100;
-  const capture = (at: number, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Batch Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: quantity }] }] }, bank: { containers: [] } });
+  const capture = (at: number, quantity: number, bank: { partial?: boolean; unknown?: boolean } = {}) => buildWowSyncExport({ generatedAt: at, character: { name: "Batch Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: quantity }] }] }, bank: { containers: [], ...bank } });
   try {
     const first = store.importSnapshot(capture(now, 2));
-    store.importSnapshot(capture(now + 20, 5));
+    store.importSnapshot(capture(now + 20, 5, { partial: true }));
+    store.importSnapshot(capture(now + 30, 2, { unknown: true }));
     const createdProject = store.createErpProject({ version: "classic-era", title: "Saved multi-need plan", needs: [
       { stableId: "stone-a", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone A", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
       { stableId: "stone-b", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone B", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
@@ -21,13 +22,42 @@ test("saved planning batches compare later same-version evidence without attribu
     assert.equal(review.totalCount, 1);
     assert.equal(review.batches[0]?.steps.length, 2, "the atomic batch remains grouped across its two requirements");
     assert.equal(review.batches[0]?.state, "NEWER_OBSERVATION_REVIEW");
-    assert.ok(review.batches[0]?.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_QUANTITY_CHANGED" && step.currentQuantity === 5 && step.reviewedQuantity === 2 && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"));
+    assert.ok(review.batches[0]?.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_UNCHANGED" && step.currentQuantity === 2 && step.reviewedQuantity === 2 && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"));
+    const interval = review.batches[0]?.steps[0]?.observationInterval;
+    assert.equal(interval?.state, "SAMPLES_AVAILABLE");
+    assert.deepEqual(interval?.points.map((point) => point.sections.find((section) => section.section === "bags")?.quantity), [5, 2], "the interval preserves intervening observed changes even when the latest quantity returns to the saved baseline");
+    assert.deepEqual(interval?.points.map((point) => point.sections.find((section) => section.section === "character bank")?.state), ["PARTIAL", "UNKNOWN"], "partial and absent bank evidence remain distinct and neither is interpreted as empty");
+    assert.equal(interval?.points[0]?.sections.find((section) => section.section === "character bank")?.quantity, undefined, "partial bank evidence has no exact quantity claim");
+    assert.equal(interval?.points[0]?.sections.find((section) => section.section === "character bank")?.relativeToReview, "AFTER_REVIEW");
     const histories = buildErpSavedNeedHistoryReview(review.batches, "classic-era");
     assert.equal(histories.totalCount, 2, "history is keyed by exact project and requirement identity rather than item alone");
     assert.ok(histories.histories.every((history) => history.version === "classic-era" && history.identityState === "CONSISTENT" && history.entries.length === 1 && history.entries[0]?.taskIds.length === 1 && history.entries[0]?.actionCausality === "UNKNOWN"));
     assert.ok(histories.histories.every((history) => history.entries[0]?.reviewedResourceKind === "ITEM_REF" && history.entries[0]?.reviewedResourceKey === "item:159:0:0" && history.entries[0]?.reviewedEvidenceState === "SHORTFALL_OBSERVED" && history.entries[0]?.reviewedFreshness === "recent" && history.entries[0]?.reviewedObservedAt === now), "exact frozen identity, state, freshness, and timestamp remain available beside later evidence");
     assert.equal(buildErpSavedNeedHistoryReview(review.batches, "forever").totalCount, 0, "requirement history never crosses version scope");
     assert.equal(buildErpSavedNeedHistoryReview(review.batches, "classic-era", 1).truncated, true, "history caps are explicit");
+    const professionStore = new SqliteSnapshotStore(":memory:");
+    const unsupportedIntervalViews = views.map((project) => ({ ...project, needs: project.needs.map((need) => ({ ...need, kind: "CURRENCY" as const, resourceKey: "1822" })), workOrders: project.workOrders.map((order) => order.planningBatch ? { ...order, planningBatch: { ...order.planningBatch, needEvidence: { ...order.planningBatch.needEvidence!, resourceKind: "CURRENCY" as const, resourceKey: "1822" } } } : order) }));
+    assert.ok(buildErpSavedPlanningBatchReview(unsupportedIntervalViews, "classic-era").batches[0]?.steps.every((step) => step.observationInterval?.state === "INTERVAL_UNAVAILABLE"), "currency timelines remain explicitly unavailable until their snapshot journal is integrated");
+    try {
+      const professionAt = now + 100;
+      const professionCapture = (at: number, options: { skill?: number; partial?: boolean; unknown?: boolean; entries?: boolean } = {}) => buildWowSyncExport({ generatedAt: at, character: { name: "Profession Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, professions: { ...(options.unknown ? { unknown: true } : {}), ...(options.partial ? { partial: true } : {}), ...(options.entries === false ? {} : { entries: [{ name: "Mining", skill: options.skill ?? 0, maxSkill: 75 }] }) } });
+      const professionCharacter = professionStore.importSnapshot(professionCapture(professionAt, { skill: 72 }));
+      professionStore.createErpProject({
+        version: "classic-era", title: "Profession review",
+        needs: [{ stableId: "mining", kind: "PROFESSION", resourceKey: "Mining", label: "Mining skill", requiredQuantity: 75, sourceIdentityKey: professionCharacter.character.identityKey }],
+        workOrders: [{
+          stableId: "review-mining", kind: "OTHER", status: "PLANNED", title: "Review Mining progress", resourceNeedIds: ["mining"], dependsOn: [],
+          planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: professionAt + 10, version: "classic-era", needEvidence: { resourceKind: "PROFESSION", resourceKey: "Mining", state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 72, observedAt: professionAt } },
+        }],
+      });
+      professionStore.importSnapshot(professionCapture(professionAt + 20, { skill: 74, partial: true }));
+      professionStore.importSnapshot(professionCapture(professionAt + 30, { entries: false }));
+      const professionReview = buildErpSavedPlanningBatchReview(new DashboardReadModel(professionStore).getErpProjects({ version: "classic-era" }), "classic-era");
+      const professionInterval = professionReview.batches[0]?.steps[0]?.observationInterval;
+      assert.equal(professionInterval?.state, "SAMPLES_AVAILABLE");
+      assert.deepEqual(professionInterval?.points.map((point) => [point.sections[0]?.state, point.sections[0]?.quantity, point.sections[0]?.completeness]), [["OBSERVED", 74, "partial"], ["OBSERVED", 0, "complete"]], "a matching skill row remains directly observed in a partial list; absence is zero only in a complete observed list");
+      assert.equal(professionReview.batches[0]?.steps[0]?.actionCausality, "UNKNOWN");
+    } finally { professionStore.close(); }
     const prior = review.batches[0]!;
     const followUpId = "erp_batch_00000000-0000-4000-8000-000000000098";
     const followUp = { ...prior, stableId: followUpId, reviewedAt: prior.reviewedAt, replanFrom: { batchId: prior.stableId, needReferences: prior.steps.map(({ projectId, needId }) => ({ projectId, needId })) }, followUpBatchIds: [], steps: prior.steps.map((step) => ({ ...step, workOrderId: `follow-${step.workOrderId}`, workOrderTitle: `Follow ${step.workOrderTitle}`, workOrderStatus: "PLANNED" as const })) };

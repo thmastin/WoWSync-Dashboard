@@ -327,6 +327,9 @@ export interface ErpNeedEvidence {
   readonly unresolvedSections: readonly string[];
   readonly unknownQuantityRowCount: number;
   readonly observationChange?: ResourceObservationChange;
+  /** Bounded, non-causal samples for reviewing a saved requirement baseline across imports. */
+  readonly observationHistory?: ErpNeedObservationPoint[];
+  readonly observationHistoryTruncated?: boolean;
   readonly reservationAssessment?: {
     readonly state: "UNRESERVED" | "WITHIN_OBSERVED_SUPPLY" | "OVER_RESERVED" | "UNKNOWN";
     readonly activeQuantity: number;
@@ -335,6 +338,23 @@ export interface ErpNeedEvidence {
     readonly reason: string;
   };
   readonly reason: string;
+}
+
+export interface ErpNeedObservationPoint {
+  readonly snapshotId: number;
+  readonly generatedAt?: number;
+  readonly importedAt: number;
+  readonly sections: readonly {
+    readonly section: "character gold" | "bags" | "character bank" | "professions";
+    readonly state: "OBSERVED" | "PARTIAL" | "LAST_SEEN" | "UNKNOWN";
+    readonly observedAt?: number;
+    /** Exact quantity only for a complete observation. */
+    readonly quantity?: number;
+    /** Known matched rows in an incomplete section; lower bound only. */
+    readonly lowerBound?: number;
+    readonly unquantifiedMatchingRows?: number;
+    readonly completeness?: string;
+  }[];
 }
 
 export interface ResourceObservationChange {
@@ -439,6 +459,54 @@ function sectionItemQuantity(snapshot: StoredSnapshot, sectionName: "bags" | "ch
     if (need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : itemId(row.itemRef) === Number(need.resourceKey)) quantity += row.qty;
   }
   return quantity;
+}
+
+const ERP_NEED_OBSERVATION_HISTORY_LIMIT = 40;
+/** Exact-resource timeline from imported character snapshots. Partial sections expose only a lower bound. */
+function needObservationHistory(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[]): ErpNeedObservationPoint[] {
+  if (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF" && need.kind !== "GOLD_COPPER" && need.kind !== "PROFESSION") return [];
+  const ordered = [...snapshots].sort((a, b) => snapshotObservedAt(a.generatedAt, a.importedAt) - snapshotObservedAt(b.generatedAt, b.importedAt) || a.id - b.id);
+  return ordered.slice(-ERP_NEED_OBSERVATION_HISTORY_LIMIT).map((snapshot) => {
+    const sections: ErpNeedObservationPoint["sections"][number][] = [];
+    const pushItemSection = (name: "bags" | "character bank", label: "bags" | "character bank") => {
+      const parsed = name === "bags" ? snapshot.parsed.bags : snapshot.parsed.bank;
+      const status = parsed.status;
+      const observedAt = status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      let lowerBound = 0;
+      let unquantifiedMatchingRows = 0;
+      for (const row of parsed.items) {
+        const matches = row.itemRef !== undefined && (need.kind === "ITEM_REF" ? row.itemRef === need.resourceKey : need.kind === "ITEM_ID" && itemId(row.itemRef) === Number(need.resourceKey));
+        if (!matches) continue;
+        if (row.qty === undefined) unquantifiedMatchingRows++;
+        else lowerBound += row.qty;
+      }
+      const complete = status.state === "OBSERVED" && status.completeness?.toLowerCase() === "complete" && unquantifiedMatchingRows === 0;
+      const state: ErpNeedObservationPoint["sections"][number]["state"] = complete ? "OBSERVED" : status.state === "LAST_SEEN" ? "LAST_SEEN" : status.state === "OBSERVED" ? "PARTIAL" : "UNKNOWN";
+      sections.push({ section: label, state, ...(observedAt !== undefined ? { observedAt } : {}), ...(complete ? { quantity: lowerBound } : state === "PARTIAL" ? { lowerBound, ...(unquantifiedMatchingRows ? { unquantifiedMatchingRows } : {}) } : state === "LAST_SEEN" && unquantifiedMatchingRows === 0 && status.completeness?.toLowerCase() === "complete" ? { lowerBound } : {}), ...(status.completeness ? { completeness: status.completeness } : {}) });
+    };
+    if (need.kind === "GOLD_COPPER") {
+      const status = snapshot.parsed.character.status;
+      const observedAt = status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      const amount = snapshot.parsed.character.moneyCopper;
+      const complete = status.state === "OBSERVED" && amount !== undefined;
+      sections.push({ section: "character gold", state: complete ? "OBSERVED" : status.state === "LAST_SEEN" ? "LAST_SEEN" : status.state === "OBSERVED" ? "PARTIAL" : "UNKNOWN", ...(observedAt !== undefined ? { observedAt } : {}), ...(complete ? { quantity: amount } : status.state === "LAST_SEEN" && amount !== undefined ? { lowerBound: amount } : {}), ...(status.completeness ? { completeness: status.completeness } : {}) });
+    } else if (need.kind === "PROFESSION") {
+      const section = snapshot.parsed.professions;
+      const observedAt = section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      const match = section.entries.find((entry) => entry.name.trim().toLocaleLowerCase() === need.resourceKey.trim().toLocaleLowerCase());
+      const complete = section.status.completeness?.toLowerCase() === "complete";
+      const state: ErpNeedObservationPoint["sections"][number]["state"] = section.status.state === "OBSERVED" && (match?.skill !== undefined || (complete && !match))
+        ? "OBSERVED"
+        : section.status.state === "LAST_SEEN" ? "LAST_SEEN"
+          : section.status.state === "OBSERVED" ? "PARTIAL" : "UNKNOWN";
+      const quantity = match?.skill ?? (complete && !match ? 0 : undefined);
+      sections.push({ section: "professions", state, ...(observedAt !== undefined ? { observedAt } : {}), ...(state === "OBSERVED" && quantity !== undefined ? { quantity } : state === "PARTIAL" && quantity !== undefined ? { lowerBound: quantity } : {}), ...(section.status.completeness ? { completeness: section.status.completeness } : {}) });
+    } else {
+      pushItemSection("bags", "bags");
+      pushItemSection("character bank", "character bank");
+    }
+    return { snapshotId: snapshot.id, ...(snapshot.generatedAt !== undefined ? { generatedAt: snapshot.generatedAt } : {}), importedAt: snapshot.importedAt, sections };
+  });
 }
 function retrievalRecipientBagObservation(need: ErpResourceNeed, identityKey: string | undefined, project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpTransferSideObservation {
   const unknown = (reason: string): ErpTransferSideObservation => ({ ...(identityKey ? { identityKey } : {}), state: "UNKNOWN", freshness: "unknown", comparisons: [], reason });
@@ -1549,7 +1617,9 @@ function resourceSourceScreens(project: ErpProject, snapshotsFor: (identityKey: 
 /** Read-time projection; recorded plans never mutate or claim observed inventory. */
 export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection, candidateSources: readonly StoredCharacterSummary[] = [], sharedJournal?: SharedJournal): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
   const needEvidence = project.needs.map((need) => {
-    const raw = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [], now, currencies, project.version);
+    const snapshots = !need.sourceOwnerKey && need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [];
+    const assessed = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, snapshots, now, currencies, project.version);
+    const raw = !need.sourceOwnerKey && need.sourceIdentityKey ? { ...assessed, observationHistory: needObservationHistory(need, snapshots), observationHistoryTruncated: snapshots.length > ERP_NEED_OBSERVATION_HISTORY_LIMIT } : assessed;
     return applyReservationAssessment(need, raw, allProjects, project.version);
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
