@@ -1310,6 +1310,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(sourceResourceReview, "REST groups only needs that explicitly name this source and exact itemString");
     assert.ok(sourceResourceReview.alternativeLocations.some((location) => location.sourceName === "Possible Source Lead"), "alternative source candidates appear only as observed location leads");
     assert.ok(sourceResourceReview.alternativeLocations.every((location) => location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "alternative locations do not establish account membership, access, or transferability");
+    const sourceReviewRow = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(sourceResourceReview.stableId)}`);
+    assert.match(await sourceReviewRow.innerText(), /Other observed location leads/);
+    assert.match(await sourceReviewRow.innerText(), /Possible Source Lead/);
+    assert.match(await sourceReviewRow.innerText(), /Membership: UNKNOWN.*access: UNKNOWN.*transferability: UNKNOWN/);
+    assert.match(await sourceReviewRow.innerText(), /Open requirement, evidence, and manual task controls/);
+    const sourceNeedLink = sourceReviewRow.getByRole("link", { name: /Review location evidence for/ }).first();
+    const sourceNeedHref = await sourceNeedLink.getAttribute("href");
+    assert.match(sourceNeedHref ?? "", /^#erp-need-/);
+    assert.equal(await page.locator(`[id="${sourceNeedHref.slice(1)}"]`).count(), 1, "a source lead opens its exact requirement and existing manual task controls");
     assert.deepEqual(sourceResourceReview.needs.map((need) => need.needId).sort(), ["mycobloom_need", "reserve_myco_need"]);
     const portfolioPackage = rest.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "briar_need"));
     assert.ok(portfolioPackage, "REST includes the connected cross-project package");
