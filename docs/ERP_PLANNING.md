@@ -275,6 +275,20 @@ The integrated browser journey selected two distinct requirements from the portf
 
 Validation: full `npm.cmd run validate:erp` passed with Core 843, MCP 3, Server 268 passed and 2 Windows platform skips, Web 315, TypeScript, production build, and 20 synthetic browser acceptances. The queue-seeded multi-project scenario passed again after adding the later-import reconciliation assertions. Independent review found no blockers. Review fixed inaccurate stale-selection wording that had implied an automatic refresh. The Vite large-chunk advisory remains. No live-game or production validation was performed.
 
+## Phase 96 planned follow-on (completed in Phase 97)
+
+The Phase 96 follow-on was to add package-level source and reservation comparisons before freezing a plan; Phase 97 delivers that scope below.
+
+## Phase 97: package-level source and reservation review
+
+The queue-seeded grouped planner now freezes a package-level comparison alongside its per-task evidence. When the player selects alternative exact-item sources for multiple PROVISION tasks, the preview groups only identical version, resource kind/key, and source identity. It sums unmet demand only where the need evidence is recent, complete, timestamped, and OBSERVED; source-side quantity and freshness remain separately visible. If demand exceeds the observed source lower bound, the screen identifies the remaining shortfall without claiming that the source is accessible or transferable.
+
+Requested reservations are separately grouped by exact version/resource/source scope. Combined requests beyond the current unreserved lower bound, conflicting evidence, and UNKNOWN capacity disable package confirmation. UNKNOWN source identities are never merged. The selected alternate identity is preserved if its candidate disappears, and it is never checked against the need's default source. The existing server transaction remains authoritative for the frozen request and stale evidence.
+
+The shared deterministic helper lives in `packages/core`; it is consumed by the Dashboard composer and type-constrained to canonical WoW version, resource-kind, and freshness contracts. The player can review combined sourcing gaps and reservation conflicts before saving, then continue to create only explicit PLANNED tasks. No ownership, route, game reservation, transfer, purchase, craftability, or action is inferred.
+
+Validation: Core 849 passed; MCP 3 passed; Server 268 passed with 2 Windows platform skips; Web 321 passed before moving six helper tests into Core, yielding Core 849 and Web 315 afterward. TypeScript and production build passed. All 22 synthetic browser acceptances passed after the final move, including source shortfall comparison, overcommit blocking, REST/AccountContext/MCP parity for the saved plan, and stale transaction rejection. Independent review found and resolved a potential alternate-source fallback to the requirement source; follow-up review found no blockers. The Vite bundle-size advisory remains. No live game or production Dashboard was used.
+
 ## Current next substantial milestone
 
-Extend the queue-seeded planning journey into a single explainable fulfillment package that compares selected source alternatives alongside task pathways and reservation conflicts before freezing the plan. Then exercise the whole queue-to-plan-to-later-import workflow with stale, partial, conflicting, and restored evidence across browser, REST, AccountContext, and MCP. Keep task authoring and every game action player-controlled; preserve UNKNOWN for unproven recipe knowledge, access, market facts, routes, and causality. The ERP mission remains active.
+Connect this package review to the saved portfolio lifecycle: expose source-specific package demand, reservations, and post-import changes together in the existing shared project review model, then validate a multi-need package across initial source selection, explicit confirmation, later partial/conflicting/restored imports, and player-led replan through Dashboard, REST, AccountContext, and MCP. Preserve UNKNOWN ownership/access and action causality; do not infer delivery or completion. The ERP mission remains active.
