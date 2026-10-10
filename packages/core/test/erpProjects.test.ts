@@ -4,6 +4,7 @@ import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
+import { buildErpNeedObservationChangeReview } from "../src/erpObservationChanges.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
 import { guild, itemRow, warband } from "./sharedStorageBuilders.ts";
 import { renderExport } from "./sharedStorageExports.ts";
@@ -53,6 +54,28 @@ function sharedFixture(options: { owner?: "warband" | "guild"; live?: boolean; c
   const view = { basis: "DERIVED", owner, ownerKey: key, current, latestPartial: undefined, broaderCoverageEarlier: undefined, conflict: options.conflict ? { effectiveObservedAt, others: [] } : undefined, observationCount: { total: 1, complete: options.completeness === "partial" ? 0 : 1, partial: options.completeness === "partial" ? 1 : 0, informationless: 0 } };
   return (owner.kind === "guild" ? { guilds: [view] } : { warband: view, guilds: [] }) as unknown as SharedStorageProjection;
 }
+
+test("changed-need portfolio review is version-scoped, bounded, and preserves snapshot comparison evidence", () => {
+  const baseAt = Math.floor(Date.now() / 1000) - 1000;
+  const { store, identityKey } = seedStore({ generatedAt: baseAt, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 1 }] }] }, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } }));
+    store.createErpProject({ version: "classic-era", title: "Current change", priority: 5, needs: [{ stableId: "rough_stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact Rough Stone variant", requiredQuantity: 5, sourceIdentityKey: identityKey }] });
+    store.createErpProject({ version: "classic-era", title: "Paused change", status: "PAUSED", needs: [{ stableId: "paused_stone", kind: "ITEM_ID", resourceKey: "159", label: "Base item demand", requiredQuantity: 4, sourceIdentityKey: identityKey }] });
+    const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const bounded = buildErpNeedObservationChangeReview(views, "classic-era", 1);
+    assert.equal(bounded.totalCount, 2);
+    assert.equal(bounded.returnedCount, 1);
+    assert.equal(bounded.affectedProjectCount, 2);
+    assert.equal(bounded.truncated, true);
+    assert.equal(bounded.items[0]?.resourceKey, "item:159:0:0");
+    assert.equal(bounded.items[0]?.needKind, "ITEM_REF");
+    assert.deepEqual(bounded.items[0]?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 1, 3, 2]]);
+    const wrongVersion = views.map((view) => ({ ...view, version: "forever" as const }));
+    assert.equal(buildErpNeedObservationChangeReview(wrongVersion, "classic-era").totalCount, 0);
+    assert.equal(buildErpNeedObservationChangeReview(views, "classic-era", 0).returnedCount, 1, "limit is clamped to a safe minimum just like related bounded views");
+  } finally { store.close(); }
+});
 
 test("project requirements preserve observed lower bounds, unknown bank, and explicit reservations", () => {
   const { store, identityKey } = seedStore({ character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });

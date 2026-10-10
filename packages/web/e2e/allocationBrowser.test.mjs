@@ -600,6 +600,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] assigned gatherer progress shows only fresh
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const changedNeeds = page.locator(".erp-observation-change-queue");
+    const changeText = await changedNeeds.innerText();
+    assert.match(changeText, /Rough Stone/);
+    assert.match(changeText, /bags: 1 .* 4 \(\+3\)/);
+    assert.match(changeText, /cause remains unknown/);
+    await changedNeeds.getByRole("button", { name: "Review Rough Stone in Gather review" }).click();
+    const focusedNeedId = await page.evaluate(() => document.activeElement?.id);
+    assert.ok(focusedNeedId?.startsWith("erp-need-project_") && focusedNeedId.endsWith("-stone"), `focused exact requirement: ${focusedNeedId}`);
     const workOrder = page.locator(".erp-work-order-list li").filter({ hasText: "Gather one more" });
     await workOrder.waitFor();
     await workOrder.getByText("Compare assigned gatherer bag observations (cause unknown)").click();

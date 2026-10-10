@@ -1413,4 +1413,8 @@ button.roster-name-link {
 .erp-batch-order-draft select[multiple] { min-height: 78px; }
 .erp-need-bundle { margin: 18px 0; padding: 14px; border: 1px solid #56708a; border-radius: 8px; background: #162433; }
 .erp-need-bundle-row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); margin: 12px 0; padding: 12px; border: 1px solid #40556b; border-radius: 6px; }
+.erp-observation-change-queue { margin: 18px 0; padding: 14px; border: 1px solid #725d37; border-radius: 8px; background: #272216; }
+.erp-observation-change-queue > ol { display: grid; gap: 10px; padding-left: 24px; }
+.erp-observation-change-queue > ol > li { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 12px; border: 1px solid #51452e; border-radius: 6px; }
+.erp-need-list > li:focus { outline: 2px solid #cfaa51; outline-offset: 3px; }
 @media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }

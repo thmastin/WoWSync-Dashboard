@@ -1,0 +1,4 @@
+export function erpNeedAnchorId(projectId: string, needId: string): string {
+  // encodeURIComponent leaves hyphens untouched, so escape them to keep the separator unambiguous.
+  return `erp-need-${encodeURIComponent(projectId).replaceAll("-", "%2D")}-${encodeURIComponent(needId).replaceAll("-", "%2D")}`;
+}
