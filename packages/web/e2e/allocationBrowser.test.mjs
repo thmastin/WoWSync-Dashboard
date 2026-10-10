@@ -101,7 +101,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
       bags: observedSection([row(ITEM_ID, 39, { name: "Mycobloom" })], now - 100),
       bank: observedSection([], now - 100),
       warband: warbandSection("OBSERVED", [], now - 100),
-      guild: guildSection("gclub-project-fixture", [], now - 100),
+      guild: guildSection("gclub-project-fixture", [row(ITEM_ID, 10, { name: "Guild Mycobloom" })], now - 100),
     }));
     store.importSnapshot(renderExport({
       name: "Project Fixture",
@@ -110,7 +110,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
       bags: observedSection([row(ITEM_ID, 40, { name: "Mycobloom" })], now),
       bank: observedSection([], now),
       warband: warbandSection("OBSERVED", [], now),
-      guild: guildSection("gclub-project-fixture", [], now),
+      guild: guildSection("gclub-project-fixture", [row(ITEM_ID, 10, { name: "Guild Mycobloom" })], now),
     }));
     store.importSnapshot(renderExport({
       name: "Other Potential Holder",
@@ -308,6 +308,34 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(materialProcurementOrder.status, "PLANNED", "procurement remains a manual plan with no purchase execution");
 
     await materialNeedForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const sharedNeedForm = projectCard.locator("form.erp-inline-form").first();
+    await sharedNeedForm.getByLabel("Kind").selectOption("ITEM_REF");
+    await sharedNeedForm.getByLabel("Resource key").fill(`item:${ITEM_ID}::::::::80`);
+    await sharedNeedForm.getByLabel("Label").fill("Guild-held Mycobloom");
+    await sharedNeedForm.getByLabel("Quantity").fill("1");
+    await sharedNeedForm.getByLabel("Source character or shared owner").locator("option[value='owner::retail::guild::gclub-project-fixture']").waitFor({ state: "attached" });
+    await sharedNeedForm.getByLabel("Source character or shared owner").selectOption("owner::retail::guild::gclub-project-fixture");
+    await sharedNeedForm.getByLabel("Intended recipient").selectOption(fixtureSourceKeys[0]);
+    await sharedNeedForm.getByRole("button", { name: "Add requirement" }).click();
+    const guildNeed = projectCard.locator(".erp-need-list li").filter({ hasText: "Guild-held Mycobloom" });
+    await guildNeed.getByText("Covered by observed supply").waitFor();
+    await guildNeed.getByRole("button", { name: "Plan manual shared-storage retrieval review" }).click();
+    const retrievalPrefill = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await retrievalPrefill.getByLabel("Action type").inputValue(), "RETRIEVE");
+    assert.equal(await retrievalPrefill.getByLabel("Assigned character").inputValue(), fixtureSourceKeys[0]);
+    assert.equal(await retrievalPrefill.getByLabel("Intended destination character").inputValue(), fixtureSourceKeys[0]);
+    assert.match(await retrievalPrefill.getByLabel("Manual instructions").inputValue(), /Guild items remain guild-owned/);
+    assert.match(await retrievalPrefill.getByLabel("Manual instructions").inputValue(), /at least 10 matching units/);
+    assert.match(await retrievalPrefill.getByLabel("Manual instructions").inputValue(), /may not cover inaccessible or unscanned storage/);
+    assert.match(await retrievalPrefill.getByLabel("Manual instructions").inputValue(), /No retrieval is executed/);
+    await retrievalPrefill.getByRole("button", { name: "Add work order" }).click();
+    const retrievalOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review retrieval of Guild-held Mycobloom" });
+    await retrievalOrder.waitFor();
+    assert.match(await retrievalOrder.innerText(), /Guild remains guild-owned|guild-owned/);
+    assert.match(await retrievalOrder.innerText(), /does not establish|permission|access/i);
+    await guildNeed.getByText("An active RETRIEVE review is already linked to this need.").waitFor();
+    await projectCard.getByRole("button", { name: "Hide forms" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const transferForm = projectCard.locator("form.erp-inline-form");
     await transferForm.getByLabel("Action type").selectOption("TRANSFER");
