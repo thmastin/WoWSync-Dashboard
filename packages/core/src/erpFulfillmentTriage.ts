@@ -105,6 +105,10 @@ export interface ErpPortfolioFulfillmentReview {
   readonly totalSavedPlanningBatchCount: number;
   readonly returnedSavedPlanningBatchCount: number;
   readonly savedPlanningBatchesTruncated: boolean;
+  readonly savedNeedHistories: readonly ErpSavedNeedHistory[];
+  readonly totalSavedNeedHistoryCount: number;
+  readonly returnedSavedNeedHistoryCount: number;
+  readonly savedNeedHistoriesTruncated: boolean;
   readonly totalPackageCount: number;
   readonly returnedPackageCount: number;
   readonly totalStepCount: number;
@@ -130,11 +134,17 @@ export interface ErpSavedPlanningBatch {
     readonly needId: string;
     readonly needLabel: string;
     readonly resourceKey: string;
+    readonly currentResourceKind?: ErpResourceNeed["kind"];
+    readonly reviewedResourceKind?: ErpResourceNeed["kind"];
+    readonly reviewedResourceKey?: string;
     readonly workOrderId: string;
     readonly workOrderTitle: string;
     readonly workOrderKind: ErpWorkOrder["kind"];
     readonly workOrderStatus: ErpWorkOrder["status"];
     readonly evidenceReview: "NO_NEWER_OBSERVATION" | "NEWER_OBSERVATION_QUANTITY_CHANGED" | "NEWER_OBSERVATION_UNCHANGED" | "NEWER_OBSERVATION_NO_BASELINE" | "CURRENT_EVIDENCE_STALE_OR_UNKNOWN" | "NEED_IDENTITY_CHANGED" | "NEED_IDENTITY_UNKNOWN";
+    readonly reviewedEvidenceState?: ErpNeedEvidence["state"];
+    readonly reviewedFreshness?: Freshness;
+    readonly reviewedObservedAt?: number;
     readonly currentEvidenceState: ErpNeedEvidence["state"];
     readonly currentFreshness: Freshness;
     readonly reviewedQuantity?: number;
@@ -155,6 +165,115 @@ export interface ErpSavedPlanningBatchReview {
   readonly totalCount: number;
   readonly returnedCount: number;
   readonly truncated: boolean;
+}
+
+export interface ErpSavedNeedHistory {
+  readonly stableId: string;
+  readonly version: WowVersion;
+  readonly projectId: string;
+  readonly projectTitle: string;
+  readonly needId: string;
+  readonly needLabel: string;
+  readonly resourceKey: string;
+  readonly reviewedResourceKeys: readonly string[];
+  readonly reviewedResourceKinds: readonly ErpResourceNeed["kind"][];
+  readonly identityState: "CONSISTENT" | "REQUIREMENT_IDENTITY_CHANGED" | "REQUIREMENT_IDENTITY_UNKNOWN";
+  readonly batchIds: readonly string[];
+  readonly entries: readonly {
+    readonly batchId: string;
+    readonly reviewedAt: number;
+    readonly predecessorBatchId?: string;
+    readonly followUpBatchIds: readonly string[];
+    readonly lineageState: ErpSavedPlanningBatch["lineageState"];
+    readonly batchState: ErpSavedPlanningBatch["state"];
+    readonly taskIds: readonly string[];
+    readonly taskTitles: readonly string[];
+    readonly taskStatuses: readonly ErpWorkOrder["status"][];
+    readonly evidenceReview: ErpSavedPlanningBatch["steps"][number]["evidenceReview"];
+    readonly reviewedQuantity?: number;
+    readonly reviewedEvidenceState?: ErpNeedEvidence["state"];
+    readonly reviewedFreshness?: Freshness;
+    readonly reviewedObservedAt?: number;
+    readonly currentEvidenceState: ErpNeedEvidence["state"];
+    readonly currentFreshness: Freshness;
+    readonly currentQuantity?: number;
+    readonly currentObservedAt?: number;
+    readonly activeReservationQuantity: number;
+    readonly actionCausality: "UNKNOWN";
+  }[];
+  readonly nextReview: "REVIEW_LINEAGE_OR_IDENTITY_CONFLICT" | "REVIEW_CURRENT_EVIDENCE" | "REVIEW_OPEN_MANUAL_WORK" | "REVIEW_REQUIREMENT";
+  readonly interpretation: "HISTORICAL_PLAN_AND_EVIDENCE_REVIEW_ONLY";
+}
+
+export interface ErpSavedNeedHistoryReview {
+  readonly version: VersionOrUnknown;
+  readonly histories: readonly ErpSavedNeedHistory[];
+  readonly totalCount: number;
+  readonly returnedCount: number;
+  readonly truncated: boolean;
+}
+
+/** Follows the same exact project/need through saved batches; lineage is planning context, never action causality. */
+export function buildErpSavedNeedHistoryReview(batches: readonly ErpSavedPlanningBatch[], version: VersionOrUnknown, limit = 100): ErpSavedNeedHistoryReview {
+  if (version === "unknown-version") return { version, histories: [], totalCount: 0, returnedCount: 0, truncated: false };
+  const scoped = batches.filter((batch) => batch.version === version);
+  const histories = new Map<string, { first: ErpSavedPlanningBatch["steps"][number]; entries: ErpSavedNeedHistory["entries"][number][]; keys: Set<string>; identities: Set<string>; kinds: Set<ErpResourceNeed["kind"]>; identityUnknown: boolean }>();
+  for (const batch of scoped) {
+    const stepsByNeed = new Map<string, ErpSavedPlanningBatch["steps"][number][]>();
+    for (const step of batch.steps) {
+      const key = JSON.stringify([step.projectId, step.needId]);
+      stepsByNeed.set(key, [...(stepsByNeed.get(key) ?? []), step]);
+    }
+    for (const steps of stepsByNeed.values()) {
+      const step = steps[0]!;
+      const stableId = JSON.stringify([version, step.projectId, step.needId]);
+      const history = histories.get(stableId) ?? { first: step, entries: [], keys: new Set<string>(), identities: new Set<string>(), kinds: new Set<ErpResourceNeed["kind"]>(), identityUnknown: false };
+      for (const candidate of steps) {
+        if (!candidate.reviewedResourceKind || !candidate.reviewedResourceKey) history.identityUnknown = true;
+        else {
+          history.keys.add(candidate.reviewedResourceKey);
+          history.kinds.add(candidate.reviewedResourceKind);
+          history.identities.add(JSON.stringify([candidate.reviewedResourceKind, candidate.reviewedResourceKey]));
+        }
+        if (!candidate.currentResourceKind || candidate.resourceKey === "UNKNOWN") history.identityUnknown = true;
+        else history.identities.add(JSON.stringify([candidate.currentResourceKind, candidate.resourceKey]));
+      }
+      history.entries.push({ batchId: batch.stableId, reviewedAt: batch.reviewedAt, ...(batch.replanFrom && batch.replanFrom.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId) ? { predecessorBatchId: batch.replanFrom.batchId } : {}), followUpBatchIds: batch.followUpBatchIds.filter((followUpId) => scoped.some((candidate) => candidate.stableId === followUpId && candidate.replanFrom?.needReferences.some((ref) => ref.projectId === step.projectId && ref.needId === step.needId))), lineageState: batch.lineageState, batchState: batch.state, taskIds: steps.map((candidate) => candidate.workOrderId), taskTitles: steps.map((candidate) => candidate.workOrderTitle), taskStatuses: steps.map((candidate) => candidate.workOrderStatus), evidenceReview: step.evidenceReview, ...(step.reviewedQuantity !== undefined ? { reviewedQuantity: step.reviewedQuantity } : {}), ...(step.reviewedEvidenceState ? { reviewedEvidenceState: step.reviewedEvidenceState } : {}), ...(step.reviewedFreshness ? { reviewedFreshness: step.reviewedFreshness } : {}), ...(step.reviewedObservedAt !== undefined ? { reviewedObservedAt: step.reviewedObservedAt } : {}), currentEvidenceState: step.currentEvidenceState, currentFreshness: step.currentFreshness, ...(step.currentQuantity !== undefined ? { currentQuantity: step.currentQuantity } : {}), ...(step.currentObservedAt !== undefined ? { currentObservedAt: step.currentObservedAt } : {}), activeReservationQuantity: step.activeReservationQuantity, actionCausality: "UNKNOWN" as const });
+      histories.set(stableId, history);
+    }
+  }
+  const rows: ErpSavedNeedHistory[] = [...histories.entries()].map(([stableId, history]) => {
+    const byBatchId = new Map(history.entries.map((entry) => [entry.batchId, entry]));
+    const indegree = new Map(history.entries.map((entry) => [entry.batchId, 0]));
+    const children = new Map<string, string[]>();
+    for (const entry of history.entries) if (entry.predecessorBatchId && byBatchId.has(entry.predecessorBatchId)) {
+      indegree.set(entry.batchId, (indegree.get(entry.batchId) ?? 0) + 1);
+      children.set(entry.predecessorBatchId, [...(children.get(entry.predecessorBatchId) ?? []), entry.batchId]);
+    }
+    const compareEntries = (left: string, right: string) => byBatchId.get(left)!.reviewedAt - byBatchId.get(right)!.reviewedAt || left.localeCompare(right);
+    const ready = history.entries.filter((entry) => indegree.get(entry.batchId) === 0).map((entry) => entry.batchId).sort(compareEntries);
+    const orderedIds: string[] = [];
+    while (ready.length) {
+      const current = ready.shift()!;
+      orderedIds.push(current);
+      for (const child of children.get(current) ?? []) {
+        const next = (indegree.get(child) ?? 0) - 1;
+        indegree.set(child, next);
+        if (next === 0) { ready.push(child); ready.sort(compareEntries); }
+      }
+    }
+    if (orderedIds.length < history.entries.length) orderedIds.push(...history.entries.map((entry) => entry.batchId).filter((id) => !orderedIds.includes(id)).sort(compareEntries));
+    const entries = orderedIds.map((id) => byBatchId.get(id)!);
+    const last = entries.at(-1);
+    const identityState = history.identities.size > 1 ? "REQUIREMENT_IDENTITY_CHANGED" as const : history.identityUnknown || history.identities.size === 0 ? "REQUIREMENT_IDENTITY_UNKNOWN" as const : "CONSISTENT" as const;
+    const nextReview = identityState === "REQUIREMENT_IDENTITY_CHANGED" || entries.some((entry) => entry.lineageState === "FOLLOW_UP_CONTEXT_CONFLICT" || entry.evidenceReview === "NEED_IDENTITY_CHANGED") ? "REVIEW_LINEAGE_OR_IDENTITY_CONFLICT" as const
+      : identityState === "REQUIREMENT_IDENTITY_UNKNOWN" ? "REVIEW_CURRENT_EVIDENCE" as const
+      : !last || last.currentEvidenceState === "UNKNOWN" || last.currentFreshness !== "recent" || last.evidenceReview === "NEED_IDENTITY_UNKNOWN" || last.evidenceReview === "CURRENT_EVIDENCE_STALE_OR_UNKNOWN" || last.evidenceReview.startsWith("NEWER_OBSERVATION_") ? "REVIEW_CURRENT_EVIDENCE" as const
+        : last.taskStatuses.some((status) => status !== "COMPLETED" && status !== "CANCELLED") ? "REVIEW_OPEN_MANUAL_WORK" as const : "REVIEW_REQUIREMENT" as const;
+    return { stableId, version, projectId: history.first.projectId, projectTitle: history.first.projectTitle, needId: history.first.needId, needLabel: history.first.needLabel, resourceKey: history.first.resourceKey, reviewedResourceKeys: [...history.keys].sort(), reviewedResourceKinds: [...history.kinds].sort(), identityState, batchIds: entries.map((entry) => entry.batchId), entries, nextReview, interpretation: "HISTORICAL_PLAN_AND_EVIDENCE_REVIEW_ONLY" as const };
+  }).sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needLabel.localeCompare(b.needLabel) || a.stableId.localeCompare(b.stableId));
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 100;
+  return { version, histories: rows.slice(0, safeLimit), totalCount: rows.length, returnedCount: Math.min(rows.length, safeLimit), truncated: rows.length > safeLimit };
 }
 
 /** Reconciles saved grouped plans with later evidence; inventory movement and task causality remain UNKNOWN. */
@@ -186,7 +305,7 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
               : baseline?.observedQuantity === undefined || evidence.observedQuantity === undefined ? "NEWER_OBSERVATION_NO_BASELINE"
                 : baseline.observedQuantity === evidence.observedQuantity ? "NEWER_OBSERVATION_UNCHANGED" : "NEWER_OBSERVATION_QUANTITY_CHANGED";
       const activeReservationQuantity = project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === needId).reduce((sum, reservation) => sum + reservation.quantity, 0);
-      return [{ projectId: project.stableId, projectTitle: project.title, needId, needLabel: need.label, resourceKey: need.resourceKey, workOrderId: order.stableId, workOrderTitle: order.title, workOrderKind: order.kind, workOrderStatus: order.status, evidenceReview, currentEvidenceState: evidence?.state ?? "UNKNOWN", currentFreshness: evidence?.freshness ?? "unknown", ...(baseline?.observedQuantity !== undefined ? { reviewedQuantity: baseline.observedQuantity } : {}), ...(evidence?.observedQuantity !== undefined ? { currentQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { currentObservedAt: evidence.observedAt } : {}), activeReservationQuantity, actionCausality: "UNKNOWN" as const }];
+      return [{ projectId: project.stableId, projectTitle: project.title, needId, needLabel: need.label, resourceKey: need.resourceKey, currentResourceKind: need.kind, ...(baseline?.resourceKind ? { reviewedResourceKind: baseline.resourceKind } : {}), ...(baseline?.resourceKey ? { reviewedResourceKey: baseline.resourceKey } : {}), workOrderId: order.stableId, workOrderTitle: order.title, workOrderKind: order.kind, workOrderStatus: order.status, evidenceReview, ...(baseline?.state ? { reviewedEvidenceState: baseline.state } : {}), ...(baseline?.freshness ? { reviewedFreshness: baseline.freshness } : {}), ...(baseline?.observedAt !== undefined ? { reviewedObservedAt: baseline.observedAt } : {}), currentEvidenceState: evidence?.state ?? "UNKNOWN", currentFreshness: evidence?.freshness ?? "unknown", ...(baseline?.observedQuantity !== undefined ? { reviewedQuantity: baseline.observedQuantity } : {}), ...(evidence?.observedQuantity !== undefined ? { currentQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { currentObservedAt: evidence.observedAt } : {}), activeReservationQuantity, actionCausality: "UNKNOWN" as const }];
     }));
     const newerObservationReviewCount = steps.filter((step) => step.evidenceReview.startsWith("NEWER_OBSERVATION_")).length;
     const state: ErpSavedPlanningBatch["state"] = conflictingContext || steps.some((step) => step.evidenceReview === "NEED_IDENTITY_CHANGED") ? "CONFLICTING_BATCH_CONTEXT" : newerObservationReviewCount ? "NEWER_OBSERVATION_REVIEW" : steps.some((step) => step.evidenceReview === "CURRENT_EVIDENCE_STALE_OR_UNKNOWN" || step.evidenceReview === "NEED_IDENTITY_UNKNOWN") ? "CURRENT_EVIDENCE_REVIEW" : "AWAITING_NEW_OBSERVATION";
@@ -469,7 +588,7 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
 
 /** Builds a compact, dependency-first view of player-authored cross-project packages. It never selects routes or attributes actions. */
 export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 50): ErpPortfolioFulfillmentReview {
-  if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, savedPlanningBatches: [], totalSavedPlanningBatchCount: 0, returnedSavedPlanningBatchCount: 0, savedPlanningBatchesTruncated: false, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
+  if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, savedPlanningBatches: [], totalSavedPlanningBatchCount: 0, returnedSavedPlanningBatchCount: 0, savedPlanningBatchesTruncated: false, savedNeedHistories: [], totalSavedNeedHistoryCount: 0, returnedSavedNeedHistoryCount: 0, savedNeedHistoriesTruncated: false, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
   const savedPlanningBatchReview = buildErpSavedPlanningBatchReview(projects, version, limit);
   const projectById = new Map(projects.filter((project) => project.version === version && project.status !== "CANCELLED").map((project) => [project.stableId, project]));
   const sourceReview = buildErpSourceFulfillmentReview(projects, version);
@@ -568,7 +687,8 @@ export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProject
   packages.sort((a, b) => a.steps[0]!.projectTitle.localeCompare(b.steps[0]!.projectTitle) || a.stableId.localeCompare(b.stableId));
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50;
   const selected = packages.slice(0, safeLimit);
-  return { version, packages: selected, totalPackageCount: packages.length, returnedPackageCount: selected.length, savedPlanningBatches: savedPlanningBatchReview.batches, totalSavedPlanningBatchCount: savedPlanningBatchReview.totalCount, returnedSavedPlanningBatchCount: savedPlanningBatchReview.returnedCount, savedPlanningBatchesTruncated: savedPlanningBatchReview.truncated, totalStepCount: packages.reduce((sum, item) => sum + item.steps.length, 0), stepsNeedingReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.reviewState !== "OBSERVED_NEED_MET").length, 0), stepsWithPrerequisiteReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.prerequisiteGate.state !== "NO_PREREQUISITES" && step.prerequisiteGate.state !== "CURRENT_OBSERVED_EVIDENCE_MET").length, 0), pathwayReviewTruncated: sourceReview.truncated, truncated: selected.length < packages.length, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
+  const savedNeedHistoryReview = buildErpSavedNeedHistoryReview(savedPlanningBatchReview.batches, version, limit);
+  return { version, packages: selected, totalPackageCount: packages.length, returnedPackageCount: selected.length, savedPlanningBatches: savedPlanningBatchReview.batches, totalSavedPlanningBatchCount: savedPlanningBatchReview.totalCount, returnedSavedPlanningBatchCount: savedPlanningBatchReview.returnedCount, savedPlanningBatchesTruncated: savedPlanningBatchReview.truncated, savedNeedHistories: savedNeedHistoryReview.histories, totalSavedNeedHistoryCount: savedNeedHistoryReview.totalCount, returnedSavedNeedHistoryCount: savedNeedHistoryReview.returnedCount, savedNeedHistoriesTruncated: savedNeedHistoryReview.truncated || savedPlanningBatchReview.truncated, totalStepCount: packages.reduce((sum, item) => sum + item.steps.length, 0), stepsNeedingReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.reviewState !== "OBSERVED_NEED_MET").length, 0), stepsWithPrerequisiteReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.prerequisiteGate.state !== "NO_PREREQUISITES" && step.prerequisiteGate.state !== "CURRENT_OBSERVED_EVIDENCE_MET").length, 0), pathwayReviewTruncated: sourceReview.truncated, truncated: selected.length < packages.length, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
 }
 
 /** Groups explicitly source-scoped active/paused requirements with their already-derived evidence and linked manual-work observations. */

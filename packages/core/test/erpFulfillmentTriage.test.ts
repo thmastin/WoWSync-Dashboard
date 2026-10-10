@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview, buildErpSavedPlanningBatchReview } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview, buildErpSavedNeedHistoryReview, buildErpSavedPlanningBatchReview } from "../src/erpFulfillmentTriage.ts";
 
 test("saved planning batches compare later same-version evidence without attributing task completion", () => {
   const store = new SqliteSnapshotStore(":memory:");
@@ -22,6 +22,17 @@ test("saved planning batches compare later same-version evidence without attribu
     assert.equal(review.batches[0]?.steps.length, 2, "the atomic batch remains grouped across its two requirements");
     assert.equal(review.batches[0]?.state, "NEWER_OBSERVATION_REVIEW");
     assert.ok(review.batches[0]?.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_QUANTITY_CHANGED" && step.currentQuantity === 5 && step.reviewedQuantity === 2 && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"));
+    const histories = buildErpSavedNeedHistoryReview(review.batches, "classic-era");
+    assert.equal(histories.totalCount, 2, "history is keyed by exact project and requirement identity rather than item alone");
+    assert.ok(histories.histories.every((history) => history.version === "classic-era" && history.identityState === "CONSISTENT" && history.entries.length === 1 && history.entries[0]?.taskIds.length === 1 && history.entries[0]?.actionCausality === "UNKNOWN"));
+    assert.ok(histories.histories.every((history) => history.entries[0]?.reviewedEvidenceState === "SHORTFALL_OBSERVED" && history.entries[0]?.reviewedFreshness === "recent" && history.entries[0]?.reviewedObservedAt === now), "frozen state, freshness, and timestamp remain available beside later evidence");
+    assert.equal(buildErpSavedNeedHistoryReview(review.batches, "forever").totalCount, 0, "requirement history never crosses version scope");
+    assert.equal(buildErpSavedNeedHistoryReview(review.batches, "classic-era", 1).truncated, true, "history caps are explicit");
+    const prior = review.batches[0]!;
+    const followUpId = "erp_batch_00000000-0000-4000-8000-000000000098";
+    const followUp = { ...prior, stableId: followUpId, reviewedAt: prior.reviewedAt, replanFrom: { batchId: prior.stableId, needReferences: prior.steps.map(({ projectId, needId }) => ({ projectId, needId })) }, followUpBatchIds: [], steps: prior.steps.map((step) => ({ ...step, workOrderId: `follow-${step.workOrderId}`, workOrderTitle: `Follow ${step.workOrderTitle}`, workOrderStatus: "PLANNED" as const })) };
+    const equalTimestamp = buildErpSavedNeedHistoryReview([{ ...followUp }, { ...prior, followUpBatchIds: [followUpId] }], "classic-era");
+    assert.ok(equalTimestamp.histories.every((history) => history.batchIds[0] === prior.stableId && history.batchIds[1] === followUpId && history.entries[1]?.predecessorBatchId === prior.stableId), "lineage orders a same-second follow-up after its predecessor regardless of batch ID and input order");
     assert.equal(buildErpSavedPlanningBatchReview(views, "forever").totalCount, 0, "batch identity is version isolated");
     const changedNeedProject = store.getErpProject(createdProject.stableId);
     assert.ok(changedNeedProject);
@@ -29,6 +40,7 @@ test("saved planning batches compare later same-version evidence without attribu
     const changedIdentityBatch = buildErpSavedPlanningBatchReview(new DashboardReadModel(store).getErpProjects({ version: "classic-era" }), "classic-era").batches[0];
     assert.equal(changedIdentityBatch?.state, "CONFLICTING_BATCH_CONTEXT");
     assert.equal(changedIdentityBatch?.steps.find((step) => step.needId === "stone-a")?.evidenceReview, "NEED_IDENTITY_CHANGED", "a later quantity must never be compared against a different resource identity");
+    assert.equal(buildErpSavedNeedHistoryReview(changedIdentityBatch ? [changedIdentityBatch] : [], "classic-era").histories.find((history) => history.needId === "stone-a")?.identityState, "REQUIREMENT_IDENTITY_CHANGED", "the history compares frozen identity with the current requirement identity");
     const legacyViews = views.map((project) => ({ ...project, workOrders: project.workOrders.map((order) => order.planningBatch ? { ...order, planningBatch: { ...order.planningBatch, needEvidence: { state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } } : order) }));
     const legacyBatch = buildErpSavedPlanningBatchReview(legacyViews, "classic-era").batches[0];
     assert.equal(legacyBatch?.state, "CURRENT_EVIDENCE_REVIEW");
