@@ -1344,7 +1344,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     store = new SqliteSnapshotStore(databasePath);
     const now = Math.floor(Date.now() / 1000);
     const source = store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now), bank: observedSection([], now) }));
-    const observedLead = store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
+    const observedLead = store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" }), row(ITEM_ID + 1, 4, { name: "Briarthorn" })], now), bank: observedSection([], now) }));
     const first = store.createErpProject({ version: "retail", title: "Provision the crafter", needs: [{ stableId: "mycobloom_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 5, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }], reservations: [{ stableId: "existing_hold", needId: "mycobloom_need", sourceIdentityKey: source.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     const second = store.createErpProject({ version: "retail", title: "Prepare the second recipe", needs: [{ stableId: "briar_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     const third = store.createErpProject({ version: "retail", title: "Provision the reserve crafter", needs: [{ stableId: "reserve_myco_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom reserve", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
@@ -1358,17 +1358,40 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
+    await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).check();
     await page.getByTestId(`erp-fulfillment-pathways-${first.stableId}-mycobloom_need`).getByRole("button", { name: "Plan manual review from investigate other character location", exact: true }).click();
     await page.waitForFunction(() => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes("Provision the crafter") && input.closest("label")?.innerText.includes("Mycobloom")));
     assert.equal(await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).isChecked(), true, "the per-need pathway review selects the exact requirement in the existing grouped planner");
+    const firstTask = composer.getByRole("group", { name: "Provision the crafter: Mycobloom" });
+    assert.equal(await firstTask.getByLabel("Evidence pathway for Mycobloom").inputValue(), "INVESTIGATE_OTHER_CHARACTER_LOCATION", "a pathway handoff refreshes an already-selected, untouched generic draft");
     await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
+    const secondTask = composer.getByRole("group", { name: "Prepare the second recipe: Briarthorn" });
+    const secondPathway = secondTask.getByLabel("Evidence pathway for Briarthorn");
+    await secondPathway.selectOption("CHOOSE_MANUAL_SUPPLY_PLAN");
+    await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).uncheck();
+    await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
+    assert.equal(await secondTask.getByLabel("Evidence pathway for Briarthorn").inputValue(), "", "removing and re-adding an untouched need clears the old pathway and suggestion together");
+    assert.equal(await secondTask.getByLabel("Manual step type").inputValue(), "INVESTIGATE");
+    await secondPathway.selectOption("CHOOSE_MANUAL_SUPPLY_PLAN");
+    await secondPathway.selectOption("");
+    assert.equal(await secondTask.getByLabel("Manual step type").inputValue(), "INVESTIGATE", "clearing a pathway removes its untouched automatic suggestion");
+    await secondPathway.selectOption("CHOOSE_MANUAL_SUPPLY_PLAN");
+    await secondTask.getByLabel("Instructions").fill("Review purchase, observed source lead, gold evidence, and exact material need.");
+    await secondPathway.selectOption("INVESTIGATE_OTHER_CHARACTER_LOCATION");
+    assert.equal(await secondTask.getByLabel("Manual step type").inputValue(), "INVESTIGATE", "changing evidence pathways leaves the player's task choice intact");
+    assert.equal(await secondTask.getByLabel("Instructions").inputValue(), "Review purchase, observed source lead, gold evidence, and exact material need.", "changing evidence pathways never overwrites player-edited instructions");
+    await secondPathway.selectOption("");
+    assert.equal(await secondTask.getByLabel("Instructions").inputValue(), "Review purchase, observed source lead, gold evidence, and exact material need.", "clearing a pathway also preserves player-edited instructions");
+    await secondPathway.selectOption("CHOOSE_MANUAL_SUPPLY_PLAN");
+    assert.equal(await secondPathway.inputValue(), "CHOOSE_MANUAL_SUPPLY_PLAN", "each selected need can carry its own evidence pathway inside the grouped planning session");
     await composer.getByRole("checkbox", { name: /Provision the reserve crafter · Mycobloom reserve/ }).check();
     const firstEvidence = composer.locator(".erp-cross-project-choice").filter({ hasText: /Provision the crafter · Mycobloom/ }).first();
     assert.match(await firstEvidence.innerText(), /2 observed/);
     assert.match(await firstEvidence.innerText(), /2 active needs \/ 8 planned units · 1 exact-scope units reserved/);
     assert.match(await firstEvidence.innerText(), /1 observed lower-bound units not reserved/);
-    const firstTask = composer.getByRole("group", { name: "Provision the crafter: Mycobloom" });
-    const secondTask = composer.getByRole("group", { name: "Prepare the second recipe: Briarthorn" });
+    assert.equal(await firstTask.getByLabel("Manual step type").inputValue(), "INVESTIGATE", "a location pathway remains an investigation rather than an implied transfer");
+    assert.equal(await firstTask.getByLabel("Observed source to investigate for Mycobloom").inputValue(), observedLead.character.identityKey, "the only recent OBSERVED exact-resource lead is selected as a reviewable investigation lead");
+    assert.match(await firstTask.getByLabel("Instructions").inputValue(), /single recent observed same-version character location lead.*ownership, access, binding, transferability, and route remain UNKNOWN/);
     assert.equal(await composer.locator('select[aria-label^="Portfolio prerequisites for "]').count(), 3);
     const secondPrerequisites = composer.getByLabel("Portfolio prerequisites for Briarthorn", { exact: true });
     await secondPrerequisites.selectOption(JSON.stringify([first.stableId, "mycobloom_need"]));
@@ -1401,6 +1424,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.match(await planReview.innerText(), /PROVISION.*Mycobloom/);
     assert.match(await planReview.innerText(), /Requirement source: Fulfillment Planner · Cairne; selected work source: Possible Source Lead · Cairne/);
     assert.match(await planReview.innerText(), /Selected fulfillment pathway at review: INVESTIGATE OTHER CHARACTER LOCATION · DERIVED/);
+    assert.match(await planReview.innerText(), /Selected fulfillment pathway at review: CHOOSE MANUAL SUPPLY PLAN · DERIVED/, "the second requirement retains its separately selected, server-revalidated pathway");
     assert.match(await planReview.innerText(), /assigned character: UNKNOWN/);
     assert.ok((await planReview.innerText()).includes(fullRef(ITEM_ID)), "the preview includes the exact selected item variant from its observed location row");
     assert.match(await planReview.innerText(), /project revision 1/);
@@ -1442,6 +1466,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual([savedPathway.kind, savedPathway.provenance, savedPathway.version, savedPathway.needId], ["INVESTIGATE_OTHER_CHARACTER_LOCATION", "DERIVED", "retail", "mycobloom_need"], "the confirmed record keeps the server-verified pathway identity and scope");
     assert.match(savedPathway.reason, /does not establish account membership|location lead|ownership/i);
     const secondRead = rest.projects.find((project) => project.title === "Prepare the second recipe");
+    assert.deepEqual([secondRead.workOrders[0].pathwayContext.kind, secondRead.workOrders[0].pathwayContext.provenance, secondRead.workOrders[0].pathwayContext.version], ["CHOOSE_MANUAL_SUPPLY_PLAN", "DERIVED", "retail"], "the grouped batch persists the second need's independently reviewed pathway even though it is a separate manual task");
     const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
     const sourceResourceReview = rest.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     assert.ok(sourceResourceReview, "REST groups only needs that explicitly name this source and exact itemString");
@@ -1517,7 +1542,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
     assert.ok(context.planning.resourceCommitments.retail.linesWithReservations >= 2, "AccountContext counts the source-scoped reservation lines without claiming stock movement");
     assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
-    assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 1, alternativeLocationCount: 1, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, pathwayStates: { CURRENT_SOURCE_SHORTFALL: 3 }, pathwayOptionKinds: { FOLLOW_EXISTING_MANUAL_PLAN: 3, INVESTIGATE_OTHER_CHARACTER_LOCATION: 2 }, truncated: false }, "AccountContext summarizes the same source/resource groups and evidence-qualified review options");
+    assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 2, alternativeLocationCount: 2, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, pathwayStates: { CURRENT_SOURCE_SHORTFALL: 3 }, pathwayOptionKinds: { FOLLOW_EXISTING_MANUAL_PLAN: 3, INVESTIGATE_OTHER_CHARACTER_LOCATION: 3 }, truncated: false }, "AccountContext summarizes the same source/resource groups and evidence-qualified review options");
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
@@ -1653,6 +1678,40 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     if (browser) await browser.close();
     if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] ambiguous location leads remain unselected and are described conservatively", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-ambiguous-leads-"));
+  let store; let server; let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const recipient = store.importSnapshot(renderExport({ name: "Need Owner", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }));
+    store.importSnapshot(renderExport({ name: "Location Lead One", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
+    store.importSnapshot(renderExport({ name: "Location Lead Two", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
+    const project = store.createErpProject({ version: "retail", title: "Review ambiguous source", needs: [{ stableId: "ambiguous_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 1, sourceIdentityKey: recipient.character.identityKey, destinationIdentityKey: recipient.character.identityKey }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
+    const pathway = page.getByTestId(`erp-fulfillment-pathways-${project.stableId}-ambiguous_need`);
+    await pathway.getByRole("button", { name: "Plan manual review from investigate other character location", exact: true }).click();
+    const composer = page.getByTestId("erp-cross-project-plan");
+    const task = composer.getByRole("group", { name: /Review ambiguous source: Mycobloom/ });
+    await task.waitFor();
+    assert.equal(await task.getByLabel("Observed source to investigate for Mycobloom").inputValue(), "", "multiple leads do not preselect an investigation source");
+    assert.match(await task.getByLabel("Instructions").inputValue(), /listed character location leads.*does not establish one unique current lead.*ownership, access, binding, transferability, and route remain UNKNOWN/);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

@@ -1,6 +1,8 @@
 # WoWSync ERP capability inventory
 
-Updated: 2026-10-10, Phases 70-82. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
+Updated: 2026-10-10, Phases 70-89. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
+
+| Grouped per-need pathway selection (Phases 88-89) | Implemented; synthetic browser-tested only | Each requirement in one cross-project manual planning batch can retain its own current evidence pathway independently from its manual task, work source, assignee, reservation, and prerequisites. Preview and atomic save revalidate each pathway. Unique observed location leads are prefilled only after same-version, exact-resource, state, and freshness checks; ambiguous leads stay blank. Untouched suggestions update/reset coherently, while edited task fields survive pathway changes. No action is executed, and UNKNOWN ownership/access/transfer/cause remains UNKNOWN. |
 
 | Capability | Status | What a player can do / evidence status |
 |---|---|---|

@@ -9,12 +9,22 @@ type Version = Exclude<VersionOrUnknown, "unknown-version">;
 interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: string; assignedIdentityKey: string; sourceLeadIdentityKey: string; provisioningSourceIdentityKey: string; reservationSourceIdentityKey: string; reservationQuantity: string; spendingCeilingCopper: string; prerequisiteKeys: string[] }
 interface PreparedTask { needId: string; task: ErpWorkOrderBatchTaskDraft; needLabel: string; requirementSourceLabel: string; workSourceLabel: string; assignedLabel: string; destinationLabel: string; evidenceText: string; pathwayText?: string; sourceRowsText?: string; prerequisiteLabels: string[] }
 interface PreparedGroup { projectId: string; projectTitle: string; expectedRevision: number; tasks: PreparedTask[] }
-const defaultDraft = (label: string, pathwayKind?: ErpNeedFulfillmentOptionKind, sourceIdentityKey?: string): Draft => {
+const defaultDraft = (label: string, pathwayKind?: ErpNeedFulfillmentOptionKind, sourceIdentityKey?: string, investigationLeadIdentityKey?: string): Draft => {
   const personalBankReview = pathwayKind === "REVIEW_PERSONAL_BANK_RETRIEVAL";
+  const otherCharacterLeadReview = pathwayKind === "INVESTIGATE_OTHER_CHARACTER_LOCATION";
   return { kind: personalBankReview ? "RETRIEVE" : "INVESTIGATE", title: `${personalBankReview ? "Review personal-bank retrieval" : "Review fulfillment"}: ${label}`.slice(0, 160), instructions: personalBankReview
     ? "Check whether the current same-character personal bank contains the exact required item and whether it is accessible now. Retrieve manually only if the item, character, and requirement still match; then export again for paired bag/bank review. The recorded bank location is evidence to review, not proof of present access or a completed retrieval."
-    : "Review the current requirement, source evidence, reservations, and version-specific constraints. Decide the next manual step only after checking the game and current account evidence.", assignedIdentityKey: personalBankReview ? sourceIdentityKey ?? "" : "", sourceLeadIdentityKey: "", provisioningSourceIdentityKey: "", reservationSourceIdentityKey: "", reservationQuantity: "0", spendingCeilingCopper: "", prerequisiteKeys: [] };
+    : otherCharacterLeadReview && investigationLeadIdentityKey ? "Review the single recent observed same-version character location lead and confirm the current character, realm, exact resource variant, and evidence before deciding on any manual plan. This is only a location lead; account membership, ownership, access, binding, transferability, and route remain UNKNOWN. No resource is reserved or moved."
+    : otherCharacterLeadReview ? "Review the listed character location leads, including each lead's identity, realm, exact resource variant, provenance, and freshness. The evidence does not establish one unique current lead. Account membership, ownership, access, binding, transferability, and route remain UNKNOWN. No resource is reserved or moved."
+    : "Review the current requirement, source evidence, reservations, and version-specific constraints. Decide the next manual step only after checking the game and current account evidence.", assignedIdentityKey: personalBankReview ? sourceIdentityKey ?? "" : "", sourceLeadIdentityKey: otherCharacterLeadReview ? investigationLeadIdentityKey ?? "" : "", provisioningSourceIdentityKey: "", reservationSourceIdentityKey: "", reservationQuantity: "0", spendingCeilingCopper: "", prerequisiteKeys: [] };
 };
+
+function verifiedInvestigationLead(project: ErpProjectView, needId: string, need: NonNullable<ErpFulfillmentTriage["items"][number]["need"]>, pathway: ErpSourceFulfillmentReview["sources"][number]["needs"][number]["fulfillmentPathways"]["options"][number] | undefined, version: Version): string | undefined {
+  const lead = pathway?.candidateLocations?.length === 1 ? pathway.candidateLocations[0] : undefined;
+  if (!lead || lead.provenance !== "OBSERVED" || lead.freshness !== "recent" || !lead.characterKey.startsWith(`${version}::`)) return undefined;
+  const matchesScreen = project.resourceSourceScreens.find((screen) => screen.needId === needId)?.candidates.some((candidate) => candidate.sourceIdentityKey === lead.characterKey && candidate.sourceIdentityKey.startsWith(`${version}::`) && candidate.kind === need.kind && candidate.resourceKey === need.resourceKey && candidate.state === "OBSERVED" && candidate.freshness === "recent");
+  return matchesScreen ? lead.characterKey : undefined;
+}
 
 function eligibleProvisioningSources(project: ErpProjectView, needId: string, version: Version) {
   const need = project.needs.find((entry) => entry.stableId === needId);
@@ -39,6 +49,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.length === 0 && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [editedDraftKeys, setEditedDraftKeys] = useState<string[]>([]);
   const [pathways, setPathways] = useState<Record<string, ErpNeedFulfillmentOptionKind>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -59,7 +70,10 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     }
     setError(""); setReview(null);
     setSelected((current) => current.includes(key) ? current.filter((entry) => entry !== key) : current.length >= 20 ? current : [...current, key]);
-    if (selected.includes(key)) setPathways((current) => { const next = { ...current }; delete next[key]; return next; });
+    if (selected.includes(key)) {
+      setPathways((current) => { const next = { ...current }; delete next[key]; return next; });
+      if (!editedDraftKeys.includes(key)) setDrafts((current) => ({ ...current, [key]: defaultDraft(row.need!.label) }));
+    }
     setDrafts((current) => {
       return selected.includes(key) ? current : { ...current, [key]: current[key] ?? defaultDraft(row.need!.label) };
     });
@@ -80,12 +94,14 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     }
     setError(""); setReview(null);
     setSelected((current) => current.includes(key) || current.length >= 20 ? current : [...current, key]);
-    setDrafts((current) => ({ ...current, [key]: current[key] ?? defaultDraft(row.need!.label, prefillNeed.pathwayKind, row.need!.sourceIdentityKey) }));
+    const pathway = sourceReview.sources.flatMap((source) => source.needs).find((entry) => entry.projectId === row.projectId && entry.needId === row.need!.stableId)?.fulfillmentPathways.options.find((option) => option.kind === prefillNeed.pathwayKind);
+    const leadStillMatchesResourceScreen = verifiedInvestigationLead(projectById.get(row.projectId)!, row.need.stableId, row.need, pathway, version);
+    setDrafts((current) => ({ ...current, [key]: current[key] && editedDraftKeys.includes(key) ? current[key]! : defaultDraft(row.need!.label, prefillNeed.pathwayKind, row.need!.sourceIdentityKey, leadStillMatchesResourceScreen) }));
     setPathways((current) => ({ ...current, [key]: prefillNeed.pathwayKind }));
     onPrefillConsumed?.();
     requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(prefillNeed.projectId)}-${encodeURIComponent(prefillNeed.needId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
-  }, [prefillNeed]);
-  const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
+  }, [prefillNeed, editedDraftKeys]);
+  const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setEditedDraftKeys((current) => current.includes(key) ? current : [...current, key]); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
   function prepareReview() {
     if (!selected.length || saving || busy) return;
     setError("");
@@ -177,6 +193,16 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
       {reservationSafe ? <label>Optional quantity to reserve from observed supply<input aria-label={`Optional reservation quantity for ${need.label}`} type="number" min="0" max={reservationMaximum} step="1" value={draft.reservationQuantity} onChange={(event) => updateDraft(key, { reservationQuantity: event.target.value })} /><small>0 means no reservation. Current maximum for this individual need at {selectedReservationSource?.sourceName ?? "the named source"}: {reservationMaximum}; grouped requests are checked together by the server. A reservation records intent and does not move, lock, or consume items.</small></label> : <small>Reservation unavailable: a recent complete exact-source quantity and clear non-overlapping commitment scope are required. Missing or incomplete storage remains UNKNOWN.</small>}
       <label>Assigned same-version character<select value={draft.assignedIdentityKey} onChange={(event) => updateDraft(key, { assignedIdentityKey: event.target.value })}><option value="">Unassigned</option>{eligibleCharacters.map((character) => <option key={character.identityKey} value={character.identityKey}>{character.name}{character.surname ? ` ${character.surname}` : ""} · {character.realm}</option>)}</select></label>
       {draft.kind === "PURCHASE" && structuredPurchase ? <label>Maximum total purchase budget (copper)<input aria-label={`Purchase spending ceiling for ${need.label}`} type="number" min="1" max="1000000000" step="1" value={draft.spendingCeilingCopper} onChange={(event) => updateDraft(key, { spendingCeilingCopper: event.target.value })} required /><small>Buyer must be the explicitly named same-version source and recipient ({need.sourceIdentityKey}). The ceiling is player intent, not a market quote, current price, affordability check, or purchase. Existing gold need and reservations remain separate.</small></label> : draft.kind === "PURCHASE" ? <small>This need does not name the same observed-version character as both source and intended buyer. A structured procurement ceiling is unavailable; keep the manual purchase review conditional.</small> : null}
+      {(() => { const pathwayOptions = sourceReview.sources.flatMap((source) => source.needs).find((entry) => entry.projectId === row.projectId && entry.needId === need.stableId)?.fulfillmentPathways.options ?? []; return pathwayOptions.length > 0 ? <label>Evidence pathway for {need.label}<select aria-label={`Evidence pathway for ${need.label}`} value={pathways[key] ?? ""} onChange={(event) => {
+        const nextKind = event.target.value as ErpNeedFulfillmentOptionKind | "";
+        setReview(null);
+        setPathways((current) => { const next = { ...current }; if (nextKind) next[key] = nextKind; else delete next[key]; return next; });
+        if (editedDraftKeys.includes(key)) return;
+        if (!nextKind) { setDrafts((current) => ({ ...current, [key]: defaultDraft(need.label) })); return; }
+        const option = pathwayOptions.find((entry) => entry.kind === nextKind);
+        const lead = nextKind === "INVESTIGATE_OTHER_CHARACTER_LOCATION" ? verifiedInvestigationLead(project, need.stableId, need, option, version) : undefined;
+        setDrafts((current) => ({ ...current, [key]: defaultDraft(need.label, nextKind, need.sourceIdentityKey, lead) }));
+      }}><option value="">No pathway attached</option>{pathwayOptions.map((option) => <option key={option.kind} value={option.kind}>{option.kind.replaceAll("_", " ")} · {option.provenance}</option>)}</select><small>Pathway evidence is a planning reference. It does not establish access, ownership, transferability, task completion, or game action.</small></label> : null; })()}
       {draft.kind === "INVESTIGATE" && (() => { const screen = projectById.get(row.projectId)?.resourceSourceScreens.find((entry) => entry.needId === row.need?.stableId); return screen?.candidates.length ? <label>Observed source to investigate<select aria-label={`Observed source to investigate for ${row.need?.label}`} value={draft.sourceLeadIdentityKey} onChange={(event) => updateDraft(key, { sourceLeadIdentityKey: event.target.value })}><option value="">No source lead</option>{screen.candidates.map((candidate) => <option key={candidate.sourceIdentityKey} value={candidate.sourceIdentityKey}>{candidate.sourceName}{candidate.sourceSurname ? ` ${candidate.sourceSurname}` : ""} · {candidate.sourceRealm} · {candidate.state} · {candidate.freshness} freshness</option>)}</select><small>A source lead only points to matching location evidence. Account membership, access, and transferability remain UNKNOWN; this creates no movement plan.</small></label> : null; })()}
       {draft.kind === "PROVISION" && (() => { const sources = eligibleProvisioningSources(project, need.stableId, version); return sources.length ? <label>Observed source for manual provisioning<select aria-label={`Observed source for manual provisioning for ${need.label}`} value={draft.provisioningSourceIdentityKey} onChange={(event) => updateDraft(key, { provisioningSourceIdentityKey: event.target.value, reservationSourceIdentityKey: "", reservationQuantity: "0" })}><option value="">No selected source lead</option>{sources.map((candidate) => <option key={candidate.sourceIdentityKey} value={candidate.sourceIdentityKey}>{candidate.sourceName}{candidate.sourceSurname ? ` ${candidate.sourceSurname}` : ""} · {candidate.sourceRealm} · exact item observed {candidate.freshness}, available lower bound {candidate.availableObservedLowerBound}</option>)}</select><small>The server rechecks the exact itemString, freshness, and recorded reservations when the batch saves. This is a location lead only: ownership, account membership, recipient access, binding, transferability, and route remain UNKNOWN. Selecting the lead does not itself reserve or move the item; an optional reservation may be scoped to this same selected source.</small></label> : <small>No recent, positively observed, unreserved exact-variant source lead is available for this need. A generic manual provisioning plan remains possible, but it cannot name an alternative source.</small>; })()}
       {selected.length > 1 && <label>Portfolio prerequisites (optional)<select multiple aria-label={`Portfolio prerequisites for ${need.label}`} value={draft.prerequisiteKeys.filter((dependency) => selected.includes(dependency))} onChange={(event) => updateDraft(key, { prerequisiteKeys: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{selected.filter((dependency) => dependency !== key).flatMap((dependency) => { const prerequisite = rowFor(dependency); return prerequisite ? <option key={dependency} value={dependency}>{projectById.get(prerequisite.projectId)?.title}: {prerequisite.need!.label}</option> : []; })}</select><small>Choose earlier package requirements that must be observed as met before this step is ready. Work-order completion notes do not satisfy this evidence gate.</small></label>}
