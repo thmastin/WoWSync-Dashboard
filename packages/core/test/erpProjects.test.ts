@@ -825,13 +825,45 @@ test("transfer reconciliation compares explicitly planned source and destination
     assert.deepEqual(destinationBagChange && [destinationBagChange.previousQuantity, destinationBagChange.currentQuantity, destinationBagChange.delta], [0, 1, 1]);
     assert.equal(sourceBagChange?.previousObservedAt, baseAt);
     assert.equal(destinationBagChange?.currentObservedAt, baseAt + 100);
-    assert.match(review?.reason ?? "", /do not establish that the changes are related or that a transfer occurred/);
+    assert.match(review?.reason ?? "", /do not establish that the changes are related or that the planned transfer occurred/);
     const broadIdPlan = { ...plan, needs: [{ ...need, kind: "ITEM_ID" as const, resourceKey: "159" }] };
     const broadIdReview = evaluateErpProject(broadIdPlan, (key) => store.listSnapshots(key), [broadIdPlan], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0];
     assert.match(broadIdReview?.reason ?? "", /group all observed itemString variants.*do not prove the same exact variant changed/);
     assert.equal(evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "stale pairs do not produce a paired change conclusion");
     const conflicting = { ...plan, workOrders: [{ ...order, sourceIdentityKey: destination }] };
     assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "order source intent conflicting with its need is surfaced rather than silently reconciled");
+  } finally { store.close(); }
+});
+
+test("provisioning progress pairs the planned source and recipient without asserting access or movement", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_150_000;
+  const capture = (name: string, realm: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt,
+    character: { name, realm, clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] },
+    bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Provider", "Realm A", 2, baseAt)).character.identityKey;
+    const recipient = store.importSnapshot(capture("Provisioned", "Realm A", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Provider", "Realm A", 1, baseAt + 100));
+    store.importSnapshot(capture("Provisioned", "Realm A", 1, baseAt + 100));
+    const need = { stableId: "provision_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source, destinationIdentityKey: recipient };
+    const order = { stableId: "provision_step", kind: "PROVISION" as const, status: "PLANNED" as const, title: "Review provisioning observations", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: recipient };
+    const plan = { ...project(source), needs: [need], reservations: [], workOrders: [order] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]!;
+    const review = progress.provisioningObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0) && [review.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.previousQuantity, review.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.currentQuantity], [2, 1]);
+    assert.deepEqual(review?.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0) && [review.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.previousQuantity, review.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.currentQuantity], [0, 1]);
+    assert.match(review?.reason ?? "", /do not establish that the changes are related or that the planned provisioning occurred/);
+    assert.equal(progress.completionRecorded, false);
+    assert.equal(progress.transferObservationReviews, undefined, "provisioning evidence remains separately named from transfer evidence");
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(stale?.state, "EVIDENCE_UNKNOWN", "stale paired observations do not become current provisioning evidence");
+    assert.equal(stale?.source.freshness, "stale");
   } finally { store.close(); }
 });
 
@@ -881,6 +913,13 @@ test("shared-owner transfer need cannot be overridden by a character source on t
     assert.equal(review?.source.identityKey, undefined, "the work-order character is not substituted for the owner source");
     assert.deepEqual(review?.source.comparisons, [], "no character deltas are presented as shared-owner deltas");
     assert.match(review?.reason ?? "", /shared-storage owner conflicts.*character source/);
+    const provisioning = { ...order, stableId: "provision", kind: "PROVISION" as const };
+    const provisioningPlan = { ...plan, workOrders: [provisioning] };
+    const provisioningReview = evaluateErpProject(provisioningPlan, (key) => store.listSnapshots(key), [provisioningPlan], 1_700_000_010).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(provisioningReview?.state, "IDENTITY_CONFLICT");
+    assert.equal(provisioningReview?.source.identityKey, undefined, "the work-order character is not substituted for the shared owner during provisioning review");
+    assert.deepEqual(provisioningReview?.source.comparisons, []);
+    assert.match(provisioningReview?.reason ?? "", /shared-storage owner conflicts.*character source/);
   } finally { store.close(); }
 });
 

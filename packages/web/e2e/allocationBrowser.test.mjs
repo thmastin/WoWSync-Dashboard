@@ -237,10 +237,30 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(transferReview, /bags: 3 → 2 \(-1\)/);
     assert.match(transferReview, /Destination — Project Fixture — Cairne: recent comparable quantity change/);
     assert.match(transferReview, /bags: 39 → 40 \(\+1\)/);
-    assert.match(transferReview, /do not establish that the changes are related or that a transfer occurred/);
+    assert.match(transferReview, /do not establish that the changes are related or that the planned transfer occurred/);
     assert.match(transferReview, /does not establish account membership, ownership, access, transferability/);
 
     await transferForm.getByRole("button", { name: "Close" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const provisionForm = projectCard.locator("form.erp-inline-form");
+    await provisionForm.getByLabel("Action type").selectOption("PROVISION");
+    await provisionForm.getByLabel("Action", { exact: true }).fill("Review manual character provisioning");
+    await provisionForm.getByLabel("Planned source character").selectOption(savedNeed.sourceIdentityKey);
+    await provisionForm.getByLabel("Intended destination character").selectOption(savedNeed.destinationIdentityKey);
+    await provisionForm.getByLabel("Linked resource needs").selectOption({ label: "Mycobloom" });
+    await provisionForm.getByRole("button", { name: "Add work order" }).click();
+    const provisionOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review manual character provisioning" });
+    await provisionOrder.waitFor();
+    await provisionOrder.getByText("Compare planned provisioning source and recipient observations (relationship unknown)").click();
+    const provisionReview = await provisionOrder.innerText();
+    assert.match(provisionReview, /BOTH SIDES CHANGED/);
+    assert.match(provisionReview, /Source .*Other Potential Holder.*recent comparable quantity change/);
+    assert.match(provisionReview, /Recipient .*Project Fixture.*recent comparable quantity change/);
+    assert.match(provisionReview, /does not establish that the resources moved/);
+    assert.match(provisionReview, /PROVISION.*PLANNED/);
+    assert.doesNotMatch(provisionReview, /PROVISION.*COMPLETED/);
+
+    await provisionForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const orderForm = projectCard.locator("form.erp-inline-form");
     await orderForm.getByLabel("Action", { exact: true }).fill("Manually review possible retrieval of observed supply");

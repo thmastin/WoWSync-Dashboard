@@ -147,11 +147,21 @@ test("REST and AccountContext expose paired transfer observations while preservi
     assert.ok(created.body.project.workOrderReadiness[0].linkedNeeds[0].sourceSections.some((section: any) => section.section === "bags" && section.state === "OBSERVED" && section.observedAt === currentAt), "REST keeps section-level source provenance on the work-order input");
     const sourceBagChange = review.source.comparisons.find((comparison: any) => comparison.section === "bags" && comparison.delta !== 0);
     assert.deepEqual(sourceBagChange && [sourceBagChange.previousQuantity, sourceBagChange.currentQuantity, sourceBagChange.delta], [2, 1, -1]);
-    assert.match(review.reason, /do not establish that the changes are related or that a transfer occurred/);
+    assert.match(review.reason, /do not establish that the changes are related or that the planned transfer occurred/);
     const listed = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.deepEqual(listed.body.projects[0].workOrderProgress[0].transferObservationReviews, created.body.project.workOrderProgress[0].transferObservationReviews);
     const context = await call("GET", "/api/account-context");
     assert.deepEqual(context.body.planning.projects[0].workOrderProgressStates, { OBSERVATION_CHANGED_CAUSE_UNKNOWN: 1 });
+    const provisioned = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review paired provisioning observations", needs: [{ stableId: "provision_stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source.identityKey, destinationIdentityKey: destination.identityKey }], workOrders: [{ stableId: "provision", kind: "PROVISION", status: "PLANNED", title: "Review provisioning", sourceIdentityKey: source.identityKey, destinationIdentityKey: destination.identityKey, resourceNeedIds: ["provision_stone"], dependsOn: [] }] });
+    assert.equal(provisioned.status, 201);
+    const provisioningReview = provisioned.body.project.workOrderProgress[0].provisioningObservationReviews[0];
+    assert.deepEqual([provisioningReview.state, provisioningReview.interpretation], ["BOTH_SIDES_CHANGED", "CAUSE_UNKNOWN"]);
+    assert.deepEqual([provisioningReview.source.identityKey, provisioningReview.destination.identityKey], [source.identityKey, destination.identityKey]);
+    assert.equal(provisioned.body.project.workOrderProgress[0].recordedStatus, "PLANNED", "paired changes do not mark provisioning complete");
+    const provisionedRead = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((entry: any) => entry.title === "Review paired provisioning observations");
+    assert.deepEqual(provisionedRead.workOrderProgress[0].provisioningObservationReviews, provisioned.body.project.workOrderProgress[0].provisioningObservationReviews, "REST read-after-write returns the same provisioning comparison");
+    const provisionContext = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.title === "Review paired provisioning observations");
+    assert.deepEqual(provisionContext.workOrderProgressStates, { NO_LINKED_NEEDS: 1 }, "AccountContext keeps paired provisioning separate from transfer completion states");
   });
 });
 
