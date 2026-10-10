@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview } from "../src/erpFulfillmentTriage.ts";
 
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");
@@ -48,6 +48,73 @@ test("fulfillment triage joins changed evidence, reservation review, and manual 
     assert.equal(buildErpFulfillmentTriage(views, "classic-era", 1).truncated, true);
     assert.equal(buildErpFulfillmentTriage(views, "classic-era", 1).returnedCount, 1);
     assert.equal(triage.affectedProjectCount, 1);
+    const nextActions = buildErpPortfolioNextActionReview(views, "classic-era");
+    const stoneAction = nextActions.items.find((entry) => entry.resource?.resourceKey === "item:159:0:0");
+    assert.equal(stoneAction?.action, "REVIEW_RESERVATIONS", "shared source review determines the next step when competing commitments need review");
+    assert.equal(stoneAction?.source?.identityKey, first.character.identityKey);
+    assert.deepEqual(stoneAction?.signals, ["CHANGED_OBSERVATION", "OPEN_WORK_ORDER", "RESERVATION_REVIEW"]);
+    assert.equal(stoneAction?.needReferences.length, 1);
+    const clothAction = nextActions.items.find((entry) => entry.resource?.resourceKey === "2589");
+    assert.equal(clothAction?.action, "REVIEW_UNSCOPED_ITEM");
+    assert.equal(clothAction?.source, undefined, "a missing selected source remains UNKNOWN and is not grouped");
+    assert.equal(clothAction?.needReferences[0]?.freshness, "unknown");
+    assert.equal(buildErpPortfolioNextActionReview(views, "forever").totalCount, 0, "the portfolio queue is version isolated");
+    assert.equal(buildErpPortfolioNextActionReview(views, "classic-era", 1).truncated, true);
+  } finally { store.close(); }
+});
+
+test("portfolio next actions aggregate only an exact selected source and exact resource across projects", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Multi Need", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: 3 }] }] }, bank: { containers: [] } }));
+    const needs = ["crafting", "provisioning"].map((title, index) => store.createErpProject({ version: "classic-era", title, priority: 5 - index, needs: [{ stableId: `need-${index}`, kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Fixture Stone", requiredQuantity: index + 2, sourceIdentityKey: imported.character.identityKey }] }));
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const review = buildErpPortfolioNextActionReview(projects, "classic-era");
+    const shared = review.items.find((entry) => entry.resource?.resourceKey === "item:159:0:0");
+    assert.equal(review.totalCount, 1);
+    assert.equal(shared?.source?.identityKey, imported.character.identityKey);
+    assert.deepEqual(shared?.needReferences.map((entry) => entry.projectId).sort(), needs.map((entry) => entry.stableId).sort());
+    assert.deepEqual(shared?.needReferences.map((entry) => entry.freshness), ["recent", "recent"]);
+    assert.equal(shared?.action, "REVIEW_SOURCE_AND_ACCESS", "shortfall still requires source/access review before selecting a player task");
+    assert.match(shared?.reason ?? "", /accessible|allocated|resolved/i);
+  } finally { store.close(); }
+});
+
+test("portfolio next actions retain high-volume totals and disclose the returned-row cap", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Portfolio Queue", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [{ id: -1, capacity: 28, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: 5 }] }] } }));
+    for (let index = 0; index < 205; index++) store.createErpProject({ version: "classic-era", title: `Need ${index}`, needs: [{ stableId: `need-${index}`, kind: index === 204 ? "ITEM_REF" : "ITEM_ID", resourceKey: index === 204 ? "item:159:0:0" : String(990000 + index), label: `Resource ${index}`, requiredQuantity: index === 204 ? 5 : 1, sourceIdentityKey: imported.character.identityKey }] });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const review = buildErpPortfolioNextActionReview(projects, "classic-era", 50);
+    assert.equal(review.totalCount, 205);
+    assert.equal(review.returnedCount, 50);
+    assert.equal(review.truncated, true);
+    assert.equal(review.sourceReviewTruncated, false);
+    assert.equal(review.triageTruncated, false);
+    assert.equal(Object.values(review.counts).reduce((sum, count) => sum + count, 0), 205);
+    const bankTriage = buildErpFulfillmentTriage(projects, "classic-era", 10_000).items.find((entry) => entry.need?.stableId === "need-204");
+    assert.ok(bankTriage?.signals.includes("UNWORKED_REQUIREMENT"), "the retrieval pathway beyond the first 200 source groups still reaches triage and portfolio review");
+  } finally { store.close(); }
+});
+
+test("portfolio next actions preserve explicitly recorded but ungroupable source references", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Scope Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [] }, bank: { containers: [] } }));
+    store.createErpProject({ version: "classic-era", title: "Conflicting source scope", needs: [{ stableId: "need", kind: "ITEM_ID", resourceKey: "991001", label: "Scope check", requiredQuantity: 1 }] });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const contradictory = projects.map((project) => ({ ...project, needs: project.needs.map((need) => ({ ...need, sourceIdentityKey: "retail::realm::character", sourceOwnerKey: "guild:unknown" })) }));
+    const row = buildErpPortfolioNextActionReview(contradictory, "classic-era").items[0]!;
+    assert.equal(row.source, undefined);
+    assert.equal(row.recordedSourceIdentity, "retail::realm::character");
+    assert.deepEqual(row.recordedSourceScope, { sourceIdentityKey: "retail::realm::character", sourceOwnerKey: "guild:unknown" });
+    assert.equal(row.sourceScopeIssue, "CONFLICTING_SOURCE_FIELDS");
+    assert.match(row.reason, /conflicting or incompatible/i);
+    assert.doesNotMatch(row.reason, /No source identity was recorded/);
   } finally { store.close(); }
 });
 

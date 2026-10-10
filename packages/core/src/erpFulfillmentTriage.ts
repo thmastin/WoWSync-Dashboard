@@ -2,6 +2,8 @@ import type { ErpNeedEvidence, ErpProjectView, ErpResourceNeed, ErpResourceSourc
 import type { VersionOrUnknown, WowVersion } from "./types.ts";
 import type { Freshness } from "./freshness.ts";
 
+const MAX_ERP_REVIEW_ROWS = 1_000;
+
 export type ErpFulfillmentTriageSignal = "CHANGED_OBSERVATION" | "UNWORKED_REQUIREMENT" | "RESERVATION_REVIEW" | "OPEN_WORK_ORDER";
 
 export interface ErpFulfillmentTriageItem {
@@ -200,6 +202,34 @@ export interface ErpSourceFulfillmentReview {
   readonly interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY";
 }
 
+export type ErpPortfolioNextAction = "REVIEW_EVIDENCE" | "REVIEW_RESERVATIONS" | "RECONCILE_OBSERVATIONS" | "REVIEW_MANUAL_WORK" | "PLAN_MANUAL_WORK" | "REVIEW_SOURCE_AND_ACCESS" | "REVIEW_UNSCOPED_ITEM";
+export interface ErpPortfolioNextActionItem {
+  readonly stableId: string;
+  readonly version: WowVersion;
+  readonly action: ErpPortfolioNextAction;
+  readonly resource?: { readonly kind: ErpResourceNeed["kind"]; readonly resourceKey: string; readonly label: string };
+  /** Only present when an exact selected source was explicitly supplied by the plan. */
+  readonly source?: { readonly scope: "CHARACTER" | "SHARED_OWNER"; readonly identityKey: string };
+  readonly recordedSourceIdentity?: string;
+  readonly recordedSourceScope?: { readonly sourceIdentityKey?: string; readonly sourceOwnerKey?: string };
+  readonly sourceScopeIssue?: "MISSING_SOURCE" | "CONFLICTING_SOURCE_FIELDS" | "VERSION_MISMATCH";
+  readonly needReferences: readonly { readonly projectId: string; readonly projectTitle: string; readonly projectPriority: number; readonly needId: string; readonly requiredQuantity: number; readonly evidenceState: string; readonly freshness: Freshness; readonly observedAt?: number; readonly observationChanges?: NonNullable<NonNullable<ErpFulfillmentTriageItem["need"]>["observationChange"]>["comparisons"] }[];
+  readonly signals: readonly ErpFulfillmentTriageSignal[];
+  readonly workOrders: readonly { readonly projectId: string; readonly stableId: string }[];
+  readonly reason: string;
+}
+export interface ErpPortfolioNextActionReview {
+  readonly version: VersionOrUnknown;
+  readonly items: readonly ErpPortfolioNextActionItem[];
+  readonly totalCount: number;
+  readonly returnedCount: number;
+  readonly counts: Readonly<Record<ErpPortfolioNextAction, number>>;
+  readonly sourceReviewTruncated: boolean;
+  readonly triageTruncated: boolean;
+  readonly truncated: boolean;
+  readonly interpretation: "DETERMINISTIC_PLAYER_REVIEW_QUEUE_ONLY";
+}
+
 function buildNeedFulfillmentPathways(need: ErpResourceNeed, evidence: ErpNeedEvidence | undefined, workOrders: readonly { stableId: string; status: string }[], sourceSections: ErpNeedEvidence["sourceSections"], candidateLocations: ErpNeedFulfillmentOption["candidateLocations"], ownReservationQuantity = 0): ErpNeedFulfillmentPathwayReview {
   const options: ErpNeedFulfillmentOption[] = [];
   const completeCurrent = evidence?.freshness === "recent" && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
@@ -254,7 +284,7 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
   const counts = emptyCounts();
   if (version === "unknown-version") return { version, items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, counts, truncated: false, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" };
   const entries: ErpFulfillmentTriageItem[] = [];
-  const sourceReview = buildErpSourceFulfillmentReview(projects, version, 200);
+  const sourceReview = buildErpSourceFulfillmentReview(projects, version, MAX_ERP_REVIEW_ROWS);
   const retrievalPathways = new Set(sourceReview.sources.flatMap((source) => source.needs.filter((need) => need.fulfillmentPathways.options.some((option) => option.kind === "REVIEW_PERSONAL_BANK_RETRIEVAL") && !need.workOrders.some((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED")).map((need) => `${need.projectId}\0${need.needId}`)));
   for (const project of projects) {
     if (project.version !== version || project.status === "CANCELLED") continue;
@@ -296,7 +326,7 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
   }
   const signalOrder: Record<ErpFulfillmentTriageSignal, number> = { RESERVATION_REVIEW: 0, CHANGED_OBSERVATION: 1, UNWORKED_REQUIREMENT: 2, OPEN_WORK_ORDER: 3 };
   entries.sort((a, b) => Math.min(...a.signals.map((signal) => signalOrder[signal])) - Math.min(...b.signals.map((signal) => signalOrder[signal])) || b.projectPriority - a.projectPriority || a.projectTitle.localeCompare(b.projectTitle) || (a.need?.label ?? a.workOrders[0]?.title ?? "").localeCompare(b.need?.label ?? b.workOrders[0]?.title ?? "") || a.stableId.localeCompare(b.stableId));
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 200;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(MAX_ERP_REVIEW_ROWS, Math.floor(limit))) : 200;
   const items = entries.slice(0, safeLimit);
   return { version, items, totalCount: entries.length, returnedCount: items.length, affectedProjectCount: new Set(entries.map((entry) => entry.projectId)).size, counts, truncated: items.length < entries.length, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" };
 }
@@ -493,8 +523,50 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
   // Review priority is explicit and independent of per-state counts.
   const order: Record<ErpSourceFulfillmentNextReview, number> = { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 1, RECONCILE_OBSERVATIONS: 2, REVIEW_MANUAL_WORK: 3, PLAN_MANUAL_WORK: 4, REVIEW_SOURCE_AND_ACCESS: 5 };
   lines.sort((a, b) => order[a.nextReview] - order[b.nextReview] || b.needs[0]!.projectPriority - a.needs[0]!.projectPriority || a.label.localeCompare(b.label) || a.stableId.localeCompare(b.stableId));
-  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 200) : 100;
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, MAX_ERP_REVIEW_ROWS) : 100;
   const sources = lines.slice(0, safeLimit);
   const openProvisioningPlanCount = [...projectById.values()].reduce((count, project) => count + project.workOrders.filter((order) => order.kind === "PROVISION" && order.status !== "COMPLETED" && order.status !== "CANCELLED").length, 0);
   return { version, sources, totalSourceCount: lines.length, returnedSourceCount: sources.length, totalNeedCount: lines.reduce((sum, line) => sum + line.needs.length, 0), needsReviewCount: lines.length, nextReviewCounts, groupsWithAlternativeLocations: lines.filter((line) => line.alternativeLocationCount > 0).length, alternativeLocationCount: lines.reduce((sum, line) => sum + line.alternativeLocationCount, 0), groupsWithIncompleteSourceScan: lines.filter((line) => line.alternativeLocationReview === "SOURCE_SCAN_INCOMPLETE" || line.alternativeLocationReview === "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE" || line.alternativeLocationReview === "SOURCE_REVIEW_UNAVAILABLE").length, openProvisioningPlanCount, truncated: sources.length < lines.length, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" };
+}
+
+/** Combines existing source and project triage reviews without joining any needs whose source is absent or differently scoped. */
+export function buildErpPortfolioNextActionReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 100): ErpPortfolioNextActionReview {
+  const actions: ErpPortfolioNextAction[] = ["REVIEW_EVIDENCE", "REVIEW_RESERVATIONS", "RECONCILE_OBSERVATIONS", "REVIEW_MANUAL_WORK", "PLAN_MANUAL_WORK", "REVIEW_SOURCE_AND_ACCESS", "REVIEW_UNSCOPED_ITEM"];
+  const counts = Object.fromEntries(actions.map((action) => [action, 0])) as Record<ErpPortfolioNextAction, number>;
+  if (version === "unknown-version") return { version, items: [], totalCount: 0, returnedCount: 0, counts, sourceReviewTruncated: false, triageTruncated: false, truncated: false, interpretation: "DETERMINISTIC_PLAYER_REVIEW_QUEUE_ONLY" };
+  const triage = buildErpFulfillmentTriage(projects, version, MAX_ERP_REVIEW_ROWS);
+  const triageByNeed = new Map(triage.items.filter((item) => item.need).map((item) => [`${item.projectId}\0${item.need!.stableId}`, item]));
+  const matched = new Set<string>();
+  const sourceReview = buildErpSourceFulfillmentReview(projects, version, MAX_ERP_REVIEW_ROWS);
+  const convert = (action: ErpSourceFulfillmentNextReview): ErpPortfolioNextAction => action;
+  const rows: ErpPortfolioNextActionItem[] = sourceReview.sources.map((source) => {
+    const references = source.needs.map((need) => {
+      const key = `${need.projectId}\0${need.needId}`;
+      matched.add(key);
+      const triaged = triageByNeed.get(key);
+      return { projectId: need.projectId, projectTitle: need.projectTitle, projectPriority: need.projectPriority, needId: need.needId, requiredQuantity: need.requiredQuantity, evidenceState: need.state, freshness: need.freshness, ...(need.observedAt !== undefined ? { observedAt: need.observedAt } : {}), ...(triaged?.need?.observationChange?.comparisons.length ? { observationChanges: triaged.need.observationChange.comparisons } : {}) };
+    });
+    const linked = source.needs.map((need) => triageByNeed.get(`${need.projectId}\0${need.needId}`)).filter((item): item is ErpFulfillmentTriageItem => Boolean(item));
+    const signals = [...new Set(linked.flatMap((item) => item.signals))].sort();
+    const action: ErpPortfolioNextAction = source.needs.some((need) => need.freshness !== "recent" || need.state === "UNKNOWN" || need.unresolvedSections.length > 0) ? "REVIEW_EVIDENCE"
+      : signals.includes("RESERVATION_REVIEW") || source.nextReview === "REVIEW_RESERVATIONS" ? "REVIEW_RESERVATIONS"
+        : signals.includes("CHANGED_OBSERVATION") || source.nextReview === "RECONCILE_OBSERVATIONS" ? "RECONCILE_OBSERVATIONS"
+          : convert(source.nextReview);
+    return { stableId: `source:${source.stableId}`, version, action, resource: { kind: source.kind, resourceKey: source.resourceKey, label: source.label }, source: { scope: source.sourceScope, identityKey: source.sourceIdentityKey ?? source.sourceOwnerKey! }, needReferences: references, signals, workOrders: source.needs.flatMap((need) => need.workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").map((order) => ({ projectId: need.projectId, stableId: order.stableId }))).filter((order, index, all) => all.findIndex((candidate) => candidate.projectId === order.projectId && candidate.stableId === order.stableId) === index).sort((a, b) => a.projectId.localeCompare(b.projectId) || a.stableId.localeCompare(b.stableId)), reason: source.reason };
+  });
+  for (const item of triage.items) {
+    if (item.need && matched.has(`${item.projectId}\0${item.need.stableId}`)) continue;
+    const action: ErpPortfolioNextAction = item.need ? "REVIEW_UNSCOPED_ITEM" : "REVIEW_MANUAL_WORK";
+    const sourceScopeIssue = item.need ? item.need.sourceIdentityKey && item.need.sourceOwnerKey ? "CONFLICTING_SOURCE_FIELDS" as const : item.need.sourceIdentityKey && !item.need.sourceIdentityKey.startsWith(`${version}::`) ? "VERSION_MISMATCH" as const : !item.need.sourceIdentityKey && !item.need.sourceOwnerKey ? "MISSING_SOURCE" as const : undefined : undefined;
+    const recordedSourceIdentity = item.need?.sourceIdentityKey ?? item.need?.sourceOwnerKey;
+    const recordedSourceScope = item.need && (item.need.sourceIdentityKey || item.need.sourceOwnerKey) ? { ...(item.need.sourceIdentityKey ? { sourceIdentityKey: item.need.sourceIdentityKey } : {}), ...(item.need.sourceOwnerKey ? { sourceOwnerKey: item.need.sourceOwnerKey } : {}) } : undefined;
+    const scopeReason = sourceScopeIssue === "MISSING_SOURCE" ? "No source identity was recorded; this requirement remains separate and cannot be combined with source-scoped rows." : sourceScopeIssue ? "A source reference is recorded, but its scope is conflicting or incompatible with the selected version, so it remains separate and cannot be safely grouped." : "";
+    rows.push({ stableId: `triage:${item.stableId}`, version, action, ...(item.need ? { resource: { kind: item.need.kind, resourceKey: item.need.resourceKey, label: item.need.label } } : {}), ...(recordedSourceIdentity ? { recordedSourceIdentity } : {}), ...(recordedSourceScope ? { recordedSourceScope } : {}), ...(sourceScopeIssue ? { sourceScopeIssue } : {}), needReferences: item.need ? [{ projectId: item.projectId, projectTitle: item.projectTitle, projectPriority: item.projectPriority, needId: item.need.stableId, requiredQuantity: item.need.requiredQuantity, evidenceState: item.need.evidenceState, freshness: item.need.freshness, ...(item.need.observedAt !== undefined ? { observedAt: item.need.observedAt } : {}), ...(item.need.observationChange?.comparisons.length ? { observationChanges: item.need.observationChange.comparisons } : {}) }] : [], signals: item.signals, workOrders: item.workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").map((order) => ({ projectId: item.projectId, stableId: order.stableId })), reason: item.need ? `${item.reason} ${scopeReason}`.trim() : item.reason });
+  }
+  const order: Record<ErpPortfolioNextAction, number> = { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 1, RECONCILE_OBSERVATIONS: 2, REVIEW_UNSCOPED_ITEM: 3, REVIEW_MANUAL_WORK: 4, PLAN_MANUAL_WORK: 5, REVIEW_SOURCE_AND_ACCESS: 6 };
+  rows.sort((a, b) => order[a.action] - order[b.action] || (b.needReferences[0]?.projectPriority ?? 0) - (a.needReferences[0]?.projectPriority ?? 0) || (a.resource?.label ?? "").localeCompare(b.resource?.label ?? "") || a.stableId.localeCompare(b.stableId));
+  for (const row of rows) counts[row.action]++;
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 200) : 100;
+  const items = rows.slice(0, safeLimit);
+  return { version, items, totalCount: rows.length, returnedCount: items.length, counts, sourceReviewTruncated: sourceReview.truncated, triageTruncated: triage.truncated, truncated: items.length < rows.length || sourceReview.truncated || triage.truncated, interpretation: "DETERMINISTIC_PLAYER_REVIEW_QUEUE_ONLY" };
 }
