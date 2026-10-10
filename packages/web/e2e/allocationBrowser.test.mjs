@@ -1284,7 +1284,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(await sourceLead.locator("option").filter({ hasText: /Possible Source Lead/ }).count(), 1);
     await sourceLead.selectOption(observedLead.character.identityKey);
     assert.match(await firstTask.innerText(), /location lead only: ownership, account membership, recipient access, binding, transferability, and route remain UNKNOWN/);
-    assert.match(await firstTask.innerText(), /Selecting the lead does not itself reserve or move.*a separate reservation request applies to the need's named source/);
+    assert.match(await firstTask.innerText(), /optional reservation may be scoped to this same selected source/);
     await secondTask.getByLabel("Manual step type").selectOption("PURCHASE");
     await secondTask.getByLabel("Assigned same-version character").selectOption(source.character.identityKey);
     await secondTask.getByLabel("Purchase spending ceiling for Briarthorn").fill("25000");
@@ -1294,9 +1294,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await secondTask.getByLabel("Purchase spending ceiling for Briarthorn").fill("25000");
     const thirdTask = composer.getByRole("group", { name: "Provision the reserve crafter: Mycobloom reserve" });
     await thirdTask.getByLabel("Manual step type").selectOption("GATHER");
-    const firstReserve = firstTask.getByLabel("Optional reservation quantity for Mycobloom");
+    await firstTask.getByLabel("Reservation source for Mycobloom").selectOption(observedLead.character.identityKey); const firstReserve = firstTask.getByLabel("Optional reservation quantity for Mycobloom");
     const thirdReserve = thirdTask.getByLabel("Optional reservation quantity for Mycobloom reserve");
-    await firstReserve.fill("1"); await thirdReserve.fill("1");
+    await firstReserve.fill("2"); await thirdReserve.fill("2");
     await composer.getByRole("button", { name: "Review 3 planned manual steps" }).click();
     const planReview = composer.getByTestId("erp-cross-project-plan-review");
     assert.match(await planReview.innerText(), /PROVISION.*Mycobloom/);
@@ -1304,7 +1304,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.match(await planReview.innerText(), /assigned character: UNKNOWN/);
     assert.ok((await planReview.innerText()).includes(fullRef(ITEM_ID)), "the preview includes the exact selected item variant from its observed location row");
     assert.match(await planReview.innerText(), /project revision 1/);
-    assert.match(await planReview.innerText(), /Separate reservation requested: 1 against the requirement's named source/);
+    assert.match(await planReview.innerText(), /Separate planning reservation requested: 2 from Possible Source Lead/);
     assert.match(await planReview.innerText(), /Player-entered spending ceiling: 25000 copper/);
     assert.match(await planReview.innerText(), /Task title: Review fulfillment: Mycobloom/);
     assert.match(await planReview.innerText(), /Instructions: Review the current requirement, source evidence, reservations, and version-specific constraints/);
@@ -1327,7 +1327,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await composer.getByRole("alert").getByText(/Grouped reservations exceed the current observed lower bound/).waitFor();
     const rejected = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     assert.deepEqual(Object.fromEntries(rejected.projects.filter((project) => [first.stableId, second.stableId, third.stableId].includes(project.stableId)).map((project) => [project.title, [project.revision, project.workOrders.length, project.reservations.length]])), { "Provision the crafter": [1, 0, 1], "Prepare the second recipe": [1, 0, 0], "Provision the reserve crafter": [1, 0, 0] }, "the over-capacity request changes no project");
-    await thirdReserve.fill("0");
+    await thirdReserve.fill("1");
     await composer.getByRole("button", { name: "Review 3 planned manual steps" }).click();
     await composer.getByTestId("erp-cross-project-plan-review").getByRole("button", { name: "Confirm and create 3 planned manual steps" }).click();
     await page.locator(".erp-project-card").filter({ hasText: "Provision the crafter" }).getByText(/PROVISION · PLANNED/).waitFor();
@@ -1341,8 +1341,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
     const sourceResourceReview = rest.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     assert.ok(sourceResourceReview, "REST groups only needs that explicitly name this source and exact itemString");
-    assert.ok(sourceResourceReview.alternativeLocations.some((location) => location.sourceName === "Possible Source Lead"), "alternative source candidates appear only as observed location leads");
+    assert.ok(sourceResourceReview.alternativeLocations.some((location) => location.sourceName === "Possible Source Lead" && location.activeReservationQuantity === 2 && location.reservationState === "WITHIN_OBSERVED_SUPPLY"), "the alternate source review reflects the explicit source-scoped planning hold");
     assert.ok(sourceResourceReview.alternativeLocations.every((location) => location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "alternative locations do not establish account membership, access, or transferability");
+    const alternateCommitment = rest.resourceCommitments.items.find((entry) => entry.sourceIdentityKey === observedLead.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
+    assert.ok(alternateCommitment, "REST emits a distinct commitment line for the selected alternate source");
+    assert.equal(alternateCommitment.activeNeedCount, 0, "a source-scoped hold does not move the requirement itself onto the alternate character");
+    assert.equal(alternateCommitment.activeReservationQuantity, 2);
     const sourceReviewRow = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(sourceResourceReview.stableId)}`);
     assert.match(await sourceReviewRow.innerText(), /Other observed location leads/);
     assert.match(await sourceReviewRow.innerText(), /Possible Source Lead/);
@@ -1381,14 +1385,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.match(await downstreamOrder.innerText(), /Provision the crafter: Mycobloom/);
     assert.deepEqual(secondRead.workOrders[0].procurementPlan, { targetNeedId: "briar_need", spendingCeilingCopper: 25000 }, "the player-set copper limit remains linked to the selected item need");
     assert.deepEqual(thirdRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["GATHER", "PLANNED", ["reserve_myco_need"]]]);
-    assert.deepEqual(firstRead.reservations.map((reservation) => [reservation.quantity, reservation.status]), [[1, "ACTIVE"], [1, "ACTIVE"]], "the accepted player request is recorded beside the existing reservation");
-    assert.equal(thirdRead.reservations.length, 0, "the rejected overlapping request remains absent");
+    assert.deepEqual(firstRead.reservations.map((reservation) => [reservation.sourceIdentityKey, reservation.quantity, reservation.status]), [[source.character.identityKey, 1, "ACTIVE"], [observedLead.character.identityKey, 2, "ACTIVE"]], "the alternate-source planning hold records an exact source separately from the requirement source");
+    assert.deepEqual(thirdRead.reservations.map((reservation) => [reservation.sourceIdentityKey, reservation.quantity, reservation.status]), [[source.character.identityKey, 1, "ACTIVE"]], "the rejected over-capacity request is absent and the explicitly reduced request is saved");
     assert.equal(rest.resourceCommitments.items.find((entry) => entry.resourceKey === fullRef(ITEM_ID)).observedQuantity, 2, "planning work does not change observed stock");
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     assert.ok(context.planning.projects.some((project) => project.title === firstRead.title && project.revision === firstRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === secondRead.title && project.revision === secondRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
+    assert.ok(context.planning.resourceCommitments.retail.linesWithReservations >= 2, "AccountContext counts the source-scoped reservation lines without claiming stock movement");
     assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
     assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 1, alternativeLocationCount: 1, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, truncated: false }, "AccountContext summarizes the same source/resource groups and explicit needs");
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
@@ -1397,6 +1402,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const mcpProjectsById = new Map(mcp.structuredContent.projects.map((project) => [project.stableId, project]));
     assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment, "MCP and REST share the exact dependency-first portfolio projection");
     assert.deepEqual(mcp.structuredContent.sourceFulfillment, rest.sourceFulfillment, "MCP and REST share the same exact source/resource fulfillment review");
+    assert.deepEqual(mcp.structuredContent.resourceCommitments, rest.resourceCommitments, "MCP and REST agree on the alternate-source reservation line");
     for (const project of [firstRead, secondRead, thirdRead]) {
       assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]));
       assert.deepEqual(mcpProjectsById.get(project.stableId).reservations, project.reservations, "MCP and REST expose the same explicit reservation intent");
@@ -1410,11 +1416,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const afterObservation = await read();
     const afterFirst = afterObservation.projects.find((project) => project.stableId === first.stableId);
     assert.equal(afterFirst.needEvidence.find((entry) => entry.needId === "mycobloom_need").observedQuantity, 1);
-    assert.deepEqual(afterFirst.reservationReview.map((entry) => entry.state), ["EXCEEDS_OBSERVED_SUPPLY", "EXCEEDS_OBSERVED_SUPPLY"], "a later observed shortage flags both active reservations for review");
+    assert.deepEqual(afterFirst.reservationReview.map((entry) => entry.state), ["EXCEEDS_OBSERVED_SUPPLY", "WITHIN_OBSERVED_SUPPLY"], "a later shortage at the named source flags only that source reservation; alternate-source supply remains independently assessed");
     assert.equal(afterFirst.workOrders[0].status, "PLANNED", "inventory changes do not claim that the manual step occurred");
     const changedContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     const contextFirst = changedContext.planning.projects.find((project) => project.stableId === first.stableId);
-    assert.equal(contextFirst.reservationReviewStates.EXCEEDS_OBSERVED_SUPPLY, 2);
+    assert.equal(contextFirst.reservationReviewStates.EXCEEDS_OBSERVED_SUPPLY, 1); assert.equal(contextFirst.reservationReviewStates.WITHIN_OBSERVED_SUPPLY, 1);
     const changedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(changedMcp.structuredContent.portfolioFulfillment, afterObservation.portfolioFulfillment, "portfolio readiness is recomputed from the same later observation for REST and MCP");
     const afterShortfallPackage = afterObservation.portfolioFulfillment.packages.find((entry) => entry.stableId === portfolioPackage.stableId);
@@ -1465,6 +1471,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     }
     assert.equal(plannedMcp.structuredContent.sourceFulfillment.sources.find((entry) => entry.stableId === currentSourceGroup.stableId).alternativeLocations[0].accountMembership, "UNKNOWN");
 
+    store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now + 45, bags: observedSection([], now + 45), bank: observedSection([], now + 45) }));
+    const missingAlternateEvidence = await read();
+    const retainedAlternateCommitment = missingAlternateEvidence.resourceCommitments.items.find((entry) => entry.sourceIdentityKey === observedLead.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
+    assert.ok(retainedAlternateCommitment, `an active alternate-source reservation remains visible after its candidate row disappears: ${JSON.stringify(missingAlternateEvidence.resourceCommitments.items.map((entry) => [entry.sourceIdentityKey, entry.resourceKey, entry.activeReservationQuantity, entry.reservationState]))}`);
+    assert.equal(retainedAlternateCommitment.activeReservationQuantity, 2);
+    assert.equal(retainedAlternateCommitment.reservationState, "UNKNOWN", "missing current source-candidate evidence never turns the reservation into available or zero supply");
+    assert.equal(retainedAlternateCommitment.observedQuantity, undefined);
+    store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now + 46, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" })], now + 46), bank: observedSection([], now + 46) }));
+    const releaseSourceHold = store.getErpProject(first.stableId); assert.ok(releaseSourceHold); store.updateErpProject({ ...releaseSourceHold, reservations: releaseSourceHold.reservations.map((reservation) => reservation.sourceIdentityKey === observedLead.character.identityKey ? { ...reservation, status: "RELEASED", updatedAt: now + 50 } : reservation) }, releaseSourceHold.revision);
     const provisioningA = store.createErpProject({ version: "retail", title: "Provision first crafter", needs: [{ stableId: "provision_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for first crafter", requiredQuantity: 2, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     const provisioningB = store.createErpProject({ version: "retail", title: "Provision second crafter", needs: [{ stableId: "provision_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for second crafter", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     await page.reload();
@@ -1504,6 +1519,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
       assert.equal(provisionedContext.planning.projects.find((entry) => entry.stableId === projectId).workOrderCounts.PLANNED, 1);
       assert.deepEqual(provisionedMcp.structuredContent.projects.find((entry) => entry.stableId === projectId).workOrders, restProject.workOrders);
     }
+    const terminalizable = store.getErpProject(first.stableId); assert.ok(terminalizable);
+    const terminalOrder = store.updateErpProject({ ...terminalizable, workOrders: terminalizable.workOrders.map((order) => ({ ...order, status: "COMPLETED", completionNote: "Player recorded this manual step for lifecycle coverage." })) }, terminalizable.revision); assert.ok(terminalOrder);
+    const releasedAfterCompletion = store.updateErpProject({ ...terminalOrder, reservations: terminalOrder.reservations.map((reservation) => ({ ...reservation, status: "RELEASED", updatedAt: now + 60 })) }, terminalOrder.revision); assert.ok(releasedAfterCompletion);
+    assert.ok(store.updateErpProject({ ...releasedAfterCompletion, objective: "Lifecycle updates remain valid after linked work terminates." }, releasedAfterCompletion.revision), "terminal work and released alternate-source holds remain valid under later project edits");
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

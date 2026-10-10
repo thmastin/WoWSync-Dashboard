@@ -254,7 +254,8 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (r.sourceOwnerKey && (!parseOwnerKey(r.sourceOwnerKey) || p.version !== "retail")) fail("INVALID_RESERVATION_SOURCE", "Shared-storage reservation source must name a Retail Warband or guild owner key.");
     const needSource = reservedNeed.sourceOwnerKey ? `owner:${reservedNeed.sourceOwnerKey}` : reservedNeed.sourceIdentityKey ? `character:${reservedNeed.sourceIdentityKey}` : undefined;
     const reservationSource = r.sourceOwnerKey ? `owner:${r.sourceOwnerKey}` : r.sourceIdentityKey ? `character:${r.sourceIdentityKey}` : undefined;
-    if (!needSource || needSource !== reservationSource) fail("RESERVATION_SOURCE_MISMATCH", "Reservation source must exactly match its need's explicitly selected character or storage owner.");
+    const selectedProvisioningSource = reservedNeed.kind === "ITEM_REF" && r.sourceIdentityKey && r.sourceIdentityKey !== reservedNeed.sourceIdentityKey && !r.sourceOwnerKey && reservedNeed.destinationIdentityKey && r.sourceIdentityKey !== reservedNeed.destinationIdentityKey && p.workOrders.some((order) => order.kind === "PROVISION" && order.resourceNeedIds.includes(reservedNeed.stableId) && order.sourceIdentityKey === r.sourceIdentityKey && order.destinationIdentityKey === reservedNeed.destinationIdentityKey);
+    if ((!needSource || needSource !== reservationSource) && !selectedProvisioningSource) fail("RESERVATION_SOURCE_MISMATCH", "Reservation source must match the need's named source or an explicitly linked exact-item provisioning work order.");
     if (!Number.isSafeInteger(r.createdAt) || !Number.isSafeInteger(r.updatedAt)) fail("INVALID_RESERVATION_TIME", "Reservation timestamps must be valid integers.");
   }
 }
@@ -750,8 +751,20 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
     if (!evidence) continue;
     const explicitSourceScope = sourceScope(need);
     const key = JSON.stringify([project.version, explicitSourceScope ?? `unknown:${project.stableId}:${need.stableId}`, need.kind, need.resourceKey]);
-    const activeReservationQuantity = project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === need.stableId).reduce((sum, reservation) => sum + reservation.quantity, 0);
+    const activeReservationQuantity = project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === need.stableId && sourceScope(reservation) === explicitSourceScope).reduce((sum, reservation) => sum + reservation.quantity, 0);
     groups.set(key, [...(groups.get(key) ?? []), { project, need, evidence, activeReservationQuantity }]);
+  }
+  const alternateReservationGroups = new Map<string, { project: ErpProjectView; need: ErpResourceNeed; sourceIdentityKey: string; candidate?: ErpResourceSourceCandidate; quantity: number }>();
+  for (const project of projects) for (const reservation of project.reservations) {
+    if (reservation.status !== "ACTIVE" || !reservation.sourceIdentityKey) continue;
+    const need = project.needs.find((entry) => entry.stableId === reservation.needId);
+    if (!need || sourceScope(reservation) === sourceScope(need)) continue;
+    const candidate = project.resourceSourceScreens.flatMap((screen) => screen.candidates).find((entry) => entry.needId === need.stableId && entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey);
+    const key = JSON.stringify([project.version, `character:${reservation.sourceIdentityKey}`, need.kind, need.resourceKey]);
+    const current = alternateReservationGroups.get(key) ?? { project, need, sourceIdentityKey: reservation.sourceIdentityKey, ...(candidate ? { candidate } : {}), quantity: 0 };
+    if (candidate && !current.candidate) current.candidate = candidate;
+    current.quantity += reservation.quantity;
+    alternateReservationGroups.set(key, current);
   }
   const entries = [...groups.values()].map((group): ErpResourceCommitmentLine => {
     const first = group[0]!;
@@ -785,8 +798,8 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
     const active = group.filter((entry) => entry.project.status === "ACTIVE");
     const paused = group.filter((entry) => entry.project.status === "PAUSED");
     const other = group.filter((entry) => entry.project.status !== "ACTIVE" && entry.project.status !== "PAUSED");
-    const activeReservationQuantity = group.reduce((sum, entry) => sum + entry.activeReservationQuantity, 0);
     const assessedReservationQuantity = reservationQuantities.size === 1 ? [...reservationQuantities][0] : undefined;
+    const activeReservationQuantity = group.reduce((sum, entry) => sum + entry.activeReservationQuantity, 0);
     const overlappingReservationQuantity = assessedReservationQuantity !== undefined && assessedReservationQuantity >= activeReservationQuantity ? assessedReservationQuantity - activeReservationQuantity : undefined;
     return {
       version: first.project.version,
@@ -810,7 +823,27 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
       overlappingResourceKeys: [...new Set(overlaps)].sort(), contributorCount: contributors.length,
       contributors: contributors.slice(0, 25), contributorsTruncated: contributors.length > 25,
     };
-  }).sort((a, b) => a.sourceScope.localeCompare(b.sourceScope) || (a.sourceIdentityKey ?? a.sourceOwnerKey ?? "").localeCompare(b.sourceIdentityKey ?? b.sourceOwnerKey ?? "") || a.kind.localeCompare(b.kind) || a.resourceKey.localeCompare(b.resourceKey));
+  });
+  const groupedScopeKeys = new Set(groups.keys());
+  for (const [key, group] of alternateReservationGroups) {
+    if (groupedScopeKeys.has(key)) continue;
+    const candidate = group.candidate;
+    entries.push({
+      version: group.project.version, sourceScope: "CHARACTER", sourceIdentityKey: group.sourceIdentityKey,
+      kind: group.need.kind, resourceKey: group.need.resourceKey, label: group.need.label,
+      activeNeedCount: 0, activeNeedQuantity: 0, pausedNeedCount: 0, pausedNeedQuantity: 0, otherPlanNeedCount: 0,
+      activeReservationQuantity: candidate?.activeReservationQuantity ?? group.quantity,
+      overlappingReservations: [], reservationState: candidate?.reservationState ?? "UNKNOWN",
+      ...(candidate?.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: candidate.availableObservedLowerBound } : {}),
+      ...(candidate?.observedQuantity !== undefined ? { observedQuantity: candidate.observedQuantity } : {}),
+      ...(candidate?.potentialQuantity !== undefined ? { potentialQuantity: candidate.potentialQuantity } : {}),
+      ...(candidate?.observedAt !== undefined ? { observedAt: candidate.observedAt } : {}), freshness: candidate?.freshness ?? "unknown",
+      needStates: { COVERED_BY_OBSERVED: 0, SHORTFALL_OBSERVED: 0, POTENTIAL_COVERAGE_LAST_SEEN: 0, UNKNOWN: 0, UNSUPPORTED_EVIDENCE: 0 },
+      sourceSections: candidate?.locations.map((location) => ({ section: location.section === "bags" ? "bags" as const : "character bank" as const, state: location.state, ...(location.observedAt !== undefined ? { observedAt: location.observedAt } : {}), ...(location.completeness ? { completeness: location.completeness } : {}), ...(location.quantity !== undefined ? { matchingQuantity: location.quantity } : {}), ...(location.knownLowerBound !== undefined ? { matchingQuantity: location.knownLowerBound } : {}) })) ?? [],
+      unresolvedSections: candidate?.unresolvedSections.length ? candidate.unresolvedSections : candidate ? [] : ["Alternate source evidence is unavailable; reserved quantity remains explicit but current supply is UNKNOWN."], overlappingResourceKeys: [], contributorCount: 0, contributors: [], contributorsTruncated: false,
+    });
+  }
+  entries.sort((a, b) => a.sourceScope.localeCompare(b.sourceScope) || (a.sourceIdentityKey ?? a.sourceOwnerKey ?? "").localeCompare(b.sourceIdentityKey ?? b.sourceOwnerKey ?? "") || a.kind.localeCompare(b.kind) || a.resourceKey.localeCompare(b.resourceKey));
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 100;
   const items = entries.slice(0, safeLimit);
   return { items, totalCount: entries.length, returnedCount: items.length, truncated: items.length < entries.length, linesWithReservations: entries.filter((line) => line.activeReservationQuantity > 0 || (line.overlappingReservationQuantity ?? 0) > 0).length, unknownSourceLines: entries.filter((line) => line.sourceScope === "UNKNOWN_SOURCE").length, overlappingScopeLines: entries.filter((line) => line.overlappingResourceKeys.length > 0).length };
