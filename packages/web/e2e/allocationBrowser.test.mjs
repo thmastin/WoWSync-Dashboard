@@ -413,6 +413,88 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] assigned gatherer progress shows only fresh
   }
 });
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills manual gather and purchase plans", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-supply-step-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const imported = store.importSnapshot(renderExport({ name: "Provisioner", realm: "Realm A", generated: now, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now), bank: observedSection([], now) }));
+    store.createErpProject({ version: "retail", title: "Supply the repair", needs: [{ stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey }], workOrders: [] });
+    const other = store.importSnapshot(renderExport({ name: "Other Recipient", realm: "Realm B", generated: now, bags: observedSection([], now), bank: observedSection([], now) }));
+    store.createErpProject({ version: "retail", title: "Do not shortcut ambiguous plans", needs: [
+      { stableId: "reserved", kind: "ITEM_ID", resourceKey: "300", label: "Reserved Stone", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey },
+      { stableId: "other-recipient", kind: "ITEM_ID", resourceKey: "159", label: "Stone for another character", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: other.character.identityKey },
+    ], reservations: [{ stableId: "hold", needId: "reserved", sourceIdentityKey: imported.character.identityKey, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }], workOrders: [] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const projectCard = page.locator(".erp-project-card").filter({ hasText: "Supply the repair" });
+    await projectCard.waitFor();
+    const need = projectCard.locator(".erp-need-list li").filter({ hasText: "Rough Stone" });
+    await need.getByRole("button", { name: "Plan manual gather step" }).click();
+    await projectCard.getByRole("button", { name: "Hide forms" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    assert.equal(await projectCard.getByRole("heading", { name: "Add a resource requirement" }).count(), 1, "reopening forms clears a stale prefilled-step mode");
+    const reopenedOrderForm = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await reopenedOrderForm.getByLabel("Action type").inputValue(), "INVESTIGATE");
+    assert.equal(await reopenedOrderForm.getByRole("textbox", { name: "Action", exact: true }).inputValue(), "");
+    assert.equal(await reopenedOrderForm.getByLabel("Assigned character").inputValue(), "");
+    assert.deepEqual(await reopenedOrderForm.getByLabel("Linked resource needs").evaluate((element) => Array.from(element.selectedOptions, (option) => option.value)), []);
+    await need.getByRole("button", { name: "Plan manual gather step" }).click();
+    let orderForm = projectCard.locator("form.erp-inline-form");
+    assert.equal(await orderForm.getByLabel("Action type").inputValue(), "GATHER");
+    assert.equal(await orderForm.getByLabel("Assigned character").inputValue(), imported.character.identityKey);
+    assert.deepEqual(await orderForm.getByLabel("Linked resource needs").evaluate((element) => Array.from(element.selectedOptions, (option) => option.value)), ["stone"]);
+    assert.match(await orderForm.getByLabel("Manual instructions").inputValue(), /does not establish a gathering route/);
+    await orderForm.getByRole("button", { name: "Add work order" }).click();
+    const gatherOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Gather: Rough Stone" });
+    await gatherOrder.waitFor();
+    assert.match(await gatherOrder.innerText(), /Manual supply step can address an observed gap/);
+    assert.match(await gatherOrder.innerText(), /does not establish a gathering route/);
+
+    await need.getByRole("button", { name: "Plan manual purchase step" }).click();
+    orderForm = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await orderForm.getByLabel("Action type").inputValue(), "PURCHASE");
+    assert.equal(await orderForm.getByLabel("Assigned character").inputValue(), imported.character.identityKey);
+    assert.equal(await orderForm.getByLabel("Item target need").inputValue(), "stone");
+    await orderForm.getByLabel("Spending ceiling (copper)").fill("5000");
+    assert.match(await orderForm.innerText(), /market\/vendor availability, current price, routes, unreserved spending power, and affordability remain UNKNOWN/i);
+    await orderForm.getByRole("button", { name: "Add work order" }).click();
+    const purchaseOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Purchase: Rough Stone" });
+    await purchaseOrder.waitFor();
+    assert.match(await purchaseOrder.innerText(), /Manual supply step can address an observed gap/);
+    assert.match(await purchaseOrder.innerText(), /Record checked quote/);
+    assert.doesNotMatch(await purchaseOrder.innerText(), /purchase completed/i);
+    assert.match(await need.innerText(), /An active GATHER step is already linked/);
+    assert.match(await need.innerText(), /An active PURCHASE step is already linked/);
+    const unsafeProject = page.locator(".erp-project-card").filter({ hasText: "Do not shortcut ambiguous plans" });
+    const overReservedNeed = unsafeProject.locator(".erp-need-list li").filter({ hasText: "Reserved Stone" });
+    const differentRecipientNeed = unsafeProject.locator(".erp-need-list li").filter({ hasText: "Stone for another character" });
+    assert.equal(await overReservedNeed.getByRole("button", { name: "Plan manual gather step" }).count(), 0, "over-reserved supply requires allocation review before creating a manual step");
+    assert.equal(await overReservedNeed.getByRole("button", { name: "Plan manual purchase step" }).count(), 0);
+    assert.equal(await differentRecipientNeed.getByRole("button", { name: "Plan manual gather step" }).count(), 0, "a different intended recipient is not assigned the source character as gatherer");
+    assert.equal(await differentRecipientNeed.getByRole("button", { name: "Plan manual purchase step" }).count(), 0, "procurement quick-start is restricted to a same-character target");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank and bag evidence without declaring the work complete", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-retrieval-browser-"));
