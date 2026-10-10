@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
 import { ERP_WORK_ORDER_TYPES } from "@wowsync-dashboard/core/erpWorkOrderTypes.ts";
-import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpProjectView, ErpResourceCommitmentSummary, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
+import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpProjectView, ErpResourceCommitmentSummary, ErpSavedNeedHistory, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
 import { appendErpWorkOrderBatch, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
 import { resolvePackageReservationSource, reviewPackageReservations, reviewPackageSourceDemand } from "@wowsync-dashboard/core/erpFulfillmentPackageReview.ts";
 import type { PackageReservationGroup, PackageReservationRequest, PackageSourceDemandGroup, PackageSourceDemand } from "@wowsync-dashboard/core/erpFulfillmentPackageReview.ts";
@@ -12,6 +12,7 @@ interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: strin
 interface PreparedTask { needId: string; task: ErpWorkOrderBatchTaskDraft; needLabel: string; requirementSourceLabel: string; workSourceLabel: string; assignedLabel: string; destinationLabel: string; evidenceText: string; pathwayText?: string; sourceRowsText?: string; prerequisiteLabels: string[] }
 interface PreparedGroup { projectId: string; projectTitle: string; expectedRevision: number; tasks: PreparedTask[] }
 interface PreparedReview { groups: PreparedGroup[]; reservationGroups: PackageReservationGroup[]; sourceDemandGroups: PackageSourceDemandGroup[] }
+type HistoryReviewContext = { readonly history: ErpSavedNeedHistory; readonly entry: ErpSavedNeedHistory["entries"][number] };
 const defaultDraft = (label: string, pathwayKind?: ErpNeedFulfillmentOptionKind, sourceIdentityKey?: string, investigationLeadIdentityKey?: string): Draft => {
   const personalBankReview = pathwayKind === "REVIEW_PERSONAL_BANK_RETRIEVAL";
   const otherCharacterLeadReview = pathwayKind === "INVESTIGATE_OTHER_CHARACTER_LOCATION";
@@ -47,7 +48,7 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 }
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
-export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, prefillReplanFrom, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; prefillReplanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] } | null; onPrefillConsumed?: () => void }) {
+export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, prefillReplanFrom, prefillHistoryReview, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; prefillReplanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] } | null; prefillHistoryReview?: HistoryReviewContext | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.every((order) => order.status === "COMPLETED" || order.status === "CANCELLED") && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
@@ -59,6 +60,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   const [review, setReview] = useState<PreparedReview | null>(null);
   const [replanFrom, setReplanFrom] = useState<typeof prefillReplanFrom>(null);
   const [replanCancelled, setReplanCancelled] = useState(false);
+  const [historyReview, setHistoryReview] = useState<HistoryReviewContext | null>(null);
   const activeReplanFrom = replanCancelled ? null : replanFrom ?? prefillReplanFrom ?? null;
   const eligibleCharacters = characters.filter((character) => character.identityKey.startsWith(`${version}::`));
   const keyOf = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
@@ -109,6 +111,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   }, [prefillNeed, editedDraftKeys]);
   useEffect(() => {
     if (!prefillNeeds?.length) return;
+    if (prefillHistoryReview) setHistoryReview(prefillHistoryReview);
     if (prefillReplanFrom) { setReplanCancelled(false); setReplanFrom({ batchId: prefillReplanFrom.batchId, needReferences: [...new Map(prefillReplanFrom.needReferences.map((need) => [keyOf(need.projectId, need.needId), need])).values()] }); }
     const unique = [...new Map(prefillNeeds.map((need) => [keyOf(need.projectId, need.needId), need])).values()];
     const available = unique.flatMap((need) => {
@@ -132,7 +135,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     onPrefillConsumed?.();
     const first = additions[0]?.row;
     if (first) requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(first.projectId)}-${encodeURIComponent(first.need!.stableId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
-  }, [prefillNeeds, prefillReplanFrom]);
+  }, [prefillNeeds, prefillReplanFrom, prefillHistoryReview]);
   const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setEditedDraftKeys((current) => current.includes(key) ? current : [...current, key]); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
   function prepareReview() {
     if (!selected.length || saving || busy) return;
@@ -209,7 +212,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     setSaving(true); setError("");
     try {
       await appendErpWorkOrderBatch(version, review.groups.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })), activeReplanFrom ?? undefined);
-      setSelected([]); setDrafts({}); setPathways({}); setReview(null); setReplanFrom(null); setReplanCancelled(false); onSaved();
+      setSelected([]); setDrafts({}); setPathways({}); setReview(null); setReplanFrom(null); setReplanCancelled(false); setHistoryReview(null); onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The grouped plan could not be saved. No partial update was accepted.");
       setReview(null); onSaved();
@@ -225,6 +228,12 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     <h2 id="erp-cross-project-plan-title">Plan manual work across projects</h2>
     <p>Select requirements from this {version} review queue to create one atomic planning update. You may explicitly request a reservation when one exact source has recent, complete, fully quantified evidence. Requests are planning commitments only: no work is executed, inventory is unchanged, and overlapping or over-capacity requests reject the whole save.</p>
     {activeReplanFrom && <p data-testid="erp-replan-lineage-draft">Follow-up draft from saved batch <code>{activeReplanFrom.batchId}</code>, carrying {activeReplanFrom.needReferences.length} exact reviewed requirement references. The server will recheck the prior batch and terminal work before saving. {activeReplanFrom.needReferences.length} carried requirement{activeReplanFrom.needReferences.length === 1 ? " is" : "s are"} required in this draft. <button type="button" onClick={() => setReplanCancelled(true)}>Cancel follow-up link</button></p>}
+    {historyReview && <section aria-label="Selected requirement history review context" data-testid="erp-history-replan-context">
+      <h3>Selected saved requirement review</h3>
+      <p>{historyReview.history.projectTitle}: {historyReview.history.needLabel} · <code>{historyReview.history.projectId}/{historyReview.history.needId}</code>. Saved generation <code>{historyReview.entry.batchId}</code>, reviewed {new Date(historyReview.entry.reviewedAt * 1000).toLocaleString()}{historyReview.entry.predecessorBatchId ? <> · follows <code>{historyReview.entry.predecessorBatchId}</code></> : <> · initial saved generation</>}. {historyReview.entry.followUpBatchIds.length} recorded follow-up branch{historyReview.entry.followUpBatchIds.length === 1 ? "" : "es"}.</p>
+      <p>Frozen at that review: resource identity {historyReview.entry.reviewedResourceKind ?? "UNKNOWN kind"} / {historyReview.entry.reviewedResourceKey ?? "UNKNOWN resource"}; evidence {historyReview.entry.reviewedEvidenceState ?? "UNKNOWN"}, {historyReview.entry.reviewedFreshness ?? "UNKNOWN"} freshness, quantity {historyReview.entry.reviewedQuantity ?? "UNKNOWN"}{historyReview.entry.reviewedObservedAt !== undefined ? ` at ${new Date(historyReview.entry.reviewedObservedAt * 1000).toLocaleString()}` : ", timestamp UNKNOWN"}.</p>
+      <p>Current comparison: resource identity {historyReview.history.resourceKey} ({historyReview.history.identityState.replaceAll("_", " ")}); {historyReview.entry.currentEvidenceState}, {historyReview.entry.currentFreshness} freshness, quantity {historyReview.entry.currentQuantity ?? "UNKNOWN"}{historyReview.entry.currentObservedAt !== undefined ? ` at ${new Date(historyReview.entry.currentObservedAt * 1000).toLocaleString()}` : ", timestamp UNKNOWN"}; evidence review {historyReview.entry.evidenceReview.replaceAll("_", " ")}; active reservation intent {historyReview.entry.activeReservationQuantity}. These saved and current values are review context; they do not establish that a task caused a change or that resources moved.</p>
+    </section>}
     <div className="erp-cross-project-candidates">{candidates.map((row) => {
       const need = row.need!; const key = keyOf(row.projectId, need.stableId); const project = projectById.get(row.projectId)!;
       const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);
