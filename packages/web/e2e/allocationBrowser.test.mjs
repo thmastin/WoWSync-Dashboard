@@ -237,6 +237,13 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(commitmentText, /20 requested/, "planning intent is visible as its own quantity");
     assert.match(commitmentText, /2/, "observed source stock is shown independently from planned demand");
     assert.match(commitmentText, /Freshness:/);
+    const selectedSourceCommitment = commitmentPanel.locator(".erp-commitment-card").filter({ hasText: "Other Potential Holder" });
+    const sectionEvidence = selectedSourceCommitment.locator(".erp-commitment-sections");
+    await sectionEvidence.locator("summary").click();
+    assert.match(await sectionEvidence.innerText(), /Bags: OBSERVED · 2 matching units/,
+      "the account-wide view preserves per-location evidence instead of presenting only a collapsed total");
+    assert.match(await sectionEvidence.innerText(), /Character bank: OBSERVED · 0 matching units/,
+      "a fully observed empty personal-bank section is distinguishable from missing bank evidence");
     await commitmentPanel.getByLabel("Commitment filter").selectOption("REVIEW");
     assert.match(await commitmentPanel.getByText(/need review/).innerText(), /Showing \d+ of \d+ resource scopes/);
     await commitmentPanel.getByLabel("Commitment filter").selectOption("RESERVED");
@@ -503,6 +510,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await procurementForm.getByRole("button", { name: "Add work order" }).click();
     const purchaseOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review the observed item gap without purchasing" });
     await purchaseOrder.waitFor();
+    const goldCommitment = commitmentPanel.locator(".erp-commitment-card").filter({ hasText: "Planned purchase budget" });
+    const goldSectionEvidence = goldCommitment.locator(".erp-commitment-sections");
+    await goldSectionEvidence.locator("summary").click();
+    assert.match(await goldSectionEvidence.innerText(), /resource-specific value is summarized above; section quantity detail unavailable/,
+      "a non-item source section is not mislabeled as an unknown item count");
     const quoteAnswers = [" "];
     page.on("dialog", async (dialog) => dialog.accept(quoteAnswers.shift() ?? ""));
     await purchaseOrder.getByRole("button", { name: "Record checked quote…" }).click();

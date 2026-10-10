@@ -287,6 +287,23 @@ function ResourceCommitmentPanel({ lines, totalCount, truncated, sourceLabel, ch
     const needle = query.trim().toLocaleLowerCase();
     return !needle || `${line.label} ${line.kind} ${line.resourceKey} ${sourceLabel(line)} ${line.contributors.map((entry) => entry.projectTitle).join(" ")}`.toLocaleLowerCase().includes(needle);
   });
+  const sectionLabel = (section: ErpResourceCommitmentLine["sourceSections"][number]["section"]) => section === "character bank" ? "Character bank" : section === "shared storage" ? "Shared storage" : section === "bags" ? "Bags" : section === "currencies" ? "Currencies" : "Character";
+  const sectionRows = (line: ErpResourceCommitmentLine) => {
+    if (line.sourceScope === "UNKNOWN_SOURCE") return [];
+    const grouped = new Map<string, ErpResourceCommitmentLine["sourceSections"][number][]>();
+    for (const section of line.sourceSections) grouped.set(section.section, [...(grouped.get(section.section) ?? []), section]);
+    return [...grouped.entries()].map(([section, records]) => {
+      const distinct = [...new Map(records.map((record) => [JSON.stringify(record), record])).values()];
+      if (distinct.length > 1) return { section: sectionLabel(section as ErpResourceCommitmentLine["sourceSections"][number]["section"]), detail: `Conflicting section assessments (${distinct.length}); quantity UNKNOWN.` };
+      const record = distinct[0]!;
+      const itemResource = line.kind === "ITEM_ID" || line.kind === "ITEM_REF";
+      const quantity = record.matchingQuantity !== undefined ? `${record.matchingQuantity} matching ${record.matchingQuantity === 1 ? "unit" : "units"}`
+        : record.matchingPotentialQuantity !== undefined ? `${record.matchingPotentialQuantity} matching ${record.matchingPotentialQuantity === 1 ? "unit" : "units"} LAST_SEEN`
+          : record.state === "UNKNOWN" ? itemResource ? "contents UNKNOWN" : "resource-specific value UNKNOWN" : itemResource ? "matching quantity UNKNOWN" : "resource-specific value is summarized above; section quantity detail unavailable";
+      const completeness = record.completeness ? ` · ${record.completeness}` : "";
+      return { section: sectionLabel(record.section), detail: `${record.state} · ${quantity}${completeness} · seen ${when(record.observedAt)}` };
+    });
+  };
   return <section className="erp-resource-commitments" aria-labelledby="erp-resource-commitments-title">
     <h2 id="erp-resource-commitments-title">Resource commitments</h2>
     <p>Planning demand and reservations are intent. Observed supply is shown once per explicit source and exact resource key. Rows with overlapping item scopes must not be added together; this view does not establish access or ownership beyond the source evidence.</p>
@@ -295,6 +312,7 @@ function ResourceCommitmentPanel({ lines, totalCount, truncated, sourceLabel, ch
       <h3>{line.label} <small>{line.kind}: <code>{line.resourceKey}</code></small></h3>
       <p><strong>Source:</strong> {sourceLabel(line)} · <strong>Freshness:</strong> {line.freshness}{line.observedAt ? ` · observed ${when(line.observedAt)}` : " · observation time unknown"}</p>
       <dl><div><dt>Active plan demand</dt><dd>{line.activeNeedCount} needs · {line.activeNeedQuantity} requested</dd></div><div><dt>Paused plan demand</dt><dd>{line.pausedNeedCount} needs · {line.pausedNeedQuantity} requested</dd></div><div><dt>Reservations on these exact needs</dt><dd>{line.activeReservationQuantity}{line.overlappingReservationQuantity ? ` · plus ${line.overlappingReservationQuantity} on overlapping scopes` : ""} · {line.reservationState.replaceAll("_", " ")}</dd></div><div><dt>{line.freshness === "stale" ? "Last observed quantity" : line.freshness === "recent" ? "Recently observed quantity" : "Observed quantity"}</dt><dd>{line.observedQuantity === undefined ? "UNKNOWN" : line.observedQuantity}{line.potentialQuantity !== undefined ? ` · ${line.potentialQuantity} LAST_SEEN possible` : ""}{line.availableObservedLowerBound !== undefined ? ` · at least ${line.availableObservedLowerBound} unreserved under this exact scope` : ""}</dd></div></dl>
+      {(() => { const rows = sectionRows(line); return <details className="erp-commitment-sections"><summary>Source-section evidence</summary><p>Section quantities describe their own captured locations and timestamps. Do not add them to the aggregate or to other overlapping identity rows. LAST_SEEN is historical; UNKNOWN is not empty.</p>{line.sourceScope === "UNKNOWN_SOURCE" ? <p>Location details are unavailable because no explicit source is selected.</p> : rows.length ? <ul>{rows.map((entry) => <li key={entry.section}><strong>{entry.section}:</strong> {entry.detail}</li>)}</ul> : <p>No source-section detail is available in this evidence.</p>}</details>; })()}
       {line.overlappingResourceKeys.length > 0 && <p role="note"><strong>Scope overlap:</strong> also planned as {line.overlappingResourceKeys.join(", ")}. These resource identities may overlap; do not total their rows together.</p>}
       {line.overlappingReservations.length > 0 && <details><summary>{line.overlappingReservations.length} active reservation{line.overlappingReservations.length === 1 ? "" : "s"} on overlapping item scope{line.overlappingReservations.length === 1 ? "" : "s"}</summary><p>These reservations use a different base-item or exact-variant identity at the same explicit source. Their quantities can overlap the row above and are not summed as independent stock.</p><ul>{line.overlappingReservations.map((entry) => <li key={entry.reservationId}><strong>{entry.projectTitle}</strong> · {entry.projectStatus.toLowerCase()} · {entry.quantity} reserved against {entry.kind} <code>{entry.resourceKey}</code>{entry.ambiguous ? " · exact allocation is ambiguous" : ""} <button type="button" onClick={() => openProject(entry.projectId)}>Open project</button></li>)}</ul></details>}
       {line.unresolvedSections.length > 0 && <p>Unresolved evidence sections: {line.unresolvedSections.join(", ")}.</p>}
