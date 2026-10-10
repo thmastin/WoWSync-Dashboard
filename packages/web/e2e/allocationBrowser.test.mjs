@@ -2322,6 +2322,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     const savedNeedHistory = page.locator(`[id="${erpSavedNeedHistoryAnchorId(first.stableId, "queue_myco")}"]`);
     assert.match(await savedNeedHistory.innerText(), /REVIEW INTERVENING RESOURCE EVIDENCE/);
     const queuePanel = page.getByTestId("erp-portfolio-next-actions");
+    const directReview = queuePanel.getByTestId(`erp-next-action-review-history-${encodeURIComponent(first.stableId)}-${encodeURIComponent("queue_myco")}`);
+    await directReview.click();
+    const directComposer = page.getByTestId("erp-cross-project-plan");
+    const directNeed = directComposer.getByRole("checkbox", { name: /Queue herb stock.*Mycobloom/ });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes("Queue herb stock") && input.closest("label")?.innerText.includes("Mycobloom")));
+    assert.equal(await directNeed.isChecked(), true, "portfolio action opens a follow-up draft for the exact requirement");
+    assert.match(await directComposer.innerText(), /Selected saved requirement review/i);
+    const beforeDirectSave = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.ok(beforeDirectSave.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders.length === 1 && project.workOrders[0]?.status === "CANCELLED"), "opening the portfolio follow-up draft does not write plans or change work status");
+    await page.reload();
     const historyHref = `#${erpSavedNeedHistoryAnchorId(first.stableId, "queue_myco")}`;
     assert.ok(await queuePanel.locator(`a[href="${historyHref}"]`).count() > 0, "portfolio attention navigates directly to the matching requirement history");
     assert.equal(await savedNeedHistory.getByRole("link", { name: "Open this requirement to reconcile its observed interval" }).getAttribute("href"), `#${erpNeedAnchorId(first.stableId, "queue_myco")}`);

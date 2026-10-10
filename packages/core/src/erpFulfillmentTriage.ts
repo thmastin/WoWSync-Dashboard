@@ -666,7 +666,7 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
 }
 
 /** Builds a compact, dependency-first view of player-authored cross-project packages. It never selects routes or attributes actions. */
-export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 50): ErpPortfolioFulfillmentReview {
+export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 200): ErpPortfolioFulfillmentReview {
   if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, savedPlanningBatches: [], totalSavedPlanningBatchCount: 0, returnedSavedPlanningBatchCount: 0, savedPlanningBatchesTruncated: false, savedNeedHistories: [], totalSavedNeedHistoryCount: 0, returnedSavedNeedHistoryCount: 0, savedNeedHistoriesTruncated: false, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
   const savedPlanningBatchReview = buildErpSavedPlanningBatchReview(projects, version, limit);
   const projectById = new Map(projects.filter((project) => project.version === version && project.status !== "CANCELLED").map((project) => [project.stableId, project]));

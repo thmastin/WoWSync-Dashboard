@@ -110,6 +110,34 @@ test("saved requirement history prioritizes reconciliation when complete quantit
   } finally { store.close(); }
 });
 
+test("portfolio next-action history references always resolve in the matching workbench history window", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 300;
+  const refs = Array.from({ length: 60 }, (_, index) => `item:${990000 + index}:0:0`);
+  const capture = (at: number, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "History Window", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 100, items: refs.map((itemRef, index) => ({ itemRef, name: `Window Stone ${index}`, qty: quantity })) }] }, bank: { containers: [] } });
+  try {
+    const first = store.importSnapshot(capture(now, 2));
+    store.importSnapshot(capture(now + 120, 5));
+    store.importSnapshot(capture(now + 240, 2));
+    const needs = refs.map((resourceKey, index) => ({ stableId: `need-${index}`, kind: "ITEM_REF" as const, resourceKey, label: `Window Stone ${index}`, requiredQuantity: 4, sourceIdentityKey: first.character.identityKey }));
+    const savedOrders = needs.map((need, index) => ({ stableId: `history-work-${index}`, kind: "OTHER" as const, status: "CANCELLED" as const, title: `Review requirement ${index}`, resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: `erp_batch_00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, reviewedAt: now + index + 10, version: "classic-era" as const, needEvidence: { resourceKind: "ITEM_REF" as const, resourceKey: need.resourceKey, sourceScope: { kind: "CHARACTER" as const, identityKey: first.character.identityKey }, state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } }));
+    store.createErpProject({ version: "classic-era", title: "History window review", needs, workOrders: savedOrders });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const queue = buildErpPortfolioNextActionReview(projects, "classic-era");
+    const queuedNeed = queue.items.flatMap((item) => item.needReferences).find((need) => need.savedHistoryReview);
+    assert.ok(queuedNeed?.savedHistoryReview);
+    const workbench = buildErpPortfolioFulfillmentReview(projects, "classic-era");
+    assert.equal(workbench.savedNeedHistories.length, 60, "the default workbench window covers all histories eligible for queue actions");
+    for (const item of queue.items) for (const reference of item.needReferences.filter((need) => need.savedHistoryReview)) {
+      const history = workbench.savedNeedHistories.find((candidate) => candidate.projectId === reference.projectId && candidate.needId === reference.needId);
+      assert.ok(history, `queued history ${reference.projectId}/${reference.needId} is present in the workbench projection`);
+      assert.ok(history.entries.some((entry) => entry.batchId === reference.savedHistoryReview!.latestBatchId));
+      assert.equal(history.entries.at(-1)?.batchId, reference.savedHistoryReview!.latestBatchId, "the queue and detail view identify the same latest generation");
+    }
+    assert.equal(queue.savedHistoryReviewTruncated, workbench.savedNeedHistoriesTruncated, "truncation is consistent across both views");
+  } finally { store.close(); }
+});
+
 test("saved interval review respects per-section timestamps, evaluates hidden samples, and fails closed on truncated history", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const now = Math.floor(Date.now() / 1000) - 100;
