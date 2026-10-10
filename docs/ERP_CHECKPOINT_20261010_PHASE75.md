@@ -44,7 +44,9 @@ Independent review first identified that a zero-character scan was being describ
 - Branch: `feature/forever-gear-observation`
 - Starting Dashboard commit: `8c42f8f4e449e1f789d44ccc6553aca810437821`
 - Code commit: `6402394` (`feat(erp): add source-scoped fulfillment review`), pushed to `origin/feature/forever-gear-observation`.
-- Documentation commit and push status: record the exact report commit after this file, the capability inventory, and current state are committed.
+- Follow-up acceptance commit: `810c6f4` (`test(erp): verify source lead navigation`), pushed. It asserts the candidate/UNKNOWN wording is visible in the source row and that the lead link resolves to the exact need with its manual controls.
+- Documentation commit: `b69d52814f64b8a0e076e1f1f73c2b949a0f0dde`, pushed; this checkpoint report was introduced with that commit.
+- Browser suite rerun after the follow-up acceptance passed: 14 passed, zero failed. The full `validate:erp` passed on the implementation tree before this additional browser-only assertion.
 - GearExport, BankCleanup, production Dashboard, SavedVariables, and installed addons were not modified. No live validation or deployment occurred.
 
 ## Continuation
