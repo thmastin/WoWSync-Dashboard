@@ -1,6 +1,6 @@
 import type { ErpProjectView } from "@wowsync-dashboard/core";
 
-export type ErpQueueFilter = "ATTENTION" | "ALL_ACTIVE";
+export type ErpQueueFilter = "ATTENTION" | "ALL_OPEN";
 
 export interface ErpQueueEntry {
   readonly project: ErpProjectView;
@@ -15,7 +15,7 @@ const terminal = new Set(["COMPLETED", "CANCELLED"]);
 /** Portfolio projection only: it groups the existing project assessments without changing them. */
 export function buildErpWorkOrderQueue(projects: readonly ErpProjectView[], filter: ErpQueueFilter): ErpQueueEntry[] {
   const entries = projects.flatMap((project) => project.workOrders.flatMap((order) => {
-    if (project.status !== "ACTIVE" || terminal.has(order.status)) return [];
+    if ((project.status !== "ACTIVE" && project.status !== "COMPLETED") || terminal.has(order.status)) return [];
     const readiness = project.workOrderReadiness.find((entry) => entry.workOrderId === order.stableId);
     const progress = project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId);
     const needsAttention = !readiness || readiness.state !== "READY_FOR_PLAYER_REVIEW"

@@ -167,6 +167,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await needForm.getByLabel("Source character or shared owner").selectOption({ label: "None — supply UNKNOWN" });
     await needForm.getByLabel("Intended recipient").selectOption({ label: "Project Fixture — Cairne" });
     await needForm.getByRole("button", { name: "Add requirement" }).click();
+    const unworkedNeeds = page.getByRole("region", { name: "Resource needs without an open work order" });
+    await unworkedNeeds.getByText("Mycobloom").waitFor();
+    assert.match(await unworkedNeeds.innerText(), /UNKNOWN/);
     const needEvidence = projectCard.locator(".erp-need-list li").first();
     await needEvidence.waitFor();
     let needEvidenceText = await needEvidence.innerText();
@@ -180,6 +183,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await possibleSource.getByRole("button", { name: "Create source verification task" }).first().click();
     const verifySourceOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Verify possible source for Mycobloom" });
     await verifySourceOrder.waitFor();
+    await unworkedNeeds.getByText("No uncovered resource needs are missing an open manual work order.").waitFor();
     const verificationText = await verifySourceOrder.innerText();
     assert.match(verificationText, /item:940101\S* \(OBSERVED in bags, seen /);
     assert.match(verificationText, /Account membership, source access, recipient access, and a valid transfer route are UNKNOWN/);
