@@ -10,7 +10,8 @@ import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } fr
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
-import type { ErpProject, ErpProjectDraft, ErpProjectEvent } from "./erpProjects.ts";
+import type { ErpProject, ErpProjectDraft, ErpProjectEvent, ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -306,5 +307,7 @@ export interface SnapshotStore extends SnapshotReadStore {
   createErpProject(input: ErpProjectDraft): ErpProject;
   /** Optimistic concurrency: returns undefined for a missing project and throws ErpProjectConflictError on stale revision. */
   updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined;
+  /** Atomically appends player-authored PLANNED work orders to several ACTIVE same-version projects; no other project fields can be changed. */
+  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[] }[]): ErpProject[] | undefined;
   setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined;
 }

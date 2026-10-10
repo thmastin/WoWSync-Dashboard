@@ -1,7 +1,9 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent } from "./erpProjects.ts";
+import { isDeepStrictEqual } from "node:util";
+import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpWorkOrder } from "./erpProjects.ts";
+import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 import {
   DemandConflictError,
   storedDemandToExplicitDemand,
@@ -1651,6 +1653,48 @@ export class SqliteSnapshotStore implements SnapshotStore {
         return [{ workOrderId: order.stableId, title: order.title, ...(previous ? { fromStatus: previous.status } : {}), toStatus: order.status }];
       });
       this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined, workOrderStatusChanges);
+      return updated;
+    });
+  }
+
+  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[] }[]): ErpProject[] | undefined {
+    if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) throw new TypeError("A grouped work-order update must include 1 to 10 projects.");
+    if (new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A project can appear only once in a grouped work-order update.");
+    const totalOrders = updates.reduce((sum, entry) => sum + entry.workOrders.length, 0);
+    if (totalOrders < 1 || totalOrders > 20 || updates.some((entry) => entry.workOrders.length < 1 || entry.reviewSnapshots.length !== entry.workOrders.length)) throw new TypeError("A grouped update must append 1 to 20 work orders with one reviewed requirement snapshot per work order.");
+    const appendedIds = updates.flatMap((entry) => entry.workOrders.map((order: ErpWorkOrder) => order.stableId));
+    if (new Set(appendedIds).size !== appendedIds.length) throw new TypeError("Grouped work orders require unique stable IDs.");
+    return this.inTransaction(() => {
+      const existingProjects = updates.map((entry) => this.getErpProject(entry.projectId));
+      if (existingProjects.some((project) => !project)) return undefined;
+      const existing = existingProjects as ErpProject[];
+      const currentViews = new Map(new DashboardReadModel(this).getErpProjects({ version }).map((project) => [project.stableId, project]));
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+        if (project.version !== version || project.status !== "ACTIVE") throw new TypeError("Grouped work can be added only to active projects in one explicit version.");
+        if (project.revision !== entry.expectedRevision) throw new ErpProjectConflictError();
+        const currentView = currentViews.get(project.stableId);
+        const reviewedNeedIds = new Set<string>();
+        if (entry.reviewSnapshots.length !== entry.workOrders.length) throw new TypeError("Each grouped work order requires exactly one reviewed requirement snapshot.");
+        for (const review of entry.reviewSnapshots) {
+          if (review.projectId !== project.stableId || review.version !== version || reviewedNeedIds.has(review.need.stableId)) throw new TypeError("A reviewed requirement must be unique and belong to its project's explicit version.");
+          reviewedNeedIds.add(review.need.stableId);
+          const currentReview = currentView && buildErpNeedReviewSnapshot(currentView, review.need.stableId);
+          if (!currentReview || !isDeepStrictEqual(review, currentReview)) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "Requirement evidence changed while the grouped plan was being saved; refresh and review again.");
+          const order = entry.workOrders[reviewedNeedIds.size - 1];
+          if (order?.investigationSourceLeadIdentityKey && (order.kind !== "INVESTIGATE" || !currentReview.resourceSourceScreen?.candidates.some((candidate) => candidate.sourceIdentityKey === order.investigationSourceLeadIdentityKey))) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "The selected investigation source is no longer a matching same-version observation; refresh and review again.");
+        }
+        if (entry.workOrders.some((order: ErpWorkOrder, orderIndex: number) => order.status !== "PLANNED" || order.resourceNeedIds.length !== 1 || order.resourceNeedIds[0] !== entry.reviewSnapshots[orderIndex]?.need.stableId || order.completionNote !== undefined)) throw new TypeError("A grouped plan can append only unfinished PLANNED work orders, each linked exactly to its reviewed requirement.");
+      }
+      const updated: ErpProject[] = [];
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders] }, entry.expectedRevision);
+        if (!result) throw new ErpProjectConflictError();
+        updated.push(result);
+      }
       return updated;
     });
   }

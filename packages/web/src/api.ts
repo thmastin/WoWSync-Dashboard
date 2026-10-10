@@ -17,7 +17,7 @@ import type {
   ExplicitDemand,
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
-import type { ErpFulfillmentTriage, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary } from "@wowsync-dashboard/core";
+import type { ErpFulfillmentTriage, ErpNeedReviewSnapshot, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
 
 export interface GearCandidateEvidenceApi {
   data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
@@ -391,6 +391,25 @@ export function deactivateDemand(version: VersionOrUnknown, stableId: string) {
 
 export function fetchErpProjects(version: VersionOrUnknown, signal?: AbortSignal) {
   return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; resourceCommitments: ErpResourceCommitmentSummary; fulfillmentTriage: ErpFulfillmentTriage }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) && isRecord(body.resourceCommitments) && isRecord(body.fulfillmentTriage) });
+}
+
+export interface ErpWorkOrderBatchTaskDraft {
+  readonly needId: string;
+  readonly reviewSnapshot: ErpNeedReviewSnapshot;
+  readonly kind: ErpWorkOrder["kind"];
+  readonly title: string;
+  readonly instructions: string;
+  readonly assignedIdentityKey?: string;
+  /** For an INVESTIGATE step only: a version-scoped, observed source-screen lead; not an ownership/access claim. */
+  readonly sourceLeadIdentityKey?: string;
+}
+
+export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly tasks: readonly ErpWorkOrderBatchTaskDraft[] }[]) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; createdCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`,
+    { method: "POST", body: JSON.stringify({ updates }) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.createdCount === "number" && body.atomic === true },
+  );
 }
 
 export function createErpProject(version: VersionOrUnknown, input: Omit<ErpProjectDraft, "version">) {

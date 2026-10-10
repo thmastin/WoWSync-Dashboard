@@ -5,6 +5,7 @@ import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
 import { buildErpNeedObservationChangeReview } from "../src/erpObservationChanges.ts";
+import { buildErpNeedReviewSnapshot } from "../src/erpFulfillmentTriage.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
 import { guild, itemRow, warband } from "./sharedStorageBuilders.ts";
 import { renderExport } from "./sharedStorageExports.ts";
@@ -98,6 +99,41 @@ test("project requirements preserve observed lower bounds, unknown bank, and exp
     assert.equal(coveredSummary.state, "CURRENT_OBSERVATIONS_COVER_NEEDS", "a sufficient observed lower bound can cover a requirement while unknown bank access remains outside the claim");
     assert.equal(coveredSummary.currentObservedCoverageCount, 1);
     assert.equal(coveredSummary.unresolvedEvidenceCount, 0);
+  } finally { store.close(); }
+});
+
+test("cross-project work-order append rolls every project and audit event back when any project update is invalid", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const first = store.createErpProject({ version: "classic-era", title: "First project", needs: [{ stableId: "first_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1 }] });
+    const second = store.createErpProject({ version: "classic-era", title: "Second project", needs: [{ stableId: "second_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1 }], workOrders: [{ stableId: "duplicate_id", kind: "INVESTIGATE", status: "PLANNED", title: "Existing task", resourceNeedIds: ["second_need"], dependsOn: [] }] });
+    const order = (stableId: string, needId: string) => ({ stableId, kind: "INVESTIGATE" as const, status: "PLANNED" as const, title: "Check current evidence", assignedIdentityKey: identityKey, resourceNeedIds: [needId], dependsOn: [] });
+    const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const firstReview = buildErpNeedReviewSnapshot(views.find((entry) => entry.stableId === first.stableId)!, "first_need")!;
+    const secondReview = buildErpNeedReviewSnapshot(views.find((entry) => entry.stableId === second.stableId)!, "second_need")!;
+    assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [
+      { projectId: first.stableId, expectedRevision: 1, workOrders: [order("new_first_order", "first_need")], reviewSnapshots: [firstReview] },
+      { projectId: second.stableId, expectedRevision: 1, workOrders: [order("duplicate_id", "second_need")], reviewSnapshots: [secondReview] },
+    ]), ErpProjectValidationError);
+    const firstAfter = store.getErpProject(first.stableId)!;
+    const secondAfter = store.getErpProject(second.stableId)!;
+    assert.deepEqual([firstAfter.revision, firstAfter.workOrders.length], [1, 0], "the earlier project update is rolled back");
+    assert.deepEqual([secondAfter.revision, secondAfter.workOrders.length], [1, 1]);
+    assert.deepEqual(store.listErpProjectHistory(first.stableId).map((event) => event.kind), ["CREATED"], "rolled-back project history is not retained");
+  } finally { store.close(); }
+});
+
+test("the atomic work-order transaction rechecks reviewed evidence after the route's initial read", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const project = store.createErpProject({ version: "classic-era", title: "Freshness race", needs: [{ stableId: "stone_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 8, sourceIdentityKey: identityKey }] });
+    const initialView = new DashboardReadModel(store).getErpProjects({ version: "classic-era" }).find((entry) => entry.stableId === project.stableId)!;
+    const review = buildErpNeedReviewSnapshot(initialView, "stone_need")!;
+    const later = Math.floor(Date.now() / 1000) + 2;
+    store.importSnapshot(buildWowSyncExport({ generatedAt: later, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: project.stableId, expectedRevision: project.revision, reviewSnapshots: [review], workOrders: [{ stableId: "stale_review_order", kind: "GATHER", status: "PLANNED", title: "Review the shortage", resourceNeedIds: ["stone_need"], dependsOn: [] }] }]), (error: unknown) => error instanceof ErpProjectConflictError && error.code === "NEED_REVIEW_STALE");
+    const unchanged = store.getErpProject(project.stableId)!;
+    assert.deepEqual([unchanged.revision, unchanged.workOrders.length], [project.revision, 0], "the new observation wins and no stale plan is written");
   } finally { store.close(); }
 });
 
@@ -250,6 +286,17 @@ test("planned craft output validation rejects malformed and non-crafting declara
     assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, plannedOutput: { ...base.workOrders[0]!.plannedOutput!, resourceKey: "159" } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
     assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
     assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER", outputObservationIdentityKey: identityKey }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET");
+  } finally { store.close(); }
+});
+
+test("investigation source leads are version-checked player-review context and only valid on INVESTIGATE work", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const lead = "classic-era::realm-a::observed-candidate";
+    const base = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "inspect_candidate", kind: "INVESTIGATE" as const, status: "PLANNED" as const, title: "Review observed location", resourceNeedIds: [], dependsOn: [], investigationSourceLeadIdentityKey: lead }] };
+    validateErpProject(base, (key) => key === identityKey || key === lead);
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, investigationSourceLeadIdentityKey: "retail::realm-a::candidate" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROJECT_CHARACTER");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "TRANSFER" }] }, (key) => key === identityKey || key === lead), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_INVESTIGATION_SOURCE_LEAD");
   } finally { store.close(); }
 });
 

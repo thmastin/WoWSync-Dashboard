@@ -1237,6 +1237,83 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
   }
 });
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session spans multiple projects without reserving or moving stock", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-cross-project-plan-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const source = store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now), bank: observedSection([], now) }));
+    const observedLead = store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
+    const first = store.createErpProject({ version: "retail", title: "Provision the crafter", needs: [{ stableId: "mycobloom_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 5, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }], reservations: [{ stableId: "existing_hold", needId: "mycobloom_need", sourceIdentityKey: source.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    const second = store.createErpProject({ version: "retail", title: "Prepare the second recipe", needs: [{ stableId: "briar_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey }] });
+    const third = store.createErpProject({ version: "retail", title: "Provision the reserve crafter", needs: [{ stableId: "reserve_myco_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom reserve", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
+    await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).check();
+    await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
+    await composer.getByRole("checkbox", { name: /Provision the reserve crafter · Mycobloom reserve/ }).check();
+    const firstEvidence = composer.locator(".erp-cross-project-choice").filter({ hasText: /Provision the crafter · Mycobloom/ }).first();
+    assert.match(await firstEvidence.innerText(), /2 observed/);
+    assert.match(await firstEvidence.innerText(), /2 active needs \/ 8 planned units · 1 exact-scope units reserved/);
+    assert.match(await firstEvidence.innerText(), /1 observed lower-bound units not reserved/);
+    const firstTask = composer.locator("fieldset").filter({ hasText: "Provision the crafter: Mycobloom" });
+    const secondTask = composer.locator("fieldset").filter({ hasText: "Prepare the second recipe: Briarthorn" });
+    await firstTask.getByLabel("Manual step type").selectOption("INVESTIGATE");
+    const sourceLead = firstTask.getByLabel("Observed source to investigate for Mycobloom");
+    assert.equal(await sourceLead.locator("option").filter({ hasText: /Possible Source Lead/ }).count(), 1);
+    await sourceLead.selectOption(observedLead.character.identityKey);
+    assert.match(await firstTask.innerText(), /Account membership, access, and transferability remain UNKNOWN/);
+    await secondTask.getByLabel("Manual step type").selectOption("INVESTIGATE");
+    const thirdTask = composer.locator("fieldset").filter({ hasText: "Provision the reserve crafter: Mycobloom reserve" });
+    await thirdTask.getByLabel("Manual step type").selectOption("GATHER");
+    await composer.getByRole("button", { name: "Create 3 planned manual steps" }).click();
+    await page.locator(".erp-project-card").filter({ hasText: "Provision the crafter" }).getByText(/INVESTIGATE · PLANNED/).waitFor();
+    await page.locator(".erp-project-card").filter({ hasText: "Prepare the second recipe" }).getByText(/INVESTIGATE · PLANNED/).waitFor();
+    await page.locator(".erp-project-card").filter({ hasText: "Provision the reserve crafter" }).getByText(/GATHER · PLANNED/).waitFor();
+
+    const read = async () => page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const rest = await read();
+    const firstRead = rest.projects.find((project) => project.title === "Provision the crafter");
+    const secondRead = rest.projects.find((project) => project.title === "Prepare the second recipe");
+    const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
+    assert.equal(firstRead.revision, 2); assert.equal(secondRead.revision, 2);
+    assert.deepEqual(firstRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.sourceIdentityKey, order.investigationSourceLeadIdentityKey]), [["INVESTIGATE", "PLANNED", ["mycobloom_need"], source.character.identityKey, observedLead.character.identityKey]]);
+    const investigationOrder = page.locator(".erp-work-order-list li").filter({ has: page.getByText("Review fulfillment: Mycobloom", { exact: true }) });
+    assert.match(await investigationOrder.innerText(), /Observed source lead to investigate: Possible Source Lead/);
+    assert.match(await investigationOrder.innerText(), /Account membership, access, and transferability remain UNKNOWN/);
+    assert.deepEqual(secondRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["INVESTIGATE", "PLANNED", ["briar_need"]]]);
+    assert.deepEqual(thirdRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["GATHER", "PLANNED", ["reserve_myco_need"]]]);
+    assert.equal(firstRead.reservations[0].quantity, 1, "the planning transaction preserves existing reservations");
+    assert.equal(rest.resourceCommitments.items.find((entry) => entry.resourceKey === fullRef(ITEM_ID)).observedQuantity, 2, "planning work does not change observed stock");
+    const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.ok(context.planning.projects.some((project) => project.title === firstRead.title && project.revision === firstRead.revision));
+    assert.ok(context.planning.projects.some((project) => project.title === secondRead.title && project.revision === secondRead.revision));
+    assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
+    mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const mcpProjectsById = new Map(mcp.structuredContent.projects.map((project) => [project.stableId, project]));
+    for (const project of [firstRead, secondRead, thirdRead]) assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]));
+    assert.equal(mcpProjectsById.get(firstRead.stableId).workOrders[0].investigationSourceLeadIdentityKey, observedLead.character.identityKey, "MCP preserves the lead as a separate field from the need source");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 
 
 

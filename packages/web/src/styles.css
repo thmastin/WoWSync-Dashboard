@@ -1357,6 +1357,16 @@ button.roster-name-link {
 .erp-fulfillment-snapshot p { margin: 5px 0; color: #c2cad6; }
 .erp-fulfillment-snapshot ul { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 8px 0; padding-left: 18px; color: #c2cad6; }
 .erp-fulfillment-snapshot small { color: #9da8b8; }
+.erp-cross-project-plan { margin: 16px 0 22px; padding: 16px; border: 1px solid #7189b055; border-radius: 9px; background: #7189b00c; }
+.erp-cross-project-plan > p, .erp-cross-project-plan > small { color: var(--muted, #aab0bd); }
+.erp-cross-project-candidates { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
+.erp-cross-project-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #7189b044; border-radius: 6px; cursor: pointer; }
+.erp-cross-project-choice input { margin-top: 4px; }
+.erp-cross-project-choice span, .erp-cross-project-choice small { display: block; }
+.erp-cross-project-choice small { margin-top: 3px; color: var(--muted, #aab0bd); overflow-wrap: anywhere; }
+.erp-cross-project-task { display: grid; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid #7189b055; border-radius: 7px; }
+.erp-cross-project-task label { display: grid; gap: 4px; }
+.erp-cross-project-task input, .erp-cross-project-task select, .erp-cross-project-task textarea { max-width: 100%; }
 .erp-history ol { display: grid; gap: 7px; padding-left: 22px; }
 .erp-history li small { display: block; color: #9da8b8; margin-top: 3px; }
 .erp-history p { color: #9da8b8; }

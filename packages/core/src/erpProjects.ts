@@ -5,11 +5,12 @@ import type { WowVersion } from "./types.ts";
 import { snapshotObservedAt } from "./chronology.ts";
 import type { Freshness } from "./freshness.ts";
 import { MAX_ERP_PROJECT_COLLECTION_ENTRIES } from "./erpLimits.ts";
+import { ERP_WORK_ORDER_TYPES, type ErpWorkOrderType } from "./erpWorkOrderTypes.ts";
+export { ERP_WORK_ORDER_TYPES } from "./erpWorkOrderTypes.ts";
+export type { ErpWorkOrderType } from "./erpWorkOrderTypes.ts";
 
 export const ERP_PROJECT_STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"] as const;
 export type ErpProjectStatus = typeof ERP_PROJECT_STATUSES[number];
-export const ERP_WORK_ORDER_TYPES = ["INVESTIGATE", "GATHER", "CRAFT", "TRANSFER", "RETRIEVE", "EQUIP", "PURCHASE", "SELL_MANUALLY", "PROVISION", "OTHER"] as const;
-export type ErpWorkOrderType = typeof ERP_WORK_ORDER_TYPES[number];
 export const ERP_WORK_ORDER_STATUSES = ["PLANNED", "IN_PROGRESS", "WAITING_FOR_EVIDENCE", "COMPLETED", "CANCELLED"] as const;
 export type ErpWorkOrderStatus = typeof ERP_WORK_ORDER_STATUSES[number];
 export const ERP_RESOURCE_KINDS = ["ITEM_ID", "ITEM_REF", "GOLD_COPPER", "CURRENCY", "PROFESSION", "RECIPE"] as const;
@@ -70,6 +71,8 @@ export interface ErpWorkOrder {
   readonly instructions?: string;
   readonly assignedIdentityKey?: string;
   readonly sourceIdentityKey?: string;
+  /** Same-version candidate selected for manual investigation; does not establish possession, access, or transferability. */
+  readonly investigationSourceLeadIdentityKey?: string;
   readonly destinationIdentityKey?: string;
   /** Explicit character whose inventory will be checked for the planned craft output; distinct from the intended recipient. */
   readonly outputObservationIdentityKey?: string;
@@ -137,8 +140,8 @@ export class ErpProjectValidationError extends TypeError {
   constructor(code: string, message: string) { super(message); this.name = "ErpProjectValidationError"; this.code = code; }
 }
 export class ErpProjectConflictError extends Error {
-  readonly code = "PROJECT_REVISION_CONFLICT";
-  constructor() { super("Project changed since it was read; reload the latest revision before saving."); this.name = "ErpProjectConflictError"; }
+  readonly code: string;
+  constructor(code = "PROJECT_REVISION_CONFLICT", message = "Project changed since it was read; reload the latest revision before saving.") { super(message); this.name = "ErpProjectConflictError"; this.code = code; }
 }
 
 const hasValue = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
@@ -186,7 +189,8 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (!(ERP_WORK_ORDER_TYPES as readonly string[]).includes(w.kind) || !(ERP_WORK_ORDER_STATUSES as readonly string[]).includes(w.status)) fail("INVALID_WORK_ORDER_STATE", "Unsupported work order type or status.");
     if (!hasValue(w.title) || w.title.length > 160 || (w.instructions !== undefined && w.instructions.length > 4000)) fail("INVALID_WORK_ORDER_TEXT", "Work order title/instructions exceed their limits.");
     if (!Array.isArray(w.dependsOn) || !Array.isArray(w.resourceNeedIds)) fail("INVALID_WORK_ORDER_LINKS", "Work order dependencies and resource links must be arrays.");
-    identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.destinationIdentityKey, "Work order destination"); identity(w.outputObservationIdentityKey, "Craft output observation character");
+    identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.investigationSourceLeadIdentityKey, "Investigation source lead"); identity(w.destinationIdentityKey, "Work order destination"); identity(w.outputObservationIdentityKey, "Craft output observation character");
+    if (w.investigationSourceLeadIdentityKey !== undefined && w.kind !== "INVESTIGATE") fail("INVALID_INVESTIGATION_SOURCE_LEAD", "An observed source lead can be attached only to a manual INVESTIGATE work order.");
     if (w.outputObservationIdentityKey !== undefined && (w.kind !== "CRAFT" || w.plannedOutput === undefined)) fail("INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET", "An output observation character is supported only for a CRAFT work order with a declared planned output.");
     if (w.plannedOutput !== undefined) {
       const output = w.plannedOutput;

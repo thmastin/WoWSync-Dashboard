@@ -3,7 +3,7 @@ import http from "node:http";
 import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
-import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { buildErpNeedReviewSnapshot, SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { itemRow, warband } from "../../core/test/sharedStorageBuilders.ts";
 import { renderExport } from "../../core/test/sharedStorageExports.ts";
@@ -51,6 +51,68 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.equal(context.body.planning.projects[0].historyEventCount, 1);
     assert.deepEqual(context.body.planning.projects[0].workOrderProgressStates, { INSUFFICIENT_EVIDENCE: 1 }, "AccountContext summarizes the same reconciliation state exposed by REST");
     assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, []);
+  });
+});
+
+test("cross-project manual work is saved atomically from reviewed same-version evidence", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 3 }] }] }, bank: { unknown: true } }));
+    const possibleSource = store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Stone Holder", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 0 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } })).character;
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const first = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Provision the crafter", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact rough stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey }], reservations: [{ stableId: "stone-hold", needId: "stone", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE", createdAt: generatedAt, updatedAt: generatedAt }] })).body.project;
+    const second = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Research the missing recipe", needs: [{ stableId: "recipe", kind: "RECIPE", resourceKey: "12345", label: "Unverified recipe requirement", requiredQuantity: 1 }] })).body.project;
+    const projects = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const task = (project: any, needId: string, kind: string, sourceLeadIdentityKey?: string) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind, title: `Review ${needId}`, instructions: "Check current evidence and decide manually.", assignedIdentityKey: identityKey, ...(sourceLeadIdentityKey ? { sourceLeadIdentityKey } : {}) }] });
+    const firstCurrent = projects.find((entry: any) => entry.stableId === first.stableId);
+    const stoneCandidate = firstCurrent.resourceSourceScreens.find((entry: any) => entry.needId === "stone")?.candidates.find((entry: any) => entry.sourceIdentityKey === possibleSource.identityKey);
+    assert.ok(stoneCandidate, "the same-version source screen exposes the matching observed source as a lead for investigation");
+    const wrongVersionAssignee = task(firstCurrent, "stone", "INVESTIGATE");
+    wrongVersionAssignee.tasks[0].assignedIdentityKey = "retail::character::not-in-classic";
+    const invalidAssignee = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [wrongVersionAssignee] });
+    assert.equal(invalidAssignee.status, 400, "assignment must resolve to a character observed in the explicit work-order version");
+    assert.equal(invalidAssignee.body.code, "INVALID_WORK_ORDER_ASSIGNMENT");
+    const invalidLead = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "GATHER", possibleSource.identityKey)] });
+    assert.equal(invalidLead.status, 400, "a source lead is accepted only for INVESTIGATE work");
+    assert.equal(invalidLead.body.code, "INVALID_SOURCE_INVESTIGATION_LEAD");
+    const invalidCandidate = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", "retail::character::unobserved")] });
+    assert.equal(invalidCandidate.status, 400, "a source lead must be among currently reviewed same-version candidates");
+    assert.equal(invalidCandidate.body.code, "INVALID_SOURCE_INVESTIGATION_LEAD");
+    const saved = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey), task(projects.find((entry: any) => entry.stableId === second.stableId), "recipe", "INVESTIGATE")] });
+    assert.equal(saved.status, 200);
+    assert.deepEqual([saved.body.atomic, saved.body.createdCount], [true, 2]);
+    assert.deepEqual(saved.body.projects.map((project: any) => [project.title, project.workOrders[0].status, project.workOrders[0].resourceNeedIds]).sort((a: any, b: any) => a[0].localeCompare(b[0])), [["Provision the crafter", "PLANNED", ["stone"]], ["Research the missing recipe", "PLANNED", ["recipe"]]]);
+    const savedFirst = saved.body.projects.find((project: any) => project.stableId === first.stableId);
+    assert.equal(savedFirst.reservations[0].quantity, 1, "adding manual work does not reserve or consume resources");
+    assert.match(savedFirst.workOrders[0].instructions, /SYSTEM EVIDENCE BOUNDARY/);
+    assert.equal(savedFirst.workOrders[0].sourceIdentityKey, identityKey, "the original requirement source intent is retained separately");
+    assert.equal(savedFirst.workOrders[0].investigationSourceLeadIdentityKey, possibleSource.identityKey, "the observed candidate is attached only as a source lead");
+    assert.equal(savedFirst.workOrders[0].destinationIdentityKey, identityKey);
+    const context = await call("GET", "/api/account-context");
+    assert.ok(context.body.planning.projects.some((entry: any) => entry.stableId === first.stableId && entry.revision === 2));
+    assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, [], "the grouped plan remains in its explicit game version");
+    const rest = await call("GET", "/api/versions/classic-era/erp/projects");
+    assert.deepEqual(rest.body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId)).map((project: any) => project.workOrders.length), [1, 1]);
+  });
+});
+
+test("a grouped manual plan rejects changed evidence before appending any work", async () => {
+  await withServer(async (call, store) => {
+    const at = Math.floor(Date.now() / 1000);
+    const capture = (generatedAt: number, quantity: number) => buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: quantity }] }] }, bank: { unknown: true } });
+    store.importSnapshot(capture(at, 3));
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const first = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "First fulfillment", needs: [{ stableId: "first_need", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey }] })).body.project;
+    const second = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Second fulfillment", needs: [{ stableId: "second_need", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 4, sourceIdentityKey: identityKey }] })).body.project;
+    const views = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const toGroup = (project: any, needId: string) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind: "GATHER", title: "Review evidence", instructions: "Check manually." }] });
+    const staleUpdates = [toGroup(views.find((p: any) => p.stableId === first.stableId), "first_need"), toGroup(views.find((p: any) => p.stableId === second.stableId), "second_need")];
+    store.importSnapshot(capture(at + 30, 2));
+    const result = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: staleUpdates });
+    assert.equal(result.status, 409);
+    assert.equal(result.body.code, "NEED_REVIEW_STALE");
+    const readback = await call("GET", "/api/versions/classic-era/erp/projects");
+    assert.deepEqual(readback.body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId)).map((project: any) => [project.workOrders.length, project.revision]), [[0, 1], [0, 1]], "no project is partially updated when one reviewed evidence row is stale");
   });
 });
 

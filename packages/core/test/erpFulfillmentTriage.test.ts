@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot } from "../src/erpFulfillmentTriage.ts";
 
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");
@@ -20,6 +20,12 @@ test("fulfillment triage joins changed evidence, reservation review, and manual 
       { stableId: "unlinked", kind: "OTHER", status: "IN_PROGRESS", title: "Confirm carried supplies", resourceNeedIds: [], dependsOn: [] },
     ] });
     const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const snapshot = buildErpNeedReviewSnapshot(views[0]!, "stone");
+    assert.equal(snapshot?.projectId, project.stableId);
+    assert.equal(snapshot?.projectRevision, project.revision);
+    assert.equal(snapshot?.version, "classic-era");
+    assert.equal(snapshot?.need.resourceKey, "item:159:0:0");
+    assert.equal(snapshot?.evidence?.observedQuantity, 1, "review binds the exact normalized evidence presented to the player");
     const triage = buildErpFulfillmentTriage(views, "classic-era");
     const stone = triage.items.find((entry) => entry.need?.stableId === "stone");
     assert.ok(stone);

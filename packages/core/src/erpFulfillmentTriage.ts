@@ -1,4 +1,4 @@
-import type { ErpProjectView, ErpResourceNeed } from "./erpProjects.ts";
+import type { ErpNeedEvidence, ErpProjectView, ErpResourceNeed, ErpResourceSourceScreen } from "./erpProjects.ts";
 import type { VersionOrUnknown, WowVersion } from "./types.ts";
 import type { Freshness } from "./freshness.ts";
 
@@ -35,6 +35,25 @@ export interface ErpFulfillmentTriage {
   readonly counts: Readonly<Record<ErpFulfillmentTriageSignal, number>>;
   readonly truncated: boolean;
   readonly interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY";
+}
+
+/** Review state frozen by the Dashboard before a grouped manual plan is saved. It is a stale-review guard, not a signed or trusted claim. */
+export interface ErpNeedReviewSnapshot {
+  readonly projectId: string;
+  readonly projectRevision: number;
+  readonly version: WowVersion;
+  readonly need: ErpResourceNeed;
+  readonly evidence?: ErpNeedEvidence;
+  readonly resourceSourceScreen?: ErpResourceSourceScreen;
+}
+
+export function buildErpNeedReviewSnapshot(project: ErpProjectView, needId: string): ErpNeedReviewSnapshot | undefined {
+  const need = project.needs.find((entry) => entry.stableId === needId);
+  if (!need) return undefined;
+  const evidence = project.needEvidence.find((entry) => entry.needId === needId);
+  const resourceSourceScreen = project.resourceSourceScreens.find((entry) => entry.needId === needId);
+  return { projectId: project.stableId, projectRevision: project.revision, version: project.version, need,
+    ...(evidence ? { evidence } : {}), ...(resourceSourceScreen ? { resourceSourceScreen } : {}) };
 }
 
 const emptyCounts = (): Record<ErpFulfillmentTriageSignal, number> => ({ CHANGED_OBSERVATION: 0, UNWORKED_REQUIREMENT: 0, RESERVATION_REVIEW: 0, OPEN_WORK_ORDER: 0 });

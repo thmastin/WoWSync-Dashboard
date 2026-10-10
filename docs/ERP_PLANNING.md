@@ -2,6 +2,18 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Phases 56-57 - atomic cross-project fulfillment session
+
+The version-scoped Projects & Work Orders surface now has one session composer for up to 20 currently returned uncovered needs across up to 10 active projects. It presents each selected need beside its current evidence, exact-source commitment counts, reservation overlap details, and unreserved observed lower bound where known. The player chooses each manual task kind, instructions, and optional observed same-version assignee; an INVESTIGATE task can additionally retain a currently matching observed source candidate as a separate lead.
+
+The save is one SQLite transaction across all selected projects. It checks project revisions and exact need review snapshots against a read model rebuilt *inside* the write transaction. New imports, evidence changes, or stale project revisions reject the whole batch; no subset is written. Assignment must resolve to a character observed in the explicit version. Source leads are INVESTIGATE-only, candidate-matched in the same version, and rechecked transactionally. They are stored separately from the need's source intent and are not ownership, membership, access, transferability, or a movement plan. All new work stays PLANNED; reservations and observed stock do not change.
+
+The same three-project synthetic acceptance verifies the commitment arithmetic, source-lead wording and persistence, and REST/AccountContext/MCP parity in one temporary SQLite database and browser session. Full validation and independent review passed. It is not real-account, game, or production validation; automatic resource allocation, multi-route optimization, and reservation commits remain future work. See `ERP_CHECKPOINT_20261010_PHASE56-57.md`.
+
+## Next integrated implementation milestone
+
+Add an explicit player-reviewed cross-project reservation allocation to this session, with overlap-aware exact ITEM_ID/ITEM_REF semantics. The player must see and choose the quantity. Enforce that aggregate new commitments do not exceed a current, complete, same-version, exact-source unreserved observed lower bound, including competing requests within the same transaction; ambiguous or missing scope stays UNKNOWN and cannot reserve. Save reservation changes with the associated manual plans atomically, then verify a full multi-project need-to-reservation-to-work-order lifecycle through core, REST, AccountContext, MCP, and browser acceptance. Do not infer crafting recipes, market availability, access, or actions.
+
 ## Phase 55 - combined fulfillment triage
 
 The shared `buildErpFulfillmentTriage` projection joins four existing planning/evidence signals into one version-scoped review index: changed requirement observations, requirements without an open linked work order, active reservations that need evidence review, and open manual work. A requirement row may carry more than one signal. Signal counts cover all candidate rows before the display cap and describe affected requirement/order-only rows, not unique work orders or resource quantities. Linked rows preserve exact need keys, observed quantity/time/freshness, comparable prior/current quantity deltas when present, saved source and destination intent, reservation review details, and work-order readiness/progress states. Standalone work orders remain visible as order-only rows.
