@@ -14,7 +14,7 @@ test("cross-project buyer review totals only complete recent quotes against one 
     const buyer = imported.character.identityKey;
     for (const [projectId, itemId, needQty, budgetQty, reserveQty, ceiling, amount] of [
       ["gear-a", "1001", 3, 1000, 100, 700, 650],
-      ["gear-b", "1002", 2, 12000, 150, 12000, 11200],
+      ["gear-b", "1001", 2, 12000, 150, 12000, 11200],
     ] as const) {
       store.createErpProject({ version: "retail", title: projectId, needs: [
         { stableId: `item-${projectId}`, kind: "ITEM_ID", resourceKey: itemId, label: `Item ${itemId}`, requiredQuantity: needQty, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
@@ -35,6 +35,9 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(line.recordedReservationsCopper, 250);
     assert.equal(line.recordedRemainderCopper, 11750);
     assert.equal(review.unresolvedBuyerOrderCount, 0);
+    assert.deepEqual(line.resourcePackages.map((entry) => [entry.kind, entry.resourceKey, entry.projectCount, entry.needCount, entry.state, entry.combinedObservedGapQuantity, entry.recentQuotedQuantity]), [
+      ["ITEM_ID", "1001", 2, 2, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", 5, 5],
+    ], "the exact same item ID need is grouped without applying a generic item-level heuristic");
     assert.equal(buildErpProcurementBuyerPortfolioReview(projects, "classic-era").totalBuyerCount, 0, "project quotes never cross versions");
 
     const conflictingGold = projects.map((project, index) => index === 1 ? {
@@ -58,6 +61,26 @@ test("cross-project buyer review totals only complete recent quotes against one 
     const staleOnly = buildErpProcurementBuyerPortfolioReview(staleQuotes, "retail").buyers[0]!;
     assert.equal(staleOnly.state, "QUOTE_COVERAGE_INCOMPLETE");
     assert.equal(staleOnly.recentQuoteTotalCopper, undefined, "stale-only amounts are not presented as a zero recent subtotal");
+
+    const staleGapProjects = projects.map((project) => ({ ...project, workOrderReadiness: project.workOrderReadiness.map((entry) => entry.procurementAssessment ? {
+      ...entry,
+      procurementAssessment: { ...entry.procurementAssessment, targetNeed: { ...entry.procurementAssessment.targetNeed, freshness: "stale" as const } },
+    } : entry) }));
+    const staleGapReview = buildErpProcurementBuyerPortfolioReview(staleGapProjects, "retail").buyers[0]!;
+    assert.equal(staleGapReview.state, "QUOTE_COVERAGE_INCOMPLETE", "a stale SHORTFALL_OBSERVED value is not a current item gap");
+    assert.equal(staleGapReview.orders[0]!.targetGap, "UNKNOWN");
+    assert.equal(staleGapReview.resourcePackages[0]!.state, "EVIDENCE_INCOMPLETE");
+
+    const firstProject = projects[0]!;
+    const originalOrder = firstProject.workOrders[0]!;
+    const originalReadiness = firstProject.workOrderReadiness.find((entry) => entry.workOrderId === originalOrder.stableId)!;
+    const duplicateOrder = { ...originalOrder, stableId: "duplicate-purchase", title: "Additional quote for the same need", procurementPlan: { ...originalOrder.procurementPlan!, playerQuote: { amountCopper: 100, quantity: 1, recordedAt: at - 5, sourceNote: "Second quote line" } } };
+    const duplicateReadiness = { ...originalReadiness, workOrderId: duplicateOrder.stableId, procurementAssessment: { ...originalReadiness.procurementAssessment!, playerQuote: { ...originalReadiness.procurementAssessment!.playerQuote!, amountCopper: 100, quantity: 1, recordedAt: at - 5 } } };
+    const duplicateOrderReview = buildErpProcurementBuyerPortfolioReview([
+      { ...firstProject, workOrders: [...firstProject.workOrders, duplicateOrder], workOrderReadiness: [...firstProject.workOrderReadiness, duplicateReadiness] },
+      ...projects.slice(1),
+    ], "retail").buyers[0]!;
+    assert.deepEqual(duplicateOrderReview.resourcePackages.map((entry) => [entry.needCount, entry.combinedObservedGapQuantity, entry.recentQuotedQuantity]), [[2, 5, 6]], "multiple quotes for one need add quote quantity but count that need's observed gap only once");
   } finally { store.close(); }
 });
 
@@ -82,6 +105,7 @@ test("AccountContext labels buyer quote aggregates as returned-page counts when 
       returnedQuoteStates: { NO_PLAYER_QUOTES: 200 },
       returnedQuoteTotalsAboveRecordedRemainder: 0,
       returnedIncompleteQuoteCoverage: 0,
+      returnedCrossProjectResourcePackageCount: 0,
       unresolvedBuyerOrderCount: 0,
       truncated: true,
     });

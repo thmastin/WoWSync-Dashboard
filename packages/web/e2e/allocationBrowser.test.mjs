@@ -1477,7 +1477,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
       { stableId: "purchase-cloth", kind: "PURCHASE", status: "IN_PROGRESS", title: "Review cloth quote", assignedIdentityKey: buyer, resourceNeedIds: ["cloth", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "cloth", budgetNeedId: "budget", spendingCeilingCopper: 500 } },
     ] });
     const secondProject = store.createErpProject({ version: "retail", title: "Second character project", needs: [
-      { stableId: "potion", kind: "ITEM_ID", resourceKey: String(ITEM_ID + 2), label: "Provisioning item", requiredQuantity: 1, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+      { stableId: "potion", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom exact variant in second project", requiredQuantity: 1, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
       { stableId: "potion-budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Provisioning budget", requiredQuantity: 11000, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
     ], workOrders: [
       { stableId: "purchase-potion", kind: "PURCHASE", status: "PLANNED", title: "Review provisioning quote", assignedIdentityKey: buyer, resourceNeedIds: ["potion", "potion-budget"], dependsOn: [], procurementPlan: { targetNeedId: "potion", budgetNeedId: "potion-budget", spendingCeilingCopper: 11000 } },
@@ -1519,6 +1519,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await buyerLine.innerText(), /12050 copper in recent quotes/);
     assert.match(await buyerLine.innerText(), /12000 copper observed/);
     assert.match(await buyerLine.innerText(), /not establish spendable funds/i);
+    const resourcePackage = buyerLine.getByTestId(`erp-procurement-resource-package-${encodeURIComponent(buyer)}-${encodeURIComponent(fullRef(ITEM_ID))}`);
+    assert.match(await resourcePackage.innerText(), /QUOTE QUANTITY COVERS COMBINED OBSERVED GAPS/);
+    assert.match(await resourcePackage.innerText(), /2 projects, 2 needs · 4 combined observed gap units · 4 recent quoted units for 11650 copper/);
     assert.match(await line.innerText(), /RECENT QUOTES COVER OBSERVED GAPS/);
     assert.match(await line.innerText(), /1050 copper in recent player-entered quotes/);
     assert.match(await line.innerText(), /RECENT QUOTES ABOVE PLANNED BUDGET/);
@@ -1533,7 +1536,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     assert.equal(context.schemaVersion, "31");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
-    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, unresolvedBuyerOrderCount: 0, truncated: false });
+    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });
+    assert.equal(rest.procurementBuyerReview.buyers[0].resourcePackages[0].resourceKey, fullRef(ITEM_ID), "the package preserves the exact itemString variant rather than collapsing to its base item ID");
     await line.getByRole("button", { name: "Review project plans" }).click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);
     mcpClient = new Client({ name: "wowsync-procurement-budget-browser", version: "0.1.0" });

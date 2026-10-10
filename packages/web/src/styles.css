@@ -1373,6 +1373,8 @@ button.roster-name-link {
 .erp-procurement-buyer-review h3 { margin: 0 0 6px; }
 .erp-procurement-buyer-review p { margin: 6px 0; }
 .erp-procurement-buyer-review button { margin-top: 6px; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-procurement-buyer-review li > section { margin: 10px 0; padding: 10px; border-left: 3px solid #7298d688; background: #00000016; }
+.erp-procurement-buyer-review li > section ul { padding-left: 20px; }
 .erp-cross-project-candidates { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
 .erp-cross-project-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #7189b044; border-radius: 6px; cursor: pointer; }
 .erp-cross-project-choice input { margin-top: 4px; }

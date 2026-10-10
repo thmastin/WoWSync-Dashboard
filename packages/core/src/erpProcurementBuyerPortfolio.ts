@@ -12,6 +12,19 @@ export interface ErpProcurementBuyerOrder {
   readonly targetGap: "OBSERVED_GAP" | "UNKNOWN";
 }
 
+export interface ErpProcurementBuyerResourcePackage {
+  readonly kind: "ITEM_ID" | "ITEM_REF";
+  readonly resourceKey: string;
+  readonly projectCount: number;
+  readonly needCount: number;
+  readonly state: "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS" | "QUOTE_QUANTITY_BELOW_COMBINED_OBSERVED_GAPS" | "EVIDENCE_INCOMPLETE" | "AGGREGATE_EXCEEDS_SAFE_INTEGER";
+  readonly combinedObservedGapQuantity?: number;
+  readonly recentQuotedQuantity?: number;
+  readonly recentQuoteTotalCopper?: number;
+  readonly reason: string;
+  readonly orders: readonly ErpProcurementBuyerOrder[];
+}
+
 export interface ErpProcurementBuyerLine {
   readonly version: WowVersion;
   readonly buyerIdentityKey: string;
@@ -26,6 +39,8 @@ export interface ErpProcurementBuyerLine {
   readonly recordedRemainderCopper?: number;
   readonly reason: string;
   readonly orders: readonly ErpProcurementBuyerOrder[];
+  /** Exact resource matches shared by this buyer's needs in multiple projects; variants are never collapsed. */
+  readonly resourcePackages: readonly ErpProcurementBuyerResourcePackage[];
 }
 
 export interface ErpProcurementBuyerPortfolioReview {
@@ -42,6 +57,7 @@ interface Candidate {
   projectTitle: string;
   workOrderId: string;
   targetNeedId: string;
+  targetKind: "ITEM_ID" | "ITEM_REF";
   targetLabel: string;
   targetResourceKey: string;
   buyerIdentityKey: string;
@@ -83,9 +99,10 @@ export function buildErpProcurementBuyerPortfolioReview(
       const entry: Candidate = {
         projectId: project.stableId, projectTitle: project.title, workOrderId: order.stableId,
         targetNeedId: target.stableId, targetLabel: target.label, targetResourceKey: target.resourceKey,
+        targetKind: target.kind as "ITEM_ID" | "ITEM_REF",
         buyerIdentityKey: buyer,
         ...(quote ? { amount: quote.amountCopper, quantity: quote.quantity, recordedAt: quote.recordedAt, quoteFreshness: assessment.playerQuote?.freshness ?? "unknown" } : {}),
-        targetGap: targetNeed.state === "SHORTFALL_OBSERVED" && targetNeed.observedQuantity !== undefined ? "OBSERVED_GAP" : "UNKNOWN",
+        targetGap: targetNeed.freshness === "recent" && targetNeed.state === "SHORTFALL_OBSERVED" && targetNeed.observedQuantity !== undefined ? "OBSERVED_GAP" : "UNKNOWN",
         requiredQuantity: targetNeed.requiredQuantity,
         ...(targetNeed.observedQuantity !== undefined ? { observedQuantity: targetNeed.observedQuantity } : {}),
         ...(assessment.budgetEvidence.observedCopper !== undefined ? { observedGold: assessment.budgetEvidence.observedCopper } : {}),
@@ -146,6 +163,38 @@ export function buildErpProcurementBuyerPortfolioReview(
       }
     }
     const projectCount = new Set(entries.map((entry) => entry.projectId)).size;
+    const resourceGroups = new Map<string, Candidate[]>();
+    for (const entry of entries) {
+      const key = `${entry.targetKind}\u0000${entry.targetResourceKey}`;
+      resourceGroups.set(key, [...(resourceGroups.get(key) ?? []), entry]);
+    }
+    const resourcePackages: ErpProcurementBuyerResourcePackage[] = [...resourceGroups.values()].flatMap((group) => {
+      const packageProjectCount = new Set(group.map((entry) => entry.projectId)).size;
+      if (packageProjectCount < 2) return [];
+      const uniqueNeeds = [...new Map(group.map((entry) => [`${entry.projectId}\u0000${entry.targetNeedId}`, entry])).values()];
+      const completeGaps = uniqueNeeds.every((entry) => entry.targetGap === "OBSERVED_GAP" && entry.requiredQuantity !== undefined && entry.observedQuantity !== undefined);
+      const gapTotal = uniqueNeeds.reduce((sum, entry) => sum + (entry.requiredQuantity !== undefined && entry.observedQuantity !== undefined ? BigInt(Math.max(0, entry.requiredQuantity - entry.observedQuantity)) : 0n), 0n);
+      const packageQuotes = group.filter((entry) => entry.amount !== undefined && entry.quoteFreshness === "recent");
+      const quotesComplete = packageQuotes.length === group.length;
+      const quoteQuantity = packageQuotes.reduce((sum, entry) => sum + BigInt(entry.quantity!), 0n);
+      const quoteTotal = packageQuotes.reduce((sum, entry) => sum + BigInt(entry.amount!), 0n);
+      const unsafe = gapTotal > BigInt(Number.MAX_SAFE_INTEGER) || quoteQuantity > BigInt(Number.MAX_SAFE_INTEGER) || quoteTotal > BigInt(Number.MAX_SAFE_INTEGER);
+      const first = group[0]!;
+      const state: ErpProcurementBuyerResourcePackage["state"] = unsafe ? "AGGREGATE_EXCEEDS_SAFE_INTEGER"
+        : !completeGaps || !quotesComplete ? "EVIDENCE_INCOMPLETE"
+          : quoteQuantity >= gapTotal ? "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS"
+            : "QUOTE_QUANTITY_BELOW_COMBINED_OBSERVED_GAPS";
+      return [{
+        kind: first.targetKind, resourceKey: first.targetResourceKey, projectCount: packageProjectCount, needCount: uniqueNeeds.length, state,
+        ...(!unsafe && completeGaps ? { combinedObservedGapQuantity: Number(gapTotal) } : {}),
+        ...(!unsafe && packageQuotes.length ? { recentQuotedQuantity: Number(quoteQuantity), recentQuoteTotalCopper: Number(quoteTotal) } : {}),
+        reason: unsafe ? "An exact quantity or quote aggregate exceeds the safe display range; package comparison is withheld."
+          : !completeGaps || !quotesComplete ? "Every matching project need needs a current observed gap and recent player quote before combined quantity coverage can be assessed."
+            : quoteQuantity >= gapTotal ? "Recent player-entered quote quantities cover the sum of currently observed gaps for this exact resource identity. This groups review only; no purchase, ownership, or allocation is inferred."
+              : "Recent player-entered quote quantities are below the sum of currently observed gaps for this exact resource identity.",
+        orders: group.map((entry) => ({ projectId: entry.projectId, projectTitle: entry.projectTitle, workOrderId: entry.workOrderId, targetNeedId: entry.targetNeedId, targetLabel: entry.targetLabel, targetResourceKey: entry.targetResourceKey, targetGap: entry.targetGap ?? "UNKNOWN", ...(entry.amount !== undefined ? { quote: { amountCopper: entry.amount, quantity: entry.quantity!, recordedAt: entry.recordedAt!, freshness: entry.quoteFreshness! } } : {}) })),
+      }];
+    }).sort((a, b) => a.kind.localeCompare(b.kind) || a.resourceKey.localeCompare(b.resourceKey));
     return {
       version, buyerIdentityKey, projectCount, orderCount: entries.length, quoteCount: quoteEntries.length, state,
       ...(!quoteTotalUnsafe && recent.length ? { recentQuoteTotalCopper: Number(recentQuoteTotal) } : {}),
@@ -153,6 +202,7 @@ export function buildErpProcurementBuyerPortfolioReview(
       ...(oneReservationAssessment ? { recordedReservationsCopper: entries[0]!.reservationTotal } : {}),
       ...(recordedRemainderCopper !== undefined ? { recordedRemainderCopper } : {}), reason,
       orders: entries.map((entry) => ({ projectId: entry.projectId, projectTitle: entry.projectTitle, workOrderId: entry.workOrderId, targetNeedId: entry.targetNeedId, targetLabel: entry.targetLabel, targetResourceKey: entry.targetResourceKey, targetGap: entry.targetGap ?? "UNKNOWN", ...(entry.amount !== undefined ? { quote: { amountCopper: entry.amount, quantity: entry.quantity!, recordedAt: entry.recordedAt!, freshness: entry.quoteFreshness! } } : {}) })),
+      resourcePackages,
     };
   }).sort((a, b) => a.buyerIdentityKey.localeCompare(b.buyerIdentityKey));
   const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 500) : 100;
