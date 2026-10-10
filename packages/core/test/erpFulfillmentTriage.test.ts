@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview } from "../src/erpFulfillmentTriage.ts";
 
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");
@@ -89,5 +89,61 @@ test("portfolio fulfillment review orders prerequisite evidence first and preser
     assert.equal(missing?.projectReservationIntentQuantity, undefined, "a missing need does not claim zero project reservations");
     assert.equal(missing?.reservationAssessment, undefined, "a missing need does not claim zero source-scope commitments");
     assert.equal(dependent.version, "classic-era");
+  } finally { store.close(); }
+});
+
+test("source fulfillment review joins exact source/resource needs, reservations, and paired craft/provision evidence without selecting a route", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  const makeExport = (at: number, characterName: string) => buildWowSyncExport({ generatedAt: at, character: { name: characterName, realm: "Source Realm", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: 5 }, { itemRef: "item:159:0:1", name: "Fixture Stone variant", qty: 2 }] }] }, bank: { containers: [] } });
+  try {
+    const source = store.importSnapshot(makeExport(now, "Crafter"));
+    store.importSnapshot(makeExport(now + 20, "Crafter"));
+    const otherSource = store.importSnapshot(makeExport(now + 20, "Alt Crafter"));
+    store.createErpProject({ version: "classic-era", title: "Craft and provision", priority: 5, needs: [
+      { stableId: "stone-input", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact stone input", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey },
+      { stableId: "variant-input", kind: "ITEM_REF", resourceKey: "item:159:0:1", label: "Distinct variant", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey },
+    ], reservations: [{ stableId: "stone-hold", needId: "stone-input", sourceIdentityKey: source.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now + 20 }], workOrders: [
+      { stableId: "craft-stone", kind: "CRAFT", status: "PLANNED", title: "Review craft inputs", assignedIdentityKey: source.character.identityKey, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:200:0:0", label: "Planned result", quantity: 1 } },
+      { stableId: "provision-stone", kind: "PROVISION", status: "IN_PROGRESS", title: "Review provision pair", sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [] },
+    ] });
+    store.createErpProject({ version: "classic-era", status: "PAUSED", title: "Separate source plan", priority: 2, needs: [{ stableId: "same-resource", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Another need", requiredQuantity: 8, sourceIdentityKey: source.character.identityKey }] });
+    store.createErpProject({ version: "classic-era", title: "Different character source", priority: 2, needs: [{ stableId: "other-source-need", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Other crafter", requiredQuantity: 1, sourceIdentityKey: otherSource.character.identityKey }] });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const review = buildErpSourceFulfillmentReview(projects, "classic-era");
+    const exactSource = review.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === "item:159:0:0");
+    assert.ok(exactSource);
+    assert.equal(exactSource.needs.length, 2, "only exact source + kind + resource needs are grouped across active and paused projects");
+    assert.equal(exactSource.projectCount, 2);
+    assert.equal(exactSource.alternativeLocationReview, "SOURCE_SCAN_INCOMPLETE", "one missing per-need scan keeps the grouped location review explicitly incomplete");
+    assert.ok(exactSource.alternativeLocations.every((location) => location.sourceIdentityKey !== source.character.identityKey && location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "returned alternatives exclude the selected source and never imply membership, access, or a route");
+    assert.ok(exactSource.needs.some((need) => need.projectStatus === "PAUSED"));
+    assert.equal(exactSource.needs[0]?.reservationAssessment?.activeQuantity, 1, "reservation intent stays on the related need");
+    const craft = exactSource.needs.flatMap((need) => need.workOrders).find((order) => order.stableId === "craft-stone");
+    const provision = exactSource.needs.flatMap((need) => need.workOrders).find((order) => order.stableId === "provision-stone");
+    assert.ok(craft);
+    assert.ok(provision);
+    assert.ok(craft.observationStates.includes("UNCHANGED"), "paired crafter input observations flow into the source review without claiming consumption or output");
+    assert.ok(provision.observationStates.includes("NO_COMPARABLE_CHANGE") || provision.observationStates.includes("EVIDENCE_UNKNOWN"), "provisioning pair remains its existing qualified review");
+    assert.equal(exactSource.needs[0]?.sourceSections.some((section) => section.section === "bags"), true);
+    assert.equal(exactSource.nextReview, "REVIEW_MANUAL_WORK", "task readiness is surfaced before route assessment");
+    assert.match(exactSource.reason, /Inspect its readiness/);
+    assert.equal(review.sources.filter((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.kind === "ITEM_REF").length, 2, "itemString variants stay in distinct source groups");
+    assert.ok(!exactSource.needs.some((need) => need.needId === "other-source-need"), "a different source character is never combined into this source row");
+    assert.ok(review.sources.some((entry) => entry.sourceIdentityKey === otherSource.character.identityKey && entry.needs.some((need) => need.needId === "other-source-need")), "the other character retains its own separate source row");
+    assert.equal(review.totalNeedCount, 4);
+    assert.equal(review.interpretation, "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY");
+    const zeroRoster = projects.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => screen.needId === "stone-input" ? { ...screen, scannedCharacterCount: 0, unresolvedCharacterCount: 0, candidateCount: 0, candidates: [] } : screen) }));
+    const zeroRosterGroup = buildErpSourceFulfillmentReview(zeroRoster, "classic-era").sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === "item:159:0:0");
+    assert.equal(zeroRosterGroup?.alternativeLocationReview, "NO_OTHER_CHARACTERS_TO_SCAN", "an empty roster scan does not claim a clean negative match");
+    const partialRoster = projects.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => screen.needId === "stone-input" ? { ...screen, scannedCharacterCount: 1, unresolvedCharacterCount: 1, candidateCount: 1, candidates: [{ sourceIdentityKey: otherSource.character.identityKey, sourceName: "Alt Crafter", sourceRealm: "Source Realm", needId: "stone-input", kind: "ITEM_REF" as const, resourceKey: "item:159:0:0", state: "OBSERVED" as const, observedQuantity: 5, activeReservationQuantity: 0, reservationState: "UNRESERVED" as const, freshness: "recent" as const, observedAt: now + 20, locations: [{ section: "bags" as const, state: "OBSERVED" as const, observedAt: now + 20, completeness: "complete", quantity: 5 }], matchingItems: [{ itemRef: "item:159:0:0", section: "bags" as const, state: "OBSERVED" as const, quantity: 5, observedAt: now + 20 }], unresolvedSections: [], accountMembership: "UNKNOWN" as const, access: "UNKNOWN" as const, transferability: "UNKNOWN" as const, reason: "Observed source lead only." }] } : screen) }));
+    const partialRosterReview = buildErpSourceFulfillmentReview(partialRoster, "classic-era");
+    const partialRosterGroup = partialRosterReview.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === "item:159:0:0");
+    assert.equal(partialRosterGroup?.alternativeLocationReview, "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE", "found leads remain qualified when some characters could not be resolved");
+    assert.equal(partialRosterGroup?.alternativeLocations[0]?.sourceIdentityKey, otherSource.character.identityKey, "the matching lead remains visible during incomplete scanning");
+    assert.ok(partialRosterReview.groupsWithIncompleteSourceScan >= 1, "the summary counts incomplete scans even when a lead was found");
+    assert.equal(buildErpSourceFulfillmentReview(projects, "tbc-anniversary").sources.length, 0, "version filtering prevents cross-version project leakage");
+    assert.equal(buildErpSourceFulfillmentReview(projects, "unknown-version").totalSourceCount, 0);
+    assert.equal(buildErpSourceFulfillmentReview(projects, "classic-era", 1).truncated, true);
   } finally { store.close(); }
 });

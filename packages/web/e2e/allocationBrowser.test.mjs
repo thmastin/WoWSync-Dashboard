@@ -1306,6 +1306,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const firstRead = rest.projects.find((project) => project.title === "Provision the crafter");
     const secondRead = rest.projects.find((project) => project.title === "Prepare the second recipe");
     const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
+    const sourceResourceReview = rest.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
+    assert.ok(sourceResourceReview, "REST groups only needs that explicitly name this source and exact itemString");
+    assert.ok(sourceResourceReview.alternativeLocations.some((location) => location.sourceName === "Possible Source Lead"), "alternative source candidates appear only as observed location leads");
+    assert.ok(sourceResourceReview.alternativeLocations.every((location) => location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "alternative locations do not establish account membership, access, or transferability");
+    assert.deepEqual(sourceResourceReview.needs.map((need) => need.needId).sort(), ["mycobloom_need", "reserve_myco_need"]);
     const portfolioPackage = rest.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "briar_need"));
     assert.ok(portfolioPackage, "REST includes the connected cross-project package");
     assert.deepEqual(portfolioPackage.steps.map((step) => step.needId), ["mycobloom_need", "briar_need"], "portfolio view puts the evidence prerequisite before dependent work");
@@ -1314,8 +1319,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(portfolioPackage.steps[1].prerequisiteGate.state, "PREREQUISITE_EVIDENCE_REVIEW", "fresh but short observed supply does not satisfy the dependent step's evidence gate");
     assert.equal(portfolioPackage.steps[1].prerequisiteGate.blockers[0].evidenceState, "SHORTFALL_OBSERVED");
     const portfolioPanel = page.getByTestId("erp-portfolio-fulfillment");
-    assert.match(await portfolioPanel.innerText(), /Portfolio fulfillment packages/);
+    assert.match(await portfolioPanel.innerText(), /Player-authored dependency packages/);
     assert.match(await portfolioPanel.innerText(), /prerequisites the player linked/);
+    assert.match(await portfolioPanel.innerText(), /Shared source and resource review/);
+    assert.match(await portfolioPanel.innerText(), /Mycobloom reserve/);
     assert.equal(firstRead.revision, 2); assert.equal(secondRead.revision, 2);
     assert.deepEqual(firstRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.sourceIdentityKey, order.investigationSourceLeadIdentityKey]), [["INVESTIGATE", "PLANNED", ["mycobloom_need"], source.character.identityKey, observedLead.character.identityKey]]);
     const investigationOrder = page.locator(".erp-work-order-list li").filter({ has: page.getByText("Review fulfillment: Mycobloom", { exact: true }) });
@@ -1339,11 +1346,13 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
     assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
+    assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 1, alternativeLocationCount: 1, groupsWithIncompleteSourceScan: 0, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, truncated: false }, "AccountContext summarizes the same source/resource groups and explicit needs");
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     const mcpProjectsById = new Map(mcp.structuredContent.projects.map((project) => [project.stableId, project]));
     assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment, "MCP and REST share the exact dependency-first portfolio projection");
+    assert.deepEqual(mcp.structuredContent.sourceFulfillment, rest.sourceFulfillment, "MCP and REST share the same exact source/resource fulfillment review");
     for (const project of [firstRead, secondRead, thirdRead]) {
       assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]));
       assert.deepEqual(mcpProjectsById.get(project.stableId).reservations, project.reservations, "MCP and REST expose the same explicit reservation intent");
@@ -1535,7 +1544,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await resourcePackage.innerText(), /Review the separate provisioning need.*PROVISION.*PLANNED/);
     assert.match(await resourcePackage.innerText(), /These are separate plans, not reservations/);
     const accountContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(accountContext.schemaVersion, "35");
+    assert.equal(accountContext.schemaVersion, "36");
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedSourceCoverageReviewsWithOtherProjectNeeds, 1);
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedOtherSourceScopedNeedCount, 1);
     const otherPlanReview = resourcePackage.getByRole("button", { name: "Review this project need" });
@@ -1603,8 +1612,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     for (const needRow of await groupedNeedRows.all()) {
       const needText = await needRow.innerText();
       assert.match(needText, /SHORTFALL OBSERVED/);
-      assert.match(needText, /PURCHASE · PLANNED/);
-      assert.match(needText, /PROVISION · PLANNED/, "the source review appears alongside the unchanged purchase plan");
+      assert.match(needText, /PURCHASE · recorded status PLANNED/);
+      assert.match(needText, /PROVISION · recorded status PLANNED/, "the source review appears alongside the unchanged purchase plan");
       assert.match(needText, /reservation/i);
       assert.match(needText, /Source sections: bags OBSERVED · complete/);
     }
@@ -1622,7 +1631,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "35");
+    assert.equal(context.schemaVersion, "36");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
     assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, returnedSourceCoverageReviewsWithOtherProjectNeeds: 1, returnedOtherSourceScopedNeedCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });

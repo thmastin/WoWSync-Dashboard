@@ -17,7 +17,7 @@ import type {
   ExplicitDemand,
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
-import type { ErpFulfillmentTriage, ErpPortfolioFulfillmentReview, ErpProcurementBudgetPortfolioReview, ErpProcurementBuyerPortfolioReview, ErpNeedReviewSnapshot, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
+import type { ErpFulfillmentTriage, ErpPortfolioFulfillmentReview, ErpSourceFulfillmentReview, ErpProcurementBudgetPortfolioReview, ErpProcurementBuyerPortfolioReview, ErpNeedReviewSnapshot, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
 
 export interface GearCandidateEvidenceApi {
   data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
@@ -390,7 +390,7 @@ export function deactivateDemand(version: VersionOrUnknown, stableId: string) {
 }
 
 export function fetchErpProjects(version: VersionOrUnknown, signal?: AbortSignal) {
-  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; resourceCommitments: ErpResourceCommitmentSummary; fulfillmentTriage: ErpFulfillmentTriage; portfolioFulfillment: ErpPortfolioFulfillmentReview; procurementBudgetReview: ErpProcurementBudgetPortfolioReview; procurementBuyerReview: ErpProcurementBuyerPortfolioReview }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) && isRecord(body.resourceCommitments) && isRecord(body.fulfillmentTriage) && isRecord(body.portfolioFulfillment) && isRecord(body.procurementBudgetReview) && isRecord(body.procurementBuyerReview) });
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; resourceCommitments: ErpResourceCommitmentSummary; fulfillmentTriage: ErpFulfillmentTriage; portfolioFulfillment: ErpPortfolioFulfillmentReview; sourceFulfillment: ErpSourceFulfillmentReview; procurementBudgetReview: ErpProcurementBudgetPortfolioReview; procurementBuyerReview: ErpProcurementBuyerPortfolioReview }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) && isRecord(body.resourceCommitments) && isRecord(body.fulfillmentTriage) && isRecord(body.portfolioFulfillment) && isRecord(body.sourceFulfillment) && isRecord(body.procurementBudgetReview) && isRecord(body.procurementBuyerReview) });
 }
 
 export interface ErpWorkOrderBatchTaskDraft {

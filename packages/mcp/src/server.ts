@@ -6,6 +6,7 @@ import {
   buildErpResourceCommitmentSummary,
   buildErpFulfillmentTriage,
   buildErpPortfolioFulfillmentReview,
+  buildErpSourceFulfillmentReview,
   buildErpProcurementBudgetPortfolioReview,
   buildErpProcurementBuyerPortfolioReview,
   DashboardReadModel,
@@ -128,7 +129,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   server.registerTool("get_erp_projects", {
     title: "Review WoWSync ERP projects",
-    description: "Returns a bounded version-isolated page of player-authored projects, shared commitments, changed requirement observations, cross-project dependency-ordered fulfillment packages, procurement budget ceiling reviews, and triage. Procurement totals aggregate open player-set maximum ceilings against explicitly linked planned gold needs; they are not quotes, predicted spend, observed funds, or purchases. Portfolio packages order only player-authored prerequisite needs and show current evidence/readiness; they do not select routes or prove action causation. Changed quantities do not establish task completion. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
+    description: "Returns a bounded version-isolated page of player-authored projects, shared commitments, changed requirement observations, dependency packages, source/resource fulfillment reviews, procurement budget and buyer quote reviews, and triage. Source reviews join only exact needs that explicitly name the same versioned character/shared owner and resource identity with their evidence, reservations, linked task readiness, quotes/capability checks, and paired observations. They are review queues, not supply totals or selected routes. Procurement comparisons remain player-entered evidence; they are not predicted prices, affordability, ownership, or purchases. Changed quantities do not establish task completion or causation. Inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
     inputSchema: z.object({ version: versionSchema, limit: limitSchema.max(20).optional() }).strict(),
     annotations: toolAnnotations,
   }, async ({ version, limit }) => {
@@ -139,7 +140,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const portfolioFulfillment = buildErpPortfolioFulfillmentReview(projects, version);
     const procurementBudgetReview = buildErpProcurementBudgetPortfolioReview(projects, version);
     const procurementBuyerReview = buildErpProcurementBuyerPortfolioReview(projects, version);
-    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, procurementBudgetReview, procurementBuyerReview });
+    const sourceFulfillment = buildErpSourceFulfillmentReview(projects, version);
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, sourceFulfillment, procurementBudgetReview, procurementBuyerReview });
   });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
