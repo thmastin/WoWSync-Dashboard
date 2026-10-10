@@ -78,6 +78,12 @@ test("cross-project manual work is saved atomically from reviewed same-version e
     const invalidCandidate = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", "retail::character::unobserved")] });
     assert.equal(invalidCandidate.status, 400, "a source lead must be among currently reviewed same-version candidates");
     assert.equal(invalidCandidate.body.code, "INVALID_SOURCE_INVESTIGATION_LEAD");
+    const invalidProcurementBuyer: any = task(firstCurrent, "stone", "PURCHASE");
+    invalidProcurementBuyer.tasks[0].assignedIdentityKey = possibleSource.identityKey;
+    invalidProcurementBuyer.tasks[0].spendingCeilingCopper = 100;
+    const rejectedProcurement = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [invalidProcurementBuyer] });
+    assert.equal(rejectedProcurement.status, 400, "a procurement ceiling cannot be attached when the item need does not name that assignee as source and recipient");
+    assert.equal(rejectedProcurement.body.code, "INVALID_PROCUREMENT_PLAN");
     const saved = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey), task(projects.find((entry: any) => entry.stableId === second.stableId), "recipe", "INVESTIGATE")] });
     assert.equal(saved.status, 200);
     assert.deepEqual([saved.body.atomic, saved.body.createdCount], [true, 2]);
@@ -93,6 +99,62 @@ test("cross-project manual work is saved atomically from reviewed same-version e
     assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, [], "the grouped plan remains in its explicit game version");
     const rest = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.deepEqual(rest.body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId)).map((project: any) => project.workOrders.length), [1, 1]);
+  });
+});
+
+test("cross-project reservation requests are capacity checked together and saved atomically with work", async () => {
+  await withServer(async (call, store) => {
+    const at = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 5 }] }] }, bank: { containers: [] } }));
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const create = async (title: string, needId: string) => (await call("POST", "/api/versions/classic-era/erp/projects", { title, needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: "item:159:0:0", label: title, requiredQuantity: 5, sourceIdentityKey: identityKey }] })).body.project;
+    const first = await create("Reserve stone for craft A", "need_a");
+    const second = await create("Reserve stone for craft B", "need_b");
+    const current = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const group = (project: any, needId: string, quantity: number) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind: "CRAFT", title: `Plan ${needId}`, instructions: "Confirm prerequisites and craft manually.", reservationQuantity: quantity }] });
+    const firstView = current.find((project: any) => project.stableId === first.stableId);
+    const secondView = current.find((project: any) => project.stableId === second.stableId);
+    const over = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [group(firstView, "need_a", 3), group(secondView, "need_b", 3)] });
+    assert.equal(over.status, 409);
+    assert.equal(over.body.code, "RESERVATION_CAPACITY_EXCEEDED");
+    let listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId));
+    assert.deepEqual(listed.map((project: any) => [project.revision, project.workOrders.length, project.reservations.length]), [[1, 0, 0], [1, 0, 0]], "capacity rejection rolls back every order and reservation");
+
+    const accepted = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [group(firstView, "need_a", 3), group(secondView, "need_b", 2)] });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.body.createdCount, 2);
+    assert.equal(accepted.body.projects.reduce((sum: number, project: any) => sum + project.reservations.reduce((inside: number, reservation: any) => inside + (reservation.status === "ACTIVE" ? reservation.quantity : 0), 0), 0), 5);
+    assert.equal(accepted.body.projects.reduce((sum: number, project: any) => sum + project.workOrders.length, 0), 2);
+    assert.equal(accepted.body.projects.every((project: any) => project.revision === 2), true);
+    assert.equal(accepted.body.projects[0].needEvidence[0].observedQuantity, 5, "reservation intent does not mutate observed stock");
+    const context = await call("GET", "/api/account-context");
+    assert.equal(context.body.planning.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId)).every((project: any) => project.reservationReviewStates.WITHIN_OBSERVED_SUPPLY === 1), true);
+    assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, []);
+
+    store.importSnapshot(buildWowSyncExport({ generatedAt: at + 1, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 5 }] }] }, bank: { unknown: true } }));
+    const third = await create("Unknown bank source", "need_c");
+    const latest = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((project: any) => project.stableId === third.stableId);
+    const unknown = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [group(latest, "need_c", 1)] });
+    assert.equal(unknown.status, 409, "unknown bank evidence remains an explicit block to a new reservation");
+    assert.equal(unknown.body.code, "RESERVATION_EVIDENCE_UNAVAILABLE");
+    listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => project.stableId === third.stableId);
+    assert.deepEqual([listed[0].revision, listed[0].workOrders.length, listed[0].reservations.length], [1, 0, 0]);
+  });
+});
+
+test("a base-item reservation cannot bypass a conflicting exact-variant requirement", async () => {
+  await withServer(async (call, store) => {
+    const at = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } }));
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const broad = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Any Rough Stone", needs: [{ stableId: "materials", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: identityKey }] })).body.project;
+    const exact = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Exact variant", needs: [{ stableId: "materials", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact Rough Stone variant", requiredQuantity: 2, sourceIdentityKey: identityKey }] })).body.project;
+    const request = (project: any, needId: string) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind: "GATHER", title: "Review this requirement", instructions: "Confirm the exact stock scope.", reservationQuantity: 1 }] });
+    const result = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [request(broad, "materials")] });
+    assert.equal(result.status, 409);
+    assert.equal(result.body.code, "RESERVATION_SCOPE_OVERLAP");
+    const projects = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [broad.stableId, exact.stableId].includes(project.stableId));
+    assert.deepEqual(projects.map((project: any) => [project.revision, project.workOrders.length, project.reservations.length]), [[1, 0, 0], [1, 0, 0]]);
   });
 });
 

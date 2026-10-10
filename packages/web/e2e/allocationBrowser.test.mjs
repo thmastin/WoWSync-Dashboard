@@ -1237,7 +1237,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
   }
 });
 
-test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session spans multiple projects without reserving or moving stock", async () => {
+test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically reserves bounded supply with cross-project manual work", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-cross-project-plan-"));
   const databasePath = path.join(directory, "browser.sqlite");
@@ -1248,7 +1248,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session span
     const source = store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now), bank: observedSection([], now) }));
     const observedLead = store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
     const first = store.createErpProject({ version: "retail", title: "Provision the crafter", needs: [{ stableId: "mycobloom_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 5, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }], reservations: [{ stableId: "existing_hold", needId: "mycobloom_need", sourceIdentityKey: source.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }] });
-    const second = store.createErpProject({ version: "retail", title: "Prepare the second recipe", needs: [{ stableId: "briar_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey }] });
+    const second = store.createErpProject({ version: "retail", title: "Prepare the second recipe", needs: [{ stableId: "briar_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     const third = store.createErpProject({ version: "retail", title: "Provision the reserve crafter", needs: [{ stableId: "reserve_myco_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom reserve", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address(); assert.ok(address && typeof address !== "string");
@@ -1273,12 +1273,22 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session span
     assert.equal(await sourceLead.locator("option").filter({ hasText: /Possible Source Lead/ }).count(), 1);
     await sourceLead.selectOption(observedLead.character.identityKey);
     assert.match(await firstTask.innerText(), /Account membership, access, and transferability remain UNKNOWN/);
-    await secondTask.getByLabel("Manual step type").selectOption("INVESTIGATE");
+    await secondTask.getByLabel("Manual step type").selectOption("PURCHASE");
+    await secondTask.getByLabel("Assigned same-version character").selectOption(source.character.identityKey);
+    await secondTask.getByLabel("Purchase spending ceiling for Briarthorn").fill("25000");
     const thirdTask = composer.locator("fieldset").filter({ hasText: "Provision the reserve crafter: Mycobloom reserve" });
     await thirdTask.getByLabel("Manual step type").selectOption("GATHER");
+    const firstReserve = firstTask.getByLabel("Optional reservation quantity for Mycobloom");
+    const thirdReserve = thirdTask.getByLabel("Optional reservation quantity for Mycobloom reserve");
+    await firstReserve.fill("1"); await thirdReserve.fill("1");
+    await composer.getByRole("button", { name: "Create 3 planned manual steps" }).click();
+    await composer.getByRole("alert").getByText(/Grouped reservations exceed the current observed lower bound/).waitFor();
+    const rejected = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.deepEqual(Object.fromEntries(rejected.projects.filter((project) => [first.stableId, second.stableId, third.stableId].includes(project.stableId)).map((project) => [project.title, [project.revision, project.workOrders.length, project.reservations.length]])), { "Provision the crafter": [1, 0, 1], "Prepare the second recipe": [1, 0, 0], "Provision the reserve crafter": [1, 0, 0] }, "the over-capacity request changes no project");
+    await thirdReserve.fill("0");
     await composer.getByRole("button", { name: "Create 3 planned manual steps" }).click();
     await page.locator(".erp-project-card").filter({ hasText: "Provision the crafter" }).getByText(/INVESTIGATE · PLANNED/).waitFor();
-    await page.locator(".erp-project-card").filter({ hasText: "Prepare the second recipe" }).getByText(/INVESTIGATE · PLANNED/).waitFor();
+    await page.locator(".erp-project-card").filter({ hasText: "Prepare the second recipe" }).getByText(/PURCHASE · PLANNED/).waitFor();
     await page.locator(".erp-project-card").filter({ hasText: "Provision the reserve crafter" }).getByText(/GATHER · PLANNED/).waitFor();
 
     const read = async () => page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
@@ -1291,9 +1301,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session span
     const investigationOrder = page.locator(".erp-work-order-list li").filter({ has: page.getByText("Review fulfillment: Mycobloom", { exact: true }) });
     assert.match(await investigationOrder.innerText(), /Observed source lead to investigate: Possible Source Lead/);
     assert.match(await investigationOrder.innerText(), /Account membership, access, and transferability remain UNKNOWN/);
-    assert.deepEqual(secondRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["INVESTIGATE", "PLANNED", ["briar_need"]]]);
+    assert.deepEqual(secondRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["PURCHASE", "PLANNED", ["briar_need"]]]);
+    assert.deepEqual(secondRead.workOrders[0].procurementPlan, { targetNeedId: "briar_need", spendingCeilingCopper: 25000 }, "the player-set copper limit remains linked to the selected item need");
     assert.deepEqual(thirdRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["GATHER", "PLANNED", ["reserve_myco_need"]]]);
-    assert.equal(firstRead.reservations[0].quantity, 1, "the planning transaction preserves existing reservations");
+    assert.deepEqual(firstRead.reservations.map((reservation) => [reservation.quantity, reservation.status]), [[1, "ACTIVE"], [1, "ACTIVE"]], "the accepted player request is recorded beside the existing reservation");
+    assert.equal(thirdRead.reservations.length, 0, "the rejected overlapping request remains absent");
     assert.equal(rest.resourceCommitments.items.find((entry) => entry.resourceKey === fullRef(ITEM_ID)).observedQuantity, 2, "planning work does not change observed stock");
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     assert.ok(context.planning.projects.some((project) => project.title === firstRead.title && project.revision === firstRead.revision));
@@ -1303,8 +1315,25 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe manual planning session span
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     const mcpProjectsById = new Map(mcp.structuredContent.projects.map((project) => [project.stableId, project]));
-    for (const project of [firstRead, secondRead, thirdRead]) assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]));
+    for (const project of [firstRead, secondRead, thirdRead]) {
+      assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]));
+      assert.deepEqual(mcpProjectsById.get(project.stableId).reservations, project.reservations, "MCP and REST expose the same explicit reservation intent");
+    }
     assert.equal(mcpProjectsById.get(firstRead.stableId).workOrders[0].investigationSourceLeadIdentityKey, observedLead.character.identityKey, "MCP preserves the lead as a separate field from the need source");
+    store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now + 20, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now + 20), bank: observedSection([], now + 20) }));
+    await page.reload();
+    const afterObservation = await read();
+    const afterFirst = afterObservation.projects.find((project) => project.stableId === first.stableId);
+    assert.equal(afterFirst.needEvidence.find((entry) => entry.needId === "mycobloom_need").observedQuantity, 1);
+    assert.deepEqual(afterFirst.reservationReview.map((entry) => entry.state), ["EXCEEDS_OBSERVED_SUPPLY", "EXCEEDS_OBSERVED_SUPPLY"], "a later observed shortage flags both active reservations for review");
+    assert.equal(afterFirst.workOrders[0].status, "PLANNED", "inventory changes do not claim that the manual step occurred");
+    const changedContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const contextFirst = changedContext.planning.projects.find((project) => project.stableId === first.stableId);
+    assert.equal(contextFirst.reservationReviewStates.EXCEEDS_OBSERVED_SUPPLY, 2);
+    const changedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const changedMcpFirst = changedMcp.structuredContent.projects.find((project) => project.stableId === first.stableId);
+    assert.deepEqual(changedMcpFirst.reservationReview, afterFirst.reservationReview, "MCP and REST agree after the resource observation changes");
+    assert.deepEqual(changedMcpFirst.workOrders.map((order) => order.status), afterFirst.workOrders.map((order) => order.status));
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

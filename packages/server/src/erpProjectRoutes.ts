@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpReservation, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
 
 function isVersion(value: string): value is WowVersion { return (WOW_VERSIONS as readonly string[]).includes(value); }
@@ -34,7 +34,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) return res.status(400).json({ error: "Select work for 1 to 10 projects in one game version.", code: "INVALID_WORK_ORDER_BATCH" });
     const ids = new Set<string>();
     const selectedNeeds = new Set<string>();
-    const workOrdersByProject: Array<{ projectId: string; expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[] }> = [];
+    const workOrdersByProject: Array<{ projectId: string; expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[]; reservations: Array<ErpReservation | undefined> }> = [];
     let totalOrders = 0;
     const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
     try {
@@ -49,6 +49,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
         const openNeedIds = new Set(project.workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").flatMap((order) => order.resourceNeedIds));
         const workOrders: ErpWorkOrder[] = [];
         const reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[] = [];
+        const reservations: Array<ErpReservation | undefined> = [];
         for (const task of update.tasks) {
           totalOrders++;
           if (!task || typeof task !== "object" || typeof task.needId !== "string" || typeof task.title !== "string" || typeof task.instructions !== "string" || typeof task.kind !== "string" || !(ERP_WORK_ORDER_TYPES as readonly string[]).includes(task.kind) || task.title.trim().length < 1 || task.title.length > 160 || task.instructions.trim().length < 1 || task.instructions.length > 3500 || !task.reviewSnapshot || typeof task.reviewSnapshot !== "object") return res.status(400).json({ error: "Each grouped task requires a supported work type, bounded title/instructions, and the evidence snapshot reviewed by the player.", code: "INVALID_WORK_ORDER_BATCH_TASK" });
@@ -61,16 +62,32 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const currentReview = buildErpNeedReviewSnapshot(project, need.stableId);
           if (!currentReview || !isDeepStrictEqual(task.reviewSnapshot, currentReview)) return res.status(409).json({ error: `Evidence or saved source intent for ${need.label} changed after review. Refresh before creating a manual work order.`, code: "NEED_REVIEW_STALE" });
           reviewSnapshots.push(currentReview);
+          let reservation: ErpReservation | undefined;
+          if (task.reservationQuantity !== undefined) {
+            if (!Number.isSafeInteger(task.reservationQuantity) || task.reservationQuantity < 1 || task.reservationQuantity > 1_000_000_000) return res.status(400).json({ error: "A requested reservation quantity must be a positive bounded integer.", code: "INVALID_RESERVATION_REQUEST" });
+            const sourceIdentityKey = need.sourceIdentityKey;
+            const sourceOwnerKey = need.sourceOwnerKey;
+            const evidence = currentReview.evidence;
+            if ((!sourceIdentityKey && !sourceOwnerKey) || need.kind === "PROFESSION" || need.kind === "RECIPE" || !evidence || evidence.freshness !== "recent" || evidence.observedQuantity === undefined || evidence.unresolvedSections.length || evidence.unknownQuantityRowCount || !evidence.sourceSections.length || evidence.sourceSections.some((section) => section.state !== "OBSERVED" || section.completeness?.toLowerCase() !== "complete")) return res.status(409).json({ error: "Reservation requires a named source and recent, complete, fully quantified observations. Existing work and stock remain unchanged.", code: "RESERVATION_EVIDENCE_UNAVAILABLE" });
+            reservation = { stableId: `erp_reserve_${randomUUID()}`, needId: need.stableId, ...(sourceIdentityKey ? { sourceIdentityKey } : {}), ...(sourceOwnerKey ? { sourceOwnerKey } : {}), quantity: task.reservationQuantity, status: "ACTIVE", createdAt: Math.floor(Date.now() / 1000), updatedAt: Math.floor(Date.now() / 1000) };
+          }
+          reservations.push(reservation);
           const assignedIdentityKey = task.assignedIdentityKey;
           if (assignedIdentityKey !== undefined && (typeof assignedIdentityKey !== "string" || !store.listCharacters(version).some((character) => character.identityKey === assignedIdentityKey))) return res.status(400).json({ error: "Assigned character must be an observed character identity in this explicit game version.", code: "INVALID_WORK_ORDER_ASSIGNMENT" });
+          let procurementPlan: ErpWorkOrder["procurementPlan"];
+          if (task.spendingCeilingCopper !== undefined) {
+            if (!Number.isSafeInteger(task.spendingCeilingCopper) || task.spendingCeilingCopper < 1 || task.spendingCeilingCopper > 1_000_000_000) return res.status(400).json({ error: "A procurement ceiling must be a positive bounded whole-copper amount.", code: "INVALID_PROCUREMENT_PLAN" });
+            if (task.kind !== "PURCHASE" || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF") || !assignedIdentityKey || need.sourceIdentityKey !== assignedIdentityKey || need.destinationIdentityKey !== assignedIdentityKey || need.sourceOwnerKey) return res.status(400).json({ error: "A structured purchase plan requires a PURCHASE task and an item need explicitly sourced from and intended for its same-version assigned buyer.", code: "INVALID_PROCUREMENT_PLAN" });
+            procurementPlan = { targetNeedId: need.stableId, spendingCeilingCopper: task.spendingCeilingCopper };
+          }
           const sourceLeadIdentityKey = task.sourceLeadIdentityKey;
           if (sourceLeadIdentityKey !== undefined && (typeof sourceLeadIdentityKey !== "string" || task.kind !== "INVESTIGATE" || !currentReview.resourceSourceScreen?.candidates.some((candidate) => candidate.sourceIdentityKey === sourceLeadIdentityKey))) return res.status(400).json({ error: "An investigation source lead must match a currently reviewed same-version candidate; it does not establish ownership, access, or transferability.", code: "INVALID_SOURCE_INVESTIGATION_LEAD" });
           const boundary = "SYSTEM EVIDENCE BOUNDARY: This is player-authored planning intent only. WoWSync did not execute or verify an in-game action. Recheck current version-specific requirements, evidence, ownership, access, routes, prices, and outcomes manually; unknowns remain UNKNOWN.";
           const instructions = `${task.instructions.trim()}\n\n${boundary}`;
           if (instructions.length > 4000) return res.status(400).json({ error: "Instructions plus the required evidence boundary exceed the work-order limit.", code: "INVALID_WORK_ORDER_TEXT" });
-          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...(need.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}) });
+          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...(need.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
         }
-        workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots });
+        workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots, reservations });
       }
       if (totalOrders < 1 || totalOrders > 20) return res.status(400).json({ error: "A grouped update must contain between 1 and 20 work orders.", code: "INVALID_WORK_ORDER_BATCH" });
       const saved = store.appendErpWorkOrdersAtomically(version, workOrdersByProject);

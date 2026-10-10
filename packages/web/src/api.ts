@@ -400,6 +400,10 @@ export interface ErpWorkOrderBatchTaskDraft {
   readonly title: string;
   readonly instructions: string;
   readonly assignedIdentityKey?: string;
+  /** Player-requested quantity to reserve atomically with this work order; absent means no reservation. */
+  readonly reservationQuantity?: number;
+  /** Optional player-set purchase ceiling, valid only for an explicitly same-buyer item requirement. */
+  readonly spendingCeilingCopper?: number;
   /** For an INVESTIGATE step only: a version-scoped, observed source-screen lead; not an ownership/access claim. */
   readonly sourceLeadIdentityKey?: string;
 }

@@ -2,7 +2,7 @@ import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlit
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpWorkOrder } from "./erpProjects.ts";
+import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
 import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 import {
   DemandConflictError,
@@ -1657,11 +1657,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     });
   }
 
-  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[] }[]): ErpProject[] | undefined {
+  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[]; readonly reservations?: readonly (ErpReservation | undefined)[] }[]): ErpProject[] | undefined {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) throw new TypeError("A grouped work-order update must include 1 to 10 projects.");
     if (new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A project can appear only once in a grouped work-order update.");
     const totalOrders = updates.reduce((sum, entry) => sum + entry.workOrders.length, 0);
-    if (totalOrders < 1 || totalOrders > 20 || updates.some((entry) => entry.workOrders.length < 1 || entry.reviewSnapshots.length !== entry.workOrders.length)) throw new TypeError("A grouped update must append 1 to 20 work orders with one reviewed requirement snapshot per work order.");
+    if (totalOrders < 1 || totalOrders > 20 || updates.some((entry) => entry.workOrders.length < 1 || entry.reviewSnapshots.length !== entry.workOrders.length || (entry.reservations !== undefined && entry.reservations.length !== entry.workOrders.length))) throw new TypeError("A grouped update must append 1 to 20 work orders with aligned review snapshots and optional reservations.");
     const appendedIds = updates.flatMap((entry) => entry.workOrders.map((order: ErpWorkOrder) => order.stableId));
     if (new Set(appendedIds).size !== appendedIds.length) throw new TypeError("Grouped work orders require unique stable IDs.");
     return this.inTransaction(() => {
@@ -1669,6 +1669,36 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (existingProjects.some((project) => !project)) return undefined;
       const existing = existingProjects as ErpProject[];
       const currentViews = new Map(new DashboardReadModel(this).getErpProjects({ version }).map((project) => [project.stableId, project]));
+      const proposed: Array<{ reservation: ErpReservation; review: ErpNeedReviewSnapshot }> = updates.flatMap((entry) => (entry.reservations ?? []).flatMap((reservation: ErpReservation | undefined, index: number) => reservation ? [{ reservation, review: entry.reviewSnapshots[index]! }] : []));
+      const allocationGroups = new Map<string, { quantity: number; available: number; needId: string }>();
+      for (const { reservation, review } of proposed) {
+        const need = review.need;
+        const evidence = review.evidence;
+        const scope = need.sourceIdentityKey ? `character:${need.sourceIdentityKey}` : need.sourceOwnerKey ? `owner:${need.sourceOwnerKey}` : undefined;
+        if (!scope || need.kind === "PROFESSION" || need.kind === "RECIPE" || reservation.needId !== need.stableId || reservation.status !== "ACTIVE" || !Number.isSafeInteger(reservation.quantity) || reservation.quantity < 1) throw new TypeError("A new reservation requires a countable need, matching need ID, explicit source, and positive integer quantity.");
+        if (!evidence || evidence.freshness !== "recent" || evidence.observedQuantity === undefined || evidence.unresolvedSections.length || evidence.unknownQuantityRowCount || !evidence.sourceSections.length || evidence.sourceSections.some((section: NonNullable<ErpNeedReviewSnapshot["evidence"]>["sourceSections"][number]) => section.state !== "OBSERVED" || section.completeness?.toLowerCase() !== "complete")) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Current complete exact-source observations are required to create a reservation; existing intent and stock remain unchanged.");
+        const available = evidence.reservationAssessment?.availableObservedLowerBound;
+        const state = evidence.reservationAssessment?.state;
+        if (available === undefined || (state !== "UNRESERVED" && state !== "WITHIN_OBSERVED_SUPPLY")) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "The reviewed evidence does not establish unreserved observed quantity for this exact source and resource.");
+        if (reservation.sourceIdentityKey !== need.sourceIdentityKey || reservation.sourceOwnerKey !== need.sourceOwnerKey) throw new TypeError("Reservation source must exactly match the reviewed need source.");
+        const key = JSON.stringify([version, scope, need.kind, need.resourceKey]);
+        const itemId = (candidate: typeof need) => candidate.kind === "ITEM_ID" ? Number(candidate.resourceKey) : candidate.kind === "ITEM_REF" ? Number(candidate.resourceKey.match(/^item:(\d+)(?::|$)/)?.[1]) : undefined;
+        const itemBase = itemId(need);
+        if (itemBase !== undefined) {
+          const overlaps = (candidate: typeof need) => itemId(candidate) === itemBase && (candidate.kind === "ITEM_ID" || need.kind === "ITEM_ID") && !(candidate.kind === need.kind && candidate.resourceKey === need.resourceKey);
+          if (proposed.some(({ reservation: other, review: otherReview }) => other !== reservation && sourceScopeFor(otherReview.need) === scope && overlaps(otherReview.need))) throw new ErpProjectConflictError("RESERVATION_SCOPE_OVERLAP", "Grouped requests overlap between a base item and its exact variant; review and reserve one scope at a time.");
+          const existingOverlap = [...currentViews.values()].some((project) => project.status !== "CANCELLED" && project.needs.some((candidate) => !(project.stableId === review.projectId && candidate.stableId === need.stableId) && sourceScopeFor(candidate) === scope && overlaps(candidate)));
+          if (existingOverlap) throw new ErpProjectConflictError("RESERVATION_SCOPE_OVERLAP", "An existing requirement uses an overlapping base-item or exact-variant scope; resolve that ambiguity before adding a reservation.");
+        }
+        const group = allocationGroups.get(key) ?? { quantity: 0, available, needId: need.stableId };
+        if (group.available !== available) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Selected needs disagree about the available quantity for one exact source scope.");
+        group.quantity += reservation.quantity;
+        if (group.quantity > available) throw new ErpProjectConflictError("RESERVATION_CAPACITY_EXCEEDED", "Grouped reservations exceed the current observed lower bound after existing commitments; no work or reservation was saved.");
+        allocationGroups.set(key, group);
+        const alreadyReserved = (currentViews.get(review.projectId)?.reservations ?? []).filter((entry) => entry.status === "ACTIVE" && entry.needId === need.stableId).reduce((sum, entry) => sum + entry.quantity, 0);
+        if (alreadyReserved + reservation.quantity > need.requiredQuantity) throw new ErpProjectConflictError("RESERVATION_NEED_EXCEEDED", "The requested reservation exceeds the remaining quantity on this requirement.");
+      }
+      function sourceScopeFor(need: { sourceIdentityKey?: string; sourceOwnerKey?: string }): string | undefined { return need.sourceIdentityKey ? `character:${need.sourceIdentityKey}` : need.sourceOwnerKey ? `owner:${need.sourceOwnerKey}` : undefined; }
       for (let index = 0; index < updates.length; index++) {
         const entry = updates[index]!;
         const project = existing[index]!;
@@ -1691,7 +1721,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
       for (let index = 0; index < updates.length; index++) {
         const entry = updates[index]!;
         const project = existing[index]!;
-        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders] }, entry.expectedRevision);
+        const additions = entry.reservations?.filter((reservation: ErpReservation | undefined): reservation is ErpReservation => reservation !== undefined) ?? [];
+        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders], reservations: [...project.reservations, ...additions] }, entry.expectedRevision);
         if (!result) throw new ErpProjectConflictError();
         updated.push(result);
       }
