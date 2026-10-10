@@ -1727,6 +1727,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   projectSharedStorage(): SharedStorageProjection {
     return this.store.projectSharedStorage();
   }
+  loadSharedJournal(): SharedJournal {
+    return this.store.loadSharedJournal();
+  }
   listVersions(): VersionSummary[] {
     return this.store.listVersions();
   }

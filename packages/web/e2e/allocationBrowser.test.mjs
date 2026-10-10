@@ -378,12 +378,17 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
   try {
     store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
     const now = Math.floor(Date.now() / 1000);
-    const snapshot = (bags, bank, generated) => renderExport({ name: "Retrieval Fixture", realm: "Cairne", generated, bags: observedSection(bags ? [row(ITEM_ID, bags, { name: "Mycobloom" })] : [], generated), bank: observedSection(bank ? [row(ITEM_ID, bank, { name: "Mycobloom" })] : [], generated), warband: warbandSection("OBSERVED", [], generated), guild: guildSection("gclub-retrieval-fixture", [], generated) });
+    const snapshot = (bags, bank, generated) => renderExport({ name: "Retrieval Fixture", realm: "Cairne", generated, bags: observedSection(bags ? [row(ITEM_ID, bags, { name: "Mycobloom" })] : [], generated), bank: observedSection(bank ? [row(ITEM_ID, bank, { name: "Mycobloom" })] : [], generated), guild: guildSection("gclub-retrieval-fixture", [], generated) });
     store.importSnapshot(snapshot(0, 3, now - 100));
     const character = store.listCharacters("retail").find((entry) => entry.name === "Retrieval Fixture");
     assert.ok(character);
     store.importSnapshot(snapshot(1, 2, now));
+    const ownerItem = row(ITEM_ID, 1, { name: "Mycobloom" });
+    const ownerCapture = (name, generated, quantity) => renderExport({ name, realm: "Cairne", generated, warband: warbandSection("OBSERVED", quantity ? [row(ITEM_ID, quantity, { name: "Mycobloom", ref: ownerItem.itemRef })] : [], generated), guild: guildSection("gclub-retrieval-fixture", [], generated) });
+    store.importSnapshot(ownerCapture("Warband Carrier One", now - 2, 4));
+    store.importSnapshot(ownerCapture("Warband Carrier Two", now - 1, 2));
     store.createErpProject({ version: "retail", title: "Review personal bank retrieval", needs: [{ stableId: "retrieval_item", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom", requiredQuantity: 1, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "retrieve_step", kind: "RETRIEVE", status: "PLANNED", title: "Check personal storage observations", resourceNeedIds: ["retrieval_item"], dependsOn: [], assignedIdentityKey: character.identityKey, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }] });
+    store.createErpProject({ version: "retail", title: "Review shared Warband retrieval", needs: [{ stableId: "shared_retrieval_item", kind: "ITEM_REF", resourceKey: ownerItem.itemRef, label: "Mycobloom", requiredQuantity: 1, sourceOwnerKey: "retail::warband::local", destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "shared_retrieve_step", kind: "RETRIEVE", status: "PLANNED", title: "Review shared owner observations", resourceNeedIds: ["shared_retrieval_item"], dependsOn: [], assignedIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }] });
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address();
     assert.ok(address && typeof address !== "string");
@@ -398,7 +403,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
     const projectCard = page.locator(".erp-project-card").filter({ hasText: "Review personal bank retrieval" });
     await projectCard.waitFor();
     const workOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Check personal storage observations" });
-    await workOrder.getByText("Compare planned retrieval across personal bags and bank (cause unknown)").click();
+    await workOrder.getByText("Compare planned personal or shared-storage retrieval observations (cause unknown)").click();
     const review = await workOrder.innerText();
     assert.match(review, /BAGS AND BANK CHANGED/);
     assert.match(review, /bags: 0 to 1 \(\+1\)/);
@@ -406,6 +411,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
     assert.match(review, /The changes do not establish a retrieval, access, ownership, or cause/);
     assert.match(review, /RETRIEVE · PLANNED/);
     assert.doesNotMatch(review, /RETRIEVE.*COMPLETED/);
+    const sharedProjectCard = page.locator(".erp-project-card").filter({ hasText: "Review shared Warband retrieval" });
+    const sharedWorkOrder = sharedProjectCard.locator(".erp-work-order-list li").filter({ hasText: "Review shared owner observations" });
+    await sharedWorkOrder.getByText("Compare planned personal or shared-storage retrieval observations (cause unknown)").click();
+    const sharedReview = await sharedWorkOrder.innerText();
+    assert.match(sharedReview, /SHARED OWNER CONTENT CHANGED/);
+    assert.match(sharedReview, /warband-installation-local \(retail::warband::local\)/);
+    assert.match(sharedReview, /shared storage: 4 to 2 \(-2\)/);
+    assert.match(sharedReview, /do not establish ownership, access, recipient, or cause/);
     assert.deepEqual(pageErrors, []);
   } finally {
     if (browser) await browser.close();

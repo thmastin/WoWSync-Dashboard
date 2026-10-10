@@ -623,11 +623,13 @@ export class DashboardReadModel {
     const candidateSources = this.store.listCharacters(query.version);
     const needsSharedStorage = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined));
     const sharedStorage = needsSharedStorage ? this.store.projectSharedStorage() : undefined;
+    const needsSharedRetrievalHistory = query.version === "retail" && projects.some((project) => project.workOrders.some((order) => order.kind === "RETRIEVE" && order.resourceNeedIds.some((needId) => project.needs.some((need) => need.stableId === needId && need.sourceOwnerKey !== undefined))));
+    const sharedJournal = needsSharedRetrievalHistory ? this.store.loadSharedJournal() : undefined;
     return projects.map((project) => {
       const historyEventCount = this.store.countErpProjectHistory(project.stableId);
       const history = this.store.listErpProjectHistory(project.stableId, 50);
       return {
-        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage, candidateSources),
+        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage, candidateSources, sharedJournal),
         history, historyEventCount, historyTruncated: historyEventCount > history.length,
       };
     });

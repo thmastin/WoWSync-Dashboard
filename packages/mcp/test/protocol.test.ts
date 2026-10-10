@@ -10,6 +10,8 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { guild, itemRow } from "../../core/test/sharedStorageBuilders.ts";
+import { renderExport } from "../../core/test/sharedStorageExports.ts";
 import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
@@ -124,6 +126,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const retrievalCharacter = writer.listCharacters("retail").find((character) => character.name === "Retrieval Planner")!;
     writer.importSnapshot(retrievalSnapshot(1, 1, retrievalAt));
     writer.createErpProject({ version: "retail", title: "Personal bank retrieval protocol fixture", needs: [{ stableId: "retrieve_need", kind: "ITEM_REF", resourceKey: "item:779", label: "Observed Bag Item", requiredQuantity: 1, sourceIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }], workOrders: [{ stableId: "retrieve_check", kind: "RETRIEVE", status: "PLANNED", title: "Review personal retrieval evidence", resourceNeedIds: ["retrieve_need"], dependsOn: [], assignedIdentityKey: retrievalCharacter.identityKey, sourceIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }] });
+    const sharedRetrievalItem = itemRow("Rough Stone", 1).itemRef;
+    const sharedRetrievalCapture = (generated: number, quantity: number) => renderExport({ name: "Retrieval Planner", realm: "Cairne", generated, guild: guild({ clubId: "mcp-retrieval-guild", observedAt: generated, tabs: [{ id: 1, name: "Materials", items: [["Rough Stone", quantity]] }] }) });
+    writer.importSnapshot(sharedRetrievalCapture(retrievalAt - 30, 4));
+    writer.importSnapshot(sharedRetrievalCapture(retrievalAt - 20, 2));
+    writer.createErpProject({ version: "retail", title: "Shared owner retrieval protocol fixture", needs: [{ stableId: "guild_retrieve_need", kind: "ITEM_REF", resourceKey: sharedRetrievalItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey: "retail::guild::mcp-retrieval-guild", destinationIdentityKey: retrievalCharacter.identityKey }], workOrders: [{ stableId: "guild_retrieve_check", kind: "RETRIEVE", status: "PLANNED", title: "Review guild-owned observations", resourceNeedIds: ["guild_retrieve_need"], dependsOn: [], assignedIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }] });
     let ownerPlan = writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }], workOrders: [{ stableId: "manual_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review storage access manually", resourceNeedIds: ["warband_leather"], dependsOn: [] }] });
     ownerPlan = writer.updateErpProject({ ...ownerPlan, workOrders: ownerPlan.workOrders.map((order) => ({ ...order, status: "WAITING_FOR_EVIDENCE" })) }, ownerPlan.revision)!;
   } finally {
@@ -258,12 +265,19 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(retrievalReview?.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(retrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["bags", 1], ["character bank", -1]]);
     assert.equal(retrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "retrieve_check")?.recordedStatus, "PLANNED");
-    assert.equal(retailErpProjects.resourceCommitments.totalCount, 7, "the player-set purchase ceiling is not a resource commitment; MCP exposes the same version-scoped core commitment view as REST");
+    const sharedRetrievalPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner retrieval protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; retrievalObservationReviews?: Array<{ state: string; sourceOwnerKey: string; ownerScope: string; carrierCharacterKeys: string[]; comparisons: Array<{ section: string; delta: number }>; reason: string }> }> } | undefined;
+    const sharedRetrievalReview = sharedRetrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "guild_retrieve_check")?.retrievalObservationReviews?.[0];
+    assert.equal(sharedRetrievalReview?.state, "SHARED_OWNER_CONTENT_CHANGED");
+    assert.equal(sharedRetrievalReview?.sourceOwnerKey, "retail::guild::mcp-retrieval-guild");
+    assert.equal(sharedRetrievalReview?.ownerScope, "guild");
+    assert.deepEqual(sharedRetrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["shared storage", -2]]);
+    assert.match(sharedRetrievalReview?.reason ?? "", /Carrier character identities show which exports delivered observations/);
+    assert.equal(retailErpProjects.resourceCommitments.totalCount, 8, "the retrieval need is a resource commitment; the player-set purchase ceiling is not; MCP exposes the same version-scoped core commitment view as REST");
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.kind === "CURRENCY" && line.resourceKey === "4" && line.sourceScope === "CHARACTER"));
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.resourceKey === "item:2318::::::::85:253:::::::::" && line.sourceScope === "SHARED_OWNER" && line.sourceOwnerKey === "retail::warband::local"));
     assert.equal(retailErpProjects.truncated, false);
     const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
-    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 7, true], "MCP callers can bound ERP project results without losing the total count");
+    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 8, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
     assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
@@ -435,7 +449,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(unknownState.value?.data?.professions.state, "UNKNOWN");
     assert.equal(unknownState.value?.data?.currencies.state, "UNKNOWN");
     assert.equal(unknownState.value?.data?.playtime.playedSeconds, undefined);
-    assert.equal(accountOverview.data?.storageCoverage.sharedStorage.guilds.owners.length, 1);
+    assert.equal(accountOverview.data?.storageCoverage.sharedStorage.guilds.owners.length, 2, "the independently observed retrieval fixture guild remains a separate owner");
     assert.equal(accountOverview.data?.currencies.returnedCount, 20);
     const detailedCurrencies = structured<{ data?: { aggregationScope: string; coverage: { unknownCharacters: number }; currencies: { items: Array<{ currencyID: number; scope: string; account?: { quantity?: number | null } | null; characterTotalCount: number; charactersTruncated: boolean }> } }; provenance: { state: string } }>(await client.callTool({ name: "get_account_currencies", arguments: { version: "retail", currencyID: 1, characterLimit: 1 } }));
     assert.equal(detailedCurrencies.data?.aggregationScope, "account-wide");

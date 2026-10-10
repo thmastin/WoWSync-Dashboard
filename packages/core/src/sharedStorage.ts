@@ -634,6 +634,11 @@ export function projectOwnerFromJournal(journal: SharedJournal, owner: SharedSto
   return projectOwner(owner, [...journal.entries.values()]);
 }
 
+/** Owner-key-scoped immutable observation history for read-only ERP comparisons. */
+export function ownerObservationHistoryFromJournal(journal: SharedJournal, key: string): ProjectedObservation[] {
+  return [...journal.entries.values()].filter((entry) => entry.observation.ownerKey === key).map(project).sort(compareNewestFirst);
+}
+
 export interface SharedStorageProjection {
   /** Absent when the Warband has no observation in the journal (never observed, which is not "empty"). */
   warband?: OwnerProjection;

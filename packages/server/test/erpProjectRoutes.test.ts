@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { itemRow, warband } from "../../core/test/sharedStorageBuilders.ts";
+import { renderExport } from "../../core/test/sharedStorageExports.ts";
 import { createApp } from "../src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 
@@ -146,6 +148,32 @@ test("REST and AccountContext expose paired RETRIEVE bag and bank observations w
     assert.deepEqual(readback.workOrderProgress[0].retrievalObservationReviews, progress.retrievalObservationReviews);
     const context = (await call("GET", "/api/account-context")).body.planning.projects[0];
     assert.deepEqual(context.workOrderProgressStates, { OBSERVATION_CHANGED_CAUSE_UNKNOWN: 1 });
+  });
+});
+
+test("REST exposes owner-scoped shared-storage retrieval history without inferring recipient access", async () => {
+  await withServer(async (call, store) => {
+    const now = Math.floor(Date.now() / 1000);
+    const sharedItem = itemRow("Rough Stone", 1).itemRef;
+    const capture = (carrier: string, at: number, quantity: number) => renderExport({ name: carrier, realm: "Retail Realm", generated: at, warband: warband({ observedAt: at, items: [["Rough Stone", quantity]] }) });
+    store.importSnapshot(renderExport({ name: "Recipient", realm: "Retail Realm", generated: now }));
+    store.importSnapshot(capture("Carrier One", now - 20, 4));
+    store.importSnapshot(capture("Carrier Two", now - 10, 2));
+    const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
+    const created = await call("POST", "/api/versions/retail/erp/projects", { title: "Review shared-storage retrieval", needs: [{ stableId: "shared_need", kind: "ITEM_REF", resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey: "retail::warband::local", destinationIdentityKey: recipient.identityKey }], workOrders: [{ stableId: "retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review Warband evidence", resourceNeedIds: ["shared_need"], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] });
+    assert.equal(created.status, 201);
+    const progress = created.body.project.workOrderProgress[0];
+    const review = progress.retrievalObservationReviews[0];
+    assert.equal(review.state, "SHARED_OWNER_CONTENT_CHANGED");
+    assert.equal(review.sourceOwnerKey, "retail::warband::local");
+    assert.equal(review.ownerScope, "warband-installation-local");
+    assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.previousQuantity, entry.currentQuantity, entry.delta]), [["shared storage", 4, 2, -2]]);
+    assert.match(review.reason, /do not establish ownership, access, recipient, or cause/);
+    const readback = (await call("GET", "/api/versions/retail/erp/projects")).body.projects[0];
+    assert.deepEqual(readback.workOrderProgress[0].retrievalObservationReviews, progress.retrievalObservationReviews);
+    assert.equal(readback.workOrderProgress[0].recordedStatus, "PLANNED");
+    const context = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    assert.equal(context.workOrderProgressStates.CURRENT_LINKED_NEEDS_MET, 1, "AccountContext summarizes the shared source's same core current-state projection without claiming recipient access");
   });
 });
 

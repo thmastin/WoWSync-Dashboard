@@ -5,6 +5,8 @@ import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
 import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
+import { guild, itemRow, warband } from "./sharedStorageBuilders.ts";
+import { renderExport } from "./sharedStorageExports.ts";
 
 const ITEM = "item:159";
 function seedStore(options: Parameters<typeof buildWowSyncExport>[0] = {}) {
@@ -727,9 +729,65 @@ test("a shared-storage RETRIEVE plan remains valid UNKNOWN instead of comparing 
     const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(review?.state, "EVIDENCE_UNKNOWN");
     assert.deepEqual(review?.comparisons, []);
-    assert.match(review?.reason ?? "", /shared storage.*Historical owner observations are not available/);
+    assert.match(review?.reason ?? "", /No supported same-version observation history exists for the explicitly selected shared-storage owner/);
     const conflicting: ErpProject = { ...plan, workOrders: [{ ...order, sourceIdentityKey: identityKey }] };
     assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "a character source cannot replace the explicitly selected shared owner");
+  } finally { store.close(); }
+});
+
+test("shared-owner RETRIEVE review compares only the named Retail storage owner's live history", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_600_000;
+  const sharedItem = itemRow("Rough Stone", 1).itemRef;
+  const capture = (carrier: string, at: number, quantity: number, completeness = "complete", sectionObservedAt = at) => renderExport({ name: carrier, realm: "Retail Realm", generated: at, warband: warband({ observedAt: sectionObservedAt, completeness, items: [["Rough Stone", quantity]] }) });
+  try {
+    store.importSnapshot(renderExport({ name: "Recipient", realm: "Retail Realm", generated: baseAt + 100 }));
+    store.importSnapshot(capture("Carrier One", baseAt, 4));
+    store.importSnapshot(capture("Carrier Two", baseAt + 50, 2));
+    const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
+    const sourceOwnerKey = ownerKey(warbandOwner());
+    const plan: ErpProject = { ...project(recipient.identityKey), stableId: "shared_retrieval", version: "retail", needs: [{ stableId: "shared_need", kind: "ITEM_REF", resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey, destinationIdentityKey: recipient.identityKey }], reservations: [], workOrders: [{ stableId: "shared_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review Warband retrieval", resourceNeedIds: ["shared_need"], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] };
+    store.createErpProject(plan);
+    const view = new DashboardReadModel(store, () => baseAt + 60).getErpProjects({ version: "retail" })[0]!;
+    const review = view.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "SHARED_OWNER_CONTENT_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(review?.sourceOwnerKey, sourceOwnerKey);
+    assert.equal(review?.ownerScope, "warband-installation-local");
+    assert.deepEqual(review?.carrierCharacterKeys, ["retail::retail realm::carrier one", "retail::retail realm::carrier two"]);
+    assert.deepEqual(review?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["shared storage", 4, 2, -2]]);
+    assert.equal(review?.freshness, "recent");
+    assert.equal(view.workOrders[0]?.status, "PLANNED", "shared storage deltas never complete the player's manual retrieval task");
+    assert.match(review?.reason ?? "", /do not establish ownership, access, recipient, or cause/);
+
+    store.importSnapshot(capture("Carrier Three", baseAt + 70, 1, "partial"));
+    const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(afterPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial shared observation hides the previous complete comparison as current");
+    assert.equal(afterPartial?.comparisons.length, 0);
+
+    store.importSnapshot(capture("Carrier Four", baseAt + 90, 3));
+    store.importSnapshot(capture("Carrier Five", baseAt + 90, 1, "partial", baseAt + 91));
+    const tiedPartial = new DashboardReadModel(store, () => baseAt + 100).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(tiedPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial with the same clamped effective timestamp still prevents treating a complete snapshot as current");
+    assert.equal(tiedPartial?.comparisons.length, 0);
+
+    const guildKey = ownerKey(guildOwner("retrieval-guild"));
+    const guildNeed = { stableId: "guild_shared_need", kind: "ITEM_REF" as const, resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey: guildKey, destinationIdentityKey: recipient.identityKey };
+    const guildPlan: ErpProject = { ...plan, stableId: "guild_shared_retrieval", title: "Review guild retrieval", needs: [guildNeed], workOrders: [{ stableId: "guild_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review guild retrieval", resourceNeedIds: [guildNeed.stableId], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] };
+    const storedGuildPlan = store.createErpProject(guildPlan);
+    const guildCapture = (at: number, inaccessible: boolean, quantity = 2) => renderExport({ name: "Guild Carrier", realm: "Retail Realm", generated: at, guild: guild({ clubId: "retrieval-guild", observedAt: at, tabs: [{ id: 1, name: "Materials", items: [["Rough Stone", quantity]] }, ...(inaccessible ? [{ id: 2, name: "Restricted", state: "INACCESSIBLE" as const }] : [])] }) });
+    store.importSnapshot(guildCapture(baseAt + 90, true, 4));
+    store.importSnapshot(guildCapture(baseAt + 100, false, 3));
+    store.importSnapshot(guildCapture(baseAt + 120, false, 2));
+    const coveredGuildProjects = new DashboardReadModel(store, () => baseAt + 125).getErpProjects({ version: "retail" });
+    const coveredGuildReview = coveredGuildProjects.find((entry) => entry.stableId === storedGuildPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(coveredGuildReview?.state, "SHARED_OWNER_CONTENT_CHANGED", "an inaccessible historical tab outside the selected comparison pair does not invalidate two fully covered observations");
+    store.importSnapshot(guildCapture(baseAt + 130, true));
+    const guildProjects = new DashboardReadModel(store, () => baseAt + 140).getErpProjects({ version: "retail" });
+    const guildView = guildProjects.find((entry) => entry.stableId === storedGuildPlan.stableId);
+    const guildReview = guildView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(guildReview?.state, "EVIDENCE_UNKNOWN", `inaccessible guild tabs prevent a whole-owner quantity delta: ${JSON.stringify({ projectCount: guildProjects.length, guildView, guildReview, owners: store.projectSharedStorage().guilds.map((owner) => owner.ownerKey) })}`);
+    assert.match(guildReview?.reason ?? "", /inaccessible, unconfirmed, or unidentified guild tab/);
   } finally { store.close(); }
 });
 

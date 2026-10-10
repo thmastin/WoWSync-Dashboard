@@ -199,6 +199,8 @@ export interface SnapshotReadStore {
   getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[];
   /** The current state of every shared-storage owner, derived at read time. */
   projectSharedStorage(): SharedStorageProjection;
+  /** Immutable shared-storage observations and their export provenance, for owner-scoped history comparisons. */
+  loadSharedJournal(): SharedJournal;
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   listSnapshots(identityKey: string): StoredSnapshot[];
@@ -245,11 +247,6 @@ export interface SnapshotStore extends SnapshotReadStore {
    * its next computation with nothing further to invalidate.
    */
   deleteCharacter(identityKey: string): DeleteCharacterResult | undefined;
-  /**
-   * The persisted shared-storage journal (immutable observations + provenance), as the pure
-   * shared-storage domain model. Character deletion never removes anything from it.
-   */
-  loadSharedJournal(): SharedJournal;
   /**
    * EXPLICIT, owner-scoped, destructive: deletes that one owner's entire journal history (every
    * observation and every provenance row), atomically. The caller names the owner with the typed
