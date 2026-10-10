@@ -771,8 +771,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     const freshIdentity = store.importSnapshot(capture("Bank Planner", "Cairne", now, 1, 3)).character.identityKey;
     const staleIdentity = store.importSnapshot(capture("Stale Planner", "Cairne", now - 14 * 86400, 1, 3)).character.identityKey;
     const reservedIdentity = store.importSnapshot(capture("Reserved Planner", "Cairne", now, 1, 3)).character.identityKey;
+    const ownIdentity = store.importSnapshot(capture("Own Reserved Planner", "Cairne", now, 1, 3)).character.identityKey;
     store.createErpProject({ version: "retail", title: "Review fresh bank supply", needs: [{ stableId: "fresh_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
     store.createErpProject({ version: "retail", title: "Review base-id bank supply", needs: [{ stableId: "base_id_bank_need", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom base ID", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
+    store.createErpProject({ version: "retail", title: "Review own-reserved bank supply", needs: [{ stableId: "own_reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: ownIdentity, destinationIdentityKey: ownIdentity }], reservations: [{ stableId: "own_need_reservation", needId: "own_reserved_bank_need", sourceIdentityKey: ownIdentity, quantity: 4, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     store.createErpProject({ version: "retail", title: "Review stale bank supply", needs: [{ stableId: "stale_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: staleIdentity, destinationIdentityKey: staleIdentity }] });
     store.createErpProject({ version: "retail", title: "Competing reservation", needs: [{ stableId: "reserved_elsewhere", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 2, sourceIdentityKey: reservedIdentity }], reservations: [{ stableId: "hold_reserved_supply", needId: "reserved_elsewhere", sourceIdentityKey: reservedIdentity, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     store.createErpProject({ version: "retail", title: "Review reserved bank supply", needs: [{ stableId: "reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: reservedIdentity, destinationIdentityKey: reservedIdentity }] });
@@ -791,6 +793,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     await form.getByLabel("Manual instructions").waitFor();
     const instructions = await form.getByLabel("Manual instructions").inputValue();
     assert.match(instructions, /Recent complete OBSERVED sections show 1 matching unit in Bank Planner.* bags and 3 in that character's personal bank/);
+    assert.match(instructions, /bag requirement is short by 3; the bank observation contains 3 exact units to consider/);
     assert.match(instructions, /planning comparison, not proof of current access, bank interaction, or retrieval/);
     assert.equal(await form.getByLabel("Assigned character").inputValue(), freshIdentity);
     assert.equal(await form.getByLabel("Planned source character").inputValue(), freshIdentity);
@@ -807,6 +810,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     assert.equal(await baseId.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "base-ID needs do not collapse exact item variants for retrieval planning");
     const reserved = page.locator(".erp-project-card").filter({ hasText: "Review reserved bank supply" }); await reserved.waitFor();
     assert.equal(await reserved.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "competing reservations do not imply that the full bank quantity is available to this project");
+    const ownReserved = page.locator(".erp-project-card").filter({ hasText: "Review own-reserved bank supply" }); await ownReserved.waitFor();
+    assert.equal(await ownReserved.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 1, "an exact reservation for this need does not block its own manual review");
     const record = await page.evaluate(async () => { const projects = (await (await fetch("/api/versions/retail/erp/projects")).json()).projects; const project = projects.find((entry) => entry.title === "Review fresh bank supply"); return project.workOrders.find((entry) => entry.kind === "RETRIEVE"); });
     assert.equal(record.status, "PLANNED");
     assert.equal(record.sourceIdentityKey, freshIdentity);
