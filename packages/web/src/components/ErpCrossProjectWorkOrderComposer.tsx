@@ -49,7 +49,7 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
 export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
-  const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.length === 0 && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
+  const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.every((order) => order.status === "COMPLETED" || order.status === "CANCELLED") && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [editedDraftKeys, setEditedDraftKeys] = useState<string[]>([]);

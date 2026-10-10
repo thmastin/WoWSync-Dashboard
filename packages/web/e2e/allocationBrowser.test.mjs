@@ -2275,22 +2275,36 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     for (const project of saved) assert.deepEqual(mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId).workOrders, project.workOrders, "MCP and REST return the same saved player-authored plan");
     assert.deepEqual(mcp.structuredContent.portfolioFulfillment.savedPlanningBatches, rest.portfolioFulfillment.savedPlanningBatches, "MCP and REST share the grouped saved-plan lifecycle projection");
     assert.deepEqual(mcp.structuredContent.portfolioNextActions, rest.portfolioNextActions, "MCP and REST retain identical remaining queue state after planning");
-    store.importSnapshot(renderExport({ name: "Queue Plan Fixture", realm: "Cairne", generated: now + 60, bags: observedSection([row(ITEM_ID, 3, { name: "Mycobloom" }), row(ITEM_ID + 1, 4, { name: "Briarthorn" })], now + 60), bank: observedSection([], now + 60) }));
+    store.importSnapshot(renderExport({ name: "Queue Plan Fixture", realm: "Cairne", generated: now + 60, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" }), row(ITEM_ID + 1, 3, { name: "Briarthorn" })], now + 60), bank: observedSection([], now + 60) }));
     await page.reload();
     const afterObservation = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     batch = afterObservation.portfolioFulfillment.savedPlanningBatches[0];
     assert.equal(batch.state, "NEWER_OBSERVATION_REVIEW");
     assert.ok(batch.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_QUANTITY_CHANGED" && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"), "the later import compares with the saved baseline but does not claim the planned tasks caused the changes");
+    for (const project of afterObservation.projects.filter((entry) => [first.stableId, second.stableId].includes(entry.stableId))) {
+      const closed = structuredClone(project);
+      closed.workOrders = closed.workOrders.map((order) => ({ ...order, status: "CANCELLED" }));
+      const result = await page.evaluate(async ({ project }) => fetch(`/api/versions/retail/erp/projects/${encodeURIComponent(project.stableId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: project.revision, project }) }).then(async (response) => ({ status: response.status, body: await response.json() })), { project: closed });
+      assert.equal(result.status, 200, "the player can close obsolete manual work while retaining its saved batch history");
+    }
     await page.reload();
     assert.match(await page.getByTestId("erp-saved-planning-batches").innerText(), /NEWER OBSERVATION REVIEW/);
-    const reviewRows = afterObservation.portfolioNextActions.items.filter((item) => item.action === "RECONCILE_OBSERVATIONS");
+    await page.getByRole("button", { name: "Review 2 affected requirements in grouped planner" }).click();
+    const replanComposer = page.getByTestId("erp-cross-project-plan");
+    await page.waitForFunction((texts) => texts.every((text) => Array.from(document.querySelectorAll(".erp-cross-project-choice input[type=checkbox]")).some((input) => input.checked && input.closest("label")?.innerText.includes(text))), ["Queue herb stock · Mycobloom", "Queue thorn stock · Briarthorn"]);
+    assert.equal(await replanComposer.getByRole("checkbox", { name: /Queue herb stock.*Mycobloom/ }).isChecked(), true, "saved batch review seeds the existing planner with the first exact need");
+    assert.equal(await replanComposer.getByRole("checkbox", { name: /Queue thorn stock.*Briarthorn/ }).isChecked(), true, "saved batch review seeds the existing planner with the second exact need");
+    const afterPrefill = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.ok(afterPrefill.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders.length === 1 && project.workOrders[0]?.status === "CANCELLED"), "opening the grouped replan draft writes no new work or status changes");
+    const afterClosing = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const reviewRows = afterClosing.portfolioNextActions.items.filter((item) => item.action === "RECONCILE_OBSERVATIONS");
     assert.equal(reviewRows.length, 2, "the same queue reflects both changed requirement observations after the next import");
     assert.ok(reviewRows.every((item) => item.needReferences.length === 1 && item.needReferences[0].observationChanges?.length), "reconciliation preserves an exact per-need observation comparison");
     assert.ok(reviewRows.every((item) => item.needReferences[0].observationChanges.every((change) => !Object.hasOwn(change, "cause"))), "reconciliation preserves exact needs without inventing an action-cause field");
-    assert.ok(afterObservation.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders[0]?.status === "PLANNED"), "observed quantity changes do not claim either player-authored step was executed or completed");
+    assert.ok(afterObservation.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders[0]?.status === "PLANNED"), "the new observation alone leaves both player-authored tasks PLANNED");
     const refreshedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
-    assert.deepEqual(refreshedMcp.structuredContent.portfolioNextActions, afterObservation.portfolioNextActions, "MCP and REST report the same post-import queue and reconciliation state");
-    assert.deepEqual(refreshedMcp.structuredContent.portfolioFulfillment.savedPlanningBatches, afterObservation.portfolioFulfillment.savedPlanningBatches, "MCP and REST retain the same batch reconciliation after re-import");
+    assert.deepEqual(refreshedMcp.structuredContent.portfolioNextActions, afterClosing.portfolioNextActions, "MCP and REST report the same post-import queue and reconciliation state");
+    assert.deepEqual(refreshedMcp.structuredContent.portfolioFulfillment.savedPlanningBatches, afterClosing.portfolioFulfillment.savedPlanningBatches, "MCP and REST retain the same batch reconciliation after re-import");
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();
