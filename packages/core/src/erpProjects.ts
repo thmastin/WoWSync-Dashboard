@@ -54,6 +54,9 @@ export interface ErpProcurementPlan {
   readonly targetNeedId: string;
   /** Player-entered maximum quote to consider; this is not a resource demand or observed balance. */
   readonly spendingCeilingCopper: number;
+  /** Player-reported quote note. This is not an addon or market-feed observation. */
+  /** The total quoted amount for the explicit quantity; no unit-price extrapolation is performed. */
+  readonly playerQuote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly sourceNote?: string };
 }
 
 export interface ErpWorkOrder {
@@ -189,6 +192,7 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (w.procurementPlan !== undefined) {
       const plan = w.procurementPlan;
       if (w.kind !== "PURCHASE" || !plan || typeof plan !== "object" || !hasValue(plan.targetNeedId) || !Number.isSafeInteger(plan.spendingCeilingCopper) || plan.spendingCeilingCopper < 1 || !w.assignedIdentityKey) fail("INVALID_PROCUREMENT_PLAN", "A procurement plan requires a PURCHASE work order, an explicit buyer, an item target, and a positive integer copper ceiling.");
+      if (plan.playerQuote !== undefined && (!plan.playerQuote || typeof plan.playerQuote !== "object" || !Number.isSafeInteger(plan.playerQuote.amountCopper) || plan.playerQuote.amountCopper < 0 || !Number.isSafeInteger(plan.playerQuote.quantity) || plan.playerQuote.quantity < 1 || !Number.isSafeInteger(plan.playerQuote.recordedAt) || plan.playerQuote.recordedAt < 1 || (plan.playerQuote.sourceNote !== undefined && (typeof plan.playerQuote.sourceNote !== "string" || plan.playerQuote.sourceNote.length > 120)))) fail("INVALID_PROCUREMENT_PLAN", "A player-reported quote requires a non-negative whole-copper total, a positive whole quantity covered, a positive recorded timestamp, and an optional source note of at most 120 characters.");
       if (!w.resourceNeedIds.includes(plan.targetNeedId)) fail("INVALID_PROCUREMENT_PLAN", "The procurement item target must be linked to the PURCHASE work order.");
       const target = p.needs.find((need) => need.stableId === plan.targetNeedId);
       if (!target || (target.kind !== "ITEM_ID" && target.kind !== "ITEM_REF") || target.sourceIdentityKey !== w.assignedIdentityKey || target.destinationIdentityKey !== w.assignedIdentityKey) fail("INVALID_PROCUREMENT_PLAN", "The item target must be an item need explicitly scoped to the same buyer/recipient character.");
@@ -761,8 +765,10 @@ export interface ErpProcurementAssessment {
   readonly budgetEvidence: { readonly observedCopper?: number; readonly observedAt?: number; readonly freshness: Freshness; readonly reason: string };
   /** Player-entered upper bound; never counted as an amount needed or reserved. */
   readonly spendingCeilingCopper: number;
+  readonly quoteState: "NO_PLAYER_REPORTED_QUOTE" | "PLAYER_REPORTED_WITHIN_CEILING" | "PLAYER_REPORTED_ABOVE_CEILING";
+  readonly playerQuote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly freshness: Freshness; readonly sourceNote?: string; readonly provenance: "PLAYER_REPORTED" };
   readonly marketAvailability: "UNKNOWN";
-  readonly quotedPrice: "UNKNOWN";
+  readonly quotedPrice: "UNKNOWN" | "PLAYER_REPORTED";
   readonly affordability: "UNKNOWN";
   readonly reason: string;
 }
@@ -1070,7 +1076,11 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       const budgetText = budgetState === "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING" ? `The buyer's gross gold observation (${goldEvidence.observedQuantity} copper) is at or above the player-set ceiling (${order.procurementPlan!.spendingCeilingCopper} copper). This is an observation only; reservations and spendable balance are not calculated here.`
         : budgetState === "GROSS_OBSERVED_GOLD_BELOW_CEILING" ? `The buyer's gross gold observation (${goldEvidence.observedQuantity} copper) is below the player-set ceiling (${order.procurementPlan!.spendingCeilingCopper} copper). A ceiling is not a minimum balance or resource requirement.`
         : "Buyer gold or its freshness is unknown; no affordability result is inferred.";
-      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, marketAvailability: "UNKNOWN", quotedPrice: "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText} Current market/vendor availability, quoted price, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
+      const playerQuote = order.procurementPlan.playerQuote;
+      const quoteFreshness = playerQuote ? evidenceFreshness(playerQuote.recordedAt, now) : undefined;
+      const quoteState: ErpProcurementAssessment["quoteState"] = !playerQuote ? "NO_PLAYER_REPORTED_QUOTE" : playerQuote.amountCopper <= order.procurementPlan.spendingCeilingCopper ? "PLAYER_REPORTED_WITHIN_CEILING" : "PLAYER_REPORTED_ABOVE_CEILING";
+      const quoteText = playerQuote ? ` A player-reported total quote of ${playerQuote.amountCopper} copper for ${playerQuote.quantity} unit(s) was recorded ${quoteFreshness} (${quoteState.replaceAll("_", " ")})${playerQuote.sourceNote ? ` from “${playerQuote.sourceNote}”` : ""}; this is user-entered evidence, not a live market feed or current availability check.` : " No player-reported quote is recorded.";
+      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, quoteState, ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${quoteText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
     })() : undefined;
     const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);

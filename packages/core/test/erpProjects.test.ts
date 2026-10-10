@@ -160,6 +160,7 @@ test("procurement declarations validate the positive copper ceiling and explicit
     const p: ErpProject = { ...project(identityKey), needs: [target], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Purchase manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
     validateErpProject(p, (key) => store.getCharacter(key)?.version === "classic-era");
     assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 0 } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100, playerQuote: { amountCopper: -1, quantity: 1, recordedAt: 1 } } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
     assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, assignedIdentityKey: undefined }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
     const differentBuyer = "classic-era::realm b::another buyer";
     assert.throws(() => validateErpProject({ ...p, needs: [{ ...target, destinationIdentityKey: differentBuyer }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
@@ -192,6 +193,23 @@ test("procurement reports item coverage separately from a gross gold amount belo
     assert.equal(readiness.procurementAssessment?.budgetState, "GROSS_OBSERVED_GOLD_BELOW_CEILING");
     assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW", "gross gold below the player's ceiling is not a shortfall against a nonexistent minimum");
     assert.deepEqual([readiness.procurementAssessment?.marketAvailability, readiness.procurementAssessment?.quotedPrice, readiness.procurementAssessment?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+  } finally { store.close(); }
+});
+test("a player-reported purchase quote is compared with its ceiling but never treated as verified price or affordability", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 25 } });
+  try {
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Compare checked quote", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100, playerQuote: { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, sourceNote: "Town vendor, player checked" } } }] };
+    const assessment = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.quoteState, "PLAYER_REPORTED_WITHIN_CEILING");
+    assert.deepEqual(assessment?.playerQuote, { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, freshness: "recent", sourceNote: "Town vendor, player checked", provenance: "PLAYER_REPORTED" });
+    assert.equal(assessment?.quotedPrice, "PLAYER_REPORTED");
+    assert.equal(assessment?.marketAvailability, "UNKNOWN", "a player note does not prove current stock remains available");
+    assert.equal(assessment?.affordability, "UNKNOWN", "gross gold and a quote do not account for reservations or spendable funds");
+    assert.match(assessment?.reason ?? "", /user-entered evidence, not a live market feed/);
+    const stale = evaluateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 120, quantity: 1, recordedAt: 1 } } }] }, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(stale?.quoteState, "PLAYER_REPORTED_ABOVE_CEILING");
+    assert.equal(stale?.playerQuote?.freshness, "stale", "the old player-entered amount remains visible with its age");
   } finally { store.close(); }
 });
 test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {

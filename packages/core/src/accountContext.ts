@@ -40,6 +40,9 @@ import { buildErpResourceCommitmentSummary, type ErpProjectView } from "./erpPro
 // change summaries gained `observedAt`, realm-partitioned versions gained an
 // in-band `scopeNote`, and the `currency` note now states that a total over
 // zero observed values is not zero.
+// Bumped to "15": compact ERP project summaries include player-reported
+// procurement quote comparisons and freshness without presenting them as
+// verified market prices.
 //
 // Bumped to "2": added the `currency` field, renamed the two differently-
 // scoped profession `status` fields to `observationStatus`/`coverageStatus`
@@ -47,7 +50,7 @@ import { buildErpResourceCommitmentSummary, type ErpProjectView } from "./erpPro
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "14";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "15";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -141,7 +144,7 @@ export interface AccountContext {
   currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
   /** Player-authored ERP intent, separate from observed facts; evidence is summarized by the planning read model. */
-  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; plannedCraftOutputStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["plannedOutputAssessment"]>["state"], number>>; procurementReviewStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["reviewState"], number>>; needStates: Record<string, number>; resourceSourceScreenCounts: { needsScreened: number; possibleSources: number; unresolvedCharacters: number } }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }> };
+  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; plannedCraftOutputStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["plannedOutputAssessment"]>["state"], number>>; procurementReviewStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["reviewState"], number>>; procurementQuoteStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["quoteState"], number>>; procurementQuoteFreshnessStates: Partial<Record<NonNullable<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["playerQuote"]>["freshness"], number>>; needStates: Record<string, number>; resourceSourceScreenCounts: { needsScreened: number; possibleSources: number; unresolvedCharacters: number } }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }> };
 }
 
 export interface AccountContextInput {
@@ -263,6 +266,8 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
       workOrderProgressStates: Object.fromEntries([...new Set(p.workOrderProgress.map((w) => w.reconciliation))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.reconciliation === state).length])),
       plannedCraftOutputStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.plannedOutputAssessment ? [w.plannedOutputAssessment.state] : []))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.plannedOutputAssessment?.state === state).length])),
       procurementReviewStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.reviewState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.reviewState === state).length])),
+      procurementQuoteStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.quoteState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.quoteState === state).length])),
+      procurementQuoteFreshnessStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment?.playerQuote ? [w.procurementAssessment.playerQuote.freshness] : []))].sort().map((freshness) => [freshness, p.workOrderReadiness.filter((w) => w.procurementAssessment?.playerQuote?.freshness === freshness).length])),
       needStates: Object.fromEntries([...new Set(p.needEvidence.map((n) => n.state))].sort().map((state) => [state, p.needEvidence.filter((n) => n.state === state).length])),
       resourceSourceScreenCounts: { needsScreened: p.resourceSourceScreens.length, possibleSources: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.candidateCount, 0), unresolvedCharacters: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.unresolvedCharacterCount, 0) },
     })), resourceCommitments: Object.fromEntries(WOW_VERSIONS.map((version) => {
