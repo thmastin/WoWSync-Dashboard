@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview } from "../src/erpFulfillmentTriage.ts";
 
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");
@@ -48,5 +48,41 @@ test("fulfillment triage joins changed evidence, reservation review, and manual 
     assert.equal(buildErpFulfillmentTriage(views, "classic-era", 1).truncated, true);
     assert.equal(buildErpFulfillmentTriage(views, "classic-era", 1).returnedCount, 1);
     assert.equal(triage.affectedProjectCount, 1);
+  } finally { store.close(); }
+});
+
+test("portfolio fulfillment review orders prerequisite evidence first and preserves unknowns, reservations, and version isolation", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Portfolio Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: 5 }] }] }, bank: { containers: [] } }));
+    const prerequisite = store.createErpProject({ version: "classic-era", title: "Gather ingredients", priority: 4, needs: [{ stableId: "shared", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone supply", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey }] });
+    store.createErpProject({ version: "classic-era", title: "Competing provision plan", priority: 3, needs: [{ stableId: "other-need", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Other stone commitment", requiredQuantity: 2, sourceIdentityKey: imported.character.identityKey }], reservations: [{ stableId: "other-hold", needId: "other-need", sourceIdentityKey: imported.character.identityKey, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    const dependent = store.createErpProject({ version: "classic-era", title: "Craft package", priority: 5, needs: [{ stableId: "shared", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Crafting reserve", requiredQuantity: 9, sourceIdentityKey: imported.character.identityKey }], reservations: [{ stableId: "held", needId: "shared", sourceIdentityKey: imported.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }], workOrders: [{ stableId: "craft-review", kind: "CRAFT", status: "PLANNED", title: "Review craft", resourceNeedIds: ["shared"], dependsOn: [], portfolioPrerequisites: [{ projectId: prerequisite.stableId, needId: "shared" }] }] });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const portfolio = buildErpPortfolioFulfillmentReview(projects, "classic-era");
+    assert.equal(portfolio.totalPackageCount, 1);
+    assert.equal(portfolio.totalStepCount, 2);
+    assert.equal(portfolio.stepsNeedingReview, 1);
+    const packageView = portfolio.packages[0]!;
+    assert.deepEqual(packageView.steps.map((step) => [step.projectId, step.needId]), [[prerequisite.stableId, "shared"], [dependent.stableId, "shared"]], "the DAG is ordered prerequisite first even when the dependent project has higher priority");
+    assert.equal(packageView.steps[0]?.reviewState, "OBSERVED_NEED_MET");
+    assert.equal(packageView.steps[1]?.reviewState, "WORK_ORDER_REVIEW");
+    assert.equal(packageView.steps[1]?.projectReservationIntentQuantity, 1, "this project's recorded reservation intent remains explicit");
+    assert.equal(packageView.steps[1]?.reservationAssessment?.activeQuantity, 3, "shared source/resource assessment includes the overlapping commitment from the other project");
+    assert.equal(packageView.steps[1]?.reservationAssessment?.state, "WITHIN_OBSERVED_SUPPLY");
+    assert.equal(packageView.steps[1]?.workOrders[0]?.readinessState, "OBSERVED_RESOURCE_SHORTFALL", "the prerequisite is currently met, so the dependent step's own source shortfall controls readiness");
+    assert.equal(packageView.nextReviewStepId, `${dependent.stableId}/shared`);
+    assert.equal(packageView.interpretation, "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY");
+    assert.equal(buildErpPortfolioFulfillmentReview(projects, "forever").totalPackageCount, 0, "version-scoped portfolio cannot leak Classic Era plans into Forever");
+    assert.equal(buildErpPortfolioFulfillmentReview(projects, "unknown-version").totalPackageCount, 0);
+    assert.equal(buildErpPortfolioFulfillmentReview(projects, "classic-era").packages[0]?.stableId, packageView.stableId, "stable output is deterministic");
+    const dangling = projects.map((entry) => entry.stableId === dependent.stableId ? { ...entry, workOrders: entry.workOrders.map((order) => ({ ...order, portfolioPrerequisites: [{ projectId: "deleted-project", needId: "missing-need" }] })) } : entry);
+    const missing = buildErpPortfolioFulfillmentReview(dangling, "classic-era").packages[0]!.steps.find((step) => step.projectId === "deleted-project");
+    assert.equal(missing?.reviewState, "MISSING_NEED");
+    assert.equal(missing?.requiredQuantity, undefined, "a dangling evidence link is UNKNOWN, not a fabricated zero requirement");
+    assert.equal(missing?.projectReservationIntentQuantity, undefined, "a missing need does not claim zero project reservations");
+    assert.equal(missing?.reservationAssessment, undefined, "a missing need does not claim zero source-scope commitments");
+    assert.equal(dependent.version, "classic-era");
   } finally { store.close(); }
 });

@@ -127,6 +127,9 @@ test("portfolio prerequisite links are version-scoped, cycle checked, and block 
     assert.equal(saved.workOrderReadiness[0].state, "WAITING_FOR_PORTFOLIO_PREREQUISITE");
     assert.equal(saved.workOrderReadiness[0].portfolioPrerequisites[0].state, "OBSERVED_SHORTFALL");
     assert.deepEqual(saved.workOrderReadiness[0].unresolvedNeedIds, [], "a foreign prerequisite's project-local ID is not misreported as a need on the dependent project");
+    const linkedPortfolio = (await call("GET", "/api/versions/classic-era/erp/projects")).body.portfolioFulfillment;
+    assert.equal(linkedPortfolio.totalPackageCount, 1, "the REST project read returns the shared portfolio package projection");
+    assert.deepEqual(linkedPortfolio.packages[0].steps.map((step: any) => step.projectId), [first.stableId, second.stableId]);
     const context = await call("GET", "/api/account-context");
     assert.deepEqual(context.body.planning.projects.find((project: any) => project.stableId === second.stableId).workOrderReadinessStates, { WAITING_FOR_PORTFOLIO_PREREQUISITE: 1 });
     store.importSnapshot(buildWowSyncExport({ generatedAt: at + 1, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 5 }] }] }, bank: { containers: [] } }));
@@ -279,7 +282,7 @@ test("stale reservation coverage agrees across REST and AccountContext summaries
     assert.equal(created.body.project.fulfillment.changedObservationCauseUnknownCount, 0);
 
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "26");
+    assert.equal(context.body.schemaVersion, "27");
     const summary = context.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.reservationReviewStates, { SUPPLY_UNKNOWN: 1 }, "AccountContext exposes the same compact reservation result as the detailed REST projection");
     assert.deepEqual(summary.fulfillment, created.body.project.fulfillment, "AccountContext carries the same project fulfillment snapshot as REST");
@@ -363,7 +366,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "26");
+    assert.equal(account.body.schemaVersion, "27");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementBudgetNeedStates, { PLANNED_NEED_COVERS_CEILING: 1 });
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
@@ -536,7 +539,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "26");
+    assert.equal(context.body.schemaVersion, "27");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
@@ -555,7 +558,7 @@ test("assigned gatherer bag deltas agree across REST and AccountContext without 
     assert.equal(review.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.delta]), [["bags", 3]]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "26");
+    assert.equal(context.body.schemaVersion, "27");
     assert.deepEqual(context.body.planning.projects[0].gatherObservationStates, { RESOURCE_INCREASED: 1 });
   });
 });

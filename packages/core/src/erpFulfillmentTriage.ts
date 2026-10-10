@@ -37,6 +37,52 @@ export interface ErpFulfillmentTriage {
   readonly interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY";
 }
 
+export interface ErpPortfolioFulfillmentStep {
+  readonly projectId: string;
+  readonly projectTitle: string;
+  readonly projectPriority: number;
+  readonly needId: string;
+  readonly needLabel: string;
+  readonly resourceKey: string;
+  readonly requiredQuantity?: number;
+  readonly sourceIdentityKey?: string;
+  readonly sourceOwnerKey?: string;
+  readonly destinationIdentityKey?: string;
+  readonly evidenceState: ErpProjectView["needEvidence"][number]["state"];
+  readonly freshness: Freshness;
+  readonly observedQuantity?: number;
+  readonly observedAt?: number;
+  /** Active reservation intent attached to this project requirement only. */
+  readonly projectReservationIntentQuantity?: number;
+  /** Existing source/resource-scope assessment, including overlapping same-version project commitments. Never an availability figure. */
+  readonly reservationAssessment?: ErpNeedEvidence["reservationAssessment"];
+  readonly prerequisiteNeedIds: readonly { readonly projectId: string; readonly needId: string }[];
+  readonly workOrders: readonly { readonly stableId: string; readonly title: string; readonly status: string; readonly readinessState: string; readonly progressState?: string }[];
+  readonly reviewState: "OBSERVED_NEED_MET" | "NEED_EVIDENCE_REVIEW" | "WORK_ORDER_REVIEW" | "MISSING_NEED";
+  readonly reason: string;
+}
+
+export interface ErpPortfolioFulfillmentPackage {
+  readonly stableId: string;
+  readonly version: WowVersion;
+  readonly steps: readonly ErpPortfolioFulfillmentStep[];
+  readonly crossProjectDependencyCount: number;
+  readonly nextReviewStepId?: string;
+  readonly cycleDetected: boolean;
+  readonly interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY";
+}
+
+export interface ErpPortfolioFulfillmentReview {
+  readonly version: VersionOrUnknown;
+  readonly packages: readonly ErpPortfolioFulfillmentPackage[];
+  readonly totalPackageCount: number;
+  readonly returnedPackageCount: number;
+  readonly totalStepCount: number;
+  readonly stepsNeedingReview: number;
+  readonly truncated: boolean;
+  readonly interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY";
+}
+
 /** Review state frozen by the Dashboard before a grouped manual plan is saved. It is a stale-review guard, not a signed or trusted claim. */
 export interface ErpNeedReviewSnapshot {
   readonly projectId: string;
@@ -105,4 +151,79 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 200;
   const items = entries.slice(0, safeLimit);
   return { version, items, totalCount: entries.length, returnedCount: items.length, affectedProjectCount: new Set(entries.map((entry) => entry.projectId)).size, counts, truncated: items.length < entries.length, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" };
+}
+
+/** Builds a compact, dependency-first view of player-authored cross-project packages. It never selects routes or attributes actions. */
+export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 50): ErpPortfolioFulfillmentReview {
+  if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, totalStepCount: 0, stepsNeedingReview: 0, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
+  const projectById = new Map(projects.filter((project) => project.version === version && project.status !== "CANCELLED").map((project) => [project.stableId, project]));
+  const nodeKey = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
+  const nodes = new Map<string, { projectId: string; needId: string }>();
+  const edges = new Map<string, Set<string>>();
+  for (const project of projectById.values()) for (const order of project.workOrders) for (const needId of order.resourceNeedIds) {
+    const key = nodeKey(project.stableId, needId);
+    nodes.set(key, { projectId: project.stableId, needId });
+    for (const reference of order.portfolioPrerequisites ?? []) {
+      if (reference.projectId === project.stableId && reference.needId === needId) continue;
+      const dependencyKey = nodeKey(reference.projectId, reference.needId);
+      nodes.set(dependencyKey, { projectId: reference.projectId, needId: reference.needId });
+      const dependencies = edges.get(key) ?? new Set<string>(); dependencies.add(dependencyKey); edges.set(key, dependencies);
+    }
+  }
+  const adjacency = new Map<string, Set<string>>();
+  for (const [key, dependencies] of edges) for (const dependency of dependencies) {
+    const left = adjacency.get(key) ?? new Set<string>(); left.add(dependency); adjacency.set(key, left);
+    const right = adjacency.get(dependency) ?? new Set<string>(); right.add(key); adjacency.set(dependency, right);
+  }
+  const compareNode = (a: string, b: string) => {
+    const left = nodes.get(a)!; const right = nodes.get(b)!;
+    const lp = projectById.get(left.projectId); const rp = projectById.get(right.projectId);
+    return (rp?.priority ?? 0) - (lp?.priority ?? 0) || (lp?.title ?? left.projectId).localeCompare(rp?.title ?? right.projectId) || left.needId.localeCompare(right.needId) || a.localeCompare(b);
+  };
+  const seen = new Set<string>();
+  const packages: ErpPortfolioFulfillmentPackage[] = [];
+  for (const start of [...adjacency.keys()].sort(compareNode)) {
+    if (seen.has(start)) continue;
+    const component: string[] = []; const stack = [start]; seen.add(start);
+    while (stack.length) { const current = stack.pop()!; component.push(current); for (const next of adjacency.get(current) ?? []) if (!seen.has(next)) { seen.add(next); stack.push(next); } }
+    if (component.length < 2) continue;
+    const componentSet = new Set(component);
+    const indegree = new Map(component.map((key) => [key, 0]));
+    for (const key of component) for (const dependency of edges.get(key) ?? []) if (componentSet.has(dependency)) indegree.set(key, (indegree.get(key) ?? 0) + 1);
+    const ready = component.filter((key) => indegree.get(key) === 0).sort(compareNode);
+    const ordered: string[] = [];
+    while (ready.length) {
+      const current = ready.shift()!; ordered.push(current);
+      for (const dependent of component) if (edges.get(dependent)?.has(current)) {
+        const nextDegree = (indegree.get(dependent) ?? 0) - 1; indegree.set(dependent, nextDegree);
+        if (nextDegree === 0) { ready.push(dependent); ready.sort(compareNode); }
+      }
+    }
+    const cycleDetected = ordered.length !== component.length;
+    if (cycleDetected) ordered.push(...component.filter((key) => !ordered.includes(key)).sort(compareNode));
+    const steps: ErpPortfolioFulfillmentStep[] = ordered.map((key) => {
+      const reference = nodes.get(key)!; const project = projectById.get(reference.projectId);
+      const need = project?.needs.find((entry) => entry.stableId === reference.needId);
+      const evidence = project?.needEvidence.find((entry) => entry.needId === reference.needId);
+      const workOrders = project?.workOrders.filter((order) => order.resourceNeedIds.includes(reference.needId)) ?? [];
+      const orderReadiness = workOrders.map((order) => project!.workOrderReadiness.find((entry) => entry.workOrderId === order.stableId)?.state ?? "UNKNOWN");
+      const projectReservationIntentQuantity = need ? project!.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === reference.needId).reduce((total, reservation) => total + reservation.quantity, 0) : undefined;
+      const prerequisites = [...(edges.get(key) ?? [])].map((dependency) => nodes.get(dependency)!).sort((a, b) => compareNode(nodeKey(a.projectId, a.needId), nodeKey(b.projectId, b.needId)));
+      const evidenceMet = evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent" && evidence.observedAt !== undefined;
+      const hasOpenWork = workOrders.some((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED");
+      const reviewState: ErpPortfolioFulfillmentStep["reviewState"] = !need || !project ? "MISSING_NEED" : hasOpenWork ? "WORK_ORDER_REVIEW" : evidenceMet ? "OBSERVED_NEED_MET" : "NEED_EVIDENCE_REVIEW";
+      const reason = !project || !need ? "The referenced same-version requirement is unavailable; evidence is UNKNOWN and the saved link requires review."
+        : evidenceMet ? `Recent observed coverage reports ${evidence.observedQuantity ?? "quantity UNKNOWN"} against ${need.requiredQuantity} required. This confirms only the need evidence; it does not establish which action occurred.`
+          : `${evidence?.state.replaceAll("_", " ") ?? "Evidence UNKNOWN"} with ${evidence?.freshness ?? "unknown"} freshness${workOrders.length ? `; ${workOrders.length} linked manual work order(s) require review` : "; no linked manual work order exists"}.`;
+      return { projectId: reference.projectId, projectTitle: project?.title ?? "Unavailable project", projectPriority: project?.priority ?? 0, needId: reference.needId, needLabel: need?.label ?? reference.needId, resourceKey: need?.resourceKey ?? "UNKNOWN", ...(need ? { requiredQuantity: need.requiredQuantity } : {}), ...(need?.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(need?.sourceOwnerKey ? { sourceOwnerKey: need.sourceOwnerKey } : {}), ...(need?.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), evidenceState: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), ...(projectReservationIntentQuantity !== undefined ? { projectReservationIntentQuantity } : {}), ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), prerequisiteNeedIds: prerequisites, workOrders: workOrders.map((order, index) => ({ stableId: order.stableId, title: order.title, status: order.status, readinessState: orderReadiness[index]!, ...(project?.workOrderProgress.find((entry) => entry.workOrderId === order.stableId) ? { progressState: project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId)!.reconciliation } : {}) })), reviewState, reason };
+    });
+    const stableId = `portfolio:${JSON.stringify([version, component.map((key) => { const node = nodes.get(key)!; return [node.projectId, node.needId]; }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))])}`;
+    const crossProjectDependencyCount = component.reduce((count, key) => count + [...(edges.get(key) ?? [])].filter((dependency) => nodes.get(dependency)!.projectId !== nodes.get(key)!.projectId).length, 0);
+    const nextReview = steps.find((step) => step.reviewState !== "OBSERVED_NEED_MET");
+    packages.push({ stableId, version, steps, crossProjectDependencyCount, ...(nextReview ? { nextReviewStepId: `${nextReview.projectId}/${nextReview.needId}` } : {}), cycleDetected, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" });
+  }
+  packages.sort((a, b) => a.steps[0]!.projectTitle.localeCompare(b.steps[0]!.projectTitle) || a.stableId.localeCompare(b.stableId));
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50;
+  const selected = packages.slice(0, safeLimit);
+  return { version, packages: selected, totalPackageCount: packages.length, returnedPackageCount: selected.length, totalStepCount: packages.reduce((sum, item) => sum + item.steps.length, 0), stepsNeedingReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.reviewState !== "OBSERVED_NEED_MET").length, 0), truncated: selected.length < packages.length, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
 }

@@ -5,6 +5,7 @@ import {
   DASHBOARD_RESEARCH_REGISTRATIONS,
   buildErpResourceCommitmentSummary,
   buildErpFulfillmentTriage,
+  buildErpPortfolioFulfillmentReview,
   DashboardReadModel,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
@@ -125,7 +126,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   server.registerTool("get_erp_projects", {
     title: "Review WoWSync ERP projects",
-    description: "Returns a bounded version-isolated page of player-authored projects, shared commitments, changed requirement observations, and a combined fulfillment triage of changed observations, unworked requirements, reservation reviews, and open manual work. Multiple signals can refer to one need. Changed quantities do not establish action cause or task completion. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
+    description: "Returns a bounded version-isolated page of player-authored projects, shared commitments, changed requirement observations, cross-project dependency-ordered fulfillment packages, and triage. Portfolio packages order only player-authored prerequisite needs and show current evidence/readiness; they do not select routes or prove action causation. Changed quantities do not establish task completion. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
     inputSchema: z.object({ version: versionSchema, limit: limitSchema.max(20).optional() }).strict(),
     annotations: toolAnnotations,
   }, async ({ version, limit }) => {
@@ -133,7 +134,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const resolvedLimit = limit ?? 10;
     const observationChanges = version === "unknown-version" ? { items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, truncated: false } : buildErpNeedObservationChangeReview(projects, version);
     const fulfillmentTriage = buildErpFulfillmentTriage(projects, version);
-    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage });
+    const portfolioFulfillment = buildErpPortfolioFulfillmentReview(projects, version);
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment });
   });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();

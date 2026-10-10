@@ -1304,6 +1304,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const firstRead = rest.projects.find((project) => project.title === "Provision the crafter");
     const secondRead = rest.projects.find((project) => project.title === "Prepare the second recipe");
     const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
+    const portfolioPackage = rest.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "briar_need"));
+    assert.ok(portfolioPackage, "REST includes the connected cross-project package");
+    assert.deepEqual(portfolioPackage.steps.map((step) => step.needId), ["mycobloom_need", "briar_need"], "portfolio view puts the evidence prerequisite before dependent work");
+    assert.equal(portfolioPackage.steps[0].reviewState, "WORK_ORDER_REVIEW");
+    assert.equal(portfolioPackage.steps[1].reviewState, "WORK_ORDER_REVIEW");
+    const portfolioPanel = page.getByTestId("erp-portfolio-fulfillment");
+    assert.match(await portfolioPanel.innerText(), /Portfolio fulfillment packages/);
+    assert.match(await portfolioPanel.innerText(), /prerequisites the player linked/);
     assert.equal(firstRead.revision, 2); assert.equal(secondRead.revision, 2);
     assert.deepEqual(firstRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.sourceIdentityKey, order.investigationSourceLeadIdentityKey]), [["INVESTIGATE", "PLANNED", ["mycobloom_need"], source.character.identityKey, observedLead.character.identityKey]]);
     const investigationOrder = page.locator(".erp-work-order-list li").filter({ has: page.getByText("Review fulfillment: Mycobloom", { exact: true }) });
@@ -1326,10 +1334,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(context.planning.projects.some((project) => project.title === secondRead.title && project.revision === secondRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
+    assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, truncated: false });
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     const mcpProjectsById = new Map(mcp.structuredContent.projects.map((project) => [project.stableId, project]));
+    assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment, "MCP and REST share the exact dependency-first portfolio projection");
     for (const project of [firstRead, secondRead, thirdRead]) {
       assert.deepEqual(mcpProjectsById.get(project.stableId).workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]), project.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.procurementPlan]));
       assert.deepEqual(mcpProjectsById.get(project.stableId).reservations, project.reservations, "MCP and REST expose the same explicit reservation intent");
@@ -1348,6 +1358,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const contextFirst = changedContext.planning.projects.find((project) => project.stableId === first.stableId);
     assert.equal(contextFirst.reservationReviewStates.EXCEEDS_OBSERVED_SUPPLY, 2);
     const changedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(changedMcp.structuredContent.portfolioFulfillment, afterObservation.portfolioFulfillment, "portfolio readiness is recomputed from the same later observation for REST and MCP");
     const changedMcpFirst = changedMcp.structuredContent.projects.find((project) => project.stableId === first.stableId);
     assert.deepEqual(changedMcpFirst.reservationReview, afterFirst.reservationReview, "MCP and REST agree after the resource observation changes");
     assert.deepEqual(changedMcpFirst.workOrders.map((order) => order.status), afterFirst.workOrders.map((order) => order.status));
