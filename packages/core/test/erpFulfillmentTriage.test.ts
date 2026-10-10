@@ -152,3 +152,61 @@ test("source fulfillment review joins exact source/resource needs, reservations,
     assert.equal(buildErpSourceFulfillmentReview(projects, "classic-era", 1).truncated, true);
   } finally { store.close(); }
 });
+
+test("per-need fulfillment pathways distinguish observed bank retrieval, player plans, location leads, and incomplete evidence", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 200;
+  const make = (name: string, at: number, bagCount: number, bankCount: number, partialBank = false) => buildWowSyncExport({
+    generatedAt: at,
+    character: { name, realm: "Pathway Realm", clientVersion: "1.15.7", clientBuild: "60927" },
+    bags: { containers: [{ id: 0, capacity: 16, items: bagCount ? [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: bagCount }] : [] }] },
+    bank: { containers: [{ id: -1, capacity: 28, items: bankCount ? [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: bankCount }] : [] }], partial: partialBank },
+  });
+  try {
+    const source = store.importSnapshot(make("Pathway Crafter", now, 1, 5));
+    store.importSnapshot(make("Pathway Alternate", now + 10, 2, 0));
+    const destination = store.importSnapshot(buildWowSyncExport({ generatedAt: now + 10, character: { name: "Pathway Recipient", realm: "Pathway Realm", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [] } }));
+    const created = store.createErpProject({ version: "classic-era", title: "Pathway review", needs: [{ stableId: "exact-stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact stone", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: destination.character.identityKey }], reservations: [], workOrders: [{ stableId: "craft-plan", kind: "CRAFT", status: "PLANNED", title: "Player-declared craft review", resourceNeedIds: ["exact-stone"], assignedIdentityKey: source.character.identityKey, dependsOn: [] }] });
+    assert.ok(created);
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const review = buildErpSourceFulfillmentReview(projects, "classic-era");
+    const need = review.sources.flatMap((line) => line.needs).find((entry) => entry.needId === "exact-stone")!;
+    assert.equal(need.fulfillmentPathways.state, "CURRENT_SOURCE_COVERAGE", "selected-source coverage is distinct from delivery to the separate recipient");
+    assert.match(need.fulfillmentPathways.reason, /does not mean a different destination has received/);
+    const retrieval = need.fulfillmentPathways.options.find((option) => option.kind === "REVIEW_PERSONAL_BANK_RETRIEVAL");
+    assert.deepEqual(retrieval?.observedLocation, { section: "character bank", quantity: 5, observedAt: now, itemRef: "item:159:0:0" }, "retrieval option preserves exact variant and section timestamp");
+    assert.ok(need.fulfillmentPathways.options.some((option) => option.kind === "FOLLOW_EXISTING_MANUAL_PLAN" && option.workOrderIds?.includes("craft-plan")), "an existing player-declared craft task is shown independently");
+    const alternate = need.fulfillmentPathways.options.find((option) => option.kind === "INVESTIGATE_OTHER_CHARACTER_LOCATION");
+    const alternateLocation = alternate?.candidateLocations?.find((location) => location.characterName === "Pathway Alternate");
+    assert.equal(alternateLocation?.provenance, "OBSERVED", "a current location lead retains observed provenance");
+    assert.equal(alternateLocation?.freshness, "recent");
+    assert.equal(alternateLocation?.observedAt, now + 10);
+    assert.match(alternate!.reason, /does not establish account membership, ownership, access|None of these leads establishes account membership, ownership, access/);
+
+    const staleAt = now - 8 * 24 * 60 * 60;
+    const historicalViews = projects.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => screen.needId === "exact-stone" ? { ...screen, candidates: [...screen.candidates, { ...screen.candidates[0]!, sourceIdentityKey: "classic-era::pathway realm::historical alternate", sourceName: "Historical Alternate", sourceRealm: "Pathway Realm", state: "LAST_SEEN" as const, freshness: "stale" as const, observedAt: staleAt }] } : screen) }));
+    const historicalNeed = buildErpSourceFulfillmentReview(historicalViews, "classic-era").sources.flatMap((line) => line.needs).find((entry) => entry.needId === "exact-stone")!;
+    const historicalLead = historicalNeed.fulfillmentPathways.options.find((option) => option.kind === "INVESTIGATE_OTHER_CHARACTER_LOCATION")?.candidateLocations?.find((location) => location.characterName === "Historical Alternate");
+    assert.equal(historicalLead?.provenance, "LAST_SEEN", "a location whose source is only historical stays LAST_SEEN");
+    assert.equal(historicalLead?.freshness, "stale");
+    assert.equal(historicalLead?.observedAt, staleAt);
+
+    const sharedOwnerProjects = projects.map((project) => ({
+      ...project,
+      needs: project.needs.map((entry) => entry.stableId === "exact-stone" ? { ...entry, sourceIdentityKey: undefined, sourceOwnerKey: "owner:fixture-bank" } : entry),
+      needEvidence: project.needEvidence.map((entry) => entry.needId === "exact-stone" ? { ...entry, state: "COVERED_BY_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 5, unresolvedSections: [], unknownQuantityRowCount: 0 } : entry),
+      resourceSourceScreens: [],
+    }));
+    const ownerNeed = buildErpSourceFulfillmentReview(sharedOwnerProjects, "classic-era").sources.flatMap((line) => line.needs).find((entry) => entry.needId === "exact-stone")!;
+    assert.equal(ownerNeed.fulfillmentPathways.state, "CURRENT_SOURCE_COVERAGE", "shared-owner quantity is labeled as source coverage, not destination fulfillment");
+    assert.match(ownerNeed.fulfillmentPathways.reason, /does not mean a different destination has received/);
+
+    store.importSnapshot(make("Pathway Crafter", now + 20, 1, 5, true));
+    const partialViews = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const partialNeed = buildErpSourceFulfillmentReview(partialViews, "classic-era").sources.flatMap((line) => line.needs).find((entry) => entry.needId === "exact-stone")!;
+    assert.equal(partialNeed.fulfillmentPathways.state, "EVIDENCE_REVIEW_REQUIRED", "partial storage evidence cannot produce a definite path");
+    assert.equal(partialNeed.fulfillmentPathways.options.some((option) => option.kind === "REVIEW_PERSONAL_BANK_RETRIEVAL"), false, "partial bank data is not presented as a usable retrieval pathway");
+    assert.ok(partialNeed.fulfillmentPathways.options.some((option) => option.kind === "REFRESH_OR_CLARIFY_EVIDENCE" && option.provenance === "UNKNOWN"));
+    assert.equal(buildErpSourceFulfillmentReview(partialViews, "forever").totalNeedCount, 0, "pathways remain version isolated");
+  } finally { store.close(); }
+});

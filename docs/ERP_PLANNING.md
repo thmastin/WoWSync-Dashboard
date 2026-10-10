@@ -236,3 +236,13 @@ Full `npm.cmd run validate:erp` passed on the combined Phase 70-71 tree: Core 83
 Dashboard commits `a01513b2bd97a8824fff23a7f586487e5f9bfc69` and `f0b6a9e6c0dedcaf359f6100e99da29ed3825e2b` are pushed to `feature/forever-gear-observation`.
 
 Next substantial work: connect buyer packages, source alternatives, readiness, reservations, quotes, and paired observations into one explainable cross-project manual decision surface. Continue with supported crafting inputs and storage retrieval while keeping purchase, provisioning, access, movement, ownership, and action causality separate.
+
+## Phase 83: evidence-qualified per-need fulfillment pathways
+
+Projects & Work Orders now shows the available review options beside each source-scoped requirement: observed selected-source coverage or shortfall, retrieval review from complete same-character bag and personal-bank evidence, linked player-authored work, same-version alternative location leads, a manual supply-planning prompt, or an evidence-refresh prompt. Every alternate character lead carries its own OBSERVED/LAST_SEEN provenance, freshness, and timestamp. Location is not membership, ownership, access, a transfer route, or delivery.
+
+Source coverage is deliberately labeled `CURRENT_SOURCE_COVERAGE`; it does not claim that a different destination or project received the resource. The projection is deterministic and read-only. The player still authors each task and selects any source, reservation, or dependency through the existing reviewed planning controls. REST and MCP expose the detailed core projection, the Dashboard renders it, and AccountContext schema 38 summarizes pathway states and option kinds.
+
+Validation: `npm.cmd run validate:erp` passed: Core 838, MCP 3, Server 267 passed and 2 platform skips, Web 315, TypeScript, production build, and 15 synthetic browser acceptances. The browser scenario checks the same source review through UI, REST, AccountContext, and MCP. Independent review found two semantic risks—stale lead provenance and source coverage being mistaken for destination fulfillment. Both were fixed and covered with OBSERVED/LAST_SEEN, freshness, timestamp, cross-character, and shared-owner regressions. Synthetic only; no live account or production validation.
+
+Next substantial milestone: connect pathway review to a cross-project player-authored decision session that freezes selected requirements, work details, source scope, reservations, prerequisites, and current evidence for one atomic review/save. Only explicitly selected player plans may become work orders. Revalidate evidence and constraints at save time, preserve stale rejection, and do not infer access, route, execution, or delivery. The ERP mission remains active.

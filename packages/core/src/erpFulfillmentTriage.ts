@@ -91,6 +91,23 @@ export interface ErpPortfolioFulfillmentReview {
 
 export type ErpSourceFulfillmentNextReview = "REVIEW_EVIDENCE" | "REVIEW_RESERVATIONS" | "RECONCILE_OBSERVATIONS" | "PLAN_MANUAL_WORK" | "REVIEW_MANUAL_WORK" | "REVIEW_SOURCE_AND_ACCESS";
 
+export type ErpNeedFulfillmentOptionKind = "CURRENT_OBSERVED_COVERAGE" | "REVIEW_PERSONAL_BANK_RETRIEVAL" | "FOLLOW_EXISTING_MANUAL_PLAN" | "INVESTIGATE_OTHER_CHARACTER_LOCATION" | "CHOOSE_MANUAL_SUPPLY_PLAN" | "REFRESH_OR_CLARIFY_EVIDENCE";
+export interface ErpNeedFulfillmentOption {
+  readonly kind: ErpNeedFulfillmentOptionKind;
+  readonly provenance: "OBSERVED" | "DERIVED" | "UNKNOWN";
+  readonly workOrderIds?: readonly string[];
+  readonly observedLocation?: { readonly section: "bags" | "character bank"; readonly quantity: number; readonly observedAt: number; readonly itemRef?: string };
+  readonly candidateLocations?: readonly { readonly characterKey: string; readonly characterName: string; readonly realm: string; readonly provenance: "OBSERVED" | "LAST_SEEN"; readonly freshness: Freshness; readonly observedAt?: number }[];
+  readonly reason: string;
+}
+export interface ErpNeedFulfillmentPathwayReview {
+  readonly needId: string;
+  /** State describes only the selected source evidence, never delivery to a destination. */
+  readonly state: "CURRENT_SOURCE_COVERAGE" | "CURRENT_SOURCE_SHORTFALL" | "EVIDENCE_REVIEW_REQUIRED";
+  readonly options: readonly ErpNeedFulfillmentOption[];
+  readonly reason: string;
+}
+
 /** One exact, explicitly selected source/resource scope across active portfolio needs. This is a review queue, not a supply or route solver. */
 export interface ErpSourceFulfillmentLine {
   readonly stableId: string;
@@ -125,6 +142,8 @@ export interface ErpSourceFulfillmentLine {
     readonly sourceSections: ErpProjectView["needEvidence"][number]["sourceSections"];
     readonly unresolvedSections: readonly string[];
     readonly reservationAssessment?: ErpNeedEvidence["reservationAssessment"];
+    /** Evidence-backed manual pathway leads. These are alternatives for player review, never selected or executed routes. */
+    readonly fulfillmentPathways: ErpNeedFulfillmentPathwayReview;
     readonly reason: string;
     readonly workOrders: readonly {
       readonly stableId: string;
@@ -157,6 +176,33 @@ export interface ErpSourceFulfillmentReview {
   readonly openProvisioningPlanCount: number;
   readonly truncated: boolean;
   readonly interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY";
+}
+
+function buildNeedFulfillmentPathways(need: ErpResourceNeed, evidence: ErpNeedEvidence | undefined, workOrders: readonly { stableId: string; status: string }[], sourceSections: ErpNeedEvidence["sourceSections"], candidateLocations: ErpNeedFulfillmentOption["candidateLocations"]): ErpNeedFulfillmentPathwayReview {
+  const options: ErpNeedFulfillmentOption[] = [];
+  const completeCurrent = evidence?.freshness === "recent" && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
+  const reservationClear = !evidence?.reservationAssessment || evidence.reservationAssessment.state === "UNRESERVED" || evidence.reservationAssessment.state === "WITHIN_OBSERVED_SUPPLY";
+  if (completeCurrent && reservationClear && evidence?.state === "COVERED_BY_OBSERVED") options.push({ kind: "CURRENT_OBSERVED_COVERAGE", provenance: "DERIVED", reason: `${evidence.observedQuantity ?? "An unknown quantity"} observed against ${need.requiredQuantity} required. This reports selected-source coverage only; reservation, access, and action outcome remain separate.` });
+
+  const bags = sourceSections.find((section) => section.section === "bags");
+  const bank = sourceSections.find((section) => section.section === "character bank");
+  const completeObservedSection = (section: typeof bags) => section?.state === "OBSERVED" && section.completeness?.toLowerCase() === "complete" && section.observedAt !== undefined && section.matchingQuantity !== undefined;
+  if (need.sourceIdentityKey && (need.kind === "ITEM_REF" || need.kind === "ITEM_ID") && evidence?.freshness === "recent" && completeObservedSection(bags) && completeObservedSection(bank) && bank?.matchingQuantity !== undefined && bags?.matchingQuantity !== undefined && bank.matchingQuantity > 0 && bags.matchingQuantity < need.requiredQuantity) {
+    options.push({ kind: "REVIEW_PERSONAL_BANK_RETRIEVAL", provenance: "OBSERVED", observedLocation: { section: "character bank", quantity: bank!.matchingQuantity!, observedAt: bank!.observedAt!, ...(need.kind === "ITEM_REF" ? { itemRef: need.resourceKey } : {}) }, reason: `This same character's complete recent bags scan has ${bags!.matchingQuantity} matching units and personal bank scan has ${bank!.matchingQuantity}. Review a manual retrieval in game; the export does not establish current access or that retrieval occurred.` });
+  }
+
+  const openWorkOrderIds = workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").map((order) => order.stableId);
+  if (openWorkOrderIds.length) options.push({ kind: "FOLLOW_EXISTING_MANUAL_PLAN", provenance: "DERIVED", workOrderIds: openWorkOrderIds, reason: `There are ${openWorkOrderIds.length} open player-authored work order(s) linked to this need. Check each order's current readiness, prerequisites, and observation review before continuing; no action is executed.` });
+  if (candidateLocations?.length) options.push({ kind: "INVESTIGATE_OTHER_CHARACTER_LOCATION", provenance: "DERIVED", candidateLocations, reason: `${candidateLocations.length} same-version character location lead(s) are listed with their individual provenance, freshness, and observation time. Historical or stale evidence is not a current location. None of these leads establishes account membership, ownership, access, binding, transferability, or a route.` });
+  if (completeCurrent && reservationClear && evidence?.state === "SHORTFALL_OBSERVED" && openWorkOrderIds.length === 0) options.push({ kind: "CHOOSE_MANUAL_SUPPLY_PLAN", provenance: "DERIVED", reason: `Complete recent selected-source evidence shows ${evidence.observedQuantity ?? "an unknown quantity"} against ${need.requiredQuantity} required. The player must choose and record a supported manual step; no gathering route, recipe, purchase availability, price, or transfer is inferred.` });
+
+  const evidenceNeedsReview = !completeCurrent || !reservationClear || !evidence || (evidence.state !== "COVERED_BY_OBSERVED" && evidence.state !== "SHORTFALL_OBSERVED");
+  if (evidenceNeedsReview) options.push({ kind: "REFRESH_OR_CLARIFY_EVIDENCE", provenance: "UNKNOWN", reason: `${evidence?.reason ?? "Need evidence is unavailable."}${evidence?.reservationAssessment && !reservationClear ? ` Reservation assessment is ${evidence.reservationAssessment.state}; resolve it before treating supply as available.` : ""}` });
+  const state: ErpNeedFulfillmentPathwayReview["state"] = evidenceNeedsReview ? "EVIDENCE_REVIEW_REQUIRED" : evidence?.state === "COVERED_BY_OBSERVED" ? "CURRENT_SOURCE_COVERAGE" : "CURRENT_SOURCE_SHORTFALL";
+  const reason = state === "CURRENT_SOURCE_COVERAGE" ? "Current selected-source observations cover the recorded quantity. This does not mean a different destination has received the resource; review retrieval, access, and player-controlled work separately."
+    : state === "CURRENT_SOURCE_SHORTFALL" ? "Current complete selected-source evidence identifies a shortfall and lists only evidence-supported review options. The system does not choose or execute a supply route."
+      : "Current evidence, reservation state, or completeness is insufficient for a definite fulfillment path; UNKNOWN and historical quantities remain unresolved.";
+  return { needId: need.stableId, state, options, reason };
 }
 
 /** Review state frozen by the Dashboard before a grouped manual plan is saved. It is a stale-review guard, not a signed or trusted claim. */
@@ -383,7 +429,10 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
         const procurement = readiness?.procurementAssessment;
         return { stableId: order.stableId, kind: order.kind, title: order.title, status: order.status, ...(readiness ? { readinessState: readiness.state } : {}), ...(progress ? { progressState: progress.reconciliation } : {}), observationStates: [...new Set(observationStates)], capabilityChecks: (readiness?.capabilityChecks ?? []).map((check) => ({ kind: check.kind, state: check.state, reason: check.reason })), ...(progress?.plannedOutputAssessment ? { plannedOutputState: progress.plannedOutputAssessment.state } : {}), ...(procurement ? { procurement: { reviewState: procurement.reviewState, quoteState: procurement.quoteState, ...(procurement.playerQuote ? { quote: { amountCopper: procurement.playerQuote.amountCopper, quantity: procurement.playerQuote.quantity, recordedAt: procurement.playerQuote.recordedAt, freshness: procurement.playerQuote.freshness } } : {}), affordability: procurement.affordability, marketAvailability: procurement.marketAvailability } } : {}), ...(readiness?.reason || progress?.reason ? { reason: readiness?.reason ?? progress?.reason } : {}) };
       });
-      return { projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority, needId: need.stableId, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), state: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), sourceSections: evidence?.sourceSections ?? [], unresolvedSections: evidence?.unresolvedSections ?? ["need evidence"], ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), reason: evidence?.reason ?? "No current need assessment is available; evidence is UNKNOWN.", workOrders };
+      const sourceSections = evidence?.sourceSections ?? [];
+      const candidateLocations = alternativeLocations.filter((location) => location.needReferences.some((reference) => reference.projectId === project.stableId && reference.needId === need.stableId)).map((location) => ({ characterKey: location.sourceIdentityKey, characterName: `${location.sourceName}${location.sourceSurname ? ` ${location.sourceSurname}` : ""}`, realm: location.sourceRealm, provenance: location.state, freshness: location.freshness, ...(location.observedAt !== undefined ? { observedAt: location.observedAt } : {}) }));
+      const fulfillmentPathways = buildNeedFulfillmentPathways(need, evidence, workOrders, sourceSections, candidateLocations);
+      return { projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority, needId: need.stableId, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), state: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), sourceSections, unresolvedSections: evidence?.unresolvedSections ?? ["need evidence"], ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), fulfillmentPathways, reason: evidence?.reason ?? "No current need assessment is available; evidence is UNKNOWN.", workOrders };
     }).sort((a, b) => b.projectPriority - a.projectPriority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
     const allEvidenceCurrent = needs.every((need) => need.state === "COVERED_BY_OBSERVED" || need.state === "SHORTFALL_OBSERVED") && needs.every((need) => need.freshness === "recent" && need.unresolvedSections.length === 0);
     const reservationReview = needs.some((need) => !need.reservationAssessment || need.reservationAssessment.state === "UNKNOWN" || need.reservationAssessment.state === "OVER_RESERVED");

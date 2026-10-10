@@ -1421,12 +1421,20 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(sourceResourceReview, "REST groups only needs that explicitly name this source and exact itemString");
     assert.ok(sourceResourceReview.alternativeLocations.some((location) => location.sourceName === "Possible Source Lead" && location.activeReservationQuantity === 2 && location.reservationState === "WITHIN_OBSERVED_SUPPLY"), "the alternate source review reflects the explicit source-scoped planning hold");
     assert.ok(sourceResourceReview.alternativeLocations.every((location) => location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "alternative locations do not establish account membership, access, or transferability");
+    const firstNeedPathways = sourceResourceReview.needs.find((need) => need.needId === "mycobloom_need").fulfillmentPathways;
+    assert.equal(firstNeedPathways.state, "CURRENT_SOURCE_SHORTFALL", "the status remains scoped to the selected source, not the destination's actual inventory");
+    assert.ok(firstNeedPathways.options.some((option) => option.kind === "FOLLOW_EXISTING_MANUAL_PLAN"), "the review joins the need to its player-authored provisioning plan");
+    assert.ok(firstNeedPathways.options.some((option) => option.kind === "INVESTIGATE_OTHER_CHARACTER_LOCATION" && option.candidateLocations.some((location) => location.characterKey === observedLead.character.identityKey && location.provenance === "OBSERVED" && location.freshness === "recent")), "an observed alternate character is shown with its provenance and freshness without asserting access");
+    assert.match(await page.locator("body").innerText(), /Possible Source Lead.*OBSERVED, recent/s, "player-facing pathway labels each location lead with its evidence state and freshness");
     const alternateCommitment = rest.resourceCommitments.items.find((entry) => entry.sourceIdentityKey === observedLead.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     assert.ok(alternateCommitment, "REST emits a distinct commitment line for the selected alternate source");
     assert.equal(alternateCommitment.activeNeedCount, 0, "a source-scoped hold does not move the requirement itself onto the alternate character");
     assert.equal(alternateCommitment.activeReservationQuantity, 2);
     const sourceReviewRow = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(sourceResourceReview.stableId)}`);
     assert.match(await sourceReviewRow.innerText(), /Other observed location leads/);
+    assert.match(await sourceReviewRow.innerText(), /Evidence-supported review options/);
+    assert.match(await sourceReviewRow.innerText(), /FOLLOW EXISTING MANUAL PLAN/);
+    assert.match(await sourceReviewRow.innerText(), /INVESTIGATE OTHER CHARACTER LOCATION/);
     assert.match(await sourceReviewRow.innerText(), /Possible Source Lead/);
     assert.match(await sourceReviewRow.innerText(), /Membership: UNKNOWN.*access: UNKNOWN.*transferability: UNKNOWN/);
     assert.match(await sourceReviewRow.innerText(), /Open requirement, evidence, and manual task controls/);
@@ -1482,7 +1490,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
     assert.ok(context.planning.resourceCommitments.retail.linesWithReservations >= 2, "AccountContext counts the source-scoped reservation lines without claiming stock movement");
     assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
-    assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 1, alternativeLocationCount: 1, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, truncated: false }, "AccountContext summarizes the same source/resource groups and explicit needs");
+    assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 1, alternativeLocationCount: 1, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, pathwayStates: { CURRENT_SOURCE_SHORTFALL: 3 }, pathwayOptionKinds: { FOLLOW_EXISTING_MANUAL_PLAN: 3, INVESTIGATE_OTHER_CHARACTER_LOCATION: 2 }, truncated: false }, "AccountContext summarizes the same source/resource groups and evidence-qualified review options");
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
@@ -1766,7 +1774,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await resourcePackage.innerText(), /Review the separate provisioning need.*PROVISION.*PLANNED/);
     assert.match(await resourcePackage.innerText(), /These are separate plans, not reservations/);
     const accountContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(accountContext.schemaVersion, "37");
+    assert.equal(accountContext.schemaVersion, "38");
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedSourceCoverageReviewsWithOtherProjectNeeds, 1);
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedOtherSourceScopedNeedCount, 1);
     const otherPlanReview = resourcePackage.getByRole("button", { name: "Review this project need" });
@@ -1853,7 +1861,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "37");
+    assert.equal(context.schemaVersion, "38");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
     assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, returnedSourceCoverageReviewsWithOtherProjectNeeds: 1, returnedOtherSourceScopedNeedCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });
