@@ -669,6 +669,48 @@ test("REST and AccountContext do not reconcile covered stock as work-order progr
   });
 });
 
+test("reservation replan is a reviewed cross-project reduction with atomic revisions and REST/AccountContext parity", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000) + 1;
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } }));
+    const character = store.listCharacters("classic-era")[0]!;
+    const create = async (title: string, needId: string, reservationId: string) => (await call("POST", "/api/versions/classic-era/erp/projects", { title, needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: "item:159:0:0", label: title, requiredQuantity: 3, sourceIdentityKey: character.identityKey }], reservations: [{ stableId: reservationId, needId, sourceIdentityKey: character.identityKey, quantity: 3, status: "ACTIVE", createdAt: generatedAt, updatedAt: generatedAt }] })).body.project;
+    const first = await create("First requirement", "first_need", "first_hold");
+    const second = await create("Second requirement", "second_need", "second_hold");
+    const before = await call("GET", "/api/versions/classic-era/erp/projects");
+    const line = before.body.resourceCommitments.items.find((entry: any) => entry.resourceKey === "item:159:0:0");
+    assert.equal(line.reservationState, "OVER_RESERVED");
+    const stale = await call("POST", "/api/versions/classic-era/erp/reservation-replans", { projects: [
+      { projectId: first.stableId, expectedRevision: first.revision, reservations: first.reservations.map((entry: any) => ({ stableId: entry.stableId, quantity: 1, status: "ACTIVE" })) },
+      { projectId: second.stableId, expectedRevision: second.revision + 1, reservations: second.reservations.map((entry: any) => ({ stableId: entry.stableId, quantity: entry.quantity, status: entry.status })) },
+    ] });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.code, "ERP_PROJECT_CONFLICT");
+    assert.equal(store.getErpProject(first.stableId)?.reservations[0]?.quantity, 3, "a stale project rejects every proposed change");
+
+    const saved = await call("POST", "/api/versions/classic-era/erp/reservation-replans", { projects: [
+      { projectId: first.stableId, expectedRevision: first.revision, reservations: first.reservations.map((entry: any) => ({ stableId: entry.stableId, quantity: 1, status: "ACTIVE" })) },
+      { projectId: second.stableId, expectedRevision: second.revision, reservations: second.reservations.map((entry: any) => ({ stableId: entry.stableId, quantity: entry.quantity, status: "RELEASED" })) },
+    ] });
+    assert.equal(saved.status, 200);
+    assert.deepEqual([saved.body.atomic, saved.body.changedReservationCount, saved.body.projects.map((project: any) => project.revision)], [true, 2, [2, 2]]);
+    const after = await call("GET", "/api/versions/classic-era/erp/projects");
+    const afterLine = after.body.resourceCommitments.items.find((entry: any) => entry.resourceKey === "item:159:0:0");
+    assert.deepEqual([afterLine.activeReservationQuantity, afterLine.availableObservedLowerBound, afterLine.reservationState], [1, 3, "WITHIN_OBSERVED_SUPPLY"]);
+    const context = await call("GET", "/api/account-context");
+    assert.deepEqual(context.body.planning.resourceCommitments["classic-era"].linesWithReservations, 1);
+    assert.ok(context.body.planning.projects.some((project: any) => project.stableId === first.stableId && project.revision === 2));
+    assert.ok(context.body.planning.projects.some((project: any) => project.stableId === second.stableId && project.revision === 2));
+
+    const increase = await call("POST", "/api/versions/classic-era/erp/reservation-replans", { projects: [{ projectId: first.stableId, expectedRevision: 2, reservations: [{ stableId: "first_hold", quantity: 2, status: "ACTIVE" }] }] });
+    assert.equal(increase.status, 409);
+    assert.equal(increase.body.code, "RESERVATION_INCREASE_BLOCKED");
+    const wrongVersion = await call("POST", "/api/versions/forever/erp/reservation-replans", { projects: [{ projectId: first.stableId, expectedRevision: 2, reservations: [{ stableId: "first_hold", quantity: 1, status: "ACTIVE" }] }] });
+    assert.equal(wrongVersion.status, 404);
+    assert.equal(store.getErpProject(first.stableId)?.revision, 2);
+  });
+});
+
 test("project REST preserves explicit work-order plan details and histories task status changes as saved intent", async () => {
   await withServer(async (call, store) => {
     const character = store.listCharacters("classic-era")[0]!;

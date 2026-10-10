@@ -447,6 +447,15 @@ export function updateErpProject(project: ErpProjectView) {
   return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}`, { method: "PUT", body: JSON.stringify({ expectedRevision: project.revision, project: intent }) }, { validate: hasObject("project") });
 }
 
+/** Atomically reduces or releases the existing reservation records frozen in a cross-project player review. */
+export function replanErpReservations(version: VersionOrUnknown, projects: readonly { stableId: string; revision: number; reservations: ErpProjectView["reservations"] }[]) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; changedReservationCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/reservation-replans`,
+    { method: "POST", body: JSON.stringify({ projects: projects.map((project) => ({ projectId: project.stableId, expectedRevision: project.revision, reservations: project.reservations.map(({ stableId, quantity, status }) => ({ stableId, quantity, status })) })) }) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.changedReservationCount === "number" && body.atomic === true },
+  );
+}
+
 export function setErpProjectStatus(project: ErpProjectView, status: ErpProject["status"]) {
   return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}/status`, { method: "PATCH", body: JSON.stringify({ expectedRevision: project.revision, status }) }, { validate: hasObject("project") });
 }

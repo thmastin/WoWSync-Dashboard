@@ -204,6 +204,44 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
       throw err;
     }
   });
+  app.post("/api/versions/:version/erp/reservation-replans", (req, res) => {
+    const { version } = req.params;
+    if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
+    const body = req.body ?? {};
+    if (!Array.isArray(body.projects) || body.projects.length < 1 || body.projects.length > 10 || body.projects.some((entry: unknown) => !entry || typeof entry !== "object" || typeof (entry as { projectId?: unknown }).projectId !== "string" || !Number.isSafeInteger((entry as { expectedRevision?: unknown }).expectedRevision) || !Array.isArray((entry as { reservations?: unknown }).reservations))) return res.status(400).json({ error: "Provide 1 to 10 project revision snapshots and complete reservation lists.", code: "INVALID_RESERVATION_REPLAN" });
+    if (new Set(body.projects.map((entry: { projectId: string }) => entry.projectId)).size !== body.projects.length) return res.status(400).json({ error: "Each project may appear only once in a reservation replan.", code: "INVALID_RESERVATION_REPLAN" });
+    let changedReservationCount = 0;
+    try {
+      const updates = [];
+      for (const entry of body.projects as { projectId: string; expectedRevision: number; reservations: unknown[] }[]) {
+        const existing = store.getErpProject(entry.projectId);
+        if (!existing || existing.version !== version) return res.status(404).json({ error: "A selected project was not found in this version.", code: "PROJECT_NOT_FOUND" });
+        if (existing.revision !== entry.expectedRevision) return res.status(409).json({ error: "A selected project changed after review. Reload the current reservation state.", code: "ERP_PROJECT_CONFLICT" });
+        if (entry.reservations.length !== existing.reservations.length) return res.status(400).json({ error: "The review must preserve every existing reservation record.", code: "INVALID_RESERVATION_REPLAN" });
+        const proposed = new Map<string, { stableId: string; quantity: number; status: string }>();
+        for (const value of entry.reservations) {
+          if (!value || typeof value !== "object") return res.status(400).json({ error: "Each proposed reservation needs an identity, quantity, and state.", code: "INVALID_RESERVATION_REPLAN" });
+          const reservation = value as { stableId?: unknown; quantity?: unknown; status?: unknown };
+          if (typeof reservation.stableId !== "string" || !Number.isSafeInteger(reservation.quantity) || !["ACTIVE", "RELEASED"].includes(String(reservation.status)) || proposed.has(reservation.stableId)) return res.status(400).json({ error: "Reservation changes require unique identities, integer quantities, and ACTIVE or RELEASED state.", code: "INVALID_RESERVATION_REPLAN" });
+          proposed.set(reservation.stableId, reservation as { stableId: string; quantity: number; status: string });
+        }
+        if (existing.reservations.some((reservation) => !proposed.has(reservation.stableId))) return res.status(400).json({ error: "Every existing reservation must be included in the frozen review.", code: "INVALID_RESERVATION_REPLAN" });
+        const reservations = existing.reservations.map((reservation) => {
+          const next = proposed.get(reservation.stableId)!;
+          if (next.status !== reservation.status || next.quantity !== reservation.quantity) changedReservationCount++;
+          return { ...reservation, quantity: next.quantity, status: next.status as typeof reservation.status };
+        });
+        updates.push({ projectId: existing.stableId, expectedRevision: entry.expectedRevision, reservations });
+      }
+      const saved = store.replanErpReservationsAtomically(version, updates);
+      if (!saved) return res.status(404).json({ error: "A selected project was removed before the reservation replan could be committed.", code: "PROJECT_NOT_FOUND" });
+      return res.json({ version, projects: read(version).filter((project) => saved.some((entry) => entry.stableId === project.stableId)), changedReservationCount, atomic: true });
+    } catch (err) {
+      if (err instanceof ErpProjectConflictError) return res.status(409).json({ error: err.message, code: err.code });
+      if (err instanceof ErpProjectValidationError || err instanceof TypeError) return res.status(400).json({ error: err.message, code: err instanceof ErpProjectValidationError ? err.code : "INVALID_RESERVATION_REPLAN" });
+      throw err;
+    }
+  });
   app.put("/api/versions/:version/erp/projects/:stableId", (req, res) => {
     const { version, stableId } = req.params;
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });

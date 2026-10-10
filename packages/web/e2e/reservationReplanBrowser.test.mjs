@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { fullRef, observedSection, row } from "../../core/test/allocationFixtures.ts";
+import { renderExport } from "../../core/test/sharedStorageExports.ts";
+import { createApp } from "../../server/src/app.ts";
+import { LOOPBACK_HOSTNAMES, listenOnce } from "../../server/src/net.ts";
+
+const webDist = fileURLToPath(new URL("../dist/", import.meta.url));
+const itemRef = fullRef(940211);
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh dependency evidence without inferring craftability", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-reservation-replan-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const observed = store.importSnapshot(renderExport({ name: "Reservation Planner", realm: "Cairne", generated: now, bags: observedSection([row(940211, 4, { name: "Mycobloom" }), row(940212, 1, { name: "Craft reagent" })], now), bank: observedSection([], now) }));
+    const sourceKey = observed.character.identityKey;
+    const makeProject = (title, needId, reservationId) => store.createErpProject({ version: "retail", title, needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: itemRef, label: title.includes("Second") ? "Second requirement" : "Mycobloom", requiredQuantity: 3, sourceIdentityKey: sourceKey }], reservations: [{ stableId: reservationId, needId, sourceIdentityKey: sourceKey, quantity: 3, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    const first = makeProject("First requirement", "first_need", "first_hold");
+    const second = makeProject("Second requirement", "second_need", "second_hold");
+    const downstream = store.createErpProject({ version: "retail", title: "Craft after supply review", needs: [{ stableId: "craft_need", kind: "ITEM_REF", resourceKey: fullRef(940212), label: "Craft reagent", requiredQuantity: 1, sourceIdentityKey: sourceKey }], workOrders: [{ stableId: "craft_order", kind: "CRAFT", status: "PLANNED", title: "Review craft after supply", resourceNeedIds: ["craft_need"], dependsOn: [], portfolioPrerequisites: [{ projectId: first.stableId, needId: "first_need" }] }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
+    const panel = page.getByTestId("erp-reservation-replan"); await panel.waitFor();
+    await panel.getByRole("button", { name: /Review .* reservations/ }).click();
+    assert.equal(await panel.getByLabel(/New reservation quantity for First requirement:/).inputValue(), "3");
+    assert.equal(await panel.getByLabel(/New reservation quantity for Second requirement:/).inputValue(), "3");
+    await panel.getByLabel(/New reservation quantity for First requirement:/).fill("1");
+    await panel.getByLabel(/New reservation quantity for Second requirement:/).fill("0");
+    await panel.getByRole("button", { name: "Review atomic changes" }).click();
+    const review = panel.getByTestId("erp-reservation-replan-review");
+    assert.match(await review.innerText(), /First requirement.*3 to 1/);
+    assert.match(await review.innerText(), /Second requirement.*3 to RELEASED/);
+    assert.match(await review.innerText(), /Craft after supply review: Review craft after supply \(PLANNED\)/);
+    await review.getByRole("button", { name: "Save reservation replan" }).click();
+    await panel.getByRole("status").filter({ hasText: /2 reservation changes saved atomically across 2 projects/ }).waitFor();
+
+    const rest = await page.evaluate(async () => await (await fetch("/api/versions/retail/erp/projects")).json());
+    assert.equal(rest.projects.find((project) => project.stableId === first.stableId).revision, 2);
+    assert.equal(rest.projects.find((project) => project.stableId === second.stableId).reservations[0].status, "RELEASED");
+    const gate = rest.portfolioFulfillment.packages.flatMap((entry) => entry.steps).find((step) => step.projectId === downstream.stableId)?.prerequisiteGate;
+    assert.equal(gate.state, "CURRENT_OBSERVED_EVIDENCE_MET");
+    assert.equal(gate.blockers.length, 0);
+    const context = await page.evaluate(async () => await (await fetch("/api/account-context")).json());
+    assert.equal(context.planning.portfolioFulfillment.retail.stepsWithPrerequisiteReview, 0);
+    const downstreamContext = context.planning.projects.find((project) => project.stableId === downstream.stableId);
+    assert.equal(downstreamContext.workOrderReadinessStates.WAITING_FOR_EVIDENCE, 1, "a clear prerequisite does not establish recipe or craftability evidence");
+    assert.equal(downstreamContext.craftInputObservationStates.UNKNOWN, 1);
+    mcpClient = new Client({ name: "reservation-replan-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment);
+    assert.deepEqual(mcp.structuredContent.resourceCommitments, rest.resourceCommitments);
+    assert.equal(rest.resourceCommitments.items.find((line) => line.resourceKey === itemRef).observedQuantity, 4, "reservation planning does not change observed stock");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});

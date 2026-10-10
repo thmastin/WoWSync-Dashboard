@@ -1727,6 +1727,57 @@ export class SqliteSnapshotStore implements SnapshotStore {
     });
   }
 
+  replanErpReservationsAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly reservations: readonly ErpReservation[] }[]): ErpProject[] | undefined {
+    if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10 || new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A reservation review must update 1 to 10 distinct projects.");
+    return this.inTransaction(() => {
+      const existingProjects = updates.map((entry) => this.getErpProject(entry.projectId));
+      if (existingProjects.some((project) => !project)) return undefined;
+      const existing = existingProjects as ErpProject[];
+      const nextProjects: ErpProject[] = [];
+      let changedReservationCount = 0;
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+          if (project.version !== version || (project.status !== "ACTIVE" && project.status !== "PAUSED" && project.status !== "COMPLETED")) throw new TypeError("Reservations can be replanned only in active, paused, or completed projects within one explicit version.");
+        if (!Number.isSafeInteger(entry.expectedRevision) || project.revision !== entry.expectedRevision) throw new ErpProjectConflictError();
+        if (!entry.reservations || entry.reservations.length !== project.reservations.length) throw new TypeError("A reservation review must preserve every existing reservation record.");
+        const proposedById = new Map<string, ErpReservation>(entry.reservations.map((reservation: ErpReservation) => [reservation.stableId, reservation]));
+        if (proposedById.size !== project.reservations.length || project.reservations.some((reservation) => !proposedById.has(reservation.stableId))) throw new TypeError("A reservation review cannot add, remove, or duplicate reservation identities.");
+        const reservations = project.reservations.map((previous) => {
+          const next = proposedById.get(previous.stableId)!;
+          if (next.needId !== previous.needId || next.sourceIdentityKey !== previous.sourceIdentityKey || next.sourceOwnerKey !== previous.sourceOwnerKey || next.createdAt !== previous.createdAt) throw new ErpProjectConflictError("RESERVATION_SCOPE_IMMUTABLE", "A replan may only reduce or release existing intent; changing its need, source, owner, or creation identity requires a separate reviewed plan.");
+          if (previous.status === "RELEASED") {
+            if (next.status !== "RELEASED" || next.quantity !== previous.quantity) throw new ErpProjectConflictError("RESERVATION_REACTIVATION_BLOCKED", "Released reservation history cannot be reactivated or rewritten.");
+          } else if (next.status === "ACTIVE") {
+            if (!Number.isSafeInteger(next.quantity) || next.quantity < 1 || next.quantity > previous.quantity) throw new ErpProjectConflictError("RESERVATION_INCREASE_BLOCKED", "A replan may keep or reduce an active reservation, but cannot increase it.");
+          } else if (next.status !== "RELEASED" || next.quantity !== previous.quantity) {
+            throw new ErpProjectConflictError("INVALID_RESERVATION_REPLAN", "An active reservation may only be reduced or released while preserving its recorded quantity on release.");
+          }
+          if (next.status !== previous.status || next.quantity !== previous.quantity) changedReservationCount++;
+          return { ...previous, quantity: next.quantity, status: next.status, updatedAt: Math.floor(Date.now() / 1000) };
+        });
+          if (!project.reservations.some((previous) => {
+            const next = proposedById.get(previous.stableId)!;
+            return next.status !== previous.status || next.quantity !== previous.quantity;
+          })) throw new TypeError("Each project in a reservation replan must contain at least one explicit change.");
+        const updated: ErpProject = { ...project, reservations, updatedAt: Math.floor(Date.now() / 1000), revision: project.revision + 1 };
+        validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+        nextProjects.push(updated);
+      }
+      if (changedReservationCount === 0) throw new TypeError("The reservation review contains no changes.");
+      const replacements = new Map(nextProjects.map((project) => [project.stableId, project]));
+      validatePortfolioNeedDependencies(this.listErpProjects(version).map((project) => replacements.get(project.stableId) ?? project));
+      for (let index = 0; index < nextProjects.length; index++) {
+        const updated = nextProjects[index]!; const previous = existing[index]!; const expectedRevision = updates[index]!.expectedRevision;
+        const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?").run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
+        if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
+        this.recordErpProjectEvent(updated, "UPDATED", ["reservations"]);
+        if (updated.version !== previous.version) throw new ErpProjectConflictError();
+      }
+      return nextProjects;
+    });
+  }
+
   appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[]; readonly reservations?: readonly (ErpReservation | undefined)[] }[]): ErpProject[] | undefined {
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) throw new TypeError("A grouped work-order update must include 1 to 10 projects.");
     if (new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A project can appear only once in a grouped work-order update.");
