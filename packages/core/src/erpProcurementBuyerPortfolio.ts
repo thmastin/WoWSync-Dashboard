@@ -4,7 +4,7 @@ import type { VersionOrUnknown, WowVersion } from "./types.ts";
 export type ErpProcurementSourceReviewState = "OBSERVED_POTENTIAL_SOURCES" | "POTENTIAL_SOURCES_SCAN_INCOMPLETE" | "NO_MATCHING_SOURCE_OBSERVED" | "NO_OTHER_CHARACTERS_TO_SCAN" | "SOURCE_SCAN_INCOMPLETE" | "SOURCE_REVIEW_UNAVAILABLE";
 
 export interface ErpProcurementSourceLead {
-  readonly needReferences: readonly { readonly projectId: string; readonly projectTitle: string; readonly needId: string; readonly workOrderIds: readonly string[] }[];
+  readonly needReferences: readonly { readonly projectId: string; readonly projectTitle: string; readonly needId: string }[];
   readonly sourceIdentityKey: string;
   readonly sourceName: string;
   readonly sourceSurname?: string;
@@ -113,7 +113,7 @@ function reviewSources(project: ErpProjectView | undefined, needId: string, kind
   if (!project || !screen) return { state: "SOURCE_REVIEW_UNAVAILABLE", sources: [] };
   const incomplete = screen.unresolvedCharacterCount > 0 || screen.candidatesTruncated;
   const sources: ErpProcurementSourceLead[] = screen.candidates.filter((candidate) => candidate.kind === kind && candidate.resourceKey === resourceKey).map((candidate) => ({
-    needReferences: [{ projectId: project.stableId, projectTitle: project.title, needId, workOrderIds: project.workOrders.filter((order) => order.kind === "PURCHASE" && order.status !== "COMPLETED" && order.status !== "CANCELLED" && order.procurementPlan?.targetNeedId === needId).map((order) => order.stableId) }], sourceIdentityKey: candidate.sourceIdentityKey, sourceName: candidate.sourceName,
+    needReferences: [{ projectId: project.stableId, projectTitle: project.title, needId }], sourceIdentityKey: candidate.sourceIdentityKey, sourceName: candidate.sourceName,
     ...(candidate.sourceSurname ? { sourceSurname: candidate.sourceSurname } : {}), sourceRealm: candidate.sourceRealm, state: candidate.state,
     ...(candidate.observedQuantity !== undefined ? { observedQuantity: candidate.observedQuantity } : {}), ...(candidate.potentialQuantity !== undefined ? { potentialQuantity: candidate.potentialQuantity } : {}),
     activeReservationQuantity: candidate.activeReservationQuantity, reservationState: candidate.reservationState,
@@ -234,7 +234,7 @@ export function buildErpProcurementBuyerPortfolioReview(
         const project = projectsById.get(entry.projectId);
         const screen = project?.resourceSourceScreens.find((candidate) => candidate.needId === entry.targetNeedId);
         return (screen?.candidates ?? []).filter((candidate) => candidate.kind === entry.targetKind && candidate.resourceKey === entry.targetResourceKey).map((candidate) => ({
-          needReferences: [{ projectId: entry.projectId, projectTitle: entry.projectTitle, needId: entry.targetNeedId, workOrderIds: (project?.workOrders ?? []).filter((order) => order.kind === "PURCHASE" && order.status !== "COMPLETED" && order.status !== "CANCELLED" && order.procurementPlan?.targetNeedId === entry.targetNeedId).map((order) => order.stableId) }],
+          needReferences: [{ projectId: entry.projectId, projectTitle: entry.projectTitle, needId: entry.targetNeedId }],
           sourceIdentityKey: candidate.sourceIdentityKey, sourceName: candidate.sourceName, ...(candidate.sourceSurname ? { sourceSurname: candidate.sourceSurname } : {}), sourceRealm: candidate.sourceRealm,
           state: candidate.state, ...(candidate.observedQuantity !== undefined ? { observedQuantity: candidate.observedQuantity } : {}), ...(candidate.potentialQuantity !== undefined ? { potentialQuantity: candidate.potentialQuantity } : {}),
           activeReservationQuantity: candidate.activeReservationQuantity, reservationState: candidate.reservationState,
