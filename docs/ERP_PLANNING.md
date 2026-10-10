@@ -291,7 +291,7 @@ Validation: Core 849 passed; MCP 3 passed; Server 268 passed with 2 Windows plat
 
 ## Current next substantial milestone
 
-Advance from saved grouped-plan review into a player-led fulfillment/replan loop: compare the frozen multi-need plan with later partial, conflicting, stale, and restored observations; let the player update or close affected tasks only after reviewing evidence; then ensure reservation, prerequisite, procurement, and source reviews recompute together through Dashboard, REST, AccountContext, and MCP. Preserve UNKNOWN ownership/access and action causality; do not infer delivery or completion. The ERP mission remains active.
+Connect successive reviewed batches into a decision lineage so a player can see which prior batch and exact reviewed needs motivated a follow-up plan while each batch remains immutable. Exercise the whole review-terminalize-replan-confirm lifecycle against changed, partial, stale, conflicting, and restored observations. Recheck reservations, prerequisites, procurement, and sources before the player confirms the next batch. Expose predecessor/follow-up context through Core, REST, AccountContext, MCP, and Dashboard. Preserve UNKNOWN ownership/access and action causality; do not infer delivery or completion. The ERP mission remains active.
 
 ## Phase 98: saved grouped-plan lifecycle and later evidence review
 
@@ -303,4 +303,14 @@ The browser acceptance saves one two-project batch, checks REST/AccountContext/M
 
 Validation: `npm.cmd run validate:erp` passed with Core 850, MCP 3, Server 268 passed and 2 Windows platform skips, Web 315, TypeScript, production build, and 22 synthetic browser acceptances. Independent review found and fixed two data-integrity issues: batch-linked tasks could be deleted via generic PUT, and need identity could change while a quantity baseline remained attached. Follow-up review confirmed both fixes and found no remaining blockers. The existing Vite bundle-size advisory remains. Synthetic-only; no live-game or production validation was performed.
 
-The player can now save one reviewed plan across several requirements and later see which exact requirement evidence changed, without losing the original resource scope or mistaking a quantity change for task completion. The next substantial milestone is a player-led replan/reconciliation flow that connects these lifecycle reviews back to project task and reservation changes as one coherent operation.
+The player can now save one reviewed plan across several requirements and later see which exact requirement evidence changed, without losing the original resource scope or mistaking a quantity change for task completion.
+
+## Phase 99: reviewed saved-plan steps to grouped replan
+
+From a saved-batch review, the player can carry eligible affected requirements into the existing grouped planner. Eligibility requires review-relevant current evidence and only terminal linked work; active manual work is excluded to prevent duplicate instructions. The handoff preselects the exact project and requirement, deduplicates repeated batch steps, respects planner limits, and leaves task kind, instructions, assignment, pathway, source, reservation, and prerequisites for player review. It persists nothing until the existing frozen, revision/evidence-checked atomic confirmation.
+
+The browser acceptance confirms a two-project batch, imports changed-but-still-short requirements, verifies that evidence changes alone leave original work PLANNED, explicitly terminalizes the original work, and then carries the exact reviewed needs into the grouped composer. It verifies the prefilled draft is read-only with respect to stored projects and reads the same changed evidence and original batch lifecycle through REST, AccountContext, and MCP. No task, reservation, movement, completion, or action cause is inferred by the handoff.
+
+Validation: `npm.cmd run validate:erp` passed with Core 850, MCP 3, Server 268 passed plus 2 Windows platform skips, Web 315, TypeScript, production build, and 22 synthetic browser acceptances. Independent review found no blockers. The existing Vite bundle-size advisory remains. Synthetic-only; no live-game or production validation was performed.
+
+The player can now turn a reviewed, changed saved plan into an exact follow-up draft without re-finding requirements or duplicating unfinished work. The next substantial milestone connects successive immutable batches through a server-validated predecessor/follow-up decision lineage and exercises the complete replan-confirm lifecycle.
