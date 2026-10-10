@@ -807,7 +807,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     const historicalBank = observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now - 10 * 86400);
     historicalBank.status.state = "LAST_SEEN";
     const lastSeenIdentity = store.importSnapshot(renderExport({ name: "Historical Bank Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" })], now), bank: historicalBank, guild: guildSection("gclub-historical-bank-planner", [], now) })).character.identityKey;
-    store.createErpProject({ version: "retail", title: "Review fresh bank supply", needs: [{ stableId: "fresh_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
+    const freshProject = store.createErpProject({ version: "retail", title: "Review fresh bank supply", needs: [{ stableId: "fresh_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 5, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
     store.createErpProject({ version: "retail", title: "Review base-id bank supply", needs: [{ stableId: "base_id_bank_need", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom base ID", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
     store.createErpProject({ version: "retail", title: "Review own-reserved bank supply", needs: [{ stableId: "own_reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: ownIdentity, destinationIdentityKey: ownIdentity }], reservations: [{ stableId: "own_need_reservation", needId: "own_reserved_bank_need", sourceIdentityKey: ownIdentity, quantity: 4, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     store.createErpProject({ version: "retail", title: "Review unknown bank supply", needs: [{ stableId: "unknown_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: unknownBankIdentity, destinationIdentityKey: unknownBankIdentity }] });
@@ -824,6 +824,19 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     const fresh = page.locator(".erp-project-card").filter({ hasText: "Review fresh bank supply" }); await fresh.waitFor();
+    await page.getByTestId(`erp-fulfillment-pathways-${freshProject.stableId}-fresh_bank_need`).getByRole("button", { name: "Plan manual review from review personal bank retrieval", exact: true }).click();
+    const groupedPlanner = page.getByTestId("erp-cross-project-plan");
+    const selectedNeed = groupedPlanner.locator(`#erp-cross-project-need-${encodeURIComponent(freshProject.stableId)}-fresh_bank_need input[type="checkbox"]`);
+    await selectedNeed.waitFor();
+    const suggestedType = groupedPlanner.getByLabel("Manual step type");
+    assert.equal(await suggestedType.inputValue(), "RETRIEVE", "the observed same-character bank pathway drafts the existing manual RETRIEVE task type");
+    assert.equal(await groupedPlanner.getByLabel("Assigned same-version character").inputValue(), freshIdentity, "the source character is prefilled as the assigned actor, not asserted as presently accessible");
+    assert.match(await groupedPlanner.getByLabel("Instructions").inputValue(), /Check whether the current same-character personal bank contains the exact required item and whether it is accessible now/);
+    assert.match(await groupedPlanner.innerText(), /RETRIEVE is a suggested draft.*does not establish access or retrieval/);
+    await suggestedType.selectOption("INVESTIGATE");
+    assert.match(await groupedPlanner.innerText(), /selected step remains INVESTIGATE.*records reviewed evidence only/);
+    assert.doesNotMatch(await groupedPlanner.innerText(), /RETRIEVE is a suggested draft/);
+    await selectedNeed.uncheck();
     const need = fresh.locator(".erp-need-list li").filter({ hasText: "Mycobloom" });
     const locationEvidence = await need.innerText();
     assert.match(locationEvidence, /bags: OBSERVED .*1 matching unit/);
@@ -843,7 +856,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     await form.getByLabel("Manual instructions").waitFor();
     const instructions = await form.getByLabel("Manual instructions").inputValue();
     assert.match(instructions, /Recent complete OBSERVED sections show 1 matching unit in Bank Planner.* bags and 3 in that character's personal bank/);
-    assert.match(instructions, /bag requirement is short by 3; the bank observation contains 3 exact units to consider/);
+    assert.match(instructions, /bag requirement is short by 4; the bank observation contains 3 exact units to consider/);
     assert.match(instructions, /planning comparison, not proof of current access, bank interaction, or retrieval/);
     assert.equal(await form.getByLabel("Assigned character").inputValue(), freshIdentity);
     assert.equal(await form.getByLabel("Planned source character").inputValue(), freshIdentity);
