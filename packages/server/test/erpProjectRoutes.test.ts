@@ -105,7 +105,7 @@ test("cross-project manual work is saved atomically from reviewed same-version e
 test("exact source lead creates an atomic supplemental provisioning review package across buyer projects", async () => {
   await withServer(async (call, store) => {
     const at = Math.floor(Date.now() / 1000);
-    const capture = (name: string, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name, realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: quantity }] }] }, bank: { unknown: true } });
+    const capture = (name: string, quantity: number, generatedAt = at) => buildWowSyncExport({ generatedAt, character: { name, realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: quantity }] : [] }] }, bank: { unknown: true } });
     store.importSnapshot(capture("Mira", 0));
     const source = store.importSnapshot(capture("Stone Holder", 4)).character;
     const buyer = store.listCharacters("classic-era").find((character) => character.name === "Mira")!.identityKey;
@@ -147,6 +147,15 @@ test("exact source lead creates an atomic supplemental provisioning review packa
     assert.deepEqual([repeated.status, repeated.body.createdCount, repeated.body.skippedExistingCount], [200, 0, 2], "retry is idempotent for existing source/destination reviews");
     const wrongVariant = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, resourceKey: "item:159:0:1" });
     assert.equal(wrongVariant.status, 409, "a near variant cannot be substituted for the exact buyer need");
+    store.importSnapshot(capture("Stone Holder", 2, at + 60));
+    store.importSnapshot(capture("Mira", 1, at + 60));
+    const reconciled = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId));
+    for (const project of reconciled) {
+      const review = project.workOrderProgress.find((entry: any) => entry.workOrderId === project.workOrders.find((order: any) => order.kind === "PROVISION").stableId).provisioningObservationReviews[0];
+      assert.equal(review.state, "BOTH_SIDES_CHANGED", "paired fresh source and buyer evidence is compared against the explicit provisioning source");
+      assert.equal(review.sourceIntentIdentityKey, buyer, "the existing purchase need's original source intent remains visible");
+      assert.equal(review.interpretation, "CAUSE_UNKNOWN", "paired inventory changes do not prove this manual review caused a movement");
+    }
   });
 });
 

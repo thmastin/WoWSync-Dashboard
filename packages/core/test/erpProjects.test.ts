@@ -1310,6 +1310,29 @@ test("provisioning progress pairs the planned source and recipient without asser
   } finally { store.close(); }
 });
 
+test("an explicit provisioning source may be an alternate lead to the need's original buyer source intent", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_155_000;
+  const capture = (name: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt, character: { name, realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Provider", 2, baseAt)).character.identityKey;
+    const buyer = store.importSnapshot(capture("Buyer", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Provider", 1, baseAt + 100));
+    store.importSnapshot(capture("Buyer", 1, baseAt + 100));
+    const need = { stableId: "buyer-item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: buyer, destinationIdentityKey: buyer };
+    const order = { stableId: "source-review", kind: "PROVISION" as const, status: "PLANNED" as const, title: "Review source lead", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: buyer };
+    const plan = { ...project(buyer), needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED", "the explicit work-order source is evaluated as the selected alternative");
+    assert.equal(review?.sourceIntentIdentityKey, buyer, "the purchase need's original source intent remains visible");
+    assert.match(review?.reason ?? "", /keeps its original source intent; this PROVISION review compares the separately selected work-order source as an alternative/);
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN", "paired deltas do not establish a transfer or its cause");
+  } finally { store.close(); }
+});
+
 test("purchase progress pairs buyer gold and linked item changes while keeping purchase causality unknown", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const baseAt = 1_700_200_000;

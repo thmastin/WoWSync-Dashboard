@@ -34,6 +34,16 @@ test("manual sale presentation separates item and gold observations and keeps sa
   assert.match(html, /Neither change proves a sale/);
 });
 
+test("provisioning presentation distinguishes a selected source from the requirement's original source intent", () => {
+  const source = "classic-era::realm a::provider";
+  const buyer = "classic-era::realm a::buyer";
+  const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { characterName: (key) => key?.endsWith("provider") ? "Provider" : "Buyer", progress: { ...progress, provisioningObservationReviews: [{ needId: "stone", kind: "ITEM_REF", resourceKey: "item:159:variant", sourceIntentIdentityKey: buyer, state: "BOTH_SIDES_CHANGED", interpretation: "CAUSE_UNKNOWN", source: { identityKey: source, state: "COMPARABLE_CHANGED", freshness: "recent", comparisons: [], reason: "Source inventory changed." }, destination: { identityKey: buyer, state: "COMPARABLE_CHANGED", freshness: "recent", comparisons: [], reason: "Buyer inventory changed." }, reason: "The linked requirement keeps its original source intent; this PROVISION review compares the separately selected work-order source as an alternative." }] } }));
+  assert.match(html, /Original requirement source intent: Buyer/);
+  assert.match(html, /Source: Provider/);
+  assert.match(html, /separately selected work-order source as an alternative/);
+  assert.match(html, /does not establish that the resources moved/);
+});
+
 test("gather presentation shows assigned-gatherer bag deltas as non-causal evidence", () => {
   const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { ...progress, reconciliation: "CURRENT_LINKED_NEEDS_UNMET", completionRecorded: false, recordedStatus: "IN_PROGRESS", reason: "The item need remains unmet.", gatherObservationReviews: [{ needId: "ore", resourceKey: "item:159:variant", gathererIdentityKey: "classic-era::realm a::crafter", state: "RESOURCE_INCREASED", freshness: "recent", previousFreshness: "recent", comparisons: [{ section: "bags", previousQuantity: 1, currentQuantity: 4, delta: 3, previousObservedAt: 100, currentObservedAt: 200 }], interpretation: "CAUSE_UNKNOWN", reason: "The assigned gatherer's comparable item inventory increased." }] } }));
   assert.match(html, /assigned gatherer bag observations \(cause unknown\)/i);
