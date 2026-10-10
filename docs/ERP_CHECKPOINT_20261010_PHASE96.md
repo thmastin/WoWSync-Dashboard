@@ -2,7 +2,8 @@
 
 **Date:** 2026-10-10  
 **Dashboard branch:** `feature/forever-gear-observation`  
-**Dashboard commit:** `1fc0393f59c8ad0f5417951f847bfdd1fd176cef` (pushed)  `r`n**Starting commit:** `bae3f0333af7f9dad583aa04a131a74489c7f1d2`
+**Dashboard commit:** `1fc0393f59c8ad0f5417951f847bfdd1fd176cef` (pushed)
+**Starting commit:** `bae3f0333af7f9dad583aa04a131a74489c7f1d2`
 
 ## Delivered
 
