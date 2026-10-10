@@ -163,13 +163,40 @@ test("planned craft output conflicts and absent targets stay UNKNOWN instead of 
   } finally { store.close(); }
 });
 
+test("CRAFT output can be checked on an explicitly selected crafter while keeping intended recipient separate", () => {
+  const { store, identityKey } = seedStore({ bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } });
+  try {
+    const destinationIdentityKey = "classic-era::realm-b::recipient";
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_to_other", kind: "CRAFT", status: "PLANNED", title: "Craft for recipient", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, destinationIdentityKey, outputObservationIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", quantity: 1 } }] };
+    const output = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(output?.state, "COVERED_BY_OBSERVED");
+    assert.equal(output?.observedQuantity, 2);
+    assert.equal(output?.recipientIdentityKey, destinationIdentityKey);
+    assert.equal(output?.intendedRecipientIdentityKey, destinationIdentityKey);
+    assert.equal(output?.observedOnIdentityKey, identityKey);
+    assert.match(output?.reason ?? "", /does not prove that crafting occurred/);
+
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Output Observer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] }, bank: { unknown: true } }));
+    const observerIdentityKey = store.listCharacters("classic-era").find((character) => character.name === "Output Observer")!.identityKey;
+    const observerOnlyPlan: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_observe_elsewhere", kind: "CRAFT", status: "PLANNED", title: "Check output on another character", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, outputObservationIdentityKey: observerIdentityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", quantity: 1 } }] };
+    const observerOutput = evaluateErpProject(observerOnlyPlan, (key) => store.listSnapshots(key), [observerOnlyPlan], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(observerOutput?.recipientIdentityKey, identityKey, "legacy compatibility keeps the sole assigned character when there is no intended destination");
+    assert.equal(observerOutput?.intendedRecipientIdentityKey, undefined, "the selected observation character is never described as an intended recipient");
+    assert.equal(observerOutput?.observedOnIdentityKey, observerIdentityKey);
+    assert.equal(observerOutput?.observedQuantity, 1);
+  } finally { store.close(); }
+});
+
 test("planned craft output validation rejects malformed and non-crafting declarations", () => {
   const { store, identityKey } = seedStore();
   try {
     const base = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF" as const, resourceKey: "item:159:variant", label: "Rough Stone", quantity: 2 } }] };
     validateErpProject(base, (key) => store.getCharacter(key)?.version === "classic-era");
+    validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, destinationIdentityKey: "classic-era::realm-a::recipient", outputObservationIdentityKey: identityKey }] }, (key) => key === identityKey || key === "classic-era::realm-a::recipient");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, outputObservationIdentityKey: "retail::realm-a::recipient" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROJECT_CHARACTER");
     assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, plannedOutput: { ...base.workOrders[0]!.plannedOutput!, resourceKey: "159" } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
     assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER", outputObservationIdentityKey: identityKey }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET");
   } finally { store.close(); }
 });
 

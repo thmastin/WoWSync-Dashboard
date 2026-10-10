@@ -55,15 +55,20 @@ test("project REST persists explicit plans and returns evidence from the shared 
 test("planned craft outputs are returned through REST as intent plus character-scoped evidence", async () => {
   await withServer(async (call, store) => {
     const character = store.listCharacters("classic-era")[0]!;
+    const alternate = buildWowSyncExport({ character: { name: "Output Recipient", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [] }, bank: { unknown: true } });
+    store.importSnapshot(alternate);
+    const recipient = store.listCharacters("classic-era").find((entry) => entry.identityKey !== character.identityKey)!;
     const created = await call("POST", "/api/versions/classic-era/erp/projects", {
       title: "Record planned craft result",
-      workOrders: [{ stableId: "craft_result", kind: "CRAFT", status: "PLANNED", title: "Craft manually", assignedIdentityKey: character.identityKey, resourceNeedIds: [], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", quantity: 2 } }],
+      workOrders: [{ stableId: "craft_result", kind: "CRAFT", status: "PLANNED", title: "Craft manually", assignedIdentityKey: character.identityKey, destinationIdentityKey: recipient.identityKey, outputObservationIdentityKey: character.identityKey, resourceNeedIds: [], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", quantity: 2 } }],
     });
     assert.equal(created.status, 201);
     const view = created.body.project;
     assert.deepEqual(view.workOrders[0].plannedOutput, { kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", quantity: 2 });
     const assessment = view.workOrderProgress[0].plannedOutputAssessment;
-    assert.equal(assessment.recipientIdentityKey, character.identityKey);
+    assert.equal(assessment.recipientIdentityKey, recipient.identityKey);
+    assert.equal(assessment.intendedRecipientIdentityKey, recipient.identityKey);
+    assert.equal(assessment.observedOnIdentityKey, character.identityKey);
     assert.equal(assessment.state, "COVERED_BY_OBSERVED");
     assert.equal(assessment.observedQuantity, 3);
     assert.match(assessment.reason, /does not prove that crafting occurred/);

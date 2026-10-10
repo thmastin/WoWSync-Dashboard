@@ -70,6 +70,8 @@ export interface ErpWorkOrder {
   readonly assignedIdentityKey?: string;
   readonly sourceIdentityKey?: string;
   readonly destinationIdentityKey?: string;
+  /** Explicit character whose inventory will be checked for the planned craft output; distinct from the intended recipient. */
+  readonly outputObservationIdentityKey?: string;
   readonly resourceNeedIds: readonly string[];
   readonly dependsOn: readonly string[];
   /** Optional player intent. A plan does not add output to observed supply. */
@@ -183,7 +185,8 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (!(ERP_WORK_ORDER_TYPES as readonly string[]).includes(w.kind) || !(ERP_WORK_ORDER_STATUSES as readonly string[]).includes(w.status)) fail("INVALID_WORK_ORDER_STATE", "Unsupported work order type or status.");
     if (!hasValue(w.title) || w.title.length > 160 || (w.instructions !== undefined && w.instructions.length > 4000)) fail("INVALID_WORK_ORDER_TEXT", "Work order title/instructions exceed their limits.");
     if (!Array.isArray(w.dependsOn) || !Array.isArray(w.resourceNeedIds)) fail("INVALID_WORK_ORDER_LINKS", "Work order dependencies and resource links must be arrays.");
-    identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.destinationIdentityKey, "Work order destination");
+    identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.destinationIdentityKey, "Work order destination"); identity(w.outputObservationIdentityKey, "Craft output observation character");
+    if (w.outputObservationIdentityKey !== undefined && (w.kind !== "CRAFT" || w.plannedOutput === undefined)) fail("INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET", "An output observation character is supported only for a CRAFT work order with a declared planned output.");
     if (w.plannedOutput !== undefined) {
       const output = w.plannedOutput;
       if (w.kind !== "CRAFT") fail("INVALID_PLANNED_CRAFT_OUTPUT", "A planned output is supported only on a CRAFT work order.");
@@ -889,7 +892,11 @@ export interface ErpProcurementObservationReview {
 
 export interface ErpPlannedOutputAssessment {
   readonly plannedOutput: ErpPlannedCraftOutput;
+  /** Legacy compatibility field: the character historically used as the output-check target. */
   readonly recipientIdentityKey?: string;
+  /** Intended recipient is present only when the player explicitly selected a destination. */
+  readonly intendedRecipientIdentityKey?: string;
+  readonly observedOnIdentityKey?: string;
   readonly state: NeedSupplyState;
   readonly observedQuantity?: number;
   readonly potentialQuantity?: number;
@@ -1119,18 +1126,20 @@ function assessPlannedCraftOutput(project: ErpProject, order: ErpWorkOrder, snap
   const plannedOutput = order.plannedOutput;
   if (order.kind !== "CRAFT" || !plannedOutput) return undefined;
   const explicitTargets = [...new Set([order.assignedIdentityKey, order.destinationIdentityKey].filter((key): key is string => Boolean(key)))];
-  const unknown = (reason: string, recipientIdentityKey?: string): ErpPlannedOutputAssessment => ({
-    plannedOutput, ...(recipientIdentityKey ? { recipientIdentityKey } : {}), state: "UNKNOWN", freshness: "unknown", sourceSections: [], unresolvedSections: ["explicit same-version output character observation"], observationChange: "UNKNOWN", reason,
+  const recipientIdentityKey = order.destinationIdentityKey ?? (explicitTargets.length === 1 ? explicitTargets[0] : undefined);
+  const intendedRecipientIdentityKey = order.destinationIdentityKey;
+  const unknown = (reason: string, observedOnIdentityKey?: string): ErpPlannedOutputAssessment => ({
+    plannedOutput, ...(recipientIdentityKey ? { recipientIdentityKey } : {}), ...(intendedRecipientIdentityKey ? { intendedRecipientIdentityKey } : {}), ...(observedOnIdentityKey ? { observedOnIdentityKey } : {}), state: "UNKNOWN", freshness: "unknown", sourceSections: [], unresolvedSections: ["explicit same-version output character observation"], observationChange: "UNKNOWN", reason,
   });
-  if (explicitTargets.length === 0) return unknown("This is a player-declared intended output. No crafter or destination character is explicitly selected, so current output inventory is UNKNOWN.");
-  if (explicitTargets.length > 1) return unknown("The assigned crafter and intended destination differ. The plan does not specify where the crafted output should be observed; current output inventory is UNKNOWN.");
-  const recipientIdentityKey = explicitTargets[0]!;
-  if (!recipientIdentityKey.startsWith(`${project.version}::`)) return unknown("The selected output character does not match the project's version. No cross-version inventory was queried.", recipientIdentityKey);
-  const evidence = assessErpNeed({ stableId: `planned-output:${order.stableId}`, kind: plannedOutput.kind, resourceKey: plannedOutput.resourceKey, label: plannedOutput.label, requiredQuantity: plannedOutput.quantity, sourceIdentityKey: recipientIdentityKey }, snapshotsFor(recipientIdentityKey), now, undefined, project.version);
+  if (explicitTargets.length === 0 && !order.outputObservationIdentityKey) return unknown("This is a player-declared intended output. No crafter, destination, or output observation character is explicitly selected, so current output inventory is UNKNOWN.");
+  if (explicitTargets.length > 1 && !order.outputObservationIdentityKey) return unknown("The assigned crafter and intended destination differ. Select the character whose inventory should be checked; no output location is inferred.");
+  const observedOnIdentityKey = order.outputObservationIdentityKey ?? explicitTargets[0]!;
+  if (!observedOnIdentityKey.startsWith(`${project.version}::`)) return unknown("The selected output observation character does not match the project's version. No cross-version inventory was queried.", observedOnIdentityKey);
+  const evidence = assessErpNeed({ stableId: `planned-output:${order.stableId}`, kind: plannedOutput.kind, resourceKey: plannedOutput.resourceKey, label: plannedOutput.label, requiredQuantity: plannedOutput.quantity, sourceIdentityKey: observedOnIdentityKey }, snapshotsFor(observedOnIdentityKey), now, undefined, project.version);
   const observationChange = evidence.observationChange?.state ?? "UNKNOWN";
   const changeDescription = observationChange === "CHANGED" ? "Comparable observations changed; the cause is unknown." : observationChange === "UNCHANGED" ? "Comparable observations show no quantity change." : "No comparable before/after result is available.";
   return {
-    plannedOutput, recipientIdentityKey, state: evidence.state,
+    plannedOutput, ...(recipientIdentityKey ? { recipientIdentityKey } : {}), ...(intendedRecipientIdentityKey ? { intendedRecipientIdentityKey } : {}), observedOnIdentityKey, state: evidence.state,
     ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}),
     ...(evidence.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}),
     ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}),

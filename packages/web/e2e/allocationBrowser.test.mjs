@@ -320,6 +320,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await craftForm.getByRole("textbox", { name: "Base item ID" }).fill(String(ITEM_ID));
     await craftForm.getByLabel("Output label").fill("Planned Mycobloom output");
     await craftForm.getByLabel("Planned quantity").fill("2");
+    const outputRecipient = craftForm.getByLabel("Intended destination character");
+    const outputRecipientKey = await outputRecipient.locator("option").evaluateAll((options) => options.find((option) => option.textContent?.startsWith("Project Fixture"))?.value);
+    assert.ok(outputRecipientKey);
+    await outputRecipient.selectOption(outputRecipientKey);
+    const outputObserver = craftForm.getByLabel("Character inventory to check for planned craft output");
+    const outputObserverKey = await outputObserver.locator("option").evaluateAll((options) => options.find((option) => option.textContent?.startsWith("Other Potential Holder"))?.value);
+    assert.ok(outputObserverKey);
+    await outputObserver.selectOption(outputObserverKey);
     await craftForm.getByLabel("Assigned character").selectOption({ label: "Other Potential Holder — Thrall" });
     await craftForm.getByLabel("Linked resource needs").selectOption([{ label: "Leatherworking skill 1" }, { label: "Mycobloom" }]);
     await craftForm.getByRole("button", { name: "Add work order" }).click();
@@ -331,12 +339,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(craftText, /unknown freshness/);
     assert.match(craftText, /does not meet Exact profession Leatherworking at skill 1|assigned crafter is unknown/);
     assert.match(craftText, /Planned craft output \(intent only\)/);
+    assert.match(craftText, /Intended recipient: Project Fixture.*Inventory checked: Other Potential Holder/);
     assert.match(craftText, /Quantity in recorded evidence: 2/);
     assert.match(craftText, /do not verify this craft or complete the work order/);
     assert.match(craftText, /Compare planned crafter input observations \(crafting cause unknown\)/);
     assert.match(craftText, /Input changes do not establish consumption or link them causally to the planned output/);
     const persistedCraft = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter").workOrders.find((entry) => entry.title === "Check the assigned character's profession evidence"));
     assert.deepEqual(persistedCraft.plannedOutput, { kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Planned Mycobloom output", quantity: 2 });
+    assert.equal(persistedCraft.destinationIdentityKey, outputRecipientKey);
+    assert.equal(persistedCraft.outputObservationIdentityKey, outputObserverKey);
 
     await craftForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
