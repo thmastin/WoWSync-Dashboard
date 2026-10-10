@@ -1468,6 +1468,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const exportText = renderExport({ name: "Budget Buyer", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }).replace("MoneyCopper: ?", "MoneyCopper: 12000");
     const imported = store.importSnapshot(exportText);
     const buyer = imported.character.identityKey;
+    store.importSnapshot(renderExport({ name: "Observed Source", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now), bank: observedSection([], now) }));
     const project = store.createErpProject({ version: "retail", title: "Two-item provision", needs: [
       { stableId: "stone", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom exact variant", requiredQuantity: 3, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
       { stableId: "cloth", kind: "ITEM_ID", resourceKey: String(ITEM_ID + 1), label: "Linen Cloth", requiredQuantity: 2, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
@@ -1521,6 +1522,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await buyerLine.innerText(), /not establish spendable funds/i);
     const resourcePackage = buyerLine.getByTestId(`erp-procurement-resource-package-${encodeURIComponent(buyer)}-${encodeURIComponent(fullRef(ITEM_ID))}`);
     assert.match(await resourcePackage.innerText(), /QUOTE QUANTITY COVERS COMBINED OBSERVED GAPS/);
+    await resourcePackage.getByText(/Other observed locations/).click();
+    assert.match(await resourcePackage.innerText(), /Observed Source · Cairne/);
+    assert.match(await resourcePackage.innerText(), /item:940101::::::::80/);
+    assert.match(await resourcePackage.innerText(), /Account membership: UNKNOWN · access: UNKNOWN · transferability: UNKNOWN/);
+    assert.match(await resourcePackage.innerText(), /location lead; review access and route before changing the purchase plan/);
+    const sourceReviewButton = resourcePackage.getByRole("button", { name: /Review .* before purchase/ }).first();
+    await sourceReviewButton.click();
+    await page.waitForFunction(() => document.activeElement?.id?.startsWith("erp-queue-quote-"));
+    assert.match(await page.evaluate(() => document.activeElement?.id ?? ""), /erp-queue-quote-/ , "the observed source lead links to its actual player-controlled purchase review task");
     assert.match(await resourcePackage.innerText(), /2 projects, 2 needs · 4 combined observed gap units · 4 recent quoted units for 11650 copper/);
     assert.match(await line.innerText(), /RECENT QUOTES COVER OBSERVED GAPS/);
     assert.match(await line.innerText(), /1050 copper in recent player-entered quotes/);
@@ -1534,9 +1544,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "31");
+    assert.equal(context.schemaVersion, "32");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
-    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });
+    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, unresolvedBuyerOrderCount: 0, truncated: false });
     assert.equal(rest.procurementBuyerReview.buyers[0].resourcePackages[0].resourceKey, fullRef(ITEM_ID), "the package preserves the exact itemString variant rather than collapsing to its base item ID");
     await line.getByRole("button", { name: "Review project plans" }).click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);

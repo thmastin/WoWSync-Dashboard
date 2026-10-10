@@ -38,6 +38,43 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.deepEqual(line.resourcePackages.map((entry) => [entry.kind, entry.resourceKey, entry.projectCount, entry.needCount, entry.state, entry.combinedObservedGapQuantity, entry.recentQuotedQuantity]), [
       ["ITEM_ID", "1001", 2, 2, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", 5, 5],
     ], "the exact same item ID need is grouped without applying a generic item-level heuristic");
+    const potentialSource = {
+      sourceIdentityKey: "retail::source-character::realm-a", sourceName: "Observed Source", sourceRealm: "Realm A", needId: "item-gear-a",
+      kind: "ITEM_ID" as const, resourceKey: "1001", state: "OBSERVED" as const, observedQuantity: 1, activeReservationQuantity: 0,
+      reservationState: "UNRESERVED" as const, availableObservedLowerBound: 1, freshness: "recent" as const, observedAt: at,
+      locations: [{ section: "bags" as const, state: "OBSERVED" as const, observedAt: at, completeness: "COMPLETE" as const, quantity: 1 }],
+      matchingItems: [{ itemRef: "item:1001:0:0:0:0:0:0:0", section: "bags" as const, state: "OBSERVED" as const, quantity: 1, observedAt: at }],
+      unresolvedSections: [], accountMembership: "UNKNOWN" as const, access: "UNKNOWN" as const, transferability: "UNKNOWN" as const,
+      reason: "Matching resource was observed on this character; route remains unknown.",
+    };
+    const withSourceReview = projects.map((project) => ({ ...project,
+      resourceSourceScreens: project.needs.filter((need) => need.kind === "ITEM_ID" || need.kind === "ITEM_REF").map((need) => ({
+        needId: need.stableId, destinationIdentityKey: need.destinationIdentityKey!, scannedCharacterCount: 2, unresolvedCharacterCount: 0, candidateCount: 1, candidatesTruncated: false,
+        candidates: [{ ...potentialSource, needId: need.stableId }],
+      })),
+    }));
+    const sourcedPackage = buildErpProcurementBuyerPortfolioReview(withSourceReview, "retail").buyers[0]!.resourcePackages[0]!;
+    assert.equal(sourcedPackage.sourceReviewState, "OBSERVED_POTENTIAL_SOURCES");
+    assert.equal(sourcedPackage.observedSources.length, 1, "identical observed character/location evidence is represented once across repeated needs");
+    assert.equal(sourcedPackage.observedSources[0]!.needReferences.length, 2, "the deduplicated source retains links to every covered project need");
+    const sourcedOrder = buildErpProcurementBuyerPortfolioReview(withSourceReview, "retail").buyers[0]!.orders[0]!;
+    assert.equal(sourcedOrder.sourceReview.state, "OBSERVED_POTENTIAL_SOURCES", "the individual quote task retains its destination-specific source review even when the buyer has only one need package");
+    assert.equal(sourcedOrder.sourceReview.sources.length, 1);
+    assert.equal(sourcedOrder.sourceReview.sources[0]!.needReferences[0]!.needId, sourcedOrder.targetNeedId);
+    assert.deepEqual(sourcedPackage.observedSources.map((source) => [source.sourceIdentityKey, source.access, source.transferability]), [
+      ["retail::source-character::realm-a", "UNKNOWN", "UNKNOWN"],
+    ]);
+    assert.equal(sourcedPackage.observedSources[0]!.matchingItems[0]!.itemRef, "item:1001:0:0:0:0:0:0:0", "exact item variant remains available for route review");
+    assert.equal(sourcedPackage.combinedObservedGapQuantity, 5, "observed source leads do not reduce or satisfy destination needs");
+    assert.equal(sourcedPackage.state, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", "source location evidence does not replace quote coverage evidence");
+    const incompleteSourceScreens = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, unresolvedCharacterCount: 1, candidates: [] })) }));
+    assert.equal(buildErpProcurementBuyerPortfolioReview(incompleteSourceScreens, "retail").buyers[0]!.resourcePackages[0]!.sourceReviewState, "SOURCE_SCAN_INCOMPLETE", "no source found in a partial roster scan is not reported as none available");
+    const partialWithLead = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, unresolvedCharacterCount: 1 })) }));
+    assert.equal(buildErpProcurementBuyerPortfolioReview(partialWithLead, "retail").buyers[0]!.resourcePackages[0]!.sourceReviewState, "POTENTIAL_SOURCES_SCAN_INCOMPLETE", "a matching lead remains visible while the overall scan is identified as incomplete");
+    const noOtherCharacters = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, scannedCharacterCount: 0, candidates: [], candidateCount: 0 })) }));
+    const noOtherSourceReview = buildErpProcurementBuyerPortfolioReview(noOtherCharacters, "retail").buyers[0]!;
+    assert.equal(noOtherSourceReview.resourcePackages[0]!.sourceReviewState, "NO_OTHER_CHARACTERS_TO_SCAN", "an empty roster source scan is not described as a completed scan with no matching stock");
+    assert.equal(noOtherSourceReview.orders[0]!.sourceReview.state, "NO_OTHER_CHARACTERS_TO_SCAN");
     assert.equal(buildErpProcurementBuyerPortfolioReview(projects, "classic-era").totalBuyerCount, 0, "project quotes never cross versions");
 
     const conflictingGold = projects.map((project, index) => index === 1 ? {
@@ -106,6 +143,9 @@ test("AccountContext labels buyer quote aggregates as returned-page counts when 
       returnedQuoteTotalsAboveRecordedRemainder: 0,
       returnedIncompleteQuoteCoverage: 0,
       returnedCrossProjectResourcePackageCount: 0,
+      returnedPackagesWithObservedSourceLeads: 0,
+      returnedPackagesWithIncompleteSourceReview: 0,
+      returnedObservedSourceLeadRows: 0,
       unresolvedBuyerOrderCount: 0,
       truncated: true,
     });
