@@ -668,6 +668,8 @@ export interface ErpResourceCommitmentLine {
   readonly activeReservationQuantity: number;
   /** Active reservations found on overlapping base/variant scopes; do not add across overlapping rows. */
   readonly overlappingReservationQuantity?: number;
+  /** Active reservations on a different base/variant identity at this explicit source. These rows explain overlap; quantities must not be added across scopes. */
+  readonly overlappingReservations: readonly { projectId: string; projectTitle: string; projectStatus: ErpProjectStatus; needId: string; reservationId: string; resourceKey: string; kind: ErpResourceKind; quantity: number; ambiguous: boolean }[];
   readonly reservationState: "UNRESERVED" | "WITHIN_OBSERVED_SUPPLY" | "OVER_RESERVED" | "UNKNOWN";
   readonly availableObservedLowerBound?: number;
   readonly observedQuantity?: number;
@@ -726,6 +728,14 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
       return first.need.kind !== need.kind;
     }).map((need) => need.resourceKey));
     const contributors = group.map(({ project, need, activeReservationQuantity }) => ({ projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, priority: project.priority, needId: need.stableId, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), activeReservationQuantity })).sort((a, b) => b.priority - a.priority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
+    const overlappingReservations = identityId === undefined || !explicitSource ? [] : projects.flatMap((project) => {
+      if (project.version !== first.project.version) return [];
+      return project.reservations.filter((reservation) => reservation.status === "ACTIVE" && sourceScope(reservation) === explicitSource).flatMap((reservation) => {
+        const need = project.needs.find((entry) => entry.stableId === reservation.needId);
+        if (!need || needItemId(need) !== identityId || need.kind === first.need.kind || !reservationScopesOverlap(first.need, need)) return [];
+        return [{ projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, needId: need.stableId, reservationId: reservation.stableId, resourceKey: need.resourceKey, kind: need.kind, quantity: reservation.quantity, ambiguous: first.need.kind === "ITEM_ID" || need.kind === "ITEM_ID" }];
+      });
+    }).sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
     const active = group.filter((entry) => entry.project.status === "ACTIVE");
     const paused = group.filter((entry) => entry.project.status === "PAUSED");
     const other = group.filter((entry) => entry.project.status !== "ACTIVE" && entry.project.status !== "PAUSED");
@@ -742,6 +752,7 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
       pausedNeedCount: paused.length, pausedNeedQuantity: paused.reduce((sum, entry) => sum + entry.need.requiredQuantity, 0), otherPlanNeedCount: other.length,
       activeReservationQuantity,
       ...(overlappingReservationQuantity !== undefined && overlappingReservationQuantity > 0 ? { overlappingReservationQuantity } : {}),
+      overlappingReservations,
       reservationState: reservationStates.size === 1 && (assessedReservationQuantity === undefined || assessedReservationQuantity >= activeReservationQuantity) ? [...reservationStates][0]! as ErpResourceCommitmentLine['reservationState'] : "UNKNOWN",
       ...(reservationAvailable.size === 1 && evidence[0]?.reservationAssessment?.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: evidence[0].reservationAssessment.availableObservedLowerBound } : {}),
       ...(observed.size === 1 && evidence[0]?.observedQuantity !== undefined ? { observedQuantity: evidence[0].observedQuantity } : {}),

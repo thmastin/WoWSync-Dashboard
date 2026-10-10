@@ -1297,7 +1297,7 @@ test("resource commitment summary aggregates plan asks by explicit source but re
     });
     const first = { ...makeProject("plan_a", "need_a", 3), reservations: [{ stableId: "hold_a", needId: "need_a", sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
     const second = makeProject("plan_b", "need_b", 2);
-    const variant = { ...makeProject("plan_variant", "need_variant", 1), needs: [{ stableId: "need_variant", kind: "ITEM_REF" as const, resourceKey: "item:159:123", label: "Rough Stone variant", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ stableId: "hold_variant", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const variant = { ...makeProject("plan_variant", "need_variant", 1), needs: [{ stableId: "need_variant", kind: "ITEM_REF" as const, resourceKey: "item:159:123", label: "Rough Stone variant", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ stableId: "hold_variant", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }, { stableId: "hold_variant_second", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_001, updatedAt: 1_700_000_001 }] };
     const broad = { ...makeProject("plan_base_id", "need_base_id", 1), needs: [{ stableId: "need_base_id", kind: "ITEM_ID" as const, resourceKey: "159", label: "Rough Stone base ID", requiredQuantity: 1, sourceIdentityKey: identityKey }] };
     const unknownA = { ...makeProject("unknown_a", "unknown_need_a", 4), needs: [{ stableId: "unknown_need_a", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source A", requiredQuantity: 4 }] };
     const unknownB = { ...makeProject("unknown_b", "unknown_need_b", 5), needs: [{ stableId: "unknown_need_b", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source B", requiredQuantity: 5 }] };
@@ -1313,10 +1313,12 @@ test("resource commitment summary aggregates plan asks by explicit source but re
     assert.deepEqual(exact.overlappingResourceKeys, ["159"], "an exact base itemString overlaps only the broader ITEM_ID scope, not another exact variant");
     const exactVariant = summary.items.find((line) => line.resourceKey === "item:159:123")!;
     assert.deepEqual(exactVariant.overlappingResourceKeys, ["159"]);
-    assert.equal(exactVariant.activeReservationQuantity, 1);
+    assert.equal(exactVariant.activeReservationQuantity, 2);
     const broadItem = summary.items.find((line) => line.kind === "ITEM_ID" && line.resourceKey === "159")!;
     assert.equal(broadItem.activeReservationQuantity, 0);
-    assert.equal(broadItem.overlappingReservationQuantity, 3, "a base-ID line calls out reservations on matching exact-itemString scopes");
+    assert.equal(broadItem.overlappingReservationQuantity, 4, "a base-ID line calls out reservations on matching exact-itemString scopes");
+    assert.deepEqual(broadItem.overlappingReservations.map((entry) => [entry.projectId, entry.needId, entry.reservationId, entry.resourceKey, entry.quantity, entry.ambiguous]), [["plan_a", "need_a", "hold_a", ITEM, 2, true], ["plan_variant", "need_variant", "hold_variant", "item:159:123", 1, true], ["plan_variant", "need_variant", "hold_variant_second", "item:159:123", 1, true]], "the line identifies each active reservation and project behind the overlap without combining distinct item identities");
+    assert.deepEqual(exact.overlappingReservations, [], "an exact itemString is not considered ambiguous with a different exact variant");
     assert.equal(summary.linesWithReservations, 3);
     const unknownSourceLines = summary.items.filter((line) => line.sourceScope === "UNKNOWN_SOURCE" && line.resourceKey === "item:999");
     assert.equal(unknownSourceLines.length, 2, "unsourced plans are not merged as though they share a source");
