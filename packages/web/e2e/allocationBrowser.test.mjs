@@ -236,6 +236,23 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await commitmentPanel.getByLabel("Search commitments").fill("");
     await commitmentPanel.getByLabel("Commitment filter").selectOption("ALL");
 
+    await needForm.getByLabel("Kind").selectOption("RECIPE");
+    await needForm.getByLabel("Resource key").fill("3001");
+    await needForm.getByLabel("Label").fill("Recipe 3001");
+    const fixtureSourceKeys = await needForm.getByLabel("Source character or shared owner").locator("option").evaluateAll((options) => options.filter((option) => option.textContent.includes("Project Fixture")).map((option) => option.value));
+    assert.equal(fixtureSourceKeys.length, 1);
+    await needForm.getByLabel("Source character or shared owner").selectOption(fixtureSourceKeys[0]);
+    await needForm.getByRole("button", { name: "Add requirement" }).click();
+    const recipeNeed = projectCard.locator(".erp-need-list li").filter({ hasText: "Recipe 3001" });
+    await recipeNeed.getByRole("button", { name: "Plan manual craft review" }).click();
+    const prefilledCraftForm = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await prefilledCraftForm.getByLabel("Action type").inputValue(), "CRAFT");
+    assert.equal(await prefilledCraftForm.getByLabel("Assigned character").inputValue(), fixtureSourceKeys[0]);
+    assert.deepEqual(await prefilledCraftForm.getByLabel("Linked resource needs").evaluate((element) => Array.from(element.selectedOptions, (option) => option.value)), [await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter").needs.find((entry) => entry.label === "Recipe 3001").stableId)]);
+    assert.match(await prefilledCraftForm.getByLabel("Manual instructions").inputValue(), /does not establish profession skill, unlocks, reagents, craftability, output, or completion/);
+    await prefilledCraftForm.getByRole("button", { name: "Add work order" }).click();
+    await recipeNeed.getByText("An active CRAFT review is already linked to this recipe need.").waitFor();
+
     await needForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const transferForm = projectCard.locator("form.erp-inline-form");
