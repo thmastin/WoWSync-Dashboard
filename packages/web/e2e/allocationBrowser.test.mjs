@@ -1260,6 +1260,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
     await composer.getByRole("checkbox", { name: /Provision the crafter · Mycobloom/ }).check();
     await composer.getByRole("checkbox", { name: /Prepare the second recipe · Briarthorn/ }).check();
@@ -1335,8 +1336,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await page.locator(".erp-project-card").filter({ hasText: "Provision the reserve crafter" }).getByText(/GATHER · PLANNED/).waitFor();
 
     const read = async () => page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
-    const rest = await read();
-    const firstRead = rest.projects.find((project) => project.title === "Provision the crafter");
+    let rest = await read();
+    let firstRead = rest.projects.find((project) => project.title === "Provision the crafter");
     const secondRead = rest.projects.find((project) => project.title === "Prepare the second recipe");
     const thirdRead = rest.projects.find((project) => project.title === "Provision the reserve crafter");
     const sourceResourceReview = rest.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
@@ -1386,6 +1387,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual(secondRead.workOrders[0].procurementPlan, { targetNeedId: "briar_need", spendingCeilingCopper: 25000 }, "the player-set copper limit remains linked to the selected item need");
     assert.deepEqual(thirdRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["GATHER", "PLANNED", ["reserve_myco_need"]]]);
     assert.deepEqual(firstRead.reservations.map((reservation) => [reservation.sourceIdentityKey, reservation.quantity, reservation.status]), [[source.character.identityKey, 1, "ACTIVE"], [observedLead.character.identityKey, 2, "ACTIVE"]], "the alternate-source planning hold records an exact source separately from the requirement source");
+    const firstProjectCard = page.locator(".erp-project-card").filter({ hasText: firstRead.title });
+    assert.match(await firstProjectCard.getByText(/Reservation source: Possible Source Lead.*source assessment: WITHIN_OBSERVED_SUPPLY/).innerText(), /Possible Source Lead/, "reservation controls identify the selected source and its own evidence state");
+    await page.evaluate(() => { window.__reservationAdjustmentPrompt = ""; window.prompt = (message) => { window.__reservationAdjustmentPrompt = message; return "3"; }; });
+    await firstProjectCard.getByRole("button", { name: "Adjust 2" }).click();
+    await page.waitForFunction(async ({ projectId, sourceIdentityKey }) => { const response = await fetch("/api/versions/retail/erp/projects"); const body = await response.json(); const project = body.projects.find((entry) => entry.stableId === projectId); return project?.reservations.some((reservation) => reservation.sourceIdentityKey === sourceIdentityKey && reservation.quantity === 3); }, { projectId: firstRead.stableId, sourceIdentityKey: observedLead.character.identityKey });
+    const adjustmentPrompt = await page.evaluate(() => window.__reservationAdjustmentPrompt);
+    assert.match(adjustmentPrompt, /New reservation quantity \(1–7\)/, "an alternate-source adjustment uses that source's remaining observed lower bound, not the need's original source");
+    rest = await read();
+    firstRead = rest.projects.find((project) => project.stableId === firstRead.stableId);
     assert.deepEqual(thirdRead.reservations.map((reservation) => [reservation.sourceIdentityKey, reservation.quantity, reservation.status]), [[source.character.identityKey, 1, "ACTIVE"]], "the rejected over-capacity request is absent and the explicitly reduced request is saved");
     assert.equal(rest.resourceCommitments.items.find((entry) => entry.resourceKey === fullRef(ITEM_ID)).observedQuantity, 2, "planning work does not change observed stock");
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
@@ -1475,7 +1485,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const missingAlternateEvidence = await read();
     const retainedAlternateCommitment = missingAlternateEvidence.resourceCommitments.items.find((entry) => entry.sourceIdentityKey === observedLead.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     assert.ok(retainedAlternateCommitment, `an active alternate-source reservation remains visible after its candidate row disappears: ${JSON.stringify(missingAlternateEvidence.resourceCommitments.items.map((entry) => [entry.sourceIdentityKey, entry.resourceKey, entry.activeReservationQuantity, entry.reservationState]))}`);
-    assert.equal(retainedAlternateCommitment.activeReservationQuantity, 2);
+    assert.equal(retainedAlternateCommitment.activeReservationQuantity, 3, "the explicit alternate-source adjustment remains attached to that source after the candidate disappears");
     assert.equal(retainedAlternateCommitment.reservationState, "UNKNOWN", "missing current source-candidate evidence never turns the reservation into available or zero supply");
     assert.equal(retainedAlternateCommitment.observedQuantity, undefined);
     store.importSnapshot(renderExport({ name: "Possible Source Lead", realm: "Cairne", generated: now + 46, bags: observedSection([row(ITEM_ID, 7, { name: "Mycobloom" })], now + 46), bank: observedSection([], now + 46) }));

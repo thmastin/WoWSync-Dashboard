@@ -626,6 +626,39 @@ test("resource assessments subtract overlapping plans from observed availability
   } finally { store.close(); }
 });
 
+test("generic project updates cannot increase reservations from partial source evidence", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const draft = { ...project(identityKey), reservations: [] };
+    const created = store.createErpProject(draft);
+    assert.ok(created);
+    assert.throws(() => store.updateErpProject({
+      ...created,
+      reservations: [{ stableId: "partial_hold", needId: created.needs[0]!.stableId, sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE", createdAt: 1_700_000_001, updatedAt: 1_700_000_001 }],
+    }, created.revision), /complete, quantified evidence/);
+    assert.equal(store.getErpProject(created.stableId)?.reservations.length, 0, "rejected reservation changes do not persist");
+  } finally { store.close(); }
+});
+
+test("changing a reserved need's resource revalidates the existing hold as a new allocation", () => {
+  const { store, identityKey } = seedStore({ generatedAt: Math.floor(Date.now() / 1000), bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } });
+  try {
+    const draft = project(identityKey);
+    const created = store.createErpProject(draft);
+    assert.ok(created);
+    const released = store.updateErpProject({ ...created, reservations: created.reservations.map((entry) => ({ ...entry, status: "RELEASED" as const })) }, created.revision);
+    assert.ok(released);
+    const reboundNeed = { ...created.needs[0]!, resourceKey: "item:160:0:0" };
+    assert.throws(() => store.updateErpProject({
+      ...released,
+      needs: [reboundNeed],
+      reservations: released.reservations.map((entry) => ({ ...entry, status: "ACTIVE" as const })),
+    }, released.revision), /Change the need's resource, source, or intended recipient separately/);
+    assert.equal(store.getErpProject(created.stableId)?.needs[0]?.resourceKey, created.needs[0]?.resourceKey, "a released reservation cannot be reactivated against an unverified resource");
+    assert.equal(store.getErpProject(created.stableId)?.reservations[0]?.status, "RELEASED", "rejected changes preserve the released reservation state");
+  } finally { store.close(); }
+});
+
 test("reconciliation reports observed per-section changes without assigning a cause", () => {
   const { store, identityKey } = seedStore();
   try {

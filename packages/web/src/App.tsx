@@ -74,6 +74,10 @@ export default function App() {
     }
     // Assigning location.hash pushes history and fires hashchange.
     window.location.hash = hash.startsWith("#") ? hash.slice(1) : hash;
+    // Keep navigation responsive even if the browser's hashchange event is
+    // delayed or coalesced while the app is starting up. The event handler
+    // remains the authority for back/forward and direct URL changes.
+    setRoute(next);
   }, []);
 
   useEffect(() => {

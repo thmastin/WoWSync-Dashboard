@@ -1670,6 +1670,48 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
       validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
       validatePortfolioNeedDependencies(this.listErpProjects(updated.version).map((candidate) => candidate.stableId === updated.stableId ? updated : candidate));
+      // Generic project updates are also used by REST/MCP/UI for edits. Do not let
+      // that path create or increase inventory holds without the same complete,
+      // exact-source evidence required by the dedicated reservation workflow.
+      const projectViews = new DashboardReadModel(this).getErpProjects({ version: updated.version });
+      const currentView = projectViews.find((entry) => entry.stableId === updated.stableId);
+      const increasedByScope = new Map<string, { quantity: number; available: number }>();
+      const beforeReservations = new Map(existing.reservations.map((entry) => [entry.stableId, entry]));
+      for (const reservation of updated.reservations.filter((entry) => entry.status === "ACTIVE")) {
+        const previous = beforeReservations.get(reservation.stableId);
+        const previousNeed = existing.needs.find((entry) => entry.stableId === reservation.needId);
+        const need = updated.needs.find((entry) => entry.stableId === reservation.needId);
+        const sameNeedSemantics = previous && previousNeed && need && previous.needId === reservation.needId && previousNeed.kind === need.kind && previousNeed.resourceKey === need.resourceKey && previousNeed.sourceIdentityKey === need.sourceIdentityKey && previousNeed.sourceOwnerKey === need.sourceOwnerKey && previousNeed.destinationIdentityKey === need.destinationIdentityKey;
+        const unchangedNeedScope = previousNeed && need && previousNeed.kind === need.kind && previousNeed.resourceKey === need.resourceKey && previousNeed.sourceIdentityKey === need.sourceIdentityKey && previousNeed.sourceOwnerKey === need.sourceOwnerKey && previousNeed.destinationIdentityKey === need.destinationIdentityKey;
+        if (previousNeed && need && !unchangedNeedScope) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Change the need's resource, source, or intended recipient separately from adding or reactivating a reservation; refresh the new scope before reserving it.");
+        const previousQuantity = previous?.status === "ACTIVE" && previous.sourceIdentityKey === reservation.sourceIdentityKey && previous.sourceOwnerKey === reservation.sourceOwnerKey && sameNeedSemantics ? previous.quantity : 0;
+        const increase = reservation.quantity - previousQuantity;
+        if (increase <= 0) continue;
+        const evidence = currentView?.needEvidence.find((entry) => entry.needId === reservation.needId);
+        if (!need || need.kind === "PROFESSION" || need.kind === "RECIPE") throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A new or increased reservation requires a current countable need with complete source evidence.");
+        let available: number | undefined;
+        const alternate = reservation.sourceIdentityKey !== need.sourceIdentityKey || reservation.sourceOwnerKey !== need.sourceOwnerKey;
+        if (!alternate && evidence && evidence.freshness === "recent" && evidence.observedQuantity !== undefined && !evidence.unresolvedSections.length && evidence.unknownQuantityRowCount === 0 && evidence.sourceSections.length > 0 && evidence.sourceSections.every((section) => section.state === "OBSERVED" && section.completeness?.toLowerCase() === "complete")) {
+          available = evidence.reservationAssessment?.availableObservedLowerBound;
+        } else if (alternate && reservation.sourceIdentityKey && need.kind === "ITEM_REF" && !need.sourceOwnerKey) {
+          const screen = currentView?.resourceSourceScreens.find((entry) => entry.needId === need.stableId);
+          const candidate = screen?.candidates.find((entry) => entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey);
+          const exact = candidate?.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+          const complete = candidate?.state === "OBSERVED" && candidate.freshness === "recent" && candidate.unresolvedSections.length === 0 && candidate.locations.length === 2 && candidate.locations.every((location) => location.state === "OBSERVED" && location.completeness?.toLowerCase() === "complete" && location.quantity !== undefined);
+          if (complete && exact) available = candidate?.availableObservedLowerBound;
+        }
+        if (available === undefined) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A new or increased reservation requires recent, complete, quantified evidence for its exact source and resource. Existing intent remains unchanged.");
+        const scope = reservation.sourceIdentityKey ? `character:${reservation.sourceIdentityKey}` : reservation.sourceOwnerKey ? `owner:${reservation.sourceOwnerKey}` : undefined;
+        if (!scope) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A reservation requires an explicit source scope.");
+        const key = JSON.stringify([updated.version, scope, need.kind, need.resourceKey]);
+        const group = increasedByScope.get(key) ?? { quantity: 0, available };
+        if (group.available !== available) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Current evidence disagrees about remaining supply for this exact source scope.");
+        group.quantity += increase;
+        if (group.quantity > available) throw new ErpProjectConflictError("RESERVATION_CAPACITY_EXCEEDED", "Reservation increases exceed the current unreserved observed lower bound.");
+        increasedByScope.set(key, group);
+        const needReservations = updated.reservations.filter((entry) => entry.status === "ACTIVE" && entry.needId === need.stableId && entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.sourceOwnerKey === reservation.sourceOwnerKey).reduce((sum, entry) => sum + entry.quantity, 0);
+        if (needReservations > need.requiredQuantity) throw new ErpProjectConflictError("RESERVATION_NEED_EXCEEDED", "Reservation increases exceed the quantity required by this need.");
+      }
       const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
         .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
       if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
