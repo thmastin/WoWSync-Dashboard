@@ -37,7 +37,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
-    assert.equal(ctx.schemaVersion, "22");
+    assert.equal(ctx.schemaVersion, "23");
     assert.equal(ctx.generatedAt, FIXED_NOW);
     assert.equal(ctx.currency.unit, "copper");
     assert.match(ctx.currency.note, /never gold/);

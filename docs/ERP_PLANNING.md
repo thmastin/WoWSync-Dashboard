@@ -2,6 +2,10 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Latest checkpoint — stale reservation state in AccountContext
+
+AccountContext schema 23 includes compact per-project `reservationReviewStates` counts projected by the same core assessment used by REST and MCP. This keeps stale-source reservations visible as `SUPPLY_UNKNOWN` in the account summary. The underlying observed quantity and saved reservation intent remain available, but stale evidence does not establish current quantity availability or an available lower bound. The workbench continues to disable creating a new reservation from stale supply. A server regression covers REST create/list and AccountContext parity. Full ERP validation and focused review passed; this is synthetic validation, with no live game or production validation. See `ERP_CHECKPOINT_20261010_PHASE47.md`.
+
 This feature adds persistent player intent to the existing import/read-model architecture. It does not create a second inventory database and it does not execute game actions.
 
 ## Data and APIs
