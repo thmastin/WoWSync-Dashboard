@@ -1,4 +1,4 @@
-import type { ErpNeedEvidence, ErpProjectView, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen } from "./erpProjects.ts";
+import type { ErpNeedEvidence, ErpProjectView, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpWorkOrder } from "./erpProjects.ts";
 import type { VersionOrUnknown, WowVersion } from "./types.ts";
 import type { Freshness } from "./freshness.ts";
 
@@ -91,7 +91,8 @@ export interface ErpPortfolioFulfillmentReview {
 
 export type ErpSourceFulfillmentNextReview = "REVIEW_EVIDENCE" | "REVIEW_RESERVATIONS" | "RECONCILE_OBSERVATIONS" | "PLAN_MANUAL_WORK" | "REVIEW_MANUAL_WORK" | "REVIEW_SOURCE_AND_ACCESS";
 
-export type ErpNeedFulfillmentOptionKind = "CURRENT_OBSERVED_COVERAGE" | "REVIEW_PERSONAL_BANK_RETRIEVAL" | "FOLLOW_EXISTING_MANUAL_PLAN" | "INVESTIGATE_OTHER_CHARACTER_LOCATION" | "CHOOSE_MANUAL_SUPPLY_PLAN" | "REFRESH_OR_CLARIFY_EVIDENCE";
+export const ERP_NEED_FULFILLMENT_OPTION_KINDS = ["CURRENT_OBSERVED_COVERAGE", "REVIEW_PERSONAL_BANK_RETRIEVAL", "FOLLOW_EXISTING_MANUAL_PLAN", "INVESTIGATE_OTHER_CHARACTER_LOCATION", "CHOOSE_MANUAL_SUPPLY_PLAN", "REFRESH_OR_CLARIFY_EVIDENCE"] as const;
+export type ErpNeedFulfillmentOptionKind = typeof ERP_NEED_FULFILLMENT_OPTION_KINDS[number];
 export interface ErpNeedFulfillmentOption {
   readonly kind: ErpNeedFulfillmentOptionKind;
   readonly provenance: "OBSERVED" | "DERIVED" | "UNKNOWN";
@@ -155,6 +156,7 @@ export interface ErpSourceFulfillmentLine {
       readonly observationStates: readonly string[];
       readonly capabilityChecks: readonly { readonly kind: string; readonly state: string; readonly reason: string }[];
       readonly plannedOutputState?: string;
+      readonly pathwayContext?: ErpWorkOrder["pathwayContext"];
       readonly procurement?: { readonly reviewState: string; readonly quoteState: string; readonly quote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly freshness: Freshness }; readonly affordability: "UNKNOWN"; readonly marketAvailability: "UNKNOWN" };
       readonly reason?: string;
     }[];
@@ -427,7 +429,7 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
           ...(progress?.procurementObservationReview?.targetItem?.needId === need.stableId ? [progress.procurementObservationReview.state, progress.procurementObservationReview.targetItem.state] : []),
         ];
         const procurement = readiness?.procurementAssessment;
-        return { stableId: order.stableId, kind: order.kind, title: order.title, status: order.status, ...(readiness ? { readinessState: readiness.state } : {}), ...(progress ? { progressState: progress.reconciliation } : {}), observationStates: [...new Set(observationStates)], capabilityChecks: (readiness?.capabilityChecks ?? []).map((check) => ({ kind: check.kind, state: check.state, reason: check.reason })), ...(progress?.plannedOutputAssessment ? { plannedOutputState: progress.plannedOutputAssessment.state } : {}), ...(procurement ? { procurement: { reviewState: procurement.reviewState, quoteState: procurement.quoteState, ...(procurement.playerQuote ? { quote: { amountCopper: procurement.playerQuote.amountCopper, quantity: procurement.playerQuote.quantity, recordedAt: procurement.playerQuote.recordedAt, freshness: procurement.playerQuote.freshness } } : {}), affordability: procurement.affordability, marketAvailability: procurement.marketAvailability } } : {}), ...(readiness?.reason || progress?.reason ? { reason: readiness?.reason ?? progress?.reason } : {}) };
+        return { stableId: order.stableId, kind: order.kind, title: order.title, status: order.status, ...(readiness ? { readinessState: readiness.state } : {}), ...(progress ? { progressState: progress.reconciliation } : {}), observationStates: [...new Set(observationStates)], capabilityChecks: (readiness?.capabilityChecks ?? []).map((check) => ({ kind: check.kind, state: check.state, reason: check.reason })), ...(progress?.plannedOutputAssessment ? { plannedOutputState: progress.plannedOutputAssessment.state } : {}), ...(order.pathwayContext?.needId === need.stableId ? { pathwayContext: order.pathwayContext } : {}), ...(procurement ? { procurement: { reviewState: procurement.reviewState, quoteState: procurement.quoteState, ...(procurement.playerQuote ? { quote: { amountCopper: procurement.playerQuote.amountCopper, quantity: procurement.playerQuote.quantity, recordedAt: procurement.playerQuote.recordedAt, freshness: procurement.playerQuote.freshness } } : {}), affordability: procurement.affordability, marketAvailability: procurement.marketAvailability } } : {}), ...(readiness?.reason || progress?.reason ? { reason: readiness?.reason ?? progress?.reason } : {}) };
       });
       const sourceSections = evidence?.sourceSections ?? [];
       const candidateLocations = alternativeLocations.filter((location) => location.needReferences.some((reference) => reference.projectId === project.stableId && reference.needId === need.stableId)).map((location) => ({ characterKey: location.sourceIdentityKey, characterName: `${location.sourceName}${location.sourceSurname ? ` ${location.sourceSurname}` : ""}`, realm: location.sourceRealm, provenance: location.state, freshness: location.freshness, ...(location.observedAt !== undefined ? { observedAt: location.observedAt } : {}) }));

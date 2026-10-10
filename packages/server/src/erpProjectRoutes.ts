@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpNeedReviewSnapshot, buildErpProcurementBudgetPortfolioReview, buildErpProcurementBuyerPortfolioReview, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpReservation, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
+import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpNeedReviewSnapshot, buildErpProcurementBudgetPortfolioReview, buildErpProcurementBuyerPortfolioReview, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_NEED_FULFILLMENT_OPTION_KINDS, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpNeedFulfillmentOptionKind, type ErpReservation, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
 
 function isVersion(value: string): value is WowVersion { return (WOW_VERSIONS as readonly string[]).includes(value); }
@@ -37,6 +37,8 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const selectedNeeds = new Set<string>();
     const workOrdersByProject: Array<{ projectId: string; expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[]; reservations: Array<ErpReservation | undefined> }> = [];
     const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
+    const pathwayKey = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
+    const currentPathways = new Map(buildErpSourceFulfillmentReview([...projectViews.values()], version).sources.flatMap((source) => source.needs.map((need) => [pathwayKey(need.projectId, need.needId), need.fulfillmentPathways.options] as const)));
     const portfolioDependencyGraph = new Map<string, string[]>();
     const needNode = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
     for (const project of projectViews.values()) for (const order of project.workOrders) {
@@ -71,6 +73,13 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const currentReview = buildErpNeedReviewSnapshot(project, need.stableId);
           if (!currentReview || !isDeepStrictEqual(task.reviewSnapshot, currentReview)) return res.status(409).json({ error: `Evidence or saved source intent for ${need.label} changed after review. Refresh before creating a manual work order.`, code: "NEED_REVIEW_STALE" });
           reviewSnapshots.push(currentReview);
+          let pathwayContext: ErpWorkOrder["pathwayContext"];
+          if (task.pathwayKind !== undefined) {
+            if (typeof task.pathwayKind !== "string" || !(ERP_NEED_FULFILLMENT_OPTION_KINDS as readonly string[]).includes(task.pathwayKind)) return res.status(400).json({ error: "A reviewed pathway must use a supported current option.", code: "INVALID_WORK_ORDER_PATHWAY" });
+            const option = currentPathways.get(pathwayKey(project.stableId, need.stableId))?.find((entry) => entry.kind === task.pathwayKind);
+            if (!option) return res.status(409).json({ error: `The reviewed fulfillment pathway for ${need.label} changed or is no longer supported. Refresh the evidence and review again.`, code: "WORK_ORDER_PATHWAY_STALE" });
+            pathwayContext = { version, projectRevision: project.revision, needId: need.stableId, kind: option.kind, provenance: option.provenance, reviewedAt: Math.floor(Date.now() / 1000), reason: option.reason.slice(0, 1200), ...(option.observedLocation ? { observedLocation: option.observedLocation } : {}), ...(option.candidateLocations ? { candidateLocations: option.candidateLocations.slice(0, 25) } : {}) };
+          }
           let portfolioPrerequisites: NonNullable<ErpWorkOrder["portfolioPrerequisites"]> = [];
           if (task.portfolioPrerequisites !== undefined) {
             if (!Array.isArray(task.portfolioPrerequisites) || task.portfolioPrerequisites.length > 10) return res.status(400).json({ error: "A manual step may name at most 10 same-version portfolio prerequisite needs.", code: "INVALID_PORTFOLIO_PREREQUISITES" });
@@ -122,7 +131,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const boundary = "SYSTEM EVIDENCE BOUNDARY: This is player-authored planning intent only. WoWSync did not execute or verify an in-game action. Recheck current version-specific requirements, evidence, ownership, access, routes, prices, and outcomes manually; unknowns remain UNKNOWN.";
           const instructions = `${task.instructions.trim()}\n\n${boundary}`;
           if (instructions.length > 4000) return res.status(400).json({ error: "Instructions plus the required evidence boundary exceed the work-order limit.", code: "INVALID_WORK_ORDER_TEXT" });
-          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
+          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(pathwayContext ? { pathwayContext } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
         }
         workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots, reservations });
       }

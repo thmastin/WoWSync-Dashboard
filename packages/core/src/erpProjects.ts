@@ -69,6 +69,19 @@ export interface ErpPortfolioNeedReference {
   readonly needId: string;
 }
 
+/** A server-revalidated pathway the player reviewed when creating this work order. Historical context only; it is never a selected or executed route. */
+export interface ErpWorkOrderPathwayContext {
+  readonly version: WowVersion;
+  readonly projectRevision: number;
+  readonly needId: string;
+  readonly kind: "CURRENT_OBSERVED_COVERAGE" | "REVIEW_PERSONAL_BANK_RETRIEVAL" | "FOLLOW_EXISTING_MANUAL_PLAN" | "INVESTIGATE_OTHER_CHARACTER_LOCATION" | "CHOOSE_MANUAL_SUPPLY_PLAN" | "REFRESH_OR_CLARIFY_EVIDENCE";
+  readonly provenance: "OBSERVED" | "DERIVED" | "UNKNOWN";
+  readonly reviewedAt: number;
+  readonly reason: string;
+  readonly observedLocation?: { readonly section: "bags" | "character bank"; readonly quantity: number; readonly observedAt: number; readonly itemRef?: string };
+  readonly candidateLocations?: readonly { readonly characterKey: string; readonly characterName: string; readonly realm: string; readonly provenance: "OBSERVED" | "LAST_SEEN"; readonly freshness: "recent" | "stale" | "unknown"; readonly observedAt?: number }[];
+}
+
 export interface ErpWorkOrder {
   readonly stableId: string;
   readonly kind: ErpWorkOrderType;
@@ -86,6 +99,8 @@ export interface ErpWorkOrder {
   readonly dependsOn: readonly string[];
   /** Optional cross-project evidence gates; only recent observed coverage satisfies them. */
   readonly portfolioPrerequisites?: readonly ErpPortfolioNeedReference[];
+  /** The exact evidence pathway reviewed at creation, kept separate from requirement source and work-order source. */
+  readonly pathwayContext?: ErpWorkOrderPathwayContext;
   /** Optional player intent. A plan does not add output to observed supply. */
   readonly plannedOutput?: ErpPlannedCraftOutput;
   /** Optional procurement intent; market availability and price remain unknown until observed by the player. */
@@ -206,6 +221,12 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
         if (refs.has(key)) fail("INVALID_PORTFOLIO_PREREQUISITES", "Portfolio prerequisite references must be unique.");
         refs.add(key);
       }
+    }
+    if (w.pathwayContext !== undefined) {
+      const pathway = w.pathwayContext;
+      if (!pathway || typeof pathway !== "object" || pathway.version !== p.version || pathway.projectRevision < 1 || !Number.isSafeInteger(pathway.projectRevision) || !hasValue(pathway.needId) || !w.resourceNeedIds.includes(pathway.needId) || !Number.isSafeInteger(pathway.reviewedAt) || pathway.reviewedAt < 1 || typeof pathway.reason !== "string" || pathway.reason.length > 1200 || !("OBSERVED DERIVED UNKNOWN".split(" ").includes(pathway.provenance)) || !("CURRENT_OBSERVED_COVERAGE REVIEW_PERSONAL_BANK_RETRIEVAL FOLLOW_EXISTING_MANUAL_PLAN INVESTIGATE_OTHER_CHARACTER_LOCATION CHOOSE_MANUAL_SUPPLY_PLAN REFRESH_OR_CLARIFY_EVIDENCE".split(" ").includes(pathway.kind))) fail("INVALID_WORK_ORDER_PATHWAY_CONTEXT", "A pathway context must identify the same-version linked need, reviewed project revision, provenance, and bounded explanation.");
+      if (pathway.observedLocation !== undefined && (!pathway.observedLocation || !(pathway.observedLocation.section === "bags" || pathway.observedLocation.section === "character bank") || !Number.isSafeInteger(pathway.observedLocation.quantity) || pathway.observedLocation.quantity < 0 || !Number.isSafeInteger(pathway.observedLocation.observedAt) || (pathway.observedLocation.itemRef !== undefined && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(pathway.observedLocation.itemRef)))) fail("INVALID_WORK_ORDER_PATHWAY_CONTEXT", "Observed pathway location details must be bounded, timestamped evidence.");
+      if (pathway.candidateLocations !== undefined && (!Array.isArray(pathway.candidateLocations) || pathway.candidateLocations.length > 25 || pathway.candidateLocations.some((location) => !location || typeof location !== "object" || !hasValue(location.characterKey) || !location.characterKey.startsWith(`${p.version}::`) || !hasValue(location.characterName) || location.characterName.length > 160 || !hasValue(location.realm) || location.realm.length > 160 || !(location.provenance === "OBSERVED" || location.provenance === "LAST_SEEN") || !(location.freshness === "recent" || location.freshness === "stale" || location.freshness === "unknown") || (location.observedAt !== undefined && (!Number.isSafeInteger(location.observedAt) || location.observedAt < 1))))) fail("INVALID_WORK_ORDER_PATHWAY_CONTEXT", "Pathway location leads must be bounded and same-version with explicit provenance and freshness.");
     }
     identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.investigationSourceLeadIdentityKey, "Investigation source lead"); identity(w.destinationIdentityKey, "Work order destination"); identity(w.outputObservationIdentityKey, "Craft output observation character");
     if (w.investigationSourceLeadIdentityKey !== undefined && w.kind !== "INVESTIGATE") fail("INVALID_INVESTIGATION_SOURCE_LEAD", "An observed source lead can be attached only to a manual INVESTIGATE work order.");

@@ -64,7 +64,7 @@ test("cross-project manual work is saved atomically from reviewed same-version e
     const second = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Research the missing recipe", needs: [{ stableId: "recipe", kind: "RECIPE", resourceKey: "12345", label: "Unverified recipe requirement", requiredQuantity: 1 }] })).body.project;
     const provisioning = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review exact variant source", needs: [{ stableId: "stone-provision", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact variant provision", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey }] })).body.project;
     const projects = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
-    const task = (project: any, needId: string, kind: string, sourceLeadIdentityKey?: string) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind, title: `Review ${needId}`, instructions: "Check current evidence and decide manually.", assignedIdentityKey: identityKey, ...(sourceLeadIdentityKey ? { sourceLeadIdentityKey } : {}) }] });
+    const task = (project: any, needId: string, kind: string, sourceLeadIdentityKey?: string, pathwayKind?: string) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind, title: `Review ${needId}`, instructions: "Check current evidence and decide manually.", assignedIdentityKey: identityKey, ...(sourceLeadIdentityKey ? { sourceLeadIdentityKey } : {}), ...(pathwayKind ? { pathwayKind } : {}) }] });
     const firstCurrent = projects.find((entry: any) => entry.stableId === first.stableId);
     const stoneCandidate = firstCurrent.resourceSourceScreens.find((entry: any) => entry.needId === "stone")?.candidates.find((entry: any) => entry.sourceIdentityKey === possibleSource.identityKey);
     assert.ok(stoneCandidate, "the same-version source screen exposes the matching observed source as a lead for investigation");
@@ -98,7 +98,15 @@ test("cross-project manual work is saved atomically from reviewed same-version e
     assert.equal(rejectedProcurement.body.code, "INVALID_PROCUREMENT_PLAN");
     const exactProvisionTask: any = task(provisioningCurrent, "stone-provision", "PROVISION");
     exactProvisionTask.tasks[0].provisioningSourceIdentityKey = possibleSource.identityKey;
-    const saved = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey), task(projects.find((entry: any) => entry.stableId === second.stableId), "recipe", "INVESTIGATE"), exactProvisionTask] });
+    const pathwayRows = (await call("GET", "/api/versions/classic-era/erp/projects")).body.sourceFulfillment.sources.flatMap((source: any) => source.needs).find((entry: any) => entry.projectId === first.stableId && entry.needId === "stone");
+    assert.ok(pathwayRows.fulfillmentPathways.options.some((option: any) => option.kind === "INVESTIGATE_OTHER_CHARACTER_LOCATION"), "the actual review model exposes the observed alternative-location pathway");
+    const invalidPathway = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey, "NOT_A_CURRENT_PATHWAY")] });
+    assert.equal(invalidPathway.status, 400, "the server rejects an unsupported pathway kind");
+    assert.equal(invalidPathway.body.code, "INVALID_WORK_ORDER_PATHWAY");
+    const stalePathway = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey, "FOLLOW_EXISTING_MANUAL_PLAN")] });
+    assert.equal(stalePathway.status, 409, "a valid pathway kind that is absent from current evidence is treated as a stale review");
+    assert.equal(stalePathway.body.code, "WORK_ORDER_PATHWAY_STALE");
+    const saved = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(firstCurrent, "stone", "INVESTIGATE", possibleSource.identityKey, "INVESTIGATE_OTHER_CHARACTER_LOCATION"), task(projects.find((entry: any) => entry.stableId === second.stableId), "recipe", "INVESTIGATE"), exactProvisionTask] });
     assert.equal(saved.status, 200);
     assert.deepEqual([saved.body.atomic, saved.body.createdCount], [true, 3]);
     assert.deepEqual(saved.body.projects.map((project: any) => [project.title, project.workOrders[0].status, project.workOrders[0].resourceNeedIds]).sort((a: any, b: any) => a[0].localeCompare(b[0])), [["Provision the crafter", "PLANNED", ["stone"]], ["Research the missing recipe", "PLANNED", ["recipe"]], ["Review exact variant source", "PLANNED", ["stone-provision"]]]);
@@ -108,12 +116,15 @@ test("cross-project manual work is saved atomically from reviewed same-version e
     assert.equal(savedFirst.workOrders[0].sourceIdentityKey, identityKey, "the original requirement source intent is retained separately");
     assert.equal(savedFirst.workOrders[0].investigationSourceLeadIdentityKey, possibleSource.identityKey, "the observed candidate is attached only as a source lead");
     assert.equal(savedFirst.workOrders[0].destinationIdentityKey, identityKey);
+    assert.deepEqual([savedFirst.workOrders[0].pathwayContext.kind, savedFirst.workOrders[0].pathwayContext.provenance, savedFirst.workOrders[0].pathwayContext.version, savedFirst.workOrders[0].pathwayContext.needId], ["INVESTIGATE_OTHER_CHARACTER_LOCATION", "DERIVED", "classic-era", "stone"], "the server stores the selected pathway with its own provenance and explicit need/version scope");
+    assert.match(savedFirst.workOrders[0].pathwayContext.reason, /does not establish account membership|location lead|ownership/i, "persisted pathway wording preserves the evidence boundary");
     const savedProvisioning = saved.body.projects.find((project: any) => project.stableId === provisioning.stableId);
     assert.equal(savedProvisioning.workOrders[0].sourceIdentityKey, possibleSource.identityKey, "the player-selected candidate is stored as the PROVISION plan source");
     assert.equal(savedProvisioning.workOrders[0].destinationIdentityKey, identityKey);
     assert.equal(savedProvisioning.needs[0].sourceIdentityKey, identityKey, "the linked need's existing source intent is preserved");
     const context = await call("GET", "/api/account-context");
     assert.ok(context.body.planning.projects.some((entry: any) => entry.stableId === first.stableId && entry.revision === 2));
+    assert.deepEqual(context.body.planning.projects.find((entry: any) => entry.stableId === first.stableId).workOrderPathways[0].context, savedFirst.workOrders[0].pathwayContext, "AccountContext preserves the exact saved pathway context");
     assert.deepEqual((await call("GET", "/api/versions/retail/erp/projects")).body.projects, [], "the grouped plan remains in its explicit game version");
     const rest = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.deepEqual(rest.body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId)).map((project: any) => project.workOrders.length), [1, 1]);
@@ -357,7 +368,7 @@ test("stale reservation coverage agrees across REST and AccountContext summaries
     assert.equal(created.body.project.fulfillment.changedObservationCauseUnknownCount, 0);
 
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "38");
+    assert.equal(context.body.schemaVersion, "39");
     const summary = context.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.reservationReviewStates, { SUPPLY_UNKNOWN: 1 }, "AccountContext exposes the same compact reservation result as the detailed REST projection");
     assert.deepEqual(summary.fulfillment, created.body.project.fulfillment, "AccountContext carries the same project fulfillment snapshot as REST");
@@ -441,7 +452,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "38");
+    assert.equal(account.body.schemaVersion, "39");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementBudgetNeedStates, { PLANNED_NEED_COVERS_CEILING: 1 });
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
@@ -614,7 +625,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "38");
+    assert.equal(context.body.schemaVersion, "39");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
@@ -633,7 +644,7 @@ test("assigned gatherer bag deltas agree across REST and AccountContext without 
     assert.equal(review.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.delta]), [["bags", 3]]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "38");
+    assert.equal(context.body.schemaVersion, "39");
     assert.deepEqual(context.body.planning.projects[0].gatherObservationStates, { RESOURCE_INCREASED: 1 });
   });
 });

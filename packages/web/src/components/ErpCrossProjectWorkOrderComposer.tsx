@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
 import { ERP_WORK_ORDER_TYPES } from "@wowsync-dashboard/core/erpWorkOrderTypes.ts";
-import type { ErpFulfillmentTriage, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
+import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpProjectView, ErpResourceCommitmentSummary, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
 import { appendErpWorkOrderBatch, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
 import type { CharacterFacts, VersionOrUnknown } from "../types.ts";
 
 type Version = Exclude<VersionOrUnknown, "unknown-version">;
 interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: string; assignedIdentityKey: string; sourceLeadIdentityKey: string; provisioningSourceIdentityKey: string; reservationSourceIdentityKey: string; reservationQuantity: string; spendingCeilingCopper: string; prerequisiteKeys: string[] }
-interface PreparedTask { needId: string; task: ErpWorkOrderBatchTaskDraft; needLabel: string; requirementSourceLabel: string; workSourceLabel: string; assignedLabel: string; destinationLabel: string; evidenceText: string; sourceRowsText?: string; prerequisiteLabels: string[] }
+interface PreparedTask { needId: string; task: ErpWorkOrderBatchTaskDraft; needLabel: string; requirementSourceLabel: string; workSourceLabel: string; assignedLabel: string; destinationLabel: string; evidenceText: string; pathwayText?: string; sourceRowsText?: string; prerequisiteLabels: string[] }
 interface PreparedGroup { projectId: string; projectTitle: string; expectedRevision: number; tasks: PreparedTask[] }
 const defaultDraft = (label: string): Draft => ({ kind: "INVESTIGATE", title: `Review fulfillment: ${label}`.slice(0, 160), instructions: "Review the current requirement, source evidence, reservations, and version-specific constraints. Decide the next manual step only after checking the game and current account evidence.", assignedIdentityKey: "", sourceLeadIdentityKey: "", provisioningSourceIdentityKey: "", reservationSourceIdentityKey: "", reservationQuantity: "0", spendingCeilingCopper: "", prerequisiteKeys: [] });
 
@@ -29,11 +29,12 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 }
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
-export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, commitments, characters, busy, onSaved, prefillNeed, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string } | null; onPrefillConsumed?: () => void }) {
+export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.length === 0 && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [pathways, setPathways] = useState<Record<string, ErpNeedFulfillmentOptionKind>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [review, setReview] = useState<PreparedGroup[] | null>(null);
@@ -53,6 +54,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
     }
     setError(""); setReview(null);
     setSelected((current) => current.includes(key) ? current.filter((entry) => entry !== key) : current.length >= 20 ? current : [...current, key]);
+    if (selected.includes(key)) setPathways((current) => { const next = { ...current }; delete next[key]; return next; });
     setDrafts((current) => {
       return selected.includes(key) ? current : { ...current, [key]: current[key] ?? defaultDraft(row.need!.label) };
     });
@@ -74,6 +76,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
     setError(""); setReview(null);
     setSelected((current) => current.includes(key) || current.length >= 20 ? current : [...current, key]);
     setDrafts((current) => ({ ...current, [key]: current[key] ?? defaultDraft(row.need!.label) }));
+    setPathways((current) => ({ ...current, [key]: prefillNeed.pathwayKind }));
     onPrefillConsumed?.();
     requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(prefillNeed.projectId)}-${encodeURIComponent(prefillNeed.needId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
   }, [prefillNeed]);
@@ -100,7 +103,10 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
         if (instructions.length > 3500) throw new Error("The saved player instructions plus exact source evidence exceed this work-order's text limit. Shorten the instructions and retry.");
         const alternateReservationSource = draft.kind === "PROVISION" && draft.reservationSourceIdentityKey && draft.reservationSourceIdentityKey !== row.need.sourceIdentityKey ? draft.reservationSourceIdentityKey : undefined;
         if (alternateReservationSource && alternateReservationSource !== draft.provisioningSourceIdentityKey) throw new Error("An alternate-source reservation must match the selected manual provisioning source.");
-        const task = { needId: row.need.stableId, reviewSnapshot, kind: draft.kind, title: draft.title.trim(), instructions, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(draft.assignedIdentityKey ? { assignedIdentityKey: draft.assignedIdentityKey } : {}), ...(draft.kind === "INVESTIGATE" && draft.sourceLeadIdentityKey ? { sourceLeadIdentityKey: draft.sourceLeadIdentityKey } : {}), ...(draft.kind === "PROVISION" && draft.provisioningSourceIdentityKey ? { provisioningSourceIdentityKey: draft.provisioningSourceIdentityKey } : {}), ...(alternateReservationSource ? { reservationSourceIdentityKey: alternateReservationSource } : {}), ...(reservationQuantity > 0 ? { reservationQuantity } : {}), ...(ceiling !== undefined ? { spendingCeilingCopper: ceiling } : {}) } satisfies ErpWorkOrderBatchTaskDraft;
+        const pathwayKind = pathways[key];
+        const pathway = pathwayKind ? sourceReview.sources.flatMap((source) => source.needs).find((entry) => entry.projectId === row.projectId && entry.needId === row.need!.stableId)?.fulfillmentPathways.options.find((option) => option.kind === pathwayKind) : undefined;
+        if (pathwayKind && !pathway) throw new Error("The selected evidence pathway changed. Return to the current fulfillment review and choose an available option.");
+        const task = { needId: row.need.stableId, reviewSnapshot, ...(pathwayKind ? { pathwayKind } : {}), kind: draft.kind, title: draft.title.trim(), instructions, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(draft.assignedIdentityKey ? { assignedIdentityKey: draft.assignedIdentityKey } : {}), ...(draft.kind === "INVESTIGATE" && draft.sourceLeadIdentityKey ? { sourceLeadIdentityKey: draft.sourceLeadIdentityKey } : {}), ...(draft.kind === "PROVISION" && draft.provisioningSourceIdentityKey ? { provisioningSourceIdentityKey: draft.provisioningSourceIdentityKey } : {}), ...(alternateReservationSource ? { reservationSourceIdentityKey: alternateReservationSource } : {}), ...(reservationQuantity > 0 ? { reservationQuantity } : {}), ...(ceiling !== undefined ? { spendingCeilingCopper: ceiling } : {}) } satisfies ErpWorkOrderBatchTaskDraft;
         const selectedSource = draft.kind === "PROVISION" ? draft.provisioningSourceIdentityKey : draft.kind === "INVESTIGATE" ? draft.sourceLeadIdentityKey : undefined;
         const sourceCandidate = selectedSource ? project.resourceSourceScreens.find((screen) => screen.needId === row.need!.stableId)?.candidates.find((candidate) => candidate.sourceIdentityKey === selectedSource) : undefined;
         const sourceRows = sourceCandidate?.matchingItems.filter((item) => item.itemRef === row.need!.resourceKey && item.state === "OBSERVED") ?? [];
@@ -117,7 +123,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
           requirementSourceLabel: row.need.sourceIdentityKey ? characterLabel(row.need.sourceIdentityKey) : row.need.sourceOwnerKey ?? "UNKNOWN",
           workSourceLabel: selectedSource ? characterLabel(selectedSource) : row.need.sourceIdentityKey ? characterLabel(row.need.sourceIdentityKey) : row.need.sourceOwnerKey ?? "not specified",
           assignedLabel: characterLabel(draft.assignedIdentityKey), destinationLabel: characterLabel(row.need.destinationIdentityKey),
-          evidenceText, ...(sourceRowsText ? { sourceRowsText } : {}), prerequisiteLabels,
+          evidenceText, ...(pathway ? { pathwayText: `${pathway.kind.replaceAll("_", " ")} · ${pathway.provenance}: ${pathway.reason}` } : {}), ...(sourceRowsText ? { sourceRowsText } : {}), prerequisiteLabels,
         });
         grouped.set(project.stableId, group);
       }
@@ -131,7 +137,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
     setSaving(true); setError("");
     try {
       await appendErpWorkOrderBatch(version, review.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })));
-      setSelected([]); setDrafts({}); setReview(null); onSaved();
+      setSelected([]); setDrafts({}); setPathways({}); setReview(null); onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The grouped plan could not be saved. No partial update was accepted.");
       setReview(null); onSaved();
@@ -177,11 +183,12 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
       <h3>Review the complete planning request</h3>
       <p>This frozen batch contains the exact task drafts and evidence snapshots below. The server rechecks project revisions, need evidence, selected sources, reservation capacity, and purchase fields in one transaction. If evidence changes after review, the submitted snapshot is rejected as stale and no part of the batch is saved. This does not perform a game action.</p>
       <ol>{review.flatMap((group) => group.tasks.map((prepared) => {
-        const { task, needLabel, requirementSourceLabel, workSourceLabel, assignedLabel, destinationLabel, evidenceText, sourceRowsText, prerequisiteLabels } = prepared;
+        const { task, needLabel, requirementSourceLabel, workSourceLabel, assignedLabel, destinationLabel, evidenceText, pathwayText, sourceRowsText, prerequisiteLabels } = prepared;
         return <li key={`${group.projectId}:${prepared.needId}`}>
           <strong>{group.projectTitle}: {task.kind.replaceAll("_", " ")} · {needLabel}</strong> (project revision {group.expectedRevision})<br />
           Task title: {task.title}. Instructions: {task.instructions}<br />
           Requirement source: {requirementSourceLabel}; selected work source: {workSourceLabel}; assigned character: {assignedLabel}; intended destination: {destinationLabel}.<br />
+          {pathwayText ? <>Selected fulfillment pathway at review: {pathwayText}. This is decision context only; it does not select or validate the work source or route.<br /></> : null}
           {sourceRowsText ? <>Selected exact-item location evidence: {sourceRowsText}.<br /></> : null}
           Current requirement evidence at review: {evidenceText}.<br />
           {task.reservationQuantity !== undefined ? `Separate planning reservation requested: ${task.reservationQuantity} from ${task.reservationSourceIdentityKey ? characterLabel(task.reservationSourceIdentityKey) : requirementSourceLabel}. This records intent only; it does not reserve in game or establish access. ` : "No reservation requested. "}{task.spendingCeilingCopper !== undefined ? `Player-entered spending ceiling: ${task.spendingCeilingCopper} copper; this is not a price or affordability check. ` : ""}{prerequisiteLabels.length ? `Prerequisite evidence gates: ${prerequisiteLabels.join("; ")}.` : "No portfolio prerequisite links."}<br />
