@@ -794,7 +794,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
 test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retrieval only from fresh complete section evidence", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-personal-bank-plan-"));
-  let store; let server; let browser;
+  let store; let server; let browser; let mcpClient;
   try {
     store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
     const now = Math.floor(Date.now() / 1000);
@@ -836,7 +836,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     await suggestedType.selectOption("INVESTIGATE");
     assert.match(await groupedPlanner.innerText(), /selected step remains INVESTIGATE.*records reviewed evidence only/);
     assert.doesNotMatch(await groupedPlanner.innerText(), /RETRIEVE is a suggested draft/);
-    await selectedNeed.uncheck();
+    await suggestedType.selectOption("RETRIEVE");
+    await groupedPlanner.getByRole("button", { name: "Review 1 planned manual step" }).click();
+    const planReview = page.getByTestId("erp-cross-project-plan-review");
+    await planReview.waitFor();
+    assert.match(await planReview.innerText(), /RETRIEVE · Mycobloom/);
+    assert.match(await planReview.innerText(), /Selected fulfillment pathway at review:.*same character's complete recent bags scan.*This is decision context only/);
+    await planReview.getByRole("button", { name: "Confirm and create 1 planned manual step" }).click();
+    await fresh.locator(".erp-work-order-list").getByText(/Review personal-bank retrieval: Mycobloom/).waitFor();
     const need = fresh.locator(".erp-need-list li").filter({ hasText: "Mycobloom" });
     const locationEvidence = await need.innerText();
     assert.match(locationEvidence, /bags: OBSERVED .*1 matching unit/);
@@ -850,23 +857,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     const historicalText = await historical.locator(".erp-need-list li").first().innerText();
     assert.match(historicalText, /character bank: LAST_SEEN .*2 matching units LAST_SEEN/);
     assert.equal(await historical.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "historical bank contents are displayed separately but do not create a current retrieval draft");
-    await fresh.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).click();
-    const form = fresh.locator("form.erp-inline-form");
-    await form.getByRole("textbox", { name: "Action" }).waitFor();
-    await form.getByLabel("Manual instructions").waitFor();
-    const instructions = await form.getByLabel("Manual instructions").inputValue();
-    assert.match(instructions, /Recent complete OBSERVED sections show 1 matching unit in Bank Planner.* bags and 3 in that character's personal bank/);
-    assert.match(instructions, /bag requirement is short by 4; the bank observation contains 3 exact units to consider/);
-    assert.match(instructions, /planning comparison, not proof of current access, bank interaction, or retrieval/);
-    assert.equal(await form.getByLabel("Assigned character").inputValue(), freshIdentity);
-    assert.equal(await form.getByLabel("Planned source character").inputValue(), freshIdentity);
-    assert.equal(await form.getByLabel("Intended destination character").inputValue(), freshIdentity);
-    await form.getByRole("button", { name: "Add work order" }).click();
     const planned = fresh.locator(".erp-work-order-list li").filter({ hasText: "Review personal-bank retrieval: Mycobloom" });
     await planned.waitFor();
     assert.match(await planned.innerText(), /RETRIEVE · PLANNED/);
-    assert.match(await planned.innerText(), /No action is executed/);
-    await fresh.getByText("An active personal-bank RETRIEVE review is already linked to this character and need.").waitFor();
+    assert.match(await planned.innerText(), /WoWSync did not execute or verify an in-game action/);
     const stale = page.locator(".erp-project-card").filter({ hasText: "Review stale bank supply" }); await stale.waitFor();
     assert.equal(await stale.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "stale snapshots do not create retrieval plans");
     const baseId = page.locator(".erp-project-card").filter({ hasText: "Review base-id bank supply" }); await baseId.waitFor();
@@ -877,12 +871,24 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     assert.equal(await ownReserved.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 1, "an exact reservation for this need does not block its own manual review");
     const record = await page.evaluate(async () => { const projects = (await (await fetch("/api/versions/retail/erp/projects")).json()).projects; const project = projects.find((entry) => entry.title === "Review fresh bank supply"); return project.workOrders.find((entry) => entry.kind === "RETRIEVE"); });
     assert.equal(record.status, "PLANNED");
+    assert.equal(record.pathwayContext.kind, "REVIEW_PERSONAL_BANK_RETRIEVAL");
+    assert.equal(record.pathwayContext.needId, "fresh_bank_need");
     assert.equal(record.sourceIdentityKey, freshIdentity);
     assert.equal(record.destinationIdentityKey, freshIdentity);
     assert.equal(record.assignedIdentityKey, freshIdentity);
-    assert.match(record.instructions, /not proof of current access/);
+    assert.match(record.instructions, /not proof of present access/);
+    const accountContext = await page.evaluate(async () => await (await fetch("/api/account-context")).json());
+    const contextProject = accountContext.planning.projects.find((project) => project.stableId === freshProject.stableId);
+    assert.deepEqual(contextProject.workOrderPathways[0].context, record.pathwayContext, "AccountContext preserves the reviewed pathway separately from the task type");
+    mcpClient = new Client({ name: "wowsync-pathway-retrieval-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: path.join(directory, "browser.sqlite") }, stderr: "pipe" }));
+    const mcpProjects = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const mcpProject = mcpProjects.structuredContent.projects.find((project) => project.stableId === freshProject.stableId);
+    assert.deepEqual(mcpProject.workOrders[0].pathwayContext, record.pathwayContext, "MCP agrees with REST on the saved reviewed pathway");
+    assert.equal(mcpProject.workOrders[0].kind, "RETRIEVE");
     assert.deepEqual(errors, []);
   } finally {
+    await mcpClient?.close();
     if (browser) await browser.close();
     if (server) await new Promise((resolve) => server.close(() => resolve()));
     store?.close(); rmSync(directory, { recursive: true, force: true });
