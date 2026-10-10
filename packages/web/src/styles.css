@@ -1366,6 +1366,13 @@ button.roster-name-link {
 .erp-procurement-budget-review h3 { margin: 0 0 6px; }
 .erp-procurement-budget-review p { margin: 6px 0; }
 .erp-procurement-budget-review button { margin-top: 6px; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-procurement-buyer-review { margin: 16px 0 22px; padding: 16px; border: 1px solid #7298d655; border-radius: 9px; background: #7298d60b; }
+.erp-procurement-buyer-review > p { color: var(--muted, #aab0bd); }
+.erp-procurement-buyer-review > ol { display: grid; gap: 12px; padding-left: 22px; }
+.erp-procurement-buyer-review > ol > li { padding: 12px; border: 1px solid #7298d638; border-radius: 7px; overflow-wrap: anywhere; }
+.erp-procurement-buyer-review h3 { margin: 0 0 6px; }
+.erp-procurement-buyer-review p { margin: 6px 0; }
+.erp-procurement-buyer-review button { margin-top: 6px; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
 .erp-cross-project-candidates { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
 .erp-cross-project-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #7189b044; border-radius: 6px; cursor: pointer; }
 .erp-cross-project-choice input { margin-top: 4px; }

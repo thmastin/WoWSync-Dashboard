@@ -30,6 +30,7 @@ export * from "./demand.ts";
 export * from "./erpLimits.ts";
 export * from "./erpProjects.ts";
 export * from "./erpProcurementPortfolio.ts";
+export * from "./erpProcurementBuyerPortfolio.ts";
 export * from "./erpObservationChanges.ts";
 export * from "./erpFulfillmentTriage.ts";
 export * from "./allocation.ts";

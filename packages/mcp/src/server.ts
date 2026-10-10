@@ -7,6 +7,7 @@ import {
   buildErpFulfillmentTriage,
   buildErpPortfolioFulfillmentReview,
   buildErpProcurementBudgetPortfolioReview,
+  buildErpProcurementBuyerPortfolioReview,
   DashboardReadModel,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
@@ -137,7 +138,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const fulfillmentTriage = buildErpFulfillmentTriage(projects, version);
     const portfolioFulfillment = buildErpPortfolioFulfillmentReview(projects, version);
     const procurementBudgetReview = buildErpProcurementBudgetPortfolioReview(projects, version);
-    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, procurementBudgetReview });
+    const procurementBuyerReview = buildErpProcurementBuyerPortfolioReview(projects, version);
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, procurementBudgetReview, procurementBuyerReview });
   });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();

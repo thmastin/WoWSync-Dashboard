@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErpNeedReviewSnapshot, buildErpProcurementBudgetPortfolioReview, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpReservation, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
+import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErpNeedReviewSnapshot, buildErpProcurementBudgetPortfolioReview, buildErpProcurementBuyerPortfolioReview, buildErpResourceCommitmentSummary, DashboardReadModel, ErpProjectConflictError, ErpProjectValidationError, ERP_WORK_ORDER_TYPES, WOW_VERSIONS, type ErpReservation, type ErpWorkOrder, type SnapshotStore, type WowVersion } from "@wowsync-dashboard/core";
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
 
 function isVersion(value: string): value is WowVersion { return (WOW_VERSIONS as readonly string[]).includes(value); }
@@ -13,7 +13,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const { version } = req.params;
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
     const projects = read(version);
-    res.json({ version, projects, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges: buildErpNeedObservationChangeReview(projects, version), fulfillmentTriage: buildErpFulfillmentTriage(projects, version), portfolioFulfillment: buildErpPortfolioFulfillmentReview(projects, version), procurementBudgetReview: buildErpProcurementBudgetPortfolioReview(projects, version) });
+    res.json({ version, projects, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges: buildErpNeedObservationChangeReview(projects, version), fulfillmentTriage: buildErpFulfillmentTriage(projects, version), portfolioFulfillment: buildErpPortfolioFulfillmentReview(projects, version), procurementBudgetReview: buildErpProcurementBudgetPortfolioReview(projects, version), procurementBuyerReview: buildErpProcurementBuyerPortfolioReview(projects, version) });
   });
   app.post("/api/versions/:version/erp/projects", (req, res) => {
     const { version } = req.params;

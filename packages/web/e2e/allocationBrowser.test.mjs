@@ -1476,6 +1476,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
       { stableId: "purchase-stone", kind: "PURCHASE", status: "PLANNED", title: "Review stone quote", assignedIdentityKey: buyer, resourceNeedIds: ["stone", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "stone", budgetNeedId: "budget", spendingCeilingCopper: 700 } },
       { stableId: "purchase-cloth", kind: "PURCHASE", status: "IN_PROGRESS", title: "Review cloth quote", assignedIdentityKey: buyer, resourceNeedIds: ["cloth", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "cloth", budgetNeedId: "budget", spendingCeilingCopper: 500 } },
     ] });
+    const secondProject = store.createErpProject({ version: "retail", title: "Second character project", needs: [
+      { stableId: "potion", kind: "ITEM_ID", resourceKey: String(ITEM_ID + 2), label: "Provisioning item", requiredQuantity: 1, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+      { stableId: "potion-budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Provisioning budget", requiredQuantity: 11000, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+    ], workOrders: [
+      { stableId: "purchase-potion", kind: "PURCHASE", status: "PLANNED", title: "Review provisioning quote", assignedIdentityKey: buyer, resourceNeedIds: ["potion", "potion-budget"], dependsOn: [], procurementPlan: { targetNeedId: "potion", budgetNeedId: "potion-budget", spendingCeilingCopper: 11000 } },
+    ] });
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address(); assert.ok(address && typeof address !== "string");
     const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
@@ -1491,12 +1497,28 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await line.innerText(), /exceed the planned amount by 200 copper/);
     assert.match(await line.innerText(), /12000 copper observed/);
     assert.match(await panel.innerText(), /not predicted spend, a quote, or a purchase/i);
-    const quotePrompts = ["650", "3", "player checked", "400", "2", "player checked"];
+    const quotePrompts = ["650", "3", "player checked", "400", "2", "player checked", "11000", "1", "player checked"];
     page.on("dialog", (dialog) => void dialog.accept(quotePrompts.shift() ?? ""));
     await page.getByTestId(`erp-queue-order-${project.stableId}-purchase-stone`).getByRole("button", { name: "Record quote..." }).click();
     await page.waitForFunction((id) => document.querySelector(`[data-testid="erp-procurement-budget-${id}-budget"]`)?.textContent?.includes("player quote 650 copper for 3 units"), project.stableId);
     await page.getByTestId(`erp-queue-order-${project.stableId}-purchase-cloth`).getByRole("button", { name: "Record quote..." }).click();
     await page.waitForFunction((id) => document.querySelector(`[data-testid="erp-procurement-budget-${id}-budget"]`)?.textContent?.includes("player quote 400 copper for 2 units"), project.stableId);
+    await page.getByTestId(`erp-queue-order-${secondProject.stableId}-purchase-potion`).getByRole("button", { name: "Record quote..." }).click();
+    await page.waitForFunction((id) => document.querySelector(`[data-testid="erp-procurement-budget-${id}-potion-budget"]`)?.textContent?.includes("player quote 11000 copper for 1 units"), secondProject.stableId);
+    const laterGoldAt = Math.floor(Date.now() / 1000) + 10;
+    const laterExport = renderExport({ name: "Budget Buyer", realm: "Cairne", generated: laterGoldAt, bags: observedSection([], laterGoldAt), bank: observedSection([], laterGoldAt) }).replace("MoneyCopper: ?", "MoneyCopper: 12000");
+    const importResponse = await page.evaluate(async (text) => fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }).then((response) => response.json()), laterExport);
+    assert.equal(importResponse.result.character.identityKey, buyer, "the later synthetic observation resolves to the same explicit buyer identity");
+    await page.reload();
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const buyerPanel = page.getByTestId("erp-procurement-buyer-review");
+    const buyerLine = buyerPanel.getByTestId(`erp-procurement-buyer-${encodeURIComponent(buyer)}`);
+    await buyerLine.waitFor();
+    assert.match(await buyerLine.innerText(), /2 project\(s\), 3 open purchase plan\(s\), 3 player quote\(s\)/);
+    assert.match(await buyerLine.innerText(), /QUOTES EXCEED RECORDED REMAINDER/);
+    assert.match(await buyerLine.innerText(), /12050 copper in recent quotes/);
+    assert.match(await buyerLine.innerText(), /12000 copper observed/);
+    assert.match(await buyerLine.innerText(), /not establish spendable funds/i);
     assert.match(await line.innerText(), /RECENT QUOTES COVER OBSERVED GAPS/);
     assert.match(await line.innerText(), /1050 copper in recent player-entered quotes/);
     assert.match(await line.innerText(), /RECENT QUOTES ABOVE PLANNED BUDGET/);
@@ -1509,14 +1531,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "30");
-    assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 1, overPlannedBudget: 1, totalOpenCeilingCopper: 1200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 1 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
+    assert.equal(context.schemaVersion, "31");
+    assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
+    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, unresolvedBuyerOrderCount: 0, truncated: false });
     await line.getByRole("button", { name: "Review project plans" }).click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);
     mcpClient = new Client({ name: "wowsync-procurement-budget-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(mcp.structuredContent.procurementBudgetReview.lines, rest.procurementBudgetReview.lines);
+    assert.deepEqual(mcp.structuredContent.procurementBuyerReview, rest.procurementBuyerReview);
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();
