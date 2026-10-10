@@ -1,5 +1,5 @@
 import type { ErpPortfolioFulfillmentReview, ErpSavedNeedHistory, ErpSourceFulfillmentReview } from "@wowsync-dashboard/core";
-import { erpNeedAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
+import { erpNeedAnchorId, erpSavedNeedHistoryAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
 
 function prerequisiteGateLabel(state: ErpPortfolioFulfillmentReview["packages"][number]["steps"][number]["prerequisiteGate"]["state"]): string {
   switch (state) {
@@ -100,7 +100,7 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
     {review.savedPlanningBatchesTruncated && <p role="note">Saved planning batches are capped; narrow the version's project list to inspect the full history.</p>}
     <h3>Requirement history across saved plans</h3>
     <p>Follow one exact project requirement through its saved planning batches. Evidence at each review and current evidence are shown separately; this history does not prove that a planned action caused a resource change.</p>
-    {!review.savedNeedHistories.length ? <p>No saved plan history is available for a requirement in this version.</p> : <ol data-testid="erp-saved-need-histories">{review.savedNeedHistories.map((history) => <li key={history.stableId} data-testid={`erp-saved-need-history-${encodeURIComponent(history.projectId)}-${encodeURIComponent(history.needId)}`}>
+    {!review.savedNeedHistories.length ? <p>No saved plan history is available for a requirement in this version.</p> : <ol data-testid="erp-saved-need-histories">{review.savedNeedHistories.map((history) => <li id={erpSavedNeedHistoryAnchorId(history.projectId, history.needId)} key={history.stableId} data-testid={`erp-saved-need-history-${encodeURIComponent(history.projectId)}-${encodeURIComponent(history.needId)}`}>
       <h4>{history.projectTitle}: {history.needLabel}</h4>
       <p>Requirement <code>{history.projectId}/{history.needId}</code> · current resource <code>{history.resourceKey}</code> · historical resource identities {history.reviewedResourceKeys.map((key) => <code key={key}>{key} </code>)} · identity {history.identityState.replaceAll("_", " ")} · next review {history.nextReview === "REVIEW_INTERVENING_EVIDENCE" ? "REVIEW INTERVENING RESOURCE EVIDENCE" : history.nextReview.replaceAll("_", " ")}. {history.nextReview === "REVIEW_INTERVENING_EVIDENCE" && <a href={`#${erpNeedAnchorId(history.projectId, history.needId)}`}>Open this requirement to reconcile its observed interval</a>}</p>
       <ol>{history.entries.map((entry) => <li key={entry.batchId}>

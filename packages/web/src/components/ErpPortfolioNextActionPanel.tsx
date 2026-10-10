@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ErpPortfolioNextActionReview } from "@wowsync-dashboard/core";
-import { erpNeedAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
+import { erpNeedAnchorId, erpSavedNeedHistoryAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
 
 const labels: Record<ErpPortfolioNextActionReview["items"][number]["action"], string> = {
   REVIEW_EVIDENCE: "Review incomplete or stale evidence",
@@ -32,12 +32,14 @@ export function ErpPortfolioNextActionPanel({ review, busy = false, onPlanNeeds 
       {item.recordedSourceIdentity && !item.source && <p>Recorded source reference, retained verbatim but not groupable: {item.recordedSourceScope?.sourceIdentityKey && <><code>{item.recordedSourceScope.sourceIdentityKey}</code>{item.recordedSourceScope.sourceOwnerKey && " · "}</>}{item.recordedSourceScope?.sourceOwnerKey && <code>{item.recordedSourceScope.sourceOwnerKey}</code>} · {item.sourceScopeIssue?.replaceAll("_", " ")}</p>}
       {item.needReferences.length > 0 && <ul aria-label="Requirements in this review item">{item.needReferences.map((need) => <li key={`${need.projectId}:${need.needId}`}>
         {item.action === "PLAN_MANUAL_WORK" && onPlanNeeds && <label><input type="checkbox" checked={isSelected(need)} disabled={busy || (!isSelected(need) && selected.length >= 20)} onChange={() => toggle(need)} /> Select for grouped planning </label>}
-        <a href={`#${erpNeedAnchorId(need.projectId, need.needId)}`}>{need.projectTitle}: {need.needId}</a> · priority {need.projectPriority} · need {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · {need.freshness} freshness{need.observedAt === undefined ? " · timestamp UNKNOWN" : ` · observed ${new Date(need.observedAt * 1000).toLocaleString()}`}{need.observationChanges?.length ? ` · ${need.observationChanges.map((change) => `${change.section} ${change.previousQuantity} → ${change.currentQuantity} (${change.delta > 0 ? "+" : ""}${change.delta}; cause UNKNOWN)`).join("; ")}` : ""}</li>)}</ul>}
-      {item.signals.length > 0 && <p>Related findings: {item.signals.map((signal) => signal.replaceAll("_", " ").toLowerCase()).join(", ")}.</p>}
+        <a href={`#${erpNeedAnchorId(need.projectId, need.needId)}`}>{need.projectTitle}: {need.needId}</a> · priority {need.projectPriority} · need {need.requiredQuantity} · {need.evidenceState.replaceAll("_", " ")} · {need.freshness} freshness{need.observedAt === undefined ? " · timestamp UNKNOWN" : ` · observed ${new Date(need.observedAt * 1000).toLocaleString()}`}{need.observationChanges?.length ? ` · ${need.observationChanges.map((change) => `${change.section} ${change.previousQuantity} → ${change.currentQuantity} (${change.delta > 0 ? "+" : ""}${change.delta}; cause UNKNOWN)`).join("; ")}` : ""}
+        {need.savedHistoryReview && <p>Saved plan history records intervening quantity variation in {need.savedHistoryReview.batchIdsWithVariation.length} generation(s), most recently reviewed {new Date(need.savedHistoryReview.latestReviewedAt * 1000).toLocaleString()}. <a href={`#${erpSavedNeedHistoryAnchorId(need.projectId, need.needId)}`}>Open timestamped saved evidence history</a>. Cause remains UNKNOWN.</p>}
+      </li>)}</ul>}
+      {item.signals.length > 0 && <p>Related findings: {item.signals.map((signal) => signal === "INTERVENING_HISTORY_VARIATION" ? "intervening saved-plan quantity variation" : signal.replaceAll("_", " ").toLowerCase()).join(", ")}.</p>}
       {item.workOrders.length > 0 && <p>Open work orders: {item.workOrders.map((order) => <a key={`${order.projectId}:${order.stableId}`} href={`#${erpWorkOrderAnchorId(order.projectId, order.stableId)}`}>{order.stableId}</a>)}</p>}
       <p>{item.reason}</p>
     </article></li>)}</ol>}
-    {review.truncated && <p>Showing {review.returnedCount} of {review.totalCount} known review items. {review.sourceReviewTruncated && "The source review exceeded its internal scan limit. "}{review.triageTruncated && "The project triage exceeded its internal scan limit. "}Open linked project requirements to review the rest; counts may be incomplete.</p>}
+    {review.truncated && <p>Showing {review.returnedCount} of {review.totalCount} known review items. {review.sourceReviewTruncated && "The source review exceeded its internal scan limit. "}{review.triageTruncated && "The project triage exceeded its internal scan limit. "}{review.savedHistoryReviewTruncated && "Saved requirement history exceeded its internal scan limit. "}Open linked project requirements to review the rest; counts may be incomplete.</p>}
     <small>Planning review only: no route, access, ownership, action cause, or completion is inferred, and no game action is executed.</small>
   </section>;
 }
