@@ -42,7 +42,10 @@ test("cross-project buyer review totals only complete recent quotes against one 
       sourceIdentityKey: "retail::source-character::realm-a", sourceName: "Observed Source", sourceRealm: "Realm A", needId: "item-gear-a",
       kind: "ITEM_ID" as const, resourceKey: "1001", state: "OBSERVED" as const, observedQuantity: 1, activeReservationQuantity: 0,
       reservationState: "UNRESERVED" as const, availableObservedLowerBound: 1, freshness: "recent" as const, observedAt: at,
-      locations: [{ section: "bags" as const, state: "OBSERVED" as const, observedAt: at, completeness: "COMPLETE" as const, quantity: 1 }],
+      locations: [
+        { section: "bags" as const, state: "OBSERVED" as const, observedAt: at, completeness: "COMPLETE" as const, quantity: 1 },
+        { section: "character bank" as const, state: "OBSERVED" as const, observedAt: at, completeness: "COMPLETE" as const, quantity: 0 },
+      ],
       matchingItems: [{ itemRef: "item:1001:0:0:0:0:0:0:0", section: "bags" as const, state: "OBSERVED" as const, quantity: 1, observedAt: at }],
       unresolvedSections: [], accountMembership: "UNKNOWN" as const, access: "UNKNOWN" as const, transferability: "UNKNOWN" as const,
       reason: "Matching resource was observed on this character; route remains unknown.",
@@ -65,6 +68,11 @@ test("cross-project buyer review totals only complete recent quotes against one 
       ["retail::source-character::realm-a", "UNKNOWN", "UNKNOWN"],
     ]);
     assert.equal(sourcedPackage.observedSources[0]!.matchingItems[0]!.itemRef, "item:1001:0:0:0:0:0:0:0", "exact item variant remains available for route review");
+    assert.deepEqual(sourcedPackage.sourceCoverageReviews.map((entry) => [entry.sourceIdentityKey, entry.state, entry.availableObservedLowerBound, entry.combinedObservedGapQuantity]), [
+      ["retail::source-character::realm-a", "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS", 1, 5],
+    ], "one complete matching source is screened against the current gaps without satisfying them");
+    assert.equal(sourcedPackage.sourceCoverageReviews[0]!.kind, "ITEM_ID");
+    assert.match(sourcedPackage.sourceCoverageReviews[0]!.reason, /access, transferability.*UNKNOWN/);
     assert.equal(sourcedPackage.combinedObservedGapQuantity, 5, "observed source leads do not reduce or satisfy destination needs");
     assert.equal(sourcedPackage.state, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", "source location evidence does not replace quote coverage evidence");
     assert.deepEqual(sourcedPackage.needReviews.map((need) => [need.projectTitle, need.needId, need.state, need.requiredQuantity, need.observedQuantity, need.freshness]), [
@@ -76,6 +84,23 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(buildErpProcurementBuyerPortfolioReview(incompleteSourceScreens, "retail").buyers[0]!.resourcePackages[0]!.sourceReviewState, "SOURCE_SCAN_INCOMPLETE", "no source found in a partial roster scan is not reported as none available");
     const partialWithLead = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, unresolvedCharacterCount: 1 })) }));
     assert.equal(buildErpProcurementBuyerPortfolioReview(partialWithLead, "retail").buyers[0]!.resourcePackages[0]!.sourceReviewState, "POTENTIAL_SOURCES_SCAN_INCOMPLETE", "a matching lead remains visible while the overall scan is identified as incomplete");
+    assert.equal(buildErpProcurementBuyerPortfolioReview(partialWithLead, "retail").buyers[0]!.resourcePackages[0]!.sourceCoverageReviews[0]!.state, "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS", "an incomplete roster scan does not invalidate a complete exact source observation for the grouped requirements");
+    const partialSource = withSourceReview.map((project) => ({
+      ...project,
+      resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({
+        ...screen,
+        candidates: screen.candidates.map((candidate) => ({
+          ...candidate,
+          locations: candidate.locations.map((location, index) => index === 1 ? { ...location, completeness: "PARTIAL" } : location),
+        })),
+      })),
+    }));
+    assert.equal(buildErpProcurementBuyerPortfolioReview(partialSource, "retail").buyers[0]!.resourcePackages[0]!.sourceCoverageReviews[0]!.state, "SOURCE_OR_NEED_EVIDENCE_INCOMPLETE", "partial source storage coverage withholds combined source coverage");
+    const enoughSource = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, candidates: screen.candidates.map((candidate) => ({ ...candidate, observedQuantity: 6, availableObservedLowerBound: 6, locations: candidate.locations.map((location) => ({ ...location, quantity: 6 })), matchingItems: candidate.matchingItems.map((item) => ({ ...item, quantity: 6 })) })) })) }));
+    const enoughSourcePackage = buildErpProcurementBuyerPortfolioReview(enoughSource, "retail").buyers[0]!.resourcePackages[0]!;
+    assert.equal(enoughSourcePackage.sourceCoverageReviews[0]!.state, "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS");
+    assert.match(enoughSourcePackage.sourceCoverageReviews[0]!.reason, /base item ID.*distinct itemString variants/);
+    assert.equal(enoughSourcePackage.needReviews.every((need) => need.state === "SHORTFALL_OBSERVED"), true, "source coverage remains separate from each unmet buyer requirement");
     const noOtherCharacters = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, scannedCharacterCount: 0, candidates: [], candidateCount: 0 })) }));
     const noOtherSourceReview = buildErpProcurementBuyerPortfolioReview(noOtherCharacters, "retail").buyers[0]!;
     assert.equal(noOtherSourceReview.resourcePackages[0]!.sourceReviewState, "NO_OTHER_CHARACTERS_TO_SCAN", "an empty roster source scan is not described as a completed scan with no matching stock");
@@ -154,6 +179,8 @@ test("AccountContext labels buyer quote aggregates as returned-page counts when 
       returnedPackageNeedReviewCount: 0,
       returnedPackageNeedReviewStates: {},
       returnedPackagesWithOpenProvisioningReview: 0,
+      returnedPackageSourceCoverageReviewCount: 0,
+      returnedPackageSourceCoverageReviewStates: {},
       unresolvedBuyerOrderCount: 0,
       truncated: true,
     });

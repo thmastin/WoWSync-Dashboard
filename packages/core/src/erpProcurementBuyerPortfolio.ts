@@ -54,6 +54,20 @@ export interface ErpProcurementBuyerResourcePackage {
   /** Exact-resource character locations already found by per-need source screening. These are leads to review, not accessible supply. */
   readonly sourceReviewState: ErpProcurementSourceReviewState;
   readonly observedSources: readonly ErpProcurementSourceLead[];
+  /** Compares one consistent same-version source observation with the sum of this package's current needs; this is location screening, never a transfer/allocation claim. */
+  readonly sourceCoverageReviews: readonly {
+    readonly sourceIdentityKey: string;
+    readonly sourceName: string;
+    readonly kind: "ITEM_ID" | "ITEM_REF";
+    readonly state: "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS" | "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS" | "SOURCE_OR_NEED_EVIDENCE_INCOMPLETE";
+    readonly needCount: number;
+    readonly expectedNeedCount: number;
+    readonly availableObservedLowerBound?: number;
+    readonly combinedObservedGapQuantity?: number;
+    readonly observedAt?: number;
+    readonly freshness: string;
+    readonly reason: string;
+  }[];
   /** Per-project demand and existing-work context; requirements are never merged merely because item identity matches. */
   readonly needReviews: readonly {
     readonly projectId: string;
@@ -289,6 +303,32 @@ export function buildErpProcurementBuyerPortfolioReview(
         else sourceReviewsByEvidence.set(key, source);
       }
       const sourceReviews = [...sourceReviewsByEvidence.values()].map((source) => ({ ...source, needReferences: source.needReferences.sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId)) }));
+      const sourceCoverageReviews: ErpProcurementBuyerResourcePackage["sourceCoverageReviews"] = [...new Set(sourceReviews.map((source) => source.sourceIdentityKey))].sort().map((sourceIdentityKey) => {
+        const candidates = sourceReviews.filter((source) => source.sourceIdentityKey === sourceIdentityKey);
+        const source = candidates[0]!;
+        const needKeys = new Set(uniqueNeeds.map((entry) => `${entry.projectId}\u0000${entry.targetNeedId}`));
+        const referencedNeedKeys = new Set(candidates.flatMap((candidate) => candidate.needReferences.map((reference) => `${reference.projectId}\u0000${reference.needId}`)));
+        const relatedNeeds = needReviews.filter((need) => needKeys.has(`${need.projectId}\u0000${need.needId}`));
+        const gapsKnown = relatedNeeds.length === uniqueNeeds.length && relatedNeeds.every((need) => need.freshness === "recent" && need.state === "SHORTFALL_OBSERVED" && need.observedQuantity !== undefined && need.requiredQuantity >= need.observedQuantity && need.unresolvedSections.length === 0);
+        const gap = gapsKnown ? relatedNeeds.reduce((sum, need) => sum + BigInt(need.requiredQuantity - need.observedQuantity!), 0n) : undefined;
+        const locationsComplete = source.locations.length === 2 && source.locations.every((location) => location.state === "OBSERVED" && location.quantity !== undefined && location.completeness?.toLowerCase() === "complete");
+        const sourceConsistent = candidates.length === 1 && source.state === "OBSERVED" && source.freshness === "recent" && source.availableObservedLowerBound !== undefined && source.reservationState !== "UNKNOWN" && source.reservationState !== "OVER_RESERVED" && locationsComplete && referencedNeedKeys.size === needKeys.size && [...needKeys].every((key) => referencedNeedKeys.has(key));
+        const safeGap = gap !== undefined && gap <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(gap) : undefined;
+        const complete = sourceConsistent && gapsKnown && safeGap !== undefined && !unsafe;
+        const state: ErpProcurementBuyerResourcePackage["sourceCoverageReviews"][number]["state"] = complete
+          ? source.availableObservedLowerBound! >= safeGap! ? "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS" : "UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS"
+          : "SOURCE_OR_NEED_EVIDENCE_INCOMPLETE";
+        return {
+          sourceIdentityKey, sourceName: source.sourceName, kind: first.targetKind, state, needCount: referencedNeedKeys.size, expectedNeedCount: uniqueNeeds.length,
+          ...(sourceConsistent ? { availableObservedLowerBound: source.availableObservedLowerBound } : {}),
+          ...(safeGap !== undefined && !unsafe ? { combinedObservedGapQuantity: safeGap } : {}),
+          ...(source.observedAt !== undefined ? { observedAt: source.observedAt } : {}), freshness: source.freshness,
+          reason: complete
+            ? state === "UNRESERVED_LOWER_BOUND_COVERS_REVIEWED_GAPS" ? `One recent, complete observed character source has an unreserved lower bound at least as large as these separately recorded current gaps${first.targetKind === "ITEM_ID" ? ". This quantity is matched by base item ID and can include distinct itemString variants; variant interchangeability and suitability are not established" : ""}. This is only a location and quantity lead; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN.`
+              : "The one recent, complete observed character source has fewer unreserved lower-bound units than the combined current gaps. Review these needs separately; account membership, access, transferability, recipient eligibility, and allocation remain UNKNOWN; no transfer is inferred."
+            : "A current complete source snapshot, consistent same-source evidence across every grouped need, or recent complete shortfall evidence is missing. Combined source coverage is UNKNOWN; inspect the per-need evidence and location leads.",
+        };
+      });
       const sourceScreens = uniqueNeeds.map((entry) => projectsById.get(entry.projectId)?.resourceSourceScreens.find((screen) => screen.needId === entry.targetNeedId));
       const sourceReviewUnavailable = sourceScreens.some((screen) => !screen);
       const sourceScanIncomplete = sourceScreens.some((screen) => !!screen && (screen.unresolvedCharacterCount > 0 || screen.candidatesTruncated));
@@ -301,7 +341,7 @@ export function buildErpProcurementBuyerPortfolioReview(
             : "QUOTE_QUANTITY_BELOW_COMBINED_OBSERVED_GAPS";
       return [{
         kind: first.targetKind, resourceKey: first.targetResourceKey, projectCount: packageProjectCount, needCount: uniqueNeeds.length, state,
-        sourceReviewState, observedSources: sourceReviews, needReviews,
+        sourceReviewState, observedSources: sourceReviews, sourceCoverageReviews, needReviews,
         ...(!unsafe && completeGaps ? { combinedObservedGapQuantity: Number(gapTotal) } : {}),
         ...(!unsafe && packageQuotes.length ? { recentQuotedQuantity: Number(quoteQuantity), recentQuoteTotalCopper: Number(quoteTotal) } : {}),
         reason: unsafe ? "An exact quantity or quote aggregate exceeds the safe display range; package comparison is withheld."

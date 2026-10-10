@@ -1578,6 +1578,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
       assert.match(sourceReviews[0].instructions, /No item is reserved or moved/);
     }
     assert.match(await resourcePackage.innerText(), /2 projects, 2 needs · 4 combined observed gap units · 4 recent quoted units for 11650 copper/);
+    assert.match(await resourcePackage.innerText(), /UNRESERVED LOWER BOUND BELOW REVIEWED GAPS/);
+    assert.match(await resourcePackage.innerText(), /exact itemString variant/);
+    assert.match(await resourcePackage.innerText(), /does not establish ownership, access, transferability/);
     const groupedNeedRows = resourcePackage.locator('[data-testid^="erp-procurement-need-review-"]');
     await groupedNeedRows.first().waitFor();
     assert.equal(await groupedNeedRows.count(), 2, "the grouped exact item package keeps each project requirement separately reviewable");
@@ -1603,10 +1606,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "33");
+    assert.equal(context.schemaVersion, "34");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
-    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, unresolvedBuyerOrderCount: 0, truncated: false });
+    assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, unresolvedBuyerOrderCount: 0, truncated: false });
     assert.equal(rest.procurementBuyerReview.buyers[0].resourcePackages[0].resourceKey, fullRef(ITEM_ID), "the package preserves the exact itemString variant rather than collapsing to its base item ID");
     await line.getByRole("button", { name: "Review project plans" }).click();
     assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);
@@ -1616,6 +1619,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(mcp.structuredContent.procurementBudgetReview.lines, rest.procurementBudgetReview.lines);
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview, rest.procurementBuyerReview);
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].needReviews, rest.procurementBuyerReview.buyers[0].resourcePackages[0].needReviews, "MCP and REST expose the same per-project requirements, evidence, reservations, and linked work");
+    assert.deepEqual(mcp.structuredContent.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews, rest.procurementBuyerReview.buyers[0].resourcePackages[0].sourceCoverageReviews, "MCP and REST expose the same conservative source-capacity screening");
     const mcpProvisioning = mcp.structuredContent.projects.flatMap((entry) => entry.workOrders).find((order) => order.stableId === plannedProvisioning.stableId);
     assert.deepEqual(mcpProvisioning, plannedProvisioning, "the explicitly created manual provisioning intent is consistent in REST and MCP");
     for (const packagedProject of packagedProjects) {
