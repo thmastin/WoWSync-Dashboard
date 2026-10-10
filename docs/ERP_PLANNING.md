@@ -116,3 +116,7 @@ Players can revise a nonterminal work-order plan without recreating it. Editing 
 ## Phase 35: recipe need to manual craft review
 
 An active project RECIPE need with an explicit same-version character source can prefill a CRAFT work order for that character, linking the exact recipe need and retaining only an explicit intended destination. A duplicate nonterminal CRAFT order is not offered. The instructions state that learned-recipe evidence does not establish profession skill, unlocks, reagents, craftability, output, or completion; material needs must be recorded separately. This is a planning shortcut through existing contracts, not a recipe solver or game action. Synthetic browser acceptance verifies the selected crafter, exact linked need, conservative wording, and duplicate suppression. See [ERP_CHECKPOINT_20261009_PHASE35.md](ERP_CHECKPOINT_20261009_PHASE35.md).
+
+## Phase 36: linked declared craft inputs and reservations
+
+The recipe-to-manual-craft review now opens an adjacent material requirement form scoped to an exact ITEM_REF and the explicitly selected same-version crafter. Players enter each material, quantity, and source themselves; each need can be linked explicitly into the CRAFT work order, then reserved only within the observed unreserved supply. Recipe evidence never generates reagents or proves craftability. This reuses existing resource need, readiness, reservation, and work-order projections; it adds no parallel crafting model. See [ERP_CHECKPOINT_20261009_PHASE36.md](ERP_CHECKPOINT_20261009_PHASE36.md).
