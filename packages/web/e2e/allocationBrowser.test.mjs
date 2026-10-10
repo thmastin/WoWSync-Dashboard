@@ -933,7 +933,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] group multiple assessed requirements into o
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     const project = page.locator(".erp-project-card").filter({ hasText: "Prepare a multi-input repair" });
-    await project.getByRole("button", { name: "Build grouped review" }).click();
+    await project.getByRole("button", { name: "Create one grouped investigation" }).click();
     const planner = project.getByRole("region", { name: "Multi-need fulfillment planner for Prepare a multi-input repair" });
     const stone = planner.locator(".erp-batch-need").filter({ hasText: "Rough Stone" });
     const herb = planner.locator(".erp-batch-need").filter({ hasText: "Peacebloom" });
@@ -970,3 +970,67 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] group multiple assessed requirements into o
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] compose different manual work types and dependencies for multiple needs in one project update", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-multi-work-order-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const imported = store.importSnapshot(renderExport({ name: "Project Planner", realm: "Cairne", generated: now, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now), bank: observedSection([], now) }));
+    const character = imported.character.identityKey;
+    const created = store.createErpProject({ version: "retail", title: "Prepare multi-step provisioning", needs: [
+      { stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: character },
+      { stableId: "herb", kind: "ITEM_REF", resourceKey: "item:2447:0:0:0:0:0:0:0", label: "Peacebloom", requiredQuantity: 2 },
+    ], workOrders: [{ stableId: "inspect", kind: "INVESTIGATE", status: "IN_PROGRESS", title: "Review current project evidence", resourceNeedIds: [], dependsOn: [] }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const project = page.locator(".erp-project-card").filter({ hasText: "Prepare multi-step provisioning" });
+    await project.getByRole("button", { name: "Compose fulfillment work orders" }).click();
+    const composer = project.getByRole("region", { name: "Multi-need work-order composer for Prepare multi-step provisioning" });
+    await composer.locator(".erp-batch-need").filter({ hasText: "Rough Stone" }).locator("input").check();
+    await composer.locator(".erp-batch-need").filter({ hasText: "Peacebloom" }).locator("input").check();
+    const stoneTask = composer.locator(".erp-batch-order-draft").filter({ hasText: "Task for Rough Stone" });
+    const herbTask = composer.locator(".erp-batch-order-draft").filter({ hasText: "Task for Peacebloom" });
+    await stoneTask.getByLabel("Manual work type").selectOption("GATHER");
+    await stoneTask.getByLabel("Assigned character (optional)").selectOption(character);
+    await stoneTask.getByLabel("Manual instructions").fill("Check the player's stated gather plan and current game requirements.");
+    await herbTask.getByLabel("Manual work type").selectOption("PROVISION");
+    await herbTask.getByLabel("Assigned character (optional)").selectOption(character);
+    await herbTask.getByLabel("Prerequisites (optional)").selectOption(["inspect", "draft:stone"]);
+    await composer.getByRole("button", { name: "Save 2 planned work orders" }).click();
+
+    const saved = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Prepare multi-step provisioning"));
+    const stoneOrder = saved.workOrders.find((order) => order.kind === "GATHER");
+    const herbOrder = saved.workOrders.find((order) => order.kind === "PROVISION");
+    assert.deepEqual([stoneOrder.status, stoneOrder.resourceNeedIds, stoneOrder.assignedIdentityKey], ["PLANNED", ["stone"], character]);
+    assert.deepEqual([herbOrder.status, herbOrder.resourceNeedIds, herbOrder.assignedIdentityKey], ["PLANNED", ["herb"], character]);
+    assert.deepEqual(herbOrder.dependsOn, ["inspect", stoneOrder.stableId]);
+    assert.match(stoneOrder.instructions, /planning intent only/);
+    assert.match(herbOrder.instructions, /Ownership, access, binding, and a valid route remain UNKNOWN/);
+    const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const summary = account.planning.projects.find((entry) => entry.stableId === saved.stableId);
+    assert.deepEqual(summary.workOrderCounts, { IN_PROGRESS: 1, PLANNED: 2 });
+    assert.equal(saved.fulfillment.activeWorkOrderCount, 3);
+    assert.deepEqual(pageErrors, []);
+    assert.ok(created.stableId);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+

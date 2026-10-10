@@ -4,6 +4,7 @@ import { ownerObservationHistoryFromJournal, parseOwnerKey, projectOwnerFromJour
 import type { WowVersion } from "./types.ts";
 import { snapshotObservedAt } from "./chronology.ts";
 import type { Freshness } from "./freshness.ts";
+import { MAX_ERP_PROJECT_COLLECTION_ENTRIES } from "./erpLimits.ts";
 
 export const ERP_PROJECT_STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"] as const;
 export type ErpProjectStatus = typeof ERP_PROJECT_STATUSES[number];
@@ -156,7 +157,7 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
   if (p.completionNote !== undefined && (typeof p.completionNote !== "string" || p.completionNote.length > 2000)) fail("INVALID_COMPLETION_NOTE", "Project completion note must be at most 2,000 characters.");
   if (!Number.isInteger(p.priority) || p.priority < 1 || p.priority > 5) fail("INVALID_PROJECT_PRIORITY", "Priority must be an explicit integer from 1 to 5.");
   if (!Number.isSafeInteger(p.createdAt) || !Number.isSafeInteger(p.updatedAt) || !Number.isSafeInteger(p.revision) || p.revision < 1) fail("INVALID_PROJECT_REVISION", "Project timestamps and revision must be valid integers.");
-  for (const list of [p.needs, p.reservations, p.workOrders]) if (!Array.isArray(list) || list.length > 200) fail("INVALID_PROJECT_COLLECTION", "Project collections must be arrays of at most 200 entries.");
+  for (const list of [p.needs, p.reservations, p.workOrders]) if (!Array.isArray(list) || list.length > MAX_ERP_PROJECT_COLLECTION_ENTRIES) fail("INVALID_PROJECT_COLLECTION", `Project collections must be arrays of at most ${MAX_ERP_PROJECT_COLLECTION_ENTRIES} entries.`);
   const identity = (key: string | undefined, field: string) => {
     if (key === undefined) return;
     if (!hasValue(key) || !key.startsWith(`${p.version}::`) || !identityExists(key)) fail("INVALID_PROJECT_CHARACTER", `${field} must resolve to an observed character in this project's version; membership or transfer access is not implied.`);

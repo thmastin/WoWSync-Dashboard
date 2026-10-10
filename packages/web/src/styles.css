@@ -1409,4 +1409,6 @@ button.roster-name-link {
 .erp-batch-need { display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; background: #ffffff08; }
 .erp-batch-need input { margin-top: 4px; }
 .erp-batch-need small { display: block; margin-top: 4px; color: #aeb8c5; }
+.erp-batch-order-draft { display: grid; gap: 10px; margin: 14px 0; padding: 12px; border: 1px solid #40556b; border-radius: 6px; }
+.erp-batch-order-draft select[multiple] { min-height: 78px; }
 @media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
