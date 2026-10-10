@@ -773,10 +773,14 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     const reservedIdentity = store.importSnapshot(capture("Reserved Planner", "Cairne", now, 1, 3)).character.identityKey;
     const ownIdentity = store.importSnapshot(capture("Own Reserved Planner", "Cairne", now, 1, 3)).character.identityKey;
     const unknownBankIdentity = store.importSnapshot(renderExport({ name: "Unknown Bank Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" })], now), guild: guildSection("gclub-unknown-bank-planner", [], now) })).character.identityKey;
+    const historicalBank = observedSection([row(ITEM_ID, 2, { name: "Mycobloom" })], now - 10 * 86400);
+    historicalBank.status.state = "LAST_SEEN";
+    const lastSeenIdentity = store.importSnapshot(renderExport({ name: "Historical Bank Planner", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" })], now), bank: historicalBank, guild: guildSection("gclub-historical-bank-planner", [], now) })).character.identityKey;
     store.createErpProject({ version: "retail", title: "Review fresh bank supply", needs: [{ stableId: "fresh_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
     store.createErpProject({ version: "retail", title: "Review base-id bank supply", needs: [{ stableId: "base_id_bank_need", kind: "ITEM_ID", resourceKey: String(ITEM_ID), label: "Mycobloom base ID", requiredQuantity: 4, sourceIdentityKey: freshIdentity, destinationIdentityKey: freshIdentity }] });
     store.createErpProject({ version: "retail", title: "Review own-reserved bank supply", needs: [{ stableId: "own_reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: ownIdentity, destinationIdentityKey: ownIdentity }], reservations: [{ stableId: "own_need_reservation", needId: "own_reserved_bank_need", sourceIdentityKey: ownIdentity, quantity: 4, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     store.createErpProject({ version: "retail", title: "Review unknown bank supply", needs: [{ stableId: "unknown_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: unknownBankIdentity, destinationIdentityKey: unknownBankIdentity }] });
+    store.createErpProject({ version: "retail", title: "Review historical bank supply", needs: [{ stableId: "historical_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: lastSeenIdentity, destinationIdentityKey: lastSeenIdentity }] });
     store.createErpProject({ version: "retail", title: "Review stale bank supply", needs: [{ stableId: "stale_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: staleIdentity, destinationIdentityKey: staleIdentity }] });
     store.createErpProject({ version: "retail", title: "Competing reservation", needs: [{ stableId: "reserved_elsewhere", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 2, sourceIdentityKey: reservedIdentity }], reservations: [{ stableId: "hold_reserved_supply", needId: "reserved_elsewhere", sourceIdentityKey: reservedIdentity, quantity: 2, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     store.createErpProject({ version: "retail", title: "Review reserved bank supply", needs: [{ stableId: "reserved_bank_need", kind: "ITEM_REF", resourceKey: row(ITEM_ID, 1).itemRef, label: "Mycobloom", requiredQuantity: 4, sourceIdentityKey: reservedIdentity, destinationIdentityKey: reservedIdentity }] });
@@ -798,6 +802,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     assert.match(unknownBankNeed, /character bank: UNKNOWN .*contents UNKNOWN/);
     assert.doesNotMatch(unknownBankNeed, /character bank: UNKNOWN .*0 matching units/);
     assert.equal(await unknownBank.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0);
+    const historical = page.locator(".erp-project-card").filter({ hasText: "Review historical bank supply" }); await historical.waitFor();
+    const historicalText = await historical.locator(".erp-need-list li").first().innerText();
+    assert.match(historicalText, /character bank: LAST_SEEN .*2 matching units LAST_SEEN/);
+    assert.equal(await historical.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).count(), 0, "historical bank contents are displayed separately but do not create a current retrieval draft");
     await fresh.getByRole("button", { name: "Plan manual personal-bank retrieval review" }).click();
     const form = fresh.locator("form.erp-inline-form");
     await form.getByRole("textbox", { name: "Action" }).waitFor();
