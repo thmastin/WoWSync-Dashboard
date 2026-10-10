@@ -3,13 +3,15 @@ import type { ErpProjectView, ErpResourceCommitmentLine, ErpReservation } from "
 import { replanErpReservations } from "../api.ts";
 import type { VersionOrUnknown } from "../types.ts";
 
-type ReservationRow = { projectId: string; projectTitle: string; revision: number; needId: string; needLabel: string; resourceKey: string; sourceIdentityKey?: string; sourceOwnerKey?: string; reservation: ErpReservation; newQuantity: number };
+type ReservationRow = { projectId: string; projectTitle: string; revision: number; needId: string; needLabel: string; kind: ErpResourceCommitmentLine["kind"]; resourceKey: string; sourceIdentityKey?: string; sourceOwnerKey?: string; reservation: ErpReservation; newQuantity: number };
 
 function inScope(project: ErpProjectView, reservation: ErpReservation, line: ErpResourceCommitmentLine) {
   if (project.status === "CANCELLED" || reservation.status !== "ACTIVE") return false;
   if (reservation.sourceIdentityKey !== line.sourceIdentityKey || reservation.sourceOwnerKey !== line.sourceOwnerKey) return false;
   const need = project.needs.find((entry) => entry.stableId === reservation.needId);
-  return !!need && need.kind === line.kind && need.resourceKey === line.resourceKey;
+  const exactScope = !!need && need.kind === line.kind && need.resourceKey === line.resourceKey;
+  const listedOverlap = line.overlappingReservations.some((overlap) => overlap.projectId === project.stableId && overlap.needId === reservation.needId && overlap.reservationId === reservation.stableId);
+  return exactScope || listedOverlap;
 }
 
 export function ErpReservationReplanPanel({ version, projects, lines, busy, sourceLabel, onSaved }: { version: VersionOrUnknown; projects: readonly ErpProjectView[]; lines: readonly ErpResourceCommitmentLine[]; busy: boolean; sourceLabel: (line: ErpResourceCommitmentLine) => string; onSaved: () => void }) {
@@ -18,14 +20,14 @@ export function ErpReservationReplanPanel({ version, projects, lines, busy, sour
   const [review, setReview] = useState<{ projects: { stableId: string; revision: number; reservations: ErpProjectView["reservations"] }[]; rows: ReservationRow[] } | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const conflicted = lines.filter((line) => line.reservationState === "OVER_RESERVED" && line.sourceScope !== "UNKNOWN_SOURCE");
+  const conflicted = lines.filter((line) => line.sourceScope !== "UNKNOWN_SOURCE" && (line.reservationState === "OVER_RESERVED" || (line.reservationState === "UNKNOWN" && line.overlappingReservationQuantity !== undefined && line.overlappingReservationQuantity > 0 && line.overlappingReservations.length > 0)));
   const keyFor = (line: ErpResourceCommitmentLine) => JSON.stringify([line.version, line.sourceScope, line.sourceIdentityKey, line.sourceOwnerKey, line.kind, line.resourceKey]);
   const selectedLine = conflicted.find((line) => keyFor(line) === selectedLineKey);
   const open = (line: ErpResourceCommitmentLine) => {
     const rows: ReservationRow[] = [];
     for (const project of projects) for (const reservation of project.reservations) if (inScope(project, reservation, line)) {
       const need = project.needs.find((entry) => entry.stableId === reservation.needId)!;
-      rows.push({ projectId: project.stableId, projectTitle: project.title, revision: project.revision, needId: need.stableId, needLabel: need.label, resourceKey: need.resourceKey, ...(reservation.sourceIdentityKey ? { sourceIdentityKey: reservation.sourceIdentityKey } : {}), ...(reservation.sourceOwnerKey ? { sourceOwnerKey: reservation.sourceOwnerKey } : {}), reservation, newQuantity: reservation.quantity });
+      rows.push({ projectId: project.stableId, projectTitle: project.title, revision: project.revision, needId: need.stableId, needLabel: need.label, kind: need.kind, resourceKey: need.resourceKey, ...(reservation.sourceIdentityKey ? { sourceIdentityKey: reservation.sourceIdentityKey } : {}), ...(reservation.sourceOwnerKey ? { sourceOwnerKey: reservation.sourceOwnerKey } : {}), reservation, newQuantity: reservation.quantity });
     }
     setSelectedLineKey(keyFor(line)); setDraft(rows); setReview(null); setMessage("");
   };
@@ -77,8 +79,8 @@ export function ErpReservationReplanPanel({ version, projects, lines, busy, sour
   const affectedWork = projects.flatMap((project) => project.workOrders.filter((order) => impactedOrderKeys.has(`${project.stableId}:${order.stableId}`)).map((order) => `${project.title}: ${order.title} (${order.status})`));
   return <section className="erp-reservation-replan" aria-labelledby="erp-reservation-replan-title" data-testid="erp-reservation-replan">
     <h2 id="erp-reservation-replan-title">Replan conflicting reservations</h2>
-      <p>Only exact-source groups marked OVER RESERVED are listed. A reviewed batch may reduce or release existing intent across several projects atomically. It cannot increase or move a reservation, and does not move resources.</p>
-    {conflicted.length ? <ul>{conflicted.map((line) => <li key={keyFor(line)}><span><strong>{line.label}</strong> · {sourceLabel(line)} · {line.activeReservationQuantity} reserved against {line.observedQuantity ?? "UNKNOWN"} observed · {line.freshness} evidence</span><button type="button" disabled={busy || saving} onClick={() => open(line)}>Review {line.label} reservations</button></li>)}</ul> : <p>No exact-source over-reservation groups are currently established.</p>}
+      <p>Known OVER RESERVED groups and explicit base-item/exact-variant overlaps marked UNKNOWN are listed. UNKNOWN overlaps are not treated as confirmed shortages. A reviewed batch may reduce or release existing intent across several projects atomically. It cannot increase or move a reservation, and does not move resources.</p>
+    {conflicted.length ? <ul>{conflicted.map((line) => <li key={keyFor(line)}><span><strong>{line.label}</strong> · {sourceLabel(line)} · {line.activeReservationQuantity} exact-scope units reserved against {line.observedQuantity ?? "UNKNOWN"} observed · {line.freshness} evidence{line.overlappingReservations.length ? " | base/variant overlap; combined availability UNKNOWN" : ""}</span><button type="button" disabled={busy || saving} onClick={() => open(line)}>Review {line.label} reservations</button></li>)}</ul> : <p>No exact-source over-reservation groups are currently established.</p>}
     {selectedLine && <div className="erp-reservation-replan-session" aria-label={`Reservation review for ${selectedLine.label}`}>
       <h3>Proposed changes: {selectedLine.label} at {sourceLabel(selectedLine)}</h3>
       <p>Source scope, resource identity, and project revision are frozen for this review. Enter a lower quantity; set zero to release. Existing released history is retained.</p>
@@ -88,7 +90,7 @@ export function ErpReservationReplanPanel({ version, projects, lines, busy, sour
     {review && <div className="erp-reservation-replan-review" aria-label="Frozen reservation replan review" data-testid="erp-reservation-replan-review">
       <h3>Confirm reservation replan</h3>
       <p>This frozen review updates {review.projects.length} project{review.projects.length === 1 ? "" : "s"} and {review.rows.length} existing reservation{review.rows.length === 1 ? "" : "s"}. Revisions are checked again in one database transaction.</p>
-      <ul>{review.rows.map((row) => <li key={`${row.projectId}:${row.reservation.stableId}`}><strong>{row.projectTitle}</strong> · {row.needLabel}: {row.reservation.quantity} to {row.newQuantity === 0 ? "RELEASED" : row.newQuantity} · {row.resourceKey} · source {row.sourceIdentityKey ?? row.sourceOwnerKey ?? "UNKNOWN"} · revision {row.revision}</li>)}</ul>
+      <ul>{review.rows.map((row) => <li key={`${row.projectId}:${row.reservation.stableId}`}><strong>{row.projectTitle}</strong> · {row.needLabel}: {row.reservation.quantity} to {row.newQuantity === 0 ? "RELEASED" : row.newQuantity} · {row.kind} {row.resourceKey} · source {row.sourceIdentityKey ?? row.sourceOwnerKey ?? "UNKNOWN"} · revision {row.revision}</li>)}</ul>
       <p>Affected linked work: {affectedWork.length ? affectedWork.join("; ") : "no directly linked work orders"}. Downstream evidence and readiness will be recalculated after saving. This does not prove access, execution, or task completion.</p>
       <button type="button" disabled={busy || saving} onClick={() => void save()}>{saving ? "Saving reviewed changes…" : "Save reservation replan"}</button>
       <button type="button" disabled={saving} onClick={() => setReview(null)}>Back to proposal</button>

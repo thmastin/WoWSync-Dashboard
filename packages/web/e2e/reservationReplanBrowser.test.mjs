@@ -27,7 +27,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     const now = Math.floor(Date.now() / 1000);
     const observed = store.importSnapshot(renderExport({ name: "Reservation Planner", realm: "Cairne", generated: now, bags: observedSection([row(940211, 4, { name: "Mycobloom" }), row(940212, 1, { name: "Craft reagent" })], now), bank: observedSection([], now) }));
     const sourceKey = observed.character.identityKey;
-    const makeProject = (title, needId, reservationId) => store.createErpProject({ version: "retail", title, needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: itemRef, label: title.includes("Second") ? "Second requirement" : "Mycobloom", requiredQuantity: 3, sourceIdentityKey: sourceKey }], reservations: [{ stableId: reservationId, needId, sourceIdentityKey: sourceKey, quantity: 3, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+    const makeProject = (title, needId, reservationId) => store.createErpProject({ version: "retail", title, needs: [{ stableId: needId, kind: title.includes("Second") ? "ITEM_REF" : "ITEM_ID", resourceKey: title.includes("Second") ? itemRef : "940211", label: title.includes("Second") ? "Second requirement" : "Mycobloom", requiredQuantity: 3, sourceIdentityKey: sourceKey }], reservations: [{ stableId: reservationId, needId, sourceIdentityKey: sourceKey, quantity: 3, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     const first = makeProject("First requirement", "first_need", "first_hold");
     const second = makeProject("Second requirement", "second_need", "second_hold");
     const downstream = store.createErpProject({ version: "retail", title: "Craft after supply review", needs: [{ stableId: "craft_need", kind: "ITEM_REF", resourceKey: fullRef(940212), label: "Craft reagent", requiredQuantity: 1, sourceIdentityKey: sourceKey }], workOrders: [{ stableId: "craft_order", kind: "CRAFT", status: "PLANNED", title: "Review craft after supply", resourceNeedIds: ["craft_need"], dependsOn: [], portfolioPrerequisites: [{ projectId: first.stableId, needId: "first_need" }] }] });
@@ -41,7 +41,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const panel = page.getByTestId("erp-reservation-replan"); await panel.waitFor();
-    await panel.getByRole("button", { name: /Review .* reservations/ }).click();
+    const initialCommitments = await page.evaluate(async () => await (await fetch("/api/versions/retail/erp/projects")).json());
+    const baseItemLine = initialCommitments.resourceCommitments.items.find((line) => line.kind === "ITEM_ID" && line.resourceKey === "940211");
+    assert.equal(baseItemLine.reservationState, "UNKNOWN", "cross-kind overlap stays unknown before the player resolves planning intent");
+    assert.equal(baseItemLine.overlappingReservationQuantity, 3);
+    assert.equal(baseItemLine.overlappingReservations[0].resourceKey, itemRef, "the competing exact variant remains explicit");
+    await panel.getByRole("button", { name: /Review .* reservations/ }).first().click();
     assert.equal(await panel.getByLabel(/New reservation quantity for First requirement:/).inputValue(), "3");
     assert.equal(await panel.getByLabel(/New reservation quantity for Second requirement:/).inputValue(), "3");
     await panel.getByLabel(/New reservation quantity for First requirement:/).fill("1");
@@ -50,6 +55,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     const review = panel.getByTestId("erp-reservation-replan-review");
     assert.match(await review.innerText(), /First requirement.*3 to 1/);
     assert.match(await review.innerText(), /Second requirement.*3 to RELEASED/);
+    assert.match(await review.innerText(), /ITEM_ID 940211/);
+    assert.match(await review.innerText(), /ITEM_REF item:940211/);
     assert.match(await review.innerText(), /Craft after supply review: Review craft after supply \(PLANNED\)/);
     await review.getByRole("button", { name: "Save reservation replan" }).click();
     await panel.getByRole("status").filter({ hasText: /2 reservation changes saved atomically across 2 projects/ }).waitFor();
