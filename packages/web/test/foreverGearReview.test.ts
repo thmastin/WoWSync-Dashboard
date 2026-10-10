@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
 import type { ForeverGearAllocationApi } from "../src/api.ts";
-import ForeverGearReview from "../src/components/ForeverGearReview.tsx";
+import ForeverGearReview, { ForeverComparisonDetail } from "../src/components/ForeverGearReview.tsx";
 import CharactersGrid from "../src/components/CharactersGrid.tsx";
 import { buildForeverGearReview, describeForeverAssessment, filterForeverGearReview, gearReviewSummary } from "../src/foreverGearReview.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute } from "../src/routing.ts";
@@ -16,7 +16,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   recipient: { identityKey: "forever::classic-beta-pvp-2::hallo", name: "Hallo", realm: "Classic Beta PvP 2" },
   evidence: { provenance: "DERIVED", eligibility: "UNKNOWN", suitability: "UNKNOWN", transferability: "UNKNOWN", confidence: "UNKNOWN", reasons: ["Eligibility and transfer route are unknown."], whatWouldChange: ["Capture a validated eligibility result."] },
   // Observed Hallo/Fizzwick values are retained exactly; no allocation verdict is fabricated by this fixture.
-  comparison: { upgradeStatus: "UNKNOWN", confidence: "UNKNOWN", rawComparisons: [{ slot: 10, equippedItemRef: "item:6171", classification: "EQUIPPED_DOMINATES_RECORDED_STATS", reason: "Observed RESISTANCE0_NAME: candidate 17 vs equipped 21; this one metric is not a full upgrade assessment." }] },
+  comparison: { upgradeStatus: "UNKNOWN", confidence: "UNKNOWN", rawComparisons: [{ slot: 10, equippedItemRef: "item:6171", values: [{ key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", candidate: 7, equipped: 2, delta: 5 }], classification: "CANDIDATE_DOMINATES_RECORDED_STATS", reason: "Armor: candidate 7 vs equipped 2 (+5 Armor); this one metric is not a full upgrade assessment." }] },
   ...overrides,
 });
 const response = (rows: unknown[], version = "forever", ruleset = "forever-70291-allocation-screen-v2") => ({
@@ -35,15 +35,28 @@ test("only uses the matching recipient's version-scoped 70291 plan rows", () => 
   assert.equal(result[0]!.recipients[0]!.identityKey, "forever::classic-beta-pvp-2::hallo");
 });
 
-test("the documented Hallo/Fizzwick variant and raw stat comparison remain UNKNOWN as an overall upgrade", () => {
+test("the documented Fizzwick armor comparison is labeled while overall upgrade remains UNKNOWN", () => {
   const result = buildForeverGearReview([{ recipientIdentityKey: "forever::classic-beta-pvp-2::hallo", result: response([row()]) }]);
   const [group] = result;
   assert.equal(group?.itemRef, "item:1368::::::::2:1482:::::::::");
   assert.equal(group?.recipients[0]?.comparison?.upgradeStatus, "UNKNOWN");
-  assert.match(group?.recipients[0]?.comparison?.rawComparisons[0]?.reason ?? "", /candidate 17 vs equipped 21/);
+  const comparison = group?.recipients[0]?.comparison?.rawComparisons[0];
+  assert.equal(comparison?.values[0]?.key, "RESISTANCE0_NAME", "the original key remains available for provenance");
+  assert.equal(comparison?.values[0]?.label, "Armor");
+  assert.equal(comparison?.values[0]?.delta, 5);
+  assert.match(comparison?.reason ?? "", /Armor: candidate 7 vs equipped 2 \(\+5 Armor\)/);
   assert.equal(group?.recipients[0]?.evidence.transferability, "UNKNOWN");
   assert.equal(group?.recipients[0]?.recipientEvidence.class?.value, "Hunter");
   assert.equal(group?.recipients[0]?.recipientEvidence.equipment.freshness, "FRESH");
+});
+
+test("Forever Gear Review renders the verified Armor label and signed Armor delta", () => {
+  const group = buildForeverGearReview([{ recipientIdentityKey: "forever::classic-beta-pvp-2::hallo", result: response([row()]) }])[0]!;
+  const comparison = group.recipients[0]!.comparison!.rawComparisons[0]!;
+  const markup = renderToStaticMarkup(createElement(ForeverComparisonDetail, { comparison, slot: 8 }));
+  assert.equal(group.recipients[0]?.comparison?.rawComparisons[0]?.values[0]?.label, "Armor");
+  assert.match(markup, /Armor: 7 vs 2 \(\+5 Armor\)/);
+  assert.doesNotMatch(markup, /RESISTANCE0_NAME/);
 });
 
 test("surname is displayed in roster cards and Forever gear review without affecting character identity", () => {

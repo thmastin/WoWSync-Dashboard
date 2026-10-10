@@ -190,7 +190,7 @@ test("Forever allocation keeps source location, unknown roster membership, and e
     assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "MAPPED", "Forever equip-location mapping finds the occupied main-hand slot despite a different exact token");
     assert.equal(currentAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact-item and recipient specialization evidence only produces a suitability hint");
     assert.equal(currentAssessment?.upgradeStatus, "NO_RECORDED_STAT_GAIN");
-    assert.deepEqual(currentAssessment?.rawStatComparisons[0]?.values.find((row) => row.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT"), { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", candidate: 1.5, equipped: 1.875, delta: -0.375 });
+    assert.deepEqual(currentAssessment?.rawStatComparisons[0]?.values.find((row) => row.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT"), { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", label: "Unknown stat", labelState: "UNKNOWN", candidate: 1.5, equipped: 1.875, delta: -0.375 });
     const staleAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === staleRef);
     assert.equal(staleAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "stale item metadata cannot establish a current level gate");
     assert.deepEqual(staleAssessment?.rawStatComparisons, [], "stale item metadata cannot enter raw comparisons");

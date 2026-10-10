@@ -4,7 +4,7 @@ import {
   assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta,
   classifyForeverRecordedUpgrade, compareForeverStatTables,
   evaluateForeverSlotCompatibility, evaluateForeverTransferability,
-  foreverSlotsForEquipLocation,
+  foreverSlotsForEquipLocation, presentForeverStatKey,
 } from "../src/foreverGearEvaluation.ts";
 
 const slot = (n: number, itemRef: string, equipLocation: string): { slot: number; itemRef: string; equipLocation: string; provenance: string } => ({ slot: n, itemRef, equipLocation, provenance: "OBSERVED" });
@@ -56,6 +56,16 @@ test("complete raw stat vectors distinguish dominance, losses, ties, and trade-o
   assert.deepEqual(tradeoff?.values.map((row) => [row.key, row.delta]), [["ITEM_MOD_STAMINA_SHORT", 5], ["ITEM_MOD_STRENGTH_SHORT", -2]]);
   assert.equal(compareForeverStatTables(table({ ITEM_MOD_STAMINA_SHORT: 5 }), table({ ITEM_MOD_STAMINA_SHORT: 5 }), 5, "item:old")?.classification, "RECORDED_STAT_TIE");
   assert.equal(compareForeverStatTables(table({ ITEM_MOD_STAMINA_SHORT: 5 }, false), table({ ITEM_MOD_STAMINA_SHORT: 4 }), 5, "item:old"), undefined);
+});
+
+test("Forever stat presentation labels the verified resistance key as Armor and preserves unknown keys", () => {
+  const comparison = compareForeverStatTables(table({ RESISTANCE0_NAME: 7 }), table({ RESISTANCE0_NAME: 2 }), 8, "item:old")!;
+  assert.deepEqual(comparison.values[0], { key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", candidate: 7, equipped: 2, delta: 5 });
+  assert.match(comparison.reason, /Armor: candidate 7 vs equipped 2 \(\+5 Armor\)/);
+  assert.deepEqual(presentForeverStatKey("FUTURE_UNKNOWN_STAT"), { label: "Unknown stat", labelState: "UNKNOWN" });
+  const unknown = compareForeverStatTables(table({ FUTURE_UNKNOWN_STAT: 7 }), table({ FUTURE_UNKNOWN_STAT: 2 }), 8, "item:old")!;
+  assert.deepEqual(unknown.values[0], { key: "FUTURE_UNKNOWN_STAT", label: "Unknown stat", labelState: "UNKNOWN", candidate: 7, equipped: 2, delta: 5 });
+  assert.match(unknown.reason, /Unknown stat: candidate 7 vs equipped 2 \(\+5\)/);
 });
 
 test("stat delta direction is calibrated against exact GetItemStats values, never guessed", () => {

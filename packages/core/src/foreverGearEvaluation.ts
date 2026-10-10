@@ -9,11 +9,18 @@ export type ForeverSlotEvidence = {
 
 export type ForeverStatEntry = { key: string; state: string; value?: unknown };
 export type ForeverStatTable = { state: string; complete: boolean; entries: ForeverStatEntry[] };
+export type ForeverStatPresentation = { label: string; labelState: "KNOWN" | "UNKNOWN" };
+
+/** Labels verified for Forever 1.60.1 build 70291. Unknown raw keys stay unmapped. */
+export function presentForeverStatKey(key: string): ForeverStatPresentation {
+  if (key === "RESISTANCE0_NAME") return { label: "Armor", labelState: "KNOWN" };
+  return { label: "Unknown stat", labelState: "UNKNOWN" };
+}
 
 export type ForeverStatComparison = {
   slot: number;
   equippedItemRef: string;
-  values: Array<{ key: string; candidate: number; equipped: number; delta: number }>;
+  values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>;
   classification: "CANDIDATE_DOMINATES_RECORDED_STATS" | "EQUIPPED_DOMINATES_RECORDED_STATS" | "STAT_TRADEOFF" | "RECORDED_STAT_TIE";
   provenance: "DERIVED";
   reason: string;
@@ -136,7 +143,7 @@ export function compareForeverStatTables(candidate: ForeverStatTable | undefined
   const values = keys.map((key) => {
     const candidateValue = candidateValues[key] ?? 0;
     const equippedValue = equippedValues[key] ?? 0;
-    return { key, candidate: candidateValue, equipped: equippedValue, delta: candidateValue - equippedValue };
+    return { key, ...presentForeverStatKey(key), candidate: candidateValue, equipped: equippedValue, delta: candidateValue - equippedValue };
   });
   const gains = values.some((row) => row.delta > 0);
   const losses = values.some((row) => row.delta < 0);
@@ -145,7 +152,7 @@ export function compareForeverStatTables(candidate: ForeverStatTable | undefined
       : losses ? "EQUIPPED_DOMINATES_RECORDED_STATS" as const : "RECORDED_STAT_TIE" as const;
   return {
     slot, equippedItemRef, values, classification, provenance: "DERIVED",
-    reason: "Derived from complete numeric GetItemStats tables for exact item variants. Missing keys are zero only within two complete tables. This compares the recorded stat vector; it does not weight stats for a build or include unreported effects.",
+    reason: `Derived from complete numeric GetItemStats tables for exact item variants. ${values.map((row) => `${row.labelState === "KNOWN" ? row.label : "Unknown stat"}: candidate ${row.candidate} vs equipped ${row.equipped} (${row.delta >= 0 ? "+" : ""}${row.delta}${row.labelState === "KNOWN" ? ` ${row.label}` : ""})`).join("; ")}. Raw API keys are preserved in each value. Missing keys are zero only within two complete tables. This compares the recorded stat vector; it does not weight stats for a build or include unreported effects.`,
     ...(itemClass === "Weapon" ? { weaponMetrics: {
       dps: values.filter((row) => /DAMAGE_PER_SECOND/i.test(row.key)).map((row) => ({ key: row.key, candidate: row.candidate, equipped: row.equipped, delta: row.delta })),
       speed: { state: "UNKNOWN" as const, reason: "The captured item API tables do not contain a separately validated weapon-speed field." },

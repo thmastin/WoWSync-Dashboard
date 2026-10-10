@@ -4,6 +4,7 @@ import { buildForeverGearReview, describeForeverAssessment, filterForeverGearRev
 import { useAsync } from "../useAsync.ts";
 import { formatAbsoluteTime } from "../format.ts";
 import type { CharacterFacts } from "../types.ts";
+import type { GearReviewComparison } from "../foreverGearReview.ts";
 import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 type Read = { identityKey: string; name: string; surname?: string; realm: string; result?: ForeverGearAllocationApi; error?: string };
@@ -14,6 +15,11 @@ const dispositionLabel: Record<string, string> = {
   NOT_AN_UPGRADE_ON_OBSERVED_METRICS: "No advantage in observed metrics",
   INSUFFICIENT_EVIDENCE: "Evidence is insufficient",
 };
+
+export function ForeverComparisonDetail({ comparison, slot }: { comparison: GearReviewComparison["rawComparisons"][number]; slot: number }) {
+  const values = comparison.values.map((value) => `${value.labelState === "KNOWN" ? value.label : "Unknown stat"}: ${value.candidate} vs ${value.equipped} (${value.delta >= 0 ? "+" : ""}${value.delta}${value.labelState === "KNOWN" ? ` ${value.label}` : ""})`).join("; ");
+  return <p className="muted small">Observed comparison for slot {slot} against {comparison.equippedItemRef}: {values}. {describeForeverAssessment(comparison.classification)}. {comparison.reason} This is a metric comparison, not a complete upgrade verdict.</p>;
+}
 
 export default function ForeverGearReview({ characters, refreshTick, onOpenCharacter }: {
   characters: CharacterFacts[];
@@ -77,7 +83,7 @@ export default function ForeverGearReview({ characters, refreshTick, onOpenChara
         <p>{row.evidence.reasons.join(" ") || "No explanatory reason was supplied."}</p>
         <p className="muted small">Source evidence: {row.source.location === "CARRIED_INVENTORY" ? "carried inventory" : row.source.location === "EQUIPPED" ? "equipped" : "location UNKNOWN"} · {row.source.provenance} · {row.source.observedAt ? formatAbsoluteTime(row.source.observedAt) : "timestamp UNKNOWN"} ({row.source.freshness}). {characterDisplayName(row)}'s snapshot is {row.recipientEvidence.freshness}{row.recipientEvidence.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.observedAt)}` : " · timestamp UNKNOWN"}; equipment is {row.recipientEvidence.equipment.state}{row.recipientEvidence.equipment.observedAt ? ` · observed ${formatAbsoluteTime(row.recipientEvidence.equipment.observedAt)} (${row.recipientEvidence.equipment.freshness ?? "freshness UNKNOWN"})` : " · timestamp UNKNOWN"}. Class {row.recipientEvidence.class ? `${row.recipientEvidence.class.value} (${row.recipientEvidence.class.provenance})` : "UNKNOWN"}; level {row.recipientEvidence.level ? `${row.recipientEvidence.level.value} (${row.recipientEvidence.level.provenance})` : "UNKNOWN"}.</p>
         <p className="muted small">Eligibility: {describeForeverAssessment(row.evidence.eligibility)} · suitability: {describeForeverAssessment(row.evidence.suitability)} · transferability: {describeForeverAssessment(row.evidence.transferability)}. Evidence: {describeForeverAssessment(row.evidence.provenance)} · confidence {row.evidence.confidence.toLowerCase()}.</p>
-        {row.comparison?.rawComparisons.map((comparison, index) => <p className="muted small" key={`${comparison.slot}:${comparison.equippedItemRef}:${index}`}>Observed comparison for slot {comparison.slot} against {comparison.equippedItemRef}: {describeForeverAssessment(comparison.classification)}. {comparison.reason} This is a metric comparison, not a complete upgrade verdict.</p>)}
+        {row.comparison?.rawComparisons.map((comparison, index) => <ForeverComparisonDetail key={`${comparison.slot}:${comparison.equippedItemRef}:${index}`} comparison={comparison} slot={comparison.slot} />)}
         {row.evidence.whatWouldChange.length > 0 && <details><summary>What evidence would improve this assessment</summary><ul>{row.evidence.whatWouldChange.map((fact, index) => <li key={`${index}:${fact}`}>{fact}</li>)}</ul></details>}
       </section>)}</div>
     </article>)}</div>
