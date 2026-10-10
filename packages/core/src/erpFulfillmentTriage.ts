@@ -74,8 +74,8 @@ export interface ErpPortfolioFulfillmentStep {
 function hasReservationAdjustedCoverage(project: ErpProjectView | undefined, need: ErpResourceNeed | undefined, evidence: ErpNeedEvidence | undefined): boolean {
   if (!project || !need || evidence?.state !== "COVERED_BY_OBSERVED" || evidence.freshness !== "recent" || evidence.observedAt === undefined || evidence.unresolvedSections.length > 0 || evidence.unknownQuantityRowCount > 0) return false;
   const assessment = evidence.reservationAssessment;
-  if (!assessment || (assessment.state === "UNRESERVED" && assessment.activeQuantity === 0)) return true;
-  if (assessment.state !== "WITHIN_OBSERVED_SUPPLY" || assessment.availableObservedLowerBound === undefined) return false;
+  if (assessment?.state === "UNRESERVED" && assessment.activeQuantity === 0) return true;
+  if (assessment?.state !== "WITHIN_OBSERVED_SUPPLY" || assessment.availableObservedLowerBound === undefined) return false;
   const ownReservationQuantity = reservationQuantityAtNeedSource(project, need);
   return assessment.availableObservedLowerBound + ownReservationQuantity >= need.requiredQuantity;
 }
@@ -204,7 +204,7 @@ function buildNeedFulfillmentPathways(need: ErpResourceNeed, evidence: ErpNeedEv
   const options: ErpNeedFulfillmentOption[] = [];
   const completeCurrent = evidence?.freshness === "recent" && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
   const reservation = evidence?.reservationAssessment;
-  const reservationClear = !reservation || (reservation.state === "UNRESERVED" && reservation.activeQuantity === 0) || (reservation.state === "WITHIN_OBSERVED_SUPPLY" && reservation.availableObservedLowerBound !== undefined && reservation.availableObservedLowerBound + ownReservationQuantity >= need.requiredQuantity);
+  const reservationClear = (reservation?.state === "UNRESERVED" && reservation.activeQuantity === 0) || (reservation?.state === "WITHIN_OBSERVED_SUPPLY" && reservation.availableObservedLowerBound !== undefined && reservation.availableObservedLowerBound + ownReservationQuantity >= need.requiredQuantity);
   if (completeCurrent && reservationClear && evidence?.state === "COVERED_BY_OBSERVED") options.push({ kind: "CURRENT_OBSERVED_COVERAGE", provenance: "DERIVED", reason: `${evidence.observedQuantity ?? "An unknown quantity"} observed against ${need.requiredQuantity} required. This reports selected-source coverage only; reservation, access, and action outcome remain separate.` });
 
   const bags = sourceSections.find((section) => section.section === "bags");

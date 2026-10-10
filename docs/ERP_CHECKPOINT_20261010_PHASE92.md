@@ -16,6 +16,7 @@ The workbench's resource commitment contributors now link directly to the exact 
 
 - Core fulfillment pathways now distinguish observed coverage from reservation-adjusted coverage and preserve UNKNOWN reservation state.
 - Portfolio prerequisite gates include reservation-adjusted lower bounds and source-specific explanation. Alternate-source intent is excluded from both arithmetic and blocker wording.
+- Missing reservation-assessment data is UNKNOWN and now blocks current-coverage and prerequisite claims. The canonical read model's explicit `UNRESERVED` assessment still permits clear coverage.
 - The workbench labels reservation conflict on prerequisite gates and displays the relevant reservation state and reason.
 - Commitment contributors navigate to the exact need for review.
 - Regression coverage exercises competing reservations at two sources, blocked prerequisite readiness, player release, later sufficient observation, and an open alternate-source provisioning task.
@@ -33,7 +34,7 @@ The workbench's resource commitment contributors now link directly to the exact 
 - Production web build: passed; existing advisory remains for the 708.76 kB minified JavaScript chunk
 - Synthetic browser acceptance: 18 passed
 
-Independent review of the final diff confirmed that alternate-source reservations are excluded from the selected source's coverage and explanation. No blocking or material findings remain. These results are synthetic acceptance, not live-game or production validation.
+Independent review confirmed alternate-source reservations are excluded from the selected source's coverage and explanation. Follow-up adversarial review also confirmed that missing reservation assessment stays UNKNOWN while explicit `UNRESERVED` evidence still works. No blocking or material findings remain. These results are synthetic acceptance, not live-game or production validation.
 
 ## Cumulative capability status
 

@@ -81,6 +81,12 @@ test("portfolio fulfillment review orders prerequisite evidence first and preser
     const sourcePathways = buildErpSourceFulfillmentReview(projects, "classic-era").sources.flatMap((source) => source.needs).find((need) => need.projectId === prerequisite.stableId && need.needId === "shared")?.fulfillmentPathways;
     assert.deepEqual(packageView.steps[0]?.fulfillmentPathways, sourcePathways, "dependency-first package embeds the exact pathway review derived for the same need, without recomputing or strengthening it");
     assert.equal(packageView.steps[0]?.projectStatus, "ACTIVE");
+
+    const reservationUnknownProjects = projects.map((entry) => ({ ...entry, needEvidence: entry.needEvidence.map((evidence) => { const { reservationAssessment: _reservationAssessment, ...withoutAssessment } = evidence; return withoutAssessment; }) }));
+    const reservationUnknownPortfolio = buildErpPortfolioFulfillmentReview(reservationUnknownProjects, "classic-era").packages[0]!;
+    assert.equal(reservationUnknownPortfolio.steps[0]?.fulfillmentPathways?.state, "EVIDENCE_REVIEW_REQUIRED", "a missing reservation assessment is UNKNOWN rather than proof that observed stock is unreserved");
+    assert.equal(reservationUnknownPortfolio.steps[1]?.prerequisiteGate.state, "PREREQUISITE_EVIDENCE_REVIEW", "a dependent task cannot pass a prerequisite gate without reservation assessment evidence");
+
     assert.equal(packageView.steps[0]?.fulfillmentPathways?.state, "EVIDENCE_REVIEW_REQUIRED", "source pathway does not claim available coverage when the reservations leave an inadequate lower bound");
     assert.equal(packageView.steps[1]?.workOrders[0]?.readinessState, "OBSERVED_RESOURCE_SHORTFALL", "the prerequisite is currently met, so the dependent step's own source shortfall controls readiness");
     assert.equal(packageView.nextReviewStepId, `${prerequisite.stableId}/shared`, "the next review points to the upstream reservation conflict");
