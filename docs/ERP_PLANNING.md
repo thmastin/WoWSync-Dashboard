@@ -220,3 +220,19 @@ The Dashboard presents these packages inside the buyer panel with project/need c
 Full synthetic ERP validation passed after review fixes: Core 832, MCP 3, Server 266 + 2 platform skips, Web 314, TypeScript/build, and 14 browser acceptances. The browser scenario has two projects and three purchase orders, including one exact itemString variant required by both projects. It checks package coverage and UI/REST/AccountContext/MCP agreement against a later synthetic gold import. Regressions ensure stale shortfalls remain UNKNOWN and duplicate quote tasks do not double-count one need's gap. Independent review found and resolved both cases; follow-up found no blockers. No live-game, market, or production validation.
 
 Next substantial work: connect exact-resource buyer packages to the cross-project fulfillment queue, combining observed item gaps with evidence-supported craft inputs and storage retrieval candidates, showing one explainable player-controlled next action and its blockers. Do not infer recipe capability, accessibility, affordability, or transfer routes.
+
+## Phase 70: grouped source-lead provisioning reviews
+
+The cross-project buyer panel can now take one recent observed location lead for an exact ITEM_REF and create linked manual PROVISION review work orders for the same buyer's repeated requirements across projects. The dedicated batch endpoint requires at least two needs in 2-10 distinct active projects, has a 20-need bound, rejects stale revisions and changed evidence, revalidates exact-item/source/freshness/reservation facts in the existing atomic store operation, and suppresses duplicate reviews. Duplicate retries do not bypass the project bound. Buyer needs and purchase work orders remain unchanged; no stock or reservation is altered. The work orders state that ownership, access, binding, account membership, and route remain unestablished.
+
+Full `npm.cmd run validate:erp` passed: Core 832, MCP 3, Server 267 plus 2 platform skips, Web 314, TypeScript/build, and 14 synthetic browser acceptances. Browser acceptance exercises a player selecting a repeated exact item source lead and validating REST/AccountContext/MCP parity. Independent review found the request bound was applied after duplicate suppression and a single-project payload was accepted; both boundaries were fixed and tested. No live or production validation.
+
+## Phase 71: reconcile explicit alternate provisioning sources
+
+When an existing buyer-scoped purchase need retains the buyer as its source intent, a separately selected PROVISION work order may name another character as its proposed source. The paired observation evaluator now compares the explicit work-order source and destination, preserves the original need source intent separately, and explains the distinction in work-order progress. TRANSFER source mismatches and character-versus-shared-owner conflicts remain conflicts. Paired source/destination deltas remain CAUSE_UNKNOWN and do not establish access, movement, or completion.
+
+Full `npm.cmd run validate:erp` passed on the combined Phase 70-71 tree: Core 833, MCP 3, Server 267 plus 2 platform skips, Web 315, TypeScript/build, and 14 synthetic browser acceptances. Core, REST, and UI tests exercise alternate source intent and paired observations. Independent review found no blocker. No real account or game data was used for these scenarios; no live or production validation occurred.
+
+Dashboard commits `a01513b2bd97a8824fff23a7f586487e5f9bfc69` and `f0b6a9e6c0dedcaf359f6100e99da29ed3825e2b` are pushed to `feature/forever-gear-observation`.
+
+Next substantial work: connect buyer packages, source alternatives, readiness, reservations, quotes, and paired observations into one explainable cross-project manual decision surface. Continue with supported crafting inputs and storage retrieval while keeping purchase, provisioning, access, movement, ownership, and action causality separate.
