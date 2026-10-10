@@ -370,3 +370,5 @@ The synthetic browser acceptance selects one need from an earlier generation in 
 Full `npm.cmd run validate:erp` results for this phase are recorded in the checkpoint report and canonical truth. The focused independent reviewer found one nonblocking evidence-label mismatch; it was fixed by exposing immutable identity per history entry, and follow-up review found no blockers. The Vite bundle-size advisory remains. No live-game or production validation occurred.
 
 The player can now choose a specific saved requirement generation and open a context-bearing, exact-scope draft that may become a branch, while active work and conflicts remain gated. Next substantial milestone: show the intervening imported evidence interval between a saved requirement review and current state, including partial, stale, conflicting, and restored observations, without inferring that a task caused those changes.
+
+See `ERP_CHECKPOINT_20261010_PHASE104.md` for the validation and current cumulative status.
