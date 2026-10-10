@@ -805,7 +805,18 @@ export interface ErpWorkOrderProgress {
   readonly allocationConflictNeedIds: readonly string[];
   readonly changedNeedIds: readonly string[];
   readonly transferObservationReviews?: readonly ErpTransferObservationReview[];
+  readonly procurementObservationReview?: ErpProcurementObservationReview;
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
+  readonly reason: string;
+}
+
+export interface ErpProcurementObservationReview {
+  readonly buyerIdentityKey: string;
+  readonly state: "GOLD_DECREASED" | "GOLD_INCREASED" | "GOLD_UNCHANGED" | "UNKNOWN";
+  readonly freshness: Freshness;
+  readonly comparison?: ResourceObservationChange["comparisons"][number];
+  readonly previousFreshness?: Freshness;
+  readonly interpretation: "CAUSE_UNKNOWN";
   readonly reason: string;
 }
 
@@ -897,6 +908,20 @@ function transferObservationReviews(project: ErpProject, order: ErpWorkOrder, sn
       : "Recent comparable observations show no quantity change for this resource scope; this does not prove that no unobserved action occurred.");
     return [{ needId, kind: need.kind, resourceKey: need.resourceKey, source, destination, state, interpretation: "CAUSE_UNKNOWN" as const, reason }];
   });
+}
+
+function procurementObservationReview(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpProcurementObservationReview | undefined {
+  if (order.kind !== "PURCHASE" || !order.procurementPlan || !order.assignedIdentityKey) return undefined;
+  const buyerIdentityKey = order.assignedIdentityKey;
+  if (!buyerIdentityKey.startsWith(`${project.version}::`)) return { buyerIdentityKey, state: "UNKNOWN", freshness: "unknown", interpretation: "CAUSE_UNKNOWN", reason: "The recorded buyer identity does not match this project version; no cross-version gold evidence is used." };
+  const goldNeed: ErpResourceNeed = { stableId: `procurement-progress-gold:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Buyer gold observation", requiredQuantity: 1, sourceIdentityKey: buyerIdentityKey };
+  const evidence = assessErpNeed(goldNeed, snapshotsFor(buyerIdentityKey), now, undefined, project.version);
+  const comparison = evidence.observationChange?.comparisons.find((entry) => entry.section === "character gold");
+  if (!comparison) return { buyerIdentityKey, state: "UNKNOWN", freshness: evidence.freshness, interpretation: "CAUSE_UNKNOWN", reason: `${evidence.observationChange?.reason ?? evidence.reason} A gold delta alone could not establish whether this purchase or any other action caused it.` };
+  const previousFreshness = evidenceFreshness(comparison.previousObservedAt, now);
+  const state: ErpProcurementObservationReview["state"] = comparison.delta < 0 ? "GOLD_DECREASED" : comparison.delta > 0 ? "GOLD_INCREASED" : "GOLD_UNCHANGED";
+  const freshnessText = evidence.freshness === "recent" && previousFreshness === "recent" ? "Both observations are recent." : `Freshness is ${previousFreshness} for the earlier observation and ${evidence.freshness} for the later observation.`;
+  return { buyerIdentityKey, state, freshness: evidence.freshness, comparison, previousFreshness, interpretation: "CAUSE_UNKNOWN", reason: `${freshnessText} Character gold changed from ${comparison.previousQuantity} to ${comparison.currentQuantity} copper (${comparison.delta > 0 ? "+" : ""}${comparison.delta}). This paired observation does not establish that a purchase occurred, identify an item or seller, or attribute the change to this work order.` };
 }
 
 function assessPlannedCraftOutput(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpPlannedOutputAssessment | undefined {
@@ -1197,8 +1222,9 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
         ? `Recent covered linked needs share or ambiguously identify observed source quantities for: ${allocationConflictNeedIds.join(", ")}. Their combined independent availability is not established. Reservations record player intent; they do not lock inventory or prove possession.`
         : `Linked resource evidence is stale, incomplete, unsupported, or unknown for: ${unresolvedNeedIds.join(", ")}. Refresh or clarify evidence before drawing an outcome.`;
     const transferReviews = transferObservationReviews(project, order, snapshotsFor, now, currencies);
+    const procurementReview = procurementObservationReview(project, order, snapshotsFor, now);
     const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

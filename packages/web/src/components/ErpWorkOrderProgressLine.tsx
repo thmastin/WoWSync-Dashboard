@@ -1,4 +1,4 @@
-import type { ErpWorkOrderProgress } from "@wowsync-dashboard/core";
+import type { ErpProcurementObservationReview, ErpWorkOrderProgress } from "@wowsync-dashboard/core";
 
 const LABELS: Record<ErpWorkOrderProgress["reconciliation"], string> = {
   PLAYER_RECORDED_COMPLETE: "Player recorded complete",
@@ -29,7 +29,17 @@ export function ErpWorkOrderProgressLine({ progress, characterName }: { progress
     <p>Source — {name(review.source.identityKey)}: {sideDescription(review.source)}</p>
     <p>Destination — {name(review.destination.identityKey)}: {sideDescription(review.destination)}</p>
     <p>{review.reason} The comparison does not establish account membership, ownership, access, transferability, or that the planned action caused either change.</p>
-  </li>)}</ul></details>}{output && <section className="erp-craft-output" aria-label="Planned craft output evidence"><h4>Planned craft output (intent only)</h4><p><strong>{output.plannedOutput.label}</strong>  |  <code>{output.plannedOutput.resourceKey}</code>  |  {output.plannedOutput.quantity} planned</p><p>Checked character: {name(output.recipientIdentityKey)}  |  {OUTPUT_LABELS[output.state]}  |  {output.freshness} freshness{output.observedAt ? `  |  evidence ${new Date(output.observedAt * 1000).toLocaleString()}` : ""}</p>{output.observedQuantity !== undefined && <p>Quantity in recorded evidence: {output.observedQuantity}</p>}{output.potentialQuantity !== undefined && <p>Historical possible quantity: {output.potentialQuantity} (LAST_SEEN)</p>}{output.unresolvedSections.length > 0 && <p>Unresolved: {output.unresolvedSections.join(", ")}</p>}<p>{output.reason}</p><p>Output observation changes are non-causal and do not verify this craft or complete the work order.</p></section>}</div>;
+  </li>)}</ul></details>}{progress.procurementObservationReview && <ProcurementObservationReviewView review={progress.procurementObservationReview} characterName={name} />}{output && <section className="erp-craft-output" aria-label="Planned craft output evidence"><h4>Planned craft output (intent only)</h4><p><strong>{output.plannedOutput.label}</strong>  |  <code>{output.plannedOutput.resourceKey}</code>  |  {output.plannedOutput.quantity} planned</p><p>Checked character: {name(output.recipientIdentityKey)}  |  {OUTPUT_LABELS[output.state]}  |  {output.freshness} freshness{output.observedAt ? `  |  evidence ${new Date(output.observedAt * 1000).toLocaleString()}` : ""}</p>{output.observedQuantity !== undefined && <p>Quantity in recorded evidence: {output.observedQuantity}</p>}{output.potentialQuantity !== undefined && <p>Historical possible quantity: {output.potentialQuantity} (LAST_SEEN)</p>}{output.unresolvedSections.length > 0 && <p>Unresolved: {output.unresolvedSections.join(", ")}</p>}<p>{output.reason}</p><p>Output observation changes are non-causal and do not verify this craft or complete the work order.</p></section>}</div>;
+}
+
+function ProcurementObservationReviewView({ review, characterName }: { review: ErpProcurementObservationReview; characterName: (identityKey?: string) => string }) {
+  const comparison = review.comparison;
+  return <section className="erp-procurement-observation-review" aria-label="Buyer gold observation review">
+    <h4>Buyer gold observation review</h4>
+    <p>Buyer: {characterName(review.buyerIdentityKey)} · {review.state.replaceAll("_", " ")} · {review.freshness} latest evidence{review.previousFreshness ? ` · ${review.previousFreshness} earlier evidence` : ""}</p>
+    {comparison && <p>Observed gold: {comparison.previousQuantity} → {comparison.currentQuantity} copper ({comparison.delta > 0 ? "+" : ""}{comparison.delta}); earlier {new Date(comparison.previousObservedAt * 1000).toLocaleString()}, later {new Date(comparison.currentObservedAt * 1000).toLocaleString()}.</p>}
+    <p>{review.reason} The change does not prove a purchase or attribute it to this work order.</p>
+  </section>;
 }
 
 function sideDescription(side: NonNullable<ErpWorkOrderProgress["transferObservationReviews"]>[number]["source"]): string {

@@ -835,6 +835,35 @@ test("transfer reconciliation compares explicitly planned source and destination
   } finally { store.close(); }
 });
 
+test("purchase progress pairs buyer gold and linked item changes while keeping purchase causality unknown", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_200_000;
+  const capture = (gold: number, itemQuantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt, character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: gold },
+    bags: { containers: [{ id: 0, capacity: 16, items: itemQuantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: itemQuantity }] : [] }] }, bank: { containers: [] },
+  });
+  try {
+    const buyer = store.importSnapshot(capture(1200, 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture(950, 2, baseAt + 100));
+    const need = { stableId: "purchase_target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: buyer, destinationIdentityKey: buyer };
+    const order = { stableId: "purchase_item", kind: "PURCHASE" as const, status: "IN_PROGRESS" as const, title: "Review manual procurement", assignedIdentityKey: buyer, resourceNeedIds: [need.stableId], dependsOn: [], procurementPlan: { targetNeedId: need.stableId, spendingCeilingCopper: 500 } };
+    const plan: ErpProject = { ...project(buyer), needs: [need], reservations: [], workOrders: [order] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]!;
+    const review = progress.procurementObservationReview;
+    assert.equal(review?.buyerIdentityKey, buyer);
+    assert.equal(review?.state, "GOLD_DECREASED");
+    assert.equal(review?.freshness, "recent");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.comparison && [review.comparison.previousQuantity, review.comparison.currentQuantity, review.comparison.delta], [1200, 950, -250]);
+    assert.ok(progress.changedNeedIds.includes(need.stableId), "the linked item appearance remains separately visible");
+    assert.equal(progress.completionRecorded, false, "paired deltas do not complete a manual purchase task");
+    assert.match(review?.reason ?? "", /does not establish that a purchase occurred/);
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.procurementObservationReview;
+    assert.equal(stale?.state, "GOLD_DECREASED", "the historical change remains visible");
+    assert.equal(stale?.freshness, "stale", "historical comparison cannot appear current");
+  } finally { store.close(); }
+});
+
 test("shared-owner transfer need cannot be overridden by a character source on the work order", () => {
   const { store, identityKey } = seedRetailCurrency();
   try {

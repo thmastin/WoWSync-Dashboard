@@ -84,6 +84,9 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.equal(created.status, 201);
     const readiness = created.body.project.workOrderReadiness[0];
     const assessment = readiness.procurementAssessment;
+    const procurementProgress = created.body.project.workOrderProgress[0];
+    assert.deepEqual([procurementProgress.procurementObservationReview.state, procurementProgress.procurementObservationReview.comparison.delta], ["GOLD_DECREASED", -9100]);
+    assert.equal(procurementProgress.procurementObservationReview.interpretation, "CAUSE_UNKNOWN");
     assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual([assessment.reviewState, assessment.budgetState], ["OBSERVED_ITEM_GAP", "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING"]);
     assert.deepEqual([assessment.quoteState, assessment.playerQuote.amountCopper, assessment.playerQuote.provenance], ["PLAYER_REPORTED_WITHIN_CEILING", 100, "PLAYER_REPORTED"]);
@@ -102,6 +105,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.quoteVsRecordedGoldState, assessment.quoteVsRecordedGoldRemainderCopper], ["PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER", 900]);
     const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
     assert.deepEqual(listed.workOrderReadiness[0].procurementAssessment, assessment);
+    assert.deepEqual(listed.workOrderProgress[0].procurementObservationReview, procurementProgress.procurementObservationReview, "REST returns the same paired gold review after read-back");
   });
 });
 
