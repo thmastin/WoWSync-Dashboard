@@ -3,12 +3,15 @@ import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillme
 import { ERP_WORK_ORDER_TYPES } from "@wowsync-dashboard/core/erpWorkOrderTypes.ts";
 import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpProjectView, ErpResourceCommitmentSummary, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
 import { appendErpWorkOrderBatch, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
+import { resolvePackageReservationSource, reviewPackageReservations, reviewPackageSourceDemand } from "@wowsync-dashboard/core/erpFulfillmentPackageReview.ts";
+import type { PackageReservationGroup, PackageReservationRequest, PackageSourceDemandGroup, PackageSourceDemand } from "@wowsync-dashboard/core/erpFulfillmentPackageReview.ts";
 import type { CharacterFacts, VersionOrUnknown } from "../types.ts";
 
 type Version = Exclude<VersionOrUnknown, "unknown-version">;
 interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: string; assignedIdentityKey: string; sourceLeadIdentityKey: string; provisioningSourceIdentityKey: string; reservationSourceIdentityKey: string; reservationQuantity: string; spendingCeilingCopper: string; prerequisiteKeys: string[] }
 interface PreparedTask { needId: string; task: ErpWorkOrderBatchTaskDraft; needLabel: string; requirementSourceLabel: string; workSourceLabel: string; assignedLabel: string; destinationLabel: string; evidenceText: string; pathwayText?: string; sourceRowsText?: string; prerequisiteLabels: string[] }
 interface PreparedGroup { projectId: string; projectTitle: string; expectedRevision: number; tasks: PreparedTask[] }
+interface PreparedReview { groups: PreparedGroup[]; reservationGroups: PackageReservationGroup[]; sourceDemandGroups: PackageSourceDemandGroup[] }
 const defaultDraft = (label: string, pathwayKind?: ErpNeedFulfillmentOptionKind, sourceIdentityKey?: string, investigationLeadIdentityKey?: string): Draft => {
   const personalBankReview = pathwayKind === "REVIEW_PERSONAL_BANK_RETRIEVAL";
   const otherCharacterLeadReview = pathwayKind === "INVESTIGATE_OTHER_CHARACTER_LOCATION";
@@ -53,7 +56,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   const [pathways, setPathways] = useState<Record<string, ErpNeedFulfillmentOptionKind>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [review, setReview] = useState<PreparedGroup[] | null>(null);
+  const [review, setReview] = useState<PreparedReview | null>(null);
   const eligibleCharacters = characters.filter((character) => character.identityKey.startsWith(`${version}::`));
   const keyOf = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
   const rowFor = (key: string) => candidates.find((row) => keyOf(row.projectId, row.need!.stableId) === key);
@@ -132,6 +135,8 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     setError("");
     try {
       const grouped = new Map<string, PreparedGroup>();
+      const reservationRequests: PackageReservationRequest[] = [];
+      const sourceDemandRequests: PackageSourceDemand[] = [];
       for (const key of selected) {
         const row = rowFor(key); const draft = drafts[key];
         if (!row?.need || !draft) throw new Error("A selected requirement is no longer available. Refresh the workbench.");
@@ -155,8 +160,24 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
         const task = { needId: row.need.stableId, reviewSnapshot, ...(pathwayKind ? { pathwayKind } : {}), kind: draft.kind, title: draft.title.trim(), instructions, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(draft.assignedIdentityKey ? { assignedIdentityKey: draft.assignedIdentityKey } : {}), ...(draft.kind === "INVESTIGATE" && draft.sourceLeadIdentityKey ? { sourceLeadIdentityKey: draft.sourceLeadIdentityKey } : {}), ...(draft.kind === "PROVISION" && draft.provisioningSourceIdentityKey ? { provisioningSourceIdentityKey: draft.provisioningSourceIdentityKey } : {}), ...(alternateReservationSource ? { reservationSourceIdentityKey: alternateReservationSource } : {}), ...(reservationQuantity > 0 ? { reservationQuantity } : {}), ...(ceiling !== undefined ? { spendingCeilingCopper: ceiling } : {}) } satisfies ErpWorkOrderBatchTaskDraft;
         const selectedSource = draft.kind === "PROVISION" ? draft.provisioningSourceIdentityKey : draft.kind === "INVESTIGATE" ? draft.sourceLeadIdentityKey : undefined;
         const sourceCandidate = selectedSource ? project.resourceSourceScreens.find((screen) => screen.needId === row.need!.stableId)?.candidates.find((candidate) => candidate.sourceIdentityKey === selectedSource) : undefined;
+        if (draft.kind === "PROVISION" && draft.provisioningSourceIdentityKey && !sourceCandidate) throw new Error("The selected provisioning source is no longer present in current source evidence. Refresh the workbench and review this package again.");
+        if (reservationQuantity > 0) {
+          const exactLine = commitments.items.find((entry) => entry.version === version && entry.kind === row.need!.kind && entry.resourceKey === row.need!.resourceKey && (row.need!.sourceIdentityKey ? entry.sourceScope === "CHARACTER" && entry.sourceIdentityKey === row.need!.sourceIdentityKey : row.need!.sourceOwnerKey ? entry.sourceScope === "SHARED_OWNER" && entry.sourceOwnerKey === row.need!.sourceOwnerKey : false));
+          reservationRequests.push({
+            taskKey: key, version, kind: row.need.kind, resourceKey: row.need.resourceKey,
+            ...resolvePackageReservationSource({ selectedAlternateIdentityKey: alternateReservationSource, selectedAlternateLowerBound: sourceCandidate?.availableObservedLowerBound, needSourceIdentityKey: row.need.sourceIdentityKey, needSourceOwnerKey: row.need.sourceOwnerKey, needSourceLowerBound: exactLine?.availableObservedLowerBound }),
+            quantity: reservationQuantity,
+          });
+        }
         const sourceRows = sourceCandidate?.matchingItems.filter((item) => item.itemRef === row.need!.resourceKey && item.state === "OBSERVED") ?? [];
         const evidence = project.needEvidence.find((entry) => entry.needId === row.need!.stableId);
+        if (draft.kind === "PROVISION" && draft.provisioningSourceIdentityKey && sourceCandidate) {
+          const needEvidenceComplete = Boolean(evidence && evidence.observedAt !== undefined && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0 && evidence.sourceSections.length > 0 && evidence.sourceSections.every((section) => section.state === "OBSERVED" && section.completeness?.toLowerCase() === "complete"));
+          const requestedNeedQuantity = evidence?.state === "SHORTFALL_OBSERVED" && evidence.freshness === "recent" && needEvidenceComplete && evidence.observedQuantity !== undefined
+            ? Math.max(0, row.need.requiredQuantity - evidence.observedQuantity)
+            : undefined;
+          sourceDemandRequests.push({ taskKey: key, version, kind: row.need.kind, resourceKey: row.need.resourceKey, sourceIdentityKey: sourceCandidate.sourceIdentityKey, sourceName: `${sourceCandidate.sourceName}${sourceCandidate.sourceSurname ? ` ${sourceCandidate.sourceSurname}` : ""} · ${sourceCandidate.sourceRealm}`, sourceFreshness: sourceCandidate.freshness, ...(sourceCandidate.observedAt !== undefined ? { sourceObservedAt: sourceCandidate.observedAt } : {}), ...(requestedNeedQuantity !== undefined ? { requestedNeedQuantity } : {}), ...(sourceCandidate.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: sourceCandidate.availableObservedLowerBound } : {}) });
+        }
         const prerequisiteLabels = draft.prerequisiteKeys.map((dependencyKey) => { const prerequisite = rowFor(dependencyKey); return prerequisite ? `${projectById.get(prerequisite.projectId)?.title}: ${prerequisite.need?.label}` : dependencyKey; });
         const sourceRowsText = sourceRows.slice(0, 3).map((item) => {
           const quantity = item.quantity !== undefined ? `${item.quantity} observed` : `at least ${item.knownLowerBound ?? "UNKNOWN"} observed`;
@@ -173,16 +194,16 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
         });
         grouped.set(project.stableId, group);
       }
-      setReview([...grouped.values()]);
+      setReview({ groups: [...grouped.values()], reservationGroups: reviewPackageReservations(reservationRequests), sourceDemandGroups: reviewPackageSourceDemand(sourceDemandRequests) });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The plan could not be prepared for review.");
     }
   }
   async function save() {
-    if (!review?.length || saving || busy) return;
+    if (!review?.groups.length || saving || busy || review.reservationGroups.some((group) => group.state !== "WITHIN_OBSERVED_LOWER_BOUND")) return;
     setSaving(true); setError("");
     try {
-      await appendErpWorkOrderBatch(version, review.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })));
+      await appendErpWorkOrderBatch(version, review.groups.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })));
       setSelected([]); setDrafts({}); setPathways({}); setReview(null); onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The grouped plan could not be saved. No partial update was accepted.");
@@ -238,7 +259,22 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     {review && <section className="erp-cross-project-plan-review" aria-label="Review planned work batch" data-testid="erp-cross-project-plan-review">
       <h3>Review the complete planning request</h3>
       <p>This frozen batch contains the exact task drafts and evidence snapshots below. The server rechecks project revisions, need evidence, selected sources, reservation capacity, and purchase fields in one transaction. If evidence changes after review, the submitted snapshot is rejected as stale and no part of the batch is saved. This does not perform a game action.</p>
-      <ol>{review.flatMap((group) => group.tasks.map((prepared) => {
+      {review.sourceDemandGroups.length > 0 && <section aria-label="Selected source and package demand review" data-testid="erp-package-source-demand-review">
+        <h4>Selected source leads against package demand</h4>
+        <p>Demand is summed only for recent, complete, observed shortfalls. A source lead reports observed location quantity; it does not establish ownership, access, transferability, route, or delivery. An overage identifies a remaining need for planning, not permission to move resources.</p>
+        <ul>{review.sourceDemandGroups.map((group) => <li key={group.key} data-state={group.state}>
+          <strong>{group.resourceKey}</strong> · {group.kind} · {group.sourceName} ({group.sourceIdentityKey}): {group.requestedNeedQuantity === undefined ? "selected need quantity UNKNOWN" : `${group.requestedNeedQuantity} unmet units across ${group.taskCount} selected task${group.taskCount === 1 ? "" : "s"}`} · {group.availableObservedLowerBound === undefined ? "source's unreserved observed lower bound UNKNOWN" : `${group.availableObservedLowerBound} source lower-bound units`} · source evidence {group.sourceFreshness}, oldest capture {group.oldestSourceObservedAt === undefined ? "time UNKNOWN" : new Date(group.oldestSourceObservedAt * 1000).toLocaleString()}{group.sourceTimestampComplete ? "" : " (some timestamps UNKNOWN)"} · {group.state.replaceAll("_", " ")}.
+        </li>)}</ul>
+      </section>}
+      {review.reservationGroups.length > 0 && <section aria-label="Combined reservation review" data-testid="erp-package-reservation-review">
+        <h4>Combined reservation requests</h4>
+        <p>Requests are grouped only when version, resource identity, and observed source scope match exactly. This is a plan-time lower-bound check; it does not establish possession, access, or a game reservation.</p>
+        <ul>{review.reservationGroups.map((group) => <li key={group.key} data-state={group.state}>
+          <strong>{group.resourceKey}</strong> · {group.kind} · {group.sourceLabel}: {group.requestedQuantity} requested across {group.taskCount} task{group.taskCount === 1 ? "" : "s"}; {group.availableObservedLowerBound === undefined ? "available observed lower bound UNKNOWN" : `${group.availableObservedLowerBound} unreserved observed lower-bound units`} · {group.state.replaceAll("_", " ")}.
+          {group.state === "EXCEEDS_OBSERVED_LOWER_BOUND" ? " Reduce or remove a reservation request before confirmation." : group.state === "CONFLICTING_EVIDENCE" ? " The selected source snapshots disagree; edit the package and refresh evidence." : group.state === "UNKNOWN" ? " The package cannot confirm reservation capacity from current evidence." : " This combined request is within the recorded lower bound; the server still rechecks it atomically at save time."}
+        </li>)}</ul>
+      </section>}
+      <ol>{review.groups.flatMap((group) => group.tasks.map((prepared) => {
         const { task, needLabel, requirementSourceLabel, workSourceLabel, assignedLabel, destinationLabel, evidenceText, pathwayText, sourceRowsText, prerequisiteLabels } = prepared;
         return <li key={`${group.projectId}:${prepared.needId}`}>
           <strong>{group.projectTitle}: {task.kind.replaceAll("_", " ")} · {needLabel}</strong> (project revision {group.expectedRevision})<br />
@@ -252,7 +288,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
         </li>;
       }))}</ol>
       <button type="button" disabled={busy || saving} onClick={() => setReview(null)}>Back to edit</button>
-      <button type="button" className="primary-button" disabled={busy || saving} onClick={() => void save()}>{saving ? "Saving grouped plan…" : `Confirm and create ${review.reduce((sum, group) => sum + group.tasks.length, 0)} planned manual steps`}</button>
+      <button type="button" className="primary-button" disabled={busy || saving || review.reservationGroups.some((group) => group.state !== "WITHIN_OBSERVED_LOWER_BOUND")} onClick={() => void save()}>{saving ? "Saving grouped plan…" : `Confirm and create ${review.groups.reduce((sum, group) => sum + group.tasks.length, 0)} planned manual steps`}</button>
     </section>}
     <small>New work orders remain PLANNED. Project intent and recorded evidence are not proof that an action occurred or a resource is accessible.</small>
   </section>;

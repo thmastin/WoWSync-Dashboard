@@ -1496,7 +1496,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await thirdTask.getByLabel("Manual step type").selectOption("GATHER");
     await firstTask.getByLabel("Reservation source for Mycobloom").selectOption(observedLead.character.identityKey); const firstReserve = firstTask.getByLabel("Optional reservation quantity for Mycobloom");
     const thirdReserve = thirdTask.getByLabel("Optional reservation quantity for Mycobloom reserve");
-    await firstReserve.fill("2"); await thirdReserve.fill("2");
+    await firstReserve.fill("2"); await thirdReserve.fill("1");
     await composer.getByRole("button", { name: "Review 3 planned manual steps" }).click();
     const planReview = composer.getByTestId("erp-cross-project-plan-review");
     assert.match(await planReview.innerText(), /PROVISION.*Mycobloom/);
@@ -1526,10 +1526,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const refreshedReview = composer.getByTestId("erp-cross-project-plan-review");
     assert.match(await refreshedReview.innerText(), /project revision 1/);
     assert.match(await refreshedReview.innerText(), /Selected fulfillment pathway at review: INVESTIGATE OTHER CHARACTER LOCATION/);
-    await refreshedReview.getByRole("button", { name: "Confirm and create 3 planned manual steps" }).click();
-    await composer.getByRole("alert").getByText(/Grouped reservations exceed the current observed lower bound/).waitFor();
-    const rejected = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
-    assert.deepEqual(Object.fromEntries(rejected.projects.filter((project) => [first.stableId, second.stableId, third.stableId].includes(project.stableId)).map((project) => [project.title, [project.revision, project.workOrders.length, project.reservations.length]])), { "Provision the crafter": [1, 0, 1], "Prepare the second recipe": [1, 0, 0], "Provision the reserve crafter": [1, 0, 0] }, "the over-capacity request changes no project");
+    assert.equal(await refreshedReview.getByRole("button", { name: "Confirm and create 3 planned manual steps" }).isDisabled(), false, "the frozen review remains saveable after an import because its old evidence is explicitly rejected by the transaction gate");
+    await thirdReserve.fill("2");
+    await composer.getByRole("button", { name: "Review 3 planned manual steps" }).click();
+    const overCapacityReview = composer.getByTestId("erp-cross-project-plan-review");
+    assert.match(await overCapacityReview.getByTestId("erp-package-reservation-review").innerText(), /EXCEEDS OBSERVED LOWER BOUND/);
+    assert.equal(await overCapacityReview.getByRole("button", { name: "Confirm and create 3 planned manual steps" }).isDisabled(), true, "package review blocks the known combined over-capacity request before submission");
     await thirdReserve.fill("1");
     await composer.getByRole("button", { name: "Review 3 planned manual steps" }).click();
     await composer.getByTestId("erp-cross-project-plan-review").getByRole("button", { name: "Confirm and create 3 planned manual steps" }).click();
@@ -2261,6 +2263,123 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     assert.ok(afterObservation.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders[0]?.status === "PLANNED"), "observed quantity changes do not claim either player-authored step was executed or completed");
     const refreshedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(refreshedMcp.structuredContent.portfolioNextActions, afterObservation.portfolioNextActions, "MCP and REST report the same post-import queue and reconciliation state");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] frozen fulfillment package catches combined same-source reservation overcommit", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-package-reservation-review-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const source = store.importSnapshot(renderExport({ name: "Reservation Package Fixture", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 3, { name: "Synthetic herb stack" })], now), bank: observedSection([], now) }));
+    const project = store.createErpProject({ version: "retail", title: "Two need reservation package", needs: [
+      { stableId: "package_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Herbs for first project task", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey },
+      { stableId: "package_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Herbs for second project task", requiredQuantity: 4, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey },
+    ] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const planner = page.getByTestId("erp-cross-project-plan");
+    for (const label of ["Herbs for first project task", "Herbs for second project task"]) {
+      await planner.locator(".erp-cross-project-choice").filter({ hasText: label }).getByRole("checkbox").check();
+    }
+    const tasks = planner.locator("fieldset.erp-cross-project-task");
+    assert.equal(await tasks.count(), 2);
+    for (let index = 0; index < 2; index += 1) {
+      await tasks.nth(index).getByLabel("Manual step type").selectOption("PROVISION");
+      await tasks.nth(index).getByLabel(/Optional reservation quantity/).fill("2");
+    }
+    await planner.getByRole("button", { name: "Review 2 planned manual steps" }).click();
+    let review = planner.getByTestId("erp-cross-project-plan-review");
+    const combined = review.getByTestId("erp-package-reservation-review");
+    assert.match(await combined.innerText(), /4 requested across 2 tasks; 3 unreserved observed lower-bound units · EXCEEDS OBSERVED LOWER BOUND/);
+    assert.equal(await review.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).isDisabled(), true, "known combined overcommit is blocked before confirmation");
+    const before = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.equal(before.projects.find((entry) => entry.stableId === project.stableId).workOrders.length, 0, "reviewing does not persist work");
+
+    await review.getByRole("button", { name: "Back to edit" }).click();
+    await tasks.nth(1).getByLabel(/Optional reservation quantity/).fill("1");
+    await planner.getByRole("button", { name: "Review 2 planned manual steps" }).click();
+    review = planner.getByTestId("erp-cross-project-plan-review");
+    assert.match(await review.getByTestId("erp-package-reservation-review").innerText(), /3 requested across 2 tasks; 3 unreserved observed lower-bound units · WITHIN OBSERVED LOWER BOUND/);
+    assert.equal(await review.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).isDisabled(), false);
+    await review.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).click();
+    const after = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const saved = after.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual(saved.workOrders.map((order) => [order.status, order.resourceNeedIds]), [["PLANNED", ["package_need_a"]], ["PLANNED", ["package_need_b"]]]);
+    assert.equal(saved.reservations.reduce((sum, reservation) => sum + reservation.quantity, 0), 3, "only the reviewed combined intent is saved");
+    assert.equal(after.resourceCommitments.items.find((line) => line.resourceKey === fullRef(ITEM_ID))?.observedQuantity, 3, "planning intent does not alter observed stock");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] selected source leads are compared with combined observed package shortfalls", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-package-source-demand-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const recipient = store.importSnapshot(renderExport({ name: "Package Recipient", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }));
+    const source = store.importSnapshot(renderExport({ name: "Package Source Lead", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 3, { name: "Synthetic herb stack" })], now), bank: observedSection([], now) }));
+    const project = store.createErpProject({ version: "retail", title: "Shared source fulfillment package", needs: [
+      { stableId: "source_demand_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Herbs for first recipe", requiredQuantity: 4, sourceIdentityKey: recipient.character.identityKey, destinationIdentityKey: recipient.character.identityKey },
+      { stableId: "source_demand_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Herbs for second recipe", requiredQuantity: 4, sourceIdentityKey: recipient.character.identityKey, destinationIdentityKey: recipient.character.identityKey },
+    ] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000);
+    const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const planner = page.getByTestId("erp-cross-project-plan");
+    for (const label of ["Herbs for first recipe", "Herbs for second recipe"]) {
+      await planner.locator(".erp-cross-project-choice").filter({ hasText: label }).getByRole("checkbox").check();
+    }
+    const tasks = planner.locator("fieldset.erp-cross-project-task");
+    assert.equal(await tasks.count(), 2);
+    for (let index = 0; index < 2; index += 1) {
+      await tasks.nth(index).getByLabel("Manual step type").selectOption("PROVISION");
+      await tasks.nth(index).getByLabel(/Observed source for manual provisioning/).selectOption(source.character.identityKey);
+    }
+    await planner.getByRole("button", { name: "Review 2 planned manual steps" }).click();
+    const preview = planner.getByTestId("erp-cross-project-plan-review");
+    const sourceReview = preview.getByTestId("erp-package-source-demand-review");
+    assert.match(await sourceReview.innerText(), /8 unmet units across 2 selected tasks · 3 source lower-bound units · source evidence recent, oldest capture .* · EXCEEDS OBSERVED LOWER BOUND/);
+    assert.match(await sourceReview.innerText(), /ownership, access, transferability, route, or delivery/);
+    assert.equal(await preview.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).isDisabled(), false, "a source quantity gap remains a planning review, not a false claim that no manual plan is possible");
+    await preview.getByRole("button", { name: "Confirm and create 2 planned manual steps" }).click();
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const saved = rest.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual(saved.workOrders.map((order) => [order.status, order.sourceIdentityKey]), [["PLANNED", source.character.identityKey], ["PLANNED", source.character.identityKey]]);
+    const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.ok(account.planning.projects.find((entry) => entry.stableId === project.stableId)?.workOrderCounts.PLANNED === 2);
+    mcpClient = new Client({ name: "wowsync-package-source-demand-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId).workOrders, saved.workOrders);
+    assert.deepEqual(mcp.structuredContent.portfolioNextActions, rest.portfolioNextActions);
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

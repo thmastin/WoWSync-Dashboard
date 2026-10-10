@@ -33,6 +33,7 @@ export * from "./erpProcurementPortfolio.ts";
 export * from "./erpProcurementBuyerPortfolio.ts";
 export * from "./erpObservationChanges.ts";
 export * from "./erpFulfillmentTriage.ts";
+export * from "./erpFulfillmentPackageReview.ts";
 export * from "./allocation.ts";
 export * from "./allocationReview.ts";
 export * from "./heldItemIdentity.ts";
