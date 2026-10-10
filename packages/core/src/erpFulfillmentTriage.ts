@@ -63,11 +63,26 @@ export interface ErpPortfolioFulfillmentStep {
   /** Re-evaluated from the referenced requirements' current observations; it is not a game-action or work-order completion claim. */
   readonly prerequisiteGate: {
     readonly state: "NO_PREREQUISITES" | "CURRENT_OBSERVED_EVIDENCE_MET" | "PREREQUISITE_EVIDENCE_REVIEW" | "MISSING_PREREQUISITE" | "CYCLE_REVIEW";
-    readonly blockers: readonly { readonly projectId: string; readonly needId: string; readonly evidenceState: ErpProjectView["needEvidence"][number]["state"]; readonly freshness: Freshness; readonly observedAt?: number }[];
+    readonly blockers: readonly { readonly projectId: string; readonly needId: string; readonly evidenceState: ErpProjectView["needEvidence"][number]["state"]; readonly freshness: Freshness; readonly observedAt?: number; readonly reservationState?: NonNullable<ErpNeedEvidence["reservationAssessment"]>["state"]; readonly availableObservedLowerBound?: number; readonly reason: string }[];
   };
   readonly workOrders: readonly { readonly stableId: string; readonly title: string; readonly status: string; readonly readinessState: string; readonly progressState?: string }[];
-  readonly reviewState: "OBSERVED_NEED_MET" | "NEED_EVIDENCE_REVIEW" | "WORK_ORDER_REVIEW" | "MISSING_NEED";
+  readonly reviewState: "OBSERVED_NEED_MET" | "NEED_EVIDENCE_REVIEW" | "RESERVATION_REVIEW" | "WORK_ORDER_REVIEW" | "MISSING_NEED";
   readonly reason: string;
+}
+
+/** A raw covered quantity is insufficient when other explicit plans reserve the same source scope. */
+function hasReservationAdjustedCoverage(project: ErpProjectView | undefined, need: ErpResourceNeed | undefined, evidence: ErpNeedEvidence | undefined): boolean {
+  if (!project || !need || evidence?.state !== "COVERED_BY_OBSERVED" || evidence.freshness !== "recent" || evidence.observedAt === undefined || evidence.unresolvedSections.length > 0 || evidence.unknownQuantityRowCount > 0) return false;
+  const assessment = evidence.reservationAssessment;
+  if (!assessment || (assessment.state === "UNRESERVED" && assessment.activeQuantity === 0)) return true;
+  if (assessment.state !== "WITHIN_OBSERVED_SUPPLY" || assessment.availableObservedLowerBound === undefined) return false;
+  const ownReservationQuantity = reservationQuantityAtNeedSource(project, need);
+  return assessment.availableObservedLowerBound + ownReservationQuantity >= need.requiredQuantity;
+}
+
+/** Only reservations at the need's selected source are included in its source-specific lower bound. */
+function reservationQuantityAtNeedSource(project: ErpProjectView, need: ErpResourceNeed): number {
+  return project.reservations.filter((reservation) => reservation.status === "ACTIVE" && reservation.needId === need.stableId && reservation.sourceIdentityKey === need.sourceIdentityKey && reservation.sourceOwnerKey === need.sourceOwnerKey).reduce((total, reservation) => total + reservation.quantity, 0);
 }
 
 export interface ErpPortfolioFulfillmentPackage {
@@ -185,10 +200,11 @@ export interface ErpSourceFulfillmentReview {
   readonly interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY";
 }
 
-function buildNeedFulfillmentPathways(need: ErpResourceNeed, evidence: ErpNeedEvidence | undefined, workOrders: readonly { stableId: string; status: string }[], sourceSections: ErpNeedEvidence["sourceSections"], candidateLocations: ErpNeedFulfillmentOption["candidateLocations"]): ErpNeedFulfillmentPathwayReview {
+function buildNeedFulfillmentPathways(need: ErpResourceNeed, evidence: ErpNeedEvidence | undefined, workOrders: readonly { stableId: string; status: string }[], sourceSections: ErpNeedEvidence["sourceSections"], candidateLocations: ErpNeedFulfillmentOption["candidateLocations"], ownReservationQuantity = 0): ErpNeedFulfillmentPathwayReview {
   const options: ErpNeedFulfillmentOption[] = [];
   const completeCurrent = evidence?.freshness === "recent" && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
-  const reservationClear = !evidence?.reservationAssessment || evidence.reservationAssessment.state === "UNRESERVED" || evidence.reservationAssessment.state === "WITHIN_OBSERVED_SUPPLY";
+  const reservation = evidence?.reservationAssessment;
+  const reservationClear = !reservation || (reservation.state === "UNRESERVED" && reservation.activeQuantity === 0) || (reservation.state === "WITHIN_OBSERVED_SUPPLY" && reservation.availableObservedLowerBound !== undefined && reservation.availableObservedLowerBound + ownReservationQuantity >= need.requiredQuantity);
   if (completeCurrent && reservationClear && evidence?.state === "COVERED_BY_OBSERVED") options.push({ kind: "CURRENT_OBSERVED_COVERAGE", provenance: "DERIVED", reason: `${evidence.observedQuantity ?? "An unknown quantity"} observed against ${need.requiredQuantity} required. This reports selected-source coverage only; reservation, access, and action outcome remain separate.` });
 
   const bags = sourceSections.find((section) => section.section === "bags");
@@ -347,23 +363,34 @@ export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProject
         const prerequisiteProject = projectById.get(dependency.projectId);
         const prerequisiteNeed = prerequisiteProject?.needs.find((entry) => entry.stableId === dependency.needId);
         const prerequisite = prerequisiteProject?.needEvidence.find((entry) => entry.needId === dependency.needId);
-        const isMet = !!prerequisiteNeed && prerequisite?.state === "COVERED_BY_OBSERVED" && prerequisite.freshness === "recent" && prerequisite.observedAt !== undefined;
-        return { projectId: dependency.projectId, needId: dependency.needId, evidenceState: prerequisite?.state ?? "UNKNOWN" as const, freshness: prerequisite?.freshness ?? "unknown" as const, ...(prerequisite?.observedAt !== undefined ? { observedAt: prerequisite.observedAt } : {}), exists: !!prerequisiteNeed, isMet };
+        const isMet = hasReservationAdjustedCoverage(prerequisiteProject, prerequisiteNeed, prerequisite);
+        const prerequisiteReservation = prerequisite?.reservationAssessment;
+        const reservationAdjustedCoverage = prerequisiteNeed && prerequisite && prerequisite.state === "COVERED_BY_OBSERVED" && prerequisite.freshness === "recent" && !isMet;
+        const reason = reservationAdjustedCoverage
+          ? `Observed quantity ${prerequisite.observedQuantity ?? "UNKNOWN"} is covered before reservations at the selected source, but only ${prerequisiteReservation?.availableObservedLowerBound ?? "UNKNOWN"} is observed outside same-source commitments and this need's same-source reservation intent is ${prerequisiteProject ? reservationQuantityAtNeedSource(prerequisiteProject, prerequisiteNeed) : 0}; review competing reservations before treating the prerequisite as covered.`
+          : !prerequisiteNeed ? "The referenced prerequisite need is unavailable; evidence is UNKNOWN."
+            : !isMet ? prerequisite?.reason ?? "Current timestamped observed coverage is unavailable."
+              : "Recent observed coverage satisfies this evidence gate only.";
+        return { projectId: dependency.projectId, needId: dependency.needId, evidenceState: prerequisite?.state ?? "UNKNOWN" as const, freshness: prerequisite?.freshness ?? "unknown" as const, ...(prerequisite?.observedAt !== undefined ? { observedAt: prerequisite.observedAt } : {}), ...(prerequisiteReservation ? { reservationState: prerequisiteReservation.state, ...(prerequisiteReservation.availableObservedLowerBound !== undefined ? { availableObservedLowerBound: prerequisiteReservation.availableObservedLowerBound } : {}) } : {}), reason, exists: !!prerequisiteNeed, isMet };
       });
-      const evidenceMet = evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent" && evidence.observedAt !== undefined;
+      const evidenceMet = evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent" && evidence.observedAt !== undefined && evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
+      const reservationAdjustedCoverageMet = hasReservationAdjustedCoverage(project, need, evidence);
+      const reservationBlocksCoverage = evidenceMet && !reservationAdjustedCoverageMet && (evidence?.reservationAssessment?.activeQuantity ?? 0) > 0;
       const hasOpenWork = workOrders.some((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED");
-      const reviewState: ErpPortfolioFulfillmentStep["reviewState"] = !need || !project ? "MISSING_NEED" : hasOpenWork ? "WORK_ORDER_REVIEW" : evidenceMet ? "OBSERVED_NEED_MET" : "NEED_EVIDENCE_REVIEW";
+      const reviewState: ErpPortfolioFulfillmentStep["reviewState"] = !need || !project ? "MISSING_NEED" : reservationBlocksCoverage ? "RESERVATION_REVIEW" : hasOpenWork ? "WORK_ORDER_REVIEW" : reservationAdjustedCoverageMet ? "OBSERVED_NEED_MET" : "NEED_EVIDENCE_REVIEW";
       const reason = !project || !need ? "The referenced same-version requirement is unavailable; evidence is UNKNOWN and the saved link requires review."
-        : evidenceMet ? `Recent observed coverage reports ${evidence.observedQuantity ?? "quantity UNKNOWN"} against ${need.requiredQuantity} required. This confirms only the need evidence; it does not establish which action occurred.`
+        : reservationBlocksCoverage ? `Raw observed coverage reports ${evidence?.observedQuantity ?? "quantity UNKNOWN"} against ${need.requiredQuantity} required, but reservations leave ${evidence?.reservationAssessment?.availableObservedLowerBound ?? "an UNKNOWN amount"} outside other commitments. Review competing reservations; observed inventory and reservations have not changed.`
+          : reservationAdjustedCoverageMet ? `Recent observed coverage reports ${evidence?.observedQuantity ?? "quantity UNKNOWN"} against ${need.requiredQuantity} required after accounting for this need's explicit reservation intent and same-source commitments. This confirms only source coverage; it does not establish which action occurred.`
+          : evidenceMet ? `Recent observed coverage reports ${evidence?.observedQuantity ?? "quantity UNKNOWN"} against ${need.requiredQuantity} required, but reservation-adjusted coverage is not established. ${evidence?.reservationAssessment?.reason ?? "Review the reservation evidence."}`
           : `${evidence?.state.replaceAll("_", " ") ?? "Evidence UNKNOWN"} with ${evidence?.freshness ?? "unknown"} freshness${workOrders.length ? `; ${workOrders.length} linked manual work order(s) require review` : "; no linked manual work order exists"}.`;
       const missingPrerequisite = prerequisiteEvidence.some((entry) => !entry.exists);
       const allPrerequisitesMet = prerequisiteEvidence.length > 0 && prerequisiteEvidence.every((entry) => entry.isMet);
       const prerequisiteGate: ErpPortfolioFulfillmentStep["prerequisiteGate"] = prerequisiteEvidence.length === 0
         ? { state: "NO_PREREQUISITES", blockers: [] }
-        : cycleDetected ? { state: "CYCLE_REVIEW", blockers: prerequisiteEvidence.filter((entry) => !entry.isMet).map(({ projectId, needId, evidenceState, freshness, observedAt }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}) })) }
-          : missingPrerequisite ? { state: "MISSING_PREREQUISITE", blockers: prerequisiteEvidence.filter((entry) => !entry.exists).map(({ projectId, needId, evidenceState, freshness, observedAt }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}) })) }
+        : cycleDetected ? { state: "CYCLE_REVIEW", blockers: prerequisiteEvidence.filter((entry) => !entry.isMet).map(({ projectId, needId, evidenceState, freshness, observedAt, reservationState, availableObservedLowerBound, reason }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}), ...(reservationState ? { reservationState } : {}), ...(availableObservedLowerBound !== undefined ? { availableObservedLowerBound } : {}), reason })) }
+        : missingPrerequisite ? { state: "MISSING_PREREQUISITE", blockers: prerequisiteEvidence.filter((entry) => !entry.exists).map(({ projectId, needId, evidenceState, freshness, observedAt, reason }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}), reason })) }
             : allPrerequisitesMet ? { state: "CURRENT_OBSERVED_EVIDENCE_MET", blockers: [] }
-              : { state: "PREREQUISITE_EVIDENCE_REVIEW", blockers: prerequisiteEvidence.filter((entry) => !entry.isMet).map(({ projectId, needId, evidenceState, freshness, observedAt }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}) })) };
+              : { state: cycleDetected ? "CYCLE_REVIEW" : "PREREQUISITE_EVIDENCE_REVIEW", blockers: prerequisiteEvidence.filter((entry) => !entry.isMet).map(({ projectId, needId, evidenceState, freshness, observedAt, reservationState, availableObservedLowerBound, reason }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}), ...(reservationState ? { reservationState } : {}), ...(availableObservedLowerBound !== undefined ? { availableObservedLowerBound } : {}), reason })) };
       return { projectId: reference.projectId, projectTitle: project?.title ?? "Unavailable project", ...(project ? { projectStatus: project.status } : {}), projectPriority: project?.priority ?? 0, needId: reference.needId, needLabel: need?.label ?? reference.needId, resourceKey: need?.resourceKey ?? "UNKNOWN", ...(need ? { requiredQuantity: need.requiredQuantity } : {}), ...(need?.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(need?.sourceOwnerKey ? { sourceOwnerKey: need.sourceOwnerKey } : {}), ...(need?.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), evidenceState: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), ...(projectReservationIntentQuantity !== undefined ? { projectReservationIntentQuantity } : {}), ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), ...(pathwayByNeed.get(`${reference.projectId}\u0000${reference.needId}`) ? { fulfillmentPathways: pathwayByNeed.get(`${reference.projectId}\u0000${reference.needId}`)! } : {}), prerequisiteNeedIds: prerequisites, prerequisiteGate, workOrders: workOrders.map((order, index) => ({ stableId: order.stableId, title: order.title, status: order.status, readinessState: orderReadiness[index]!, ...(project?.workOrderProgress.find((entry) => entry.workOrderId === order.stableId) ? { progressState: project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId)!.reconciliation } : {}) })), reviewState, reason };
     });
     const stableId = `portfolio:${JSON.stringify([version, component.map((key) => { const node = nodes.get(key)!; return [node.projectId, node.needId]; }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))])}`;
@@ -443,7 +470,8 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
       });
       const sourceSections = evidence?.sourceSections ?? [];
       const candidateLocations = alternativeLocations.filter((location) => location.needReferences.some((reference) => reference.projectId === project.stableId && reference.needId === need.stableId)).map((location) => ({ characterKey: location.sourceIdentityKey, characterName: `${location.sourceName}${location.sourceSurname ? ` ${location.sourceSurname}` : ""}`, realm: location.sourceRealm, provenance: location.state, freshness: location.freshness, ...(location.observedAt !== undefined ? { observedAt: location.observedAt } : {}) }));
-      const fulfillmentPathways = buildNeedFulfillmentPathways(need, evidence, workOrders, sourceSections, candidateLocations);
+      const ownReservationQuantity = reservationQuantityAtNeedSource(project, need);
+      const fulfillmentPathways = buildNeedFulfillmentPathways(need, evidence, workOrders, sourceSections, candidateLocations, ownReservationQuantity);
       return { projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority, needId: need.stableId, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), state: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), sourceSections, unresolvedSections: evidence?.unresolvedSections ?? ["need evidence"], ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), fulfillmentPathways, reason: evidence?.reason ?? "No current need assessment is available; evidence is UNKNOWN.", workOrders };
     }).sort((a, b) => b.projectPriority - a.projectPriority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
     const allEvidenceCurrent = needs.every((need) => need.state === "COVERED_BY_OBSERVED" || need.state === "SHORTFALL_OBSERVED") && needs.every((need) => need.freshness === "recent" && need.unresolvedSections.length === 0);

@@ -209,7 +209,7 @@ The ERP mission remains active. Next substantial work: connect this buyer review
 
 ## Next substantial workflow milestone
 
-Continue end-to-end resource fulfillment by connecting cross-project procurement review to the portfolio's actionable task queue. Prioritize buyer-scoped supply packages that combine item gaps, recent quotes, recipe/crafting evidence, source and storage retrieval, and existing reservations while preserving exact version and character scope. Surface one explainable next manual action and its blockers through the same core projection, REST, AccountContext, MCP, and Dashboard. Do not infer affordability, market availability, craftability, storage access, transfer routes, or execution.
+Build an atomic, player-reviewed fulfillment replanning session that resolves competing project reservations against exact source/resource scopes while preserving downstream dependencies. Show affected requirements and work orders before save; validate current evidence and project revisions together; then update only explicit player-authored reservation and task intent. Continue through the shared core, workbench, REST, AccountContext, and MCP. Do not infer affordability, market availability, craftability, storage access, transfer routes, or execution.
 
 ## Phase 67: repeated-resource procurement packages
 
