@@ -55,7 +55,7 @@ function sharedFixture(options: { owner?: "warband" | "guild"; live?: boolean; c
 }
 
 test("project requirements preserve observed lower bounds, unknown bank, and explicit reservations", () => {
-  const { store, identityKey } = seedStore();
+  const { store, identityKey } = seedStore({ character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
   try {
     const p = project(identityKey);
     const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
@@ -351,6 +351,7 @@ test("a player-reported purchase quote is compared with its ceiling but never tr
     const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Compare checked quote", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100, playerQuote: { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, sourceNote: "Town vendor, player checked" } } }] };
     const assessment = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
     assert.equal(assessment?.quoteState, "PLAYER_REPORTED_WITHIN_CEILING");
+    assert.equal(assessment?.quoteVsPlannedBudgetState, "NO_EXPLICIT_PLANNED_BUDGET");
     assert.deepEqual(assessment?.playerQuote, { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, freshness: "recent", sourceNote: "Town vendor, player checked", provenance: "PLAYER_REPORTED" });
     assert.equal(assessment?.quotedPrice, "PLAYER_REPORTED");
     assert.equal(assessment?.marketAvailability, "UNKNOWN", "a player note does not prove current stock remains available");
@@ -375,6 +376,7 @@ test("procurement review exposes only the buyer's same-version recorded gold res
     assert.equal(assessment?.recordedGoldAfterReservationsCopper, 300, "the remainder is derived only from the buyer's recent snapshot and exact recorded reservation");
     assert.equal(assessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_ABOVE_RECORDED_GOLD_REMAINDER");
     assert.equal(assessment?.quoteVsRecordedGoldRemainderCopper, 300);
+    assert.equal(assessment?.quoteVsPlannedBudgetState, "NO_EXPLICIT_PLANNED_BUDGET");
     assert.equal(assessment?.affordability, "UNKNOWN", "the plan remainder is not asserted to be live spendable funds");
     const lowerQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_699_999_999 } } }] };
     assert.equal(evaluateErpProject(lowerQuote, (key) => store.listSnapshots(key), [lowerQuote, reserve], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER");
@@ -386,6 +388,28 @@ test("procurement review exposes only the buyer's same-version recorded gold res
     assert.equal(stale?.recordedGoldReservationsCopper, 700, "recorded plan intent remains visible when the observation ages");
     assert.equal(stale?.recordedGoldReservationState, "GROSS_GOLD_NOT_RECENT");
     assert.equal(stale?.recordedGoldAfterReservationsCopper, undefined);
+  } finally { store.close(); }
+});
+test("a player quote compares with a linked planned budget separately from ceiling and observed gold", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
+  try {
+    const needs = [
+      { stableId: "item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey },
+      { stableId: "budget", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Planned budget", requiredQuantity: 450, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey },
+    ];
+    const p: ErpProject = { ...project(identityKey), needs, reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Compare quote with intent", assignedIdentityKey: identityKey, resourceNeedIds: ["item", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "item", budgetNeedId: "budget", spendingCeilingCopper: 600, playerQuote: { amountCopper: 500, quantity: 2, recordedAt: 1_699_999_999 } } }] };
+    const read = (candidate: ErpProject) => evaluateErpProject(candidate, (key) => store.listSnapshots(key), [candidate], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    const above = read(p);
+    assert.equal(above?.quoteVsPlannedBudgetState, "PLAYER_QUOTE_ABOVE_PLANNED_BUDGET");
+    assert.equal(above?.quoteVsPlannedBudgetCopper, 450);
+    assert.equal(above?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER", "plan comparison is distinct from recorded gold comparison");
+    assert.equal(above?.affordability, "UNKNOWN");
+    assert.match(above?.reason ?? "", /above the linked planned gold need/);
+    const within = { ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 400, quantity: 2, recordedAt: 1_699_999_999 } } }] };
+    assert.equal(read(within)?.quoteVsPlannedBudgetState, "PLAYER_QUOTE_AT_OR_BELOW_PLANNED_BUDGET");
+    const noQuote = { ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: undefined } }] };
+    assert.equal(read(noQuote)?.quoteVsPlannedBudgetState, "NO_PLAYER_REPORTED_QUOTE");
+    assert.equal(read(noQuote)?.quoteVsPlannedBudgetCopper, undefined);
   } finally { store.close(); }
 });
 test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {

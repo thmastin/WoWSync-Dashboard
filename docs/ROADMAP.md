@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-09 (Azeroth ERP Phase 26 manual supply quick-start implemented on the isolated feature branch; see
+Last updated: 2026-10-09 (Azeroth ERP Phase 27–28 procurement planning extension implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -122,6 +122,7 @@ Work intended next, in this order.
 - [x] **Azeroth ERP Slice 9 — explicit manual work-order instructions and transition history** (same feature branch). Players can record instructions, assignee, source and intended destination; explicit identities remain planning context, not proof of access or transfer. The shared REST/MCP read model and UI history expose task status transitions by stable work-order ID, labelled as saved plan state. Core, REST, MCP and UI tests pass; not browser/live validated.
 - [x] **Azeroth ERP Phase 25 — assigned-gatherer observation review** (same feature branch). A GATHER order scoped to an explicit same-version gatherer and same-character item need can show a non-causal delta between recent, complete OBSERVED bag sections. Unknown, partial, stale, future-dated, unordered, and identity-mismatched evidence remains UNKNOWN. REST, MCP, AccountContext schema 20, and the workbench share the core projection; synthetic browser acceptance passed. Not live-game or production validated.
 - [x] **Azeroth ERP Phase 26 — evidence-gated manual supply quick-start.** Eligible recent, complete same-character item gaps can prefill guarded manual GATHER/PURCHASE plans; hidden prefill is reset on close/reopen. Browser regression covers default reset. No route, price, purchase, or gameplay action is inferred. See [ERP_CHECKPOINT_20261009_PHASE26.md](ERP_CHECKPOINT_20261009_PHASE26.md).
+- [x] **Azeroth ERP Phases 27–28 — linked procurement budget and quote review.** PURCHASE plans may reference a separately declared buyer-scoped gold need; quote comparison against ceiling, planned need, and observed gold remains independent. No auto-reservation, affordability claim, availability, or purchase action. See [ERP_CHECKPOINT_20261009_PHASE27-28.md](ERP_CHECKPOINT_20261009_PHASE27-28.md).
   The wider ERP roadmap remains open: crafting/reagent feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access. This feature branch has not been deployed to persistent DEV or browser-validated.
   Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are

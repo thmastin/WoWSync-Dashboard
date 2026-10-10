@@ -318,6 +318,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await procurementNeedForm.getByLabel("Source character or shared owner").selectOption({ label: "Project Fixture — Cairne" });
     await procurementNeedForm.getByLabel("Intended recipient").selectOption({ label: "Project Fixture — Cairne" });
     await procurementNeedForm.getByRole("button", { name: "Add requirement" }).click();
+    const plannedBudgetForm = procurementNeedForm;
+    await plannedBudgetForm.getByLabel("Kind").selectOption("GOLD_COPPER");
+    await plannedBudgetForm.getByLabel("Label").fill("Planned purchase budget");
+    await plannedBudgetForm.getByRole("spinbutton", { name: "Copper" }).fill("90");
+    const buyerOption = plannedBudgetForm.getByLabel("Source character or shared owner").locator("option").filter({ hasText: "Project Fixture" }).last();
+    const buyerIdentityKey = await buyerOption.getAttribute("value");
+    await plannedBudgetForm.getByLabel("Source character or shared owner").selectOption(buyerIdentityKey);
+    await plannedBudgetForm.getByLabel("Intended recipient").selectOption(buyerIdentityKey);
+    await plannedBudgetForm.getByRole("button", { name: "Add requirement" }).click();
     const procurementForm = projectCard.locator("form.erp-inline-form").filter({ has: page.getByLabel("Action type") });
     await procurementForm.getByLabel("Action type").selectOption("PURCHASE");
     await procurementForm.getByLabel("Action", { exact: true }).fill("Review the observed item gap without purchasing");
@@ -326,6 +335,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.ok(targetOptions.some((label) => label.includes("Purchase gap target")));
     assert.ok(!targetOptions.some((label) => label.includes("Mycobloom")), "item needs scoped to another or unknown buyer are not offered");
     await procurementForm.getByLabel("Item target need").selectOption({ label: targetOptions.find((label) => label.includes("Purchase gap target")) });
+    const budgetOptions = await procurementForm.getByLabel("Explicit gold budget need (optional)").locator("option").allTextContents();
+    assert.ok(budgetOptions.some((label) => label.includes("Planned purchase budget")));
+    await procurementForm.getByLabel("Explicit gold budget need (optional)").selectOption({ label: budgetOptions.find((label) => label.includes("Planned purchase budget")) });
     await procurementForm.getByLabel("Spending ceiling (copper)").fill("100");
     await procurementForm.getByRole("button", { name: "Add work order" }).click();
     const purchaseOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review the observed item gap without purchasing" });
@@ -355,10 +367,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(purchaseText, /Linked item target ITEM CHANGED · recent latest evidence/);
     assert.match(purchaseText, /bags: 39 → 40 \(\+1\)/);
     assert.match(purchaseText, /Quote compared with recorded-gold snapshot: EVIDENCE NOT COMPARABLE/i);
+    assert.match(purchaseText, /Quote compared with planned budget: PLAYER QUOTE AT OR BELOW PLANNED BUDGET \(90 copper planned\)/i);
     persistedProject = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
     persistedPurchase = persistedProject.workOrders.find((entry) => entry.title === "Review the observed item gap without purchasing");
     assert.ok(persistedPurchase.resourceNeedIds.includes(persistedPurchase.procurementPlan.targetNeedId));
-    assert.deepEqual(persistedPurchase.resourceNeedIds, [persistedPurchase.procurementPlan.targetNeedId], "the spending ceiling is not persisted as resource demand");
+    assert.deepEqual(persistedPurchase.resourceNeedIds, [persistedPurchase.procurementPlan.targetNeedId, persistedPurchase.procurementPlan.budgetNeedId], "only the separately selected gold need is linked; the spending ceiling is not persisted as demand");
     assert.equal(persistedPurchase.procurementPlan.spendingCeilingCopper, 100);
     assert.deepEqual(persistedPurchase.procurementPlan.playerQuote, { amountCopper: 80, quantity: 5, recordedAt: persistedPurchase.procurementPlan.playerQuote.recordedAt, sourceNote: "Town vendor checked by player" });
     assert.equal(persistedProject.needs.find((entry) => entry.stableId === persistedPurchase.procurementPlan.targetNeedId).destinationIdentityKey, persistedPurchase.assignedIdentityKey);
