@@ -1,9 +1,10 @@
 # WoWSync ERP capability inventory
 
-Updated: 2026-10-10, through Phase 90. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
+Updated: 2026-10-10, through Phase 91. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
 
 | Grouped per-need pathway selection (Phases 88-89) | Implemented; synthetic browser-tested only | Each requirement in one cross-project manual planning batch can retain its own current evidence pathway independently from its manual task, work source, assignee, reservation, and prerequisites. Preview and atomic save revalidate each pathway. Unique observed location leads are prefilled only after same-version, exact-resource, state, and freshness checks; ambiguous leads stay blank. Untouched suggestions update/reset coherently, while edited task fields survive pathway changes. No action is executed, and UNKNOWN ownership/access/transfer/cause remains UNKNOWN. |
 | Multi-need fulfillment lifecycle acceptance and retrieval triage (Phase 90) | Implemented; synthetic browser-tested only | A complete synthetic workbench journey now connects an exact personal-bank retrieval review, player-declared craft inputs/output, a capped purchase plan, work-order progression, later export import, and non-causal reconciliation. Aggregate bags-plus-bank coverage no longer hides an unplanned retrieval step: the need remains in cross-project triage when a fresh, complete personal-bank pathway exists. REST, AccountContext, MCP, and UI agree on the same project/progress state. Inventory changes do not auto-complete retrieval, purchase, or craft. No recipe, access, purchase, or causation is inferred. |
+| Actionable portfolio next review (Phase 91) | Implemented; synthetic browser-tested only | Each player-authored package's next review now links to the exact requirement, or directly to its first open linked work order. When later observations change need coverage, an unfinished order remains the next review and the UI says the evidence does not confirm the task or its cause. |
 
 | Capability | Status | What a player can do / evidence status |
 |---|---|---|

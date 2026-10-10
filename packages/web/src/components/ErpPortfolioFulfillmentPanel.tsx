@@ -99,7 +99,7 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
             </section>}
             <a href={`#${erpNeedAnchorId(step.projectId, step.needId)}`}>Open this project requirement</a>
           </li>)}</ol>
-          {item.nextReviewStepId && <p><strong>Next player review:</strong> {item.nextReviewStepId}</p>}
+          {item.nextReviewStepId && (() => { const next = item.steps.find((step) => `${step.projectId}/${step.needId}` === item.nextReviewStepId); const openOrder = next?.workOrders.find((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED"); return <p><strong>Next player review:</strong> {next ? openOrder ? <><a href={`#${erpWorkOrderAnchorId(next.projectId, openOrder.stableId)}`}>Review {next.projectTitle}: {openOrder.title}</a> · {openOrder.status.replaceAll("_", " ")} · {next.evidenceState.replaceAll("_", " ")} evidence. New observations do not confirm this task or its cause.</> : <><a href={`#${erpNeedAnchorId(next.projectId, next.needId)}`}>Review {next.projectTitle}: {next.needLabel}</a> · {next.evidenceState.replaceAll("_", " ")} · {next.freshness} freshness</> : item.nextReviewStepId}</p>; })()}
         </article>
       </li>)}
     </ol>}

@@ -1827,6 +1827,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output
     const packageBefore = restBefore.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "craft_output"));
     assert.ok(packageBefore, "the player-authored craft prerequisites create one ordered fulfillment package");
     assert.deepEqual(packageBefore.steps.map((step) => step.needId), ["bank_reagent", "purchase_reagent", "craft_output", "craft_reagent"], "source prerequisites are shown before the craft task and its input needs");
+    const nextStep = packageBefore.steps.find((step) => `${step.projectId}/${step.needId}` === packageBefore.nextReviewStepId);
+    assert.ok(nextStep, "the shared portfolio model identifies a concrete next review need");
+    const nextReviewLink = portfolio.getByRole("link", { name: `Review ${nextStep.projectTitle}: ${nextStep.needLabel}` });
+    assert.match(await nextReviewLink.getAttribute("href"), /^#erp-need-/ , "the player-facing next review opens the exact need instead of exposing an opaque key");
     const bankPath = portfolio.getByTestId(`erp-package-pathways-${project.stableId}-bank_reagent`);
     assert.match(await bankPath.innerText(), /REVIEW PERSONAL BANK RETRIEVAL/);
     await bankPath.getByRole("button", { name: "Plan this manual review" }).click();
@@ -1892,6 +1896,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output
     const progressStates = Object.fromEntries([...new Set(current.workOrderProgress.map((entry) => entry.reconciliation))].sort().map((state) => [state, current.workOrderProgress.filter((entry) => entry.reconciliation === state).length]));
     assert.deepEqual(contextProject.workOrderProgressStates, progressStates, "AccountContext summarizes the same later evidence state as the project read model");
     assert.equal(context.planning.portfolioFulfillment.retail.pathwayReviewTruncated, false);
+    const followUpPackage = rest.portfolioFulfillment.packages.find((entry) => entry.stableId === packageBefore.stableId);
+    assert.match(followUpPackage.nextReviewStepId, /\/bank_reagent$/, "the in-progress retrieval remains the next manual review even after fresh stock appears");
+    const openWorkReview = portfolio.getByRole("link", { name: `Review Multi-need field provisioning: ${retrievalOrder.title}` });
+    assert.match(await openWorkReview.getAttribute("href"), /^#erp-work-order-/, "the next review links directly to its open manual work order");
+    assert.match(await portfolio.innerText(), /New observations do not confirm this task or its cause/, "fresh coverage does not clear or complete the player-authored retrieval order");
     mcpClient = new Client({ name: "wowsync-erp-journey-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
