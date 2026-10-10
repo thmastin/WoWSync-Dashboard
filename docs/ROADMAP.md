@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-09 (Azeroth ERP Slice 8 work-order manual status lifecycle implemented on the isolated feature branch; see
+Last updated: 2026-10-09 (Azeroth ERP Phase 25 assigned-gatherer observation review implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -120,6 +120,7 @@ Work intended next, in this order.
 - [x] **Azeroth ERP Slice 7 — work-order dependency and evidence readiness** (same feature branch). Player-authored work orders can link resource needs and prerequisites. Shared core read projection reports prerequisite blocks, current observed shortfalls, missing/stale evidence, terminal/paused state, or a manual-review step with action-specific limits. This does not infer game prerequisites or execute anything. Automated-tested, not browser/live validated.
 - [x] **Azeroth ERP Slice 8 — player-controlled work-order status lifecycle** (same feature branch). The Dashboard can record planned, in-progress, and waiting-for-evidence intent, and requires a player note to mark completion. These controls persist plan state only; no game actions execute. Automated UI-tested, not browser/live validated.
 - [x] **Azeroth ERP Slice 9 — explicit manual work-order instructions and transition history** (same feature branch). Players can record instructions, assignee, source and intended destination; explicit identities remain planning context, not proof of access or transfer. The shared REST/MCP read model and UI history expose task status transitions by stable work-order ID, labelled as saved plan state. Core, REST, MCP and UI tests pass; not browser/live validated.
+- [x] **Azeroth ERP Phase 25 — assigned-gatherer observation review** (same feature branch). A GATHER order scoped to an explicit same-version gatherer and same-character item need can show a non-causal delta between recent, complete OBSERVED bag sections. Unknown, partial, stale, future-dated, unordered, and identity-mismatched evidence remains UNKNOWN. REST, MCP, AccountContext schema 20, and the workbench share the core projection; synthetic browser acceptance passed. Not live-game or production validated.
   The wider ERP roadmap remains open: crafting/reagent feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access. This feature branch has not been deployed to persistent DEV or browser-validated.
   Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
