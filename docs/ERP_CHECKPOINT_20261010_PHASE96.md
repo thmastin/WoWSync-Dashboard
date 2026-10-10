@@ -1,8 +1,8 @@
-﻿# WoWSync ERP Phase 96 — Queue-seeded fulfillment planning
+# WoWSync ERP Phase 96 — Queue-seeded fulfillment planning
 
 **Date:** 2026-10-10  
 **Dashboard branch:** `feature/forever-gear-observation`  
-**Starting commit:** `bae3f0333af7f9dad583aa04a131a74489c7f1d2`
+**Dashboard commit:** `1fc0393f59c8ad0f5417951f847bfdd1fd176cef` (pushed)  `r`n**Starting commit:** `bae3f0333af7f9dad583aa04a131a74489c7f1d2`
 
 ## Delivered
 
@@ -38,7 +38,7 @@ Remaining unknowns include recipe/craftability evidence, ownership/access, marke
 
 ## Repository scope
 
-Only the isolated Dashboard development worktree was changed. No GearExport, SavedVariables, production Dashboard, or game installation changes. Phase 95 remains pushed at `bae3f0333af7f9dad583aa04a131a74489c7f1d2`; this Phase 96 change is pending its own commit and push.
+Only the isolated Dashboard development worktree was changed. No GearExport, SavedVariables, production Dashboard, or game installation changes. Dashboard Phase 95 `bae3f0333af7f9dad583aa04a131a74489c7f1d2` and Phase 96 `1fc0393f59c8ad0f5417951f847bfdd1fd176cef` are pushed to `feature/forever-gear-observation`.
 
 ## Next substantial work
 
