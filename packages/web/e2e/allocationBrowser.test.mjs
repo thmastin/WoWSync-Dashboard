@@ -328,6 +328,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(purchaseText, /not a purchase recommendation or action/);
     assert.match(purchaseText, /Player-reported total quote: 80 copper for 5 unit\(s\)/);
     assert.match(purchaseText, /not verified market data/);
+    assert.match(purchaseText, /Quote compared with recorded-gold snapshot: EVIDENCE NOT COMPARABLE/i);
     persistedProject = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
     persistedPurchase = persistedProject.workOrders.find((entry) => entry.title === "Review the observed item gap without purchasing");
     assert.ok(persistedPurchase.resourceNeedIds.includes(persistedPurchase.procurementPlan.targetNeedId));

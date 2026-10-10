@@ -216,7 +216,7 @@ test("procurement review exposes only the buyer's same-version recorded gold res
   const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
   try {
     const targetNeed = { stableId: "item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
-    const purchase: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review purchase", assignedIdentityKey: identityKey, resourceNeedIds: ["item"], dependsOn: [], procurementPlan: { targetNeedId: "item", spendingCeilingCopper: 500 } }] };
+    const purchase: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review purchase", assignedIdentityKey: identityKey, resourceNeedIds: ["item"], dependsOn: [], procurementPlan: { targetNeedId: "item", spendingCeilingCopper: 500, playerQuote: { amountCopper: 400, quantity: 1, recordedAt: 1_699_999_999 } } }] };
     const cashNeed = { stableId: "cash", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Project budget intent", requiredQuantity: 700, sourceIdentityKey: identityKey };
     const reserve: ErpProject = { ...project(identityKey), stableId: "reserve-cash", title: "Tracked cash commitment", needs: [cashNeed], reservations: [{ stableId: "cash-reservation", needId: "cash", sourceIdentityKey: identityKey, quantity: 700, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
     const otherCharacter = { ...reserve, stableId: "other-character-reserve", needs: [{ ...cashNeed, stableId: "other-cash", sourceIdentityKey: "classic-era::realm a::other" }], reservations: [{ ...reserve.reservations[0]!, stableId: "other-cash-reservation", needId: "other-cash", sourceIdentityKey: "classic-era::realm a::other", quantity: 900 }] };
@@ -224,7 +224,15 @@ test("procurement review exposes only the buyer's same-version recorded gold res
     assert.equal(assessment?.recordedGoldReservationsCopper, 700, "a different character's reservation is not combined");
     assert.equal(assessment?.recordedGoldReservationState, "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS");
     assert.equal(assessment?.recordedGoldAfterReservationsCopper, 300, "the remainder is derived only from the buyer's recent snapshot and exact recorded reservation");
+    assert.equal(assessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_ABOVE_RECORDED_GOLD_REMAINDER");
+    assert.equal(assessment?.quoteVsRecordedGoldRemainderCopper, 300);
     assert.equal(assessment?.affordability, "UNKNOWN", "the plan remainder is not asserted to be live spendable funds");
+    const lowerQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_699_999_999 } } }] };
+    assert.equal(evaluateErpProject(lowerQuote, (key) => store.listSnapshots(key), [lowerQuote, reserve], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER");
+    const sameSecondQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_700_000_000 } } }] };
+    assert.equal(evaluateErpProject(sameSecondQuote, (key) => store.listSnapshots(key), [sameSecondQuote, reserve], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "EVIDENCE_NOT_COMPARABLE", "second-resolution equal timestamps do not establish ordering");
+    const laterQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_700_000_005 } } }] };
+    assert.equal(evaluateErpProject(laterQuote, (key) => store.listSnapshots(key), [laterQuote, reserve], 1_700_000_006).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "EVIDENCE_NOT_COMPARABLE", "a quote recorded after the gold snapshot cannot be compared to it");
     const stale = evaluateErpProject(purchase, (key) => store.listSnapshots(key), [purchase, reserve], 1_700_000_000 + 5 * 86400).workOrderReadiness[0]?.procurementAssessment;
     assert.equal(stale?.recordedGoldReservationsCopper, 700, "recorded plan intent remains visible when the observation ages");
     assert.equal(stale?.recordedGoldReservationState, "GROSS_GOLD_NOT_RECENT");
