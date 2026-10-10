@@ -4,6 +4,7 @@ import { McpServer, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/se
 import {
   DASHBOARD_RESEARCH_REGISTRATIONS,
   buildErpResourceCommitmentSummary,
+  buildErpFulfillmentTriage,
   DashboardReadModel,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
@@ -124,14 +125,15 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   server.registerTool("get_erp_projects", {
     title: "Review WoWSync ERP projects",
-    description: "Returns a bounded version-isolated page of player-authored projects, plus shared resource commitments and latest comparable changed requirement observations for active/paused projects. Changed quantities do not establish action cause or task completion. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
+    description: "Returns a bounded version-isolated page of player-authored projects, shared commitments, changed requirement observations, and a combined fulfillment triage of changed observations, unworked requirements, reservation reviews, and open manual work. Multiple signals can refer to one need. Changed quantities do not establish action cause or task completion. Project/reservation entries are intent, not proof of ownership; inaccessible or historical storage remains UNKNOWN/LAST_SEEN. This tool is read-only and never executes in-game actions.",
     inputSchema: z.object({ version: versionSchema, limit: limitSchema.max(20).optional() }).strict(),
     annotations: toolAnnotations,
   }, async ({ version, limit }) => {
     const projects = readModel.getErpProjects({ version });
     const resolvedLimit = limit ?? 10;
     const observationChanges = version === "unknown-version" ? { items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, truncated: false } : buildErpNeedObservationChangeReview(projects, version);
-    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges });
+    const fulfillmentTriage = buildErpFulfillmentTriage(projects, version);
+    return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage });
   });
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();

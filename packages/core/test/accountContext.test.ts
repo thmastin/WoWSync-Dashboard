@@ -37,7 +37,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
   const store = seededRealStore();
   try {
     const ctx = store.buildAccountContext(FIXED_NOW);
-    assert.equal(ctx.schemaVersion, "25");
+    assert.equal(ctx.schemaVersion, "26");
     assert.equal(ctx.generatedAt, FIXED_NOW);
     assert.equal(ctx.currency.unit, "copper");
     assert.match(ctx.currency.note, /never gold/);
@@ -46,6 +46,7 @@ test("[REAL] AccountContext includes exactly the four known WoW versions, each c
     assert.equal(ctx.versions["forever"].characters.length, 0);
     assert.equal(ctx.versions["forever"].facts.characterCount, 0);
     assert.deepEqual(ctx.planning.needObservationChangeReviews.forever, { changedNeedCount: 0, affectedProjectCount: 0, truncated: false });
+    assert.deepEqual(ctx.planning.fulfillmentTriage.forever, { totalCount: 0, affectedProjectCount: 0, counts: { CHANGED_OBSERVATION: 0, UNWORKED_REQUIREMENT: 0, RESERVATION_REVIEW: 0, OPEN_WORK_ORDER: 0 }, truncated: false });
 
     assert.equal(ctx.versions["classic-era"].characters.length, 1);
     assert.equal(ctx.versions["classic-era"].characters[0].name, "Bromrik");

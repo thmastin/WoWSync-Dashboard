@@ -2,6 +2,14 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Phase 55 - combined fulfillment triage
+
+The shared `buildErpFulfillmentTriage` projection joins four existing planning/evidence signals into one version-scoped review index: changed requirement observations, requirements without an open linked work order, active reservations that need evidence review, and open manual work. A requirement row may carry more than one signal. Signal counts cover all candidate rows before the display cap and describe affected requirement/order-only rows, not unique work orders or resource quantities. Linked rows preserve exact need keys, observed quantity/time/freshness, comparable prior/current quantity deltas when present, saved source and destination intent, reservation review details, and work-order readiness/progress states. Standalone work orders remain visible as order-only rows.
+
+The project REST response and read-only `get_erp_projects` MCP tool return the same bounded core projection. AccountContext schema 26 exposes per-version signal counts and affected project counts. The Projects & Work Orders workbench presents a combined triage index with links into the existing requirement or work-order detail, where full evidence and player-controlled planning actions remain. This index does not choose a route, infer action cause, establish account membership/access, execute a task, or mark progress complete. Unknown version returns an empty triage view.
+
+Validation uses synthetic multi-need fixtures and the disposable browser workflow. It is not live-game or production validation. See `ERP_CHECKPOINT_20261010_PHASE55.md`.
+
 ## Latest checkpoint — cross-domain project fulfillment snapshot
 
 Each project now has one read-only fulfillment summary composed from the existing need evidence, reservation review, work-order progress, and saved task state. It counts recent observed coverage and shortfalls separately from historical/stale or unresolved evidence; reports reservation states and open manual work orders; and counts changed observations whose cause remains unknown. The summary is available from the shared project view used by REST and MCP, and AccountContext schema 24 includes the same project summary. The Dashboard shows it before the detailed requirement and work-order sections. Project state remains the player's saved status; evidence coverage never completes a task or project. The display explicitly says coverage is not proof of access, reservation availability, or action completion. Full `npm.cmd run validate:erp` and synthetic browser acceptance passed. No live game or production validation. See `ERP_CHECKPOINT_20261010_PHASE48.md`.

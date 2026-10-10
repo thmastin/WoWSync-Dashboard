@@ -1197,10 +1197,26 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
     assert.match(rest.workOrders[0].instructions, /does not assert .* action completion/);
     assert.match(rest.workOrders[0].instructions, /does not assert .* action completion/);
 
+    const triage = page.getByTestId("erp-fulfillment-triage");
+    const stoneTriage = triage.locator("article").filter({ hasText: "Mycobloom" }).first();
+    await stoneTriage.waitFor();
+    assert.match(await stoneTriage.innerText(), /Rows with changed observations/);
+    assert.match(await stoneTriage.innerText(), /Rows linked to open manual work/);
+    assert.match(await stoneTriage.innerText(), /bags 5 → 3 \(-2; latest /);
+    assert.match(await stoneTriage.innerText(), /Cause UNKNOWN/);
+    const detailLink = stoneTriage.getByRole("link", { name: "Open requirement and planning detail" });
+    const detailTarget = await detailLink.getAttribute("href");
+    assert.ok(detailTarget);
+    assert.equal(await page.locator(`[id="${detailTarget.slice(1)}"]`).count(), 1, "triage links to the exact need detail in the project card");
+    await detailLink.click();
+    await page.waitForFunction((target) => window.location.hash === target, detailTarget);
+
     const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     const accountProject = account.planning.projects.find((entry) => entry.stableId === project.stableId);
     assert.deepEqual([accountProject.revision, accountProject.workOrderCounts], [2, { PLANNED: 1 }]);
     assert.equal(account.planning.needObservationChangeReviews.retail.changedNeedCount, 2, "change review remains a snapshot summary until comparable evidence changes");
+    assert.equal(account.planning.fulfillmentTriage.retail.counts.CHANGED_OBSERVATION, 2);
+    assert.equal(account.planning.fulfillmentTriage.retail.counts.OPEN_WORK_ORDER, 2);
     const mcpEntrypoint = path.resolve(process.cwd(), "packages/mcp/src/index.ts");
     const mcp = new Client({ name: "wowsync-observation-review-browser", version: "0.1.0" });
     mcpClient = mcp;
@@ -1209,6 +1225,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
     const mcpProject = result.structuredContent.projects.find((entry) => entry.stableId === project.stableId);
     assert.deepEqual(mcpProject.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), rest.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]));
     assert.equal(result.structuredContent.observationChanges.totalCount, 2);
+    const restTriage = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).fulfillmentTriage);
+    assert.deepEqual(result.structuredContent.fulfillmentTriage, restTriage, "MCP and REST share the exact deterministic fulfillment triage projection");
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

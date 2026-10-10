@@ -1,6 +1,6 @@
 # WoWSync ERP capability inventory
 
-Updated: 2026-10-10, Phase 49. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
+Updated: 2026-10-10, Phase 55. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
 
 | Capability | Status | What a player can do / evidence status |
 |---|---|---|
@@ -11,6 +11,7 @@ Updated: 2026-10-10, Phase 49. This is a cumulative status view, not a claim tha
 | Manual work orders | Implemented and usable | Create, assign, edit, link dependencies and needs, and record player instructions for gather, purchase, craft, provision, retrieve, investigate, and other supported manual steps. No game action is issued. |
 | Work-order readiness and project fulfillment | Implemented; synthetic-tested | Shared core combines needs, evidence, commitments, dependencies, progress observations, and project intent. REST, AccountContext, MCP, and Dashboard expose shared projections. It does not infer action causation or complete projects from resource changes. |
 | Multi-need fulfillment review (Phase 49) | Implemented; synthetic-tested only | In an active project, group 2–4 uncovered/unworked needs into one linked INVESTIGATE work order. The saved task snapshots evidence and plan time, supports an optional same-version reviewer and open dependencies, and explicitly asks for a fresh review. It does not choose a fulfillment action or reserve/move resources. |
+| Cross-project fulfillment triage (Phase 55) | Implemented; synthetic-tested only | One version-scoped core projection groups changed observations, uncovered requirements, reservation reviews, and open manual work. REST, MCP, AccountContext schema 26, and the Project Workbench use the same projection; UI links return to exact need/order details. Signals are review prompts, not causal conclusions or execution routes. |
 | Craft planning | Partial; recipe inputs require player declaration | Exact supported recipe-knowledge evidence can be reviewed. Players can declare material needs, link them to manual craft work, and plan around observed supply. The system does not infer recipes/reagents, skill sufficiency, unlocks, output, or craftability. |
 | Procurement planning | Partial; synthetic-tested | Supports explicit item need, buyer, player-entered ceiling/quote, dated gold and reservations, and manual purchase review. Market stock, price, seller, route, and affordability are not established. |
 | Storage retrieval and provisioning | Partial; evidence-gated | Recent section observations can support manual retrieval/provision review. Storage ownership, character access, transfer route, and causation remain separate/unknown unless directly evidenced. |
@@ -29,4 +30,4 @@ This workflow was exercised with synthetic data in a disposable SQLite database 
 
 ## Next substantial milestone
 
-Build a player-authored multi-need work-order composer. For each selected need, the player chooses an existing manual work type and supplies its required details. Show evidence, reservation, and dependency constraints before saving linked orders. Do not automatically select a source or infer route, craftability, market availability, or execution.
+Move from triage into a bounded multi-project fulfillment session: let the player select several explicitly scoped need rows from active projects, inspect combined reservations and current-source evidence, and create a revision-guarded grouped manual planning update without solving routes or claiming execution. Prove consistency in REST, AccountContext, MCP, and browser acceptance, including evidence changing between review and save.
