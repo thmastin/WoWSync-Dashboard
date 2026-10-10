@@ -1456,3 +1456,57 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] manage manual work-order lifecycle from the
     store?.close(); rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceilings against linked planned gold across UI, REST, AccountContext, and MCP", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-procurement-budget-review-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const exportText = renderExport({ name: "Budget Buyer", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }).replace("MoneyCopper: ?", "MoneyCopper: 12000");
+    const imported = store.importSnapshot(exportText);
+    const buyer = imported.character.identityKey;
+    const project = store.createErpProject({ version: "retail", title: "Two-item provision", needs: [
+      { stableId: "stone", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom exact variant", requiredQuantity: 3, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+      { stableId: "cloth", kind: "ITEM_ID", resourceKey: String(ITEM_ID + 1), label: "Linen Cloth", requiredQuantity: 2, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+      { stableId: "budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Provisioning budget", requiredQuantity: 1000, sourceIdentityKey: buyer, destinationIdentityKey: buyer },
+    ], workOrders: [
+      { stableId: "purchase-stone", kind: "PURCHASE", status: "PLANNED", title: "Review stone quote", assignedIdentityKey: buyer, resourceNeedIds: ["stone", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "stone", budgetNeedId: "budget", spendingCeilingCopper: 700 } },
+      { stableId: "purchase-cloth", kind: "PURCHASE", status: "IN_PROGRESS", title: "Review cloth quote", assignedIdentityKey: buyer, resourceNeedIds: ["cloth", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "cloth", budgetNeedId: "budget", spendingCeilingCopper: 500 } },
+    ] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const panel = page.getByTestId("erp-procurement-budget-review");
+    const line = panel.getByTestId(`erp-procurement-budget-${project.stableId}-budget`);
+    await line.waitFor();
+    assert.match(await line.innerText(), /CEILINGS EXCEED PLANNED BUDGET/);
+    assert.match(await line.innerText(), /1200 copper across 2 unfinished purchase plans against 1000 copper explicitly planned/);
+    assert.match(await line.innerText(), /exceed the planned amount by 200 copper/);
+    assert.match(await line.innerText(), /12000 copper observed/);
+    assert.match(await panel.innerText(), /not predicted spend, a quote, or a purchase/i);
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
+    const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(context.schemaVersion, "29");
+    assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 1, overPlannedBudget: 1, totalOpenCeilingCopper: 1200, truncated: false });
+    await line.getByRole("button", { name: "Review project plans" }).click();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), `erp-project-title-${encodeURIComponent(project.stableId)}`);
+    mcpClient = new Client({ name: "wowsync-procurement-budget-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(mcp.structuredContent.procurementBudgetReview.lines, rest.procurementBudgetReview.lines);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
