@@ -856,3 +856,45 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     store?.close(); rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] stale observed stock cannot enable a new resource reservation", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-stale-reservation-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const staleAt = now - 5 * 86400;
+    const item = row(ITEM_ID, 7, { name: "Stale Mycobloom" });
+    const imported = store.importSnapshot(renderExport({
+      name: "Stale Reservation Holder", realm: "Stale Realm", generated: staleAt,
+      bags: observedSection([item], staleAt), bank: observedSection([], staleAt),
+      guild: guildSection("gclub-stale-reservation-holder", [], staleAt),
+    }));
+    store.createErpProject({
+      stableId: "stale_reservation_project", version: "retail", title: "Review stale supply", status: "ACTIVE", priority: 3,
+      createdAt: staleAt, updatedAt: staleAt, revision: 1, reservations: [], workOrders: [],
+      needs: [{ stableId: "stale_item_need", kind: "ITEM_REF", resourceKey: item.itemRef, label: "Stale Mycobloom", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }],
+    });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const need = page.locator(".erp-need-list li").filter({ hasText: "Stale Mycobloom" });
+    await need.getByText(/stale freshness/).waitFor();
+    assert.equal(await need.getByRole("button", { name: "Reserve" }).isDisabled(), true,
+      "observed history can remain visible without authorizing a reservation from stale supply");
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    if (store) store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -68,6 +68,23 @@ test("project requirements preserve observed lower bounds, unknown bank, and exp
   } finally { store.close(); }
 });
 
+test("stale inventory preserves reservation intent but cannot establish current coverage or new availability", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000 });
+  try {
+    const p = project(identityKey);
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_000 + 5 * 86400);
+    const evidence = view.needEvidence[0]!;
+    assert.equal(evidence.freshness, "stale");
+    assert.equal(evidence.observedQuantity, 4, "historical observed quantity remains visible as source evidence");
+    assert.equal(evidence.reservationAssessment?.activeQuantity, 2, "the player's saved reservation intent remains visible");
+    assert.equal(evidence.reservationAssessment?.state, "UNKNOWN", "stale stock cannot establish current reservation coverage");
+    assert.equal(evidence.reservationAssessment?.availableObservedLowerBound, undefined, "stale stock cannot enable a new reservation");
+    assert.match(evidence.reservationAssessment?.reason ?? "", /stale and not current/);
+    assert.equal(view.reservationReview[0]?.state, "SUPPLY_UNKNOWN");
+    assert.match(view.reservationReview[0]?.reason ?? "", /observation is stale/);
+  } finally { store.close(); }
+});
+
 test("gather review reports assigned character bag deltas without claiming cause or requiring unrelated bank access", () => {
   const { store, identityKey } = seedStore();
   try {
@@ -980,15 +997,15 @@ test("shared-owner RETRIEVE review compares only the named Retail storage owner'
 
     store.importSnapshot(capture("Carrier Three", baseAt + 70, 1, "partial"));
     store.importSnapshot(recipientCapture(baseAt + 75, 3, true));
-    const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(afterPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial shared observation hides the previous complete comparison as current");
     assert.equal(afterPartial?.comparisons.length, 0);
     assert.equal(afterPartial?.pairedObservationPattern?.state, "UNKNOWN", "a newer partial owner or recipient capture prevents a paired change signal");
-    assert.equal(afterPartial?.recipientBagObservation?.state, "UNKNOWN", "an incomplete recipient bag section cannot support a current comparison");
+    assert.equal(afterPartial?.recipientBagObservation?.state, "UNKNOWN", `an incomplete recipient bag section cannot support a current comparison: ${JSON.stringify(afterPartial?.recipientBagObservation)}`);
 
     store.importSnapshot(capture("Carrier Four", baseAt + 90, 3));
     store.importSnapshot(capture("Carrier Five", baseAt + 90, 1, "partial", baseAt + 91));
-    const tiedPartial = new DashboardReadModel(store, () => baseAt + 100).getErpProjects({ version: "retail" })[0]?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    const tiedPartial = new DashboardReadModel(store, () => baseAt + 100).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
     assert.equal(tiedPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial with the same clamped effective timestamp still prevents treating a complete snapshot as current");
     assert.equal(tiedPartial?.comparisons.length, 0);
 

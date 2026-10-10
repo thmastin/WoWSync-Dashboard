@@ -26,6 +26,8 @@ async function withServer(run: (call: (method: string, path: string, body?: unkn
 
 test("project REST persists explicit plans and returns evidence from the shared core read model", async () => {
   await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 3 }] }] }, bank: { unknown: true } }));
     const character = store.listCharacters("classic-era")[0]!;
     const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Prepare first craft", priority: 4, needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey }], reservations: [{ stableId: "reserve", needId: "stone", sourceIdentityKey: character.identityKey, quantity: 2, status: "ACTIVE", createdAt: 1700000000, updatedAt: 1700000000 }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "PLANNED", title: "Gather one more", resourceNeedIds: ["stone"], dependsOn: [] }] });
     assert.equal(created.status, 201);

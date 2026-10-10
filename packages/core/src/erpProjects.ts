@@ -1311,16 +1311,16 @@ function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvid
   const completeSupply = evidence.unresolvedSections.length === 0 && evidence.unknownQuantityRowCount === 0;
   const overReserved = evidence.observedQuantity !== undefined && activeQuantity > evidence.observedQuantity;
   const capabilityResource = need.kind === "PROFESSION" || need.kind === "RECIPE";
-  const state = capabilityResource || ambiguous || evidence.observedQuantity === undefined || (overReserved && !completeSupply)
+  const state = capabilityResource || ambiguous || evidence.observedQuantity === undefined || evidence.freshness !== "recent" || (overReserved && !completeSupply)
     ? "UNKNOWN" as const
     : overReserved ? "OVER_RESERVED" as const
     : activeQuantity ? "WITHIN_OBSERVED_SUPPLY" as const : "UNRESERVED" as const;
-  const availableObservedLowerBound = !ambiguous && evidence.observedQuantity !== undefined && activeQuantity <= evidence.observedQuantity
+  const availableObservedLowerBound = evidence.freshness === "recent" && !ambiguous && evidence.observedQuantity !== undefined && activeQuantity <= evidence.observedQuantity
     ? evidence.observedQuantity - activeQuantity : undefined;
   const reason = capabilityResource ? "Profession and recipe capabilities are not countable inventory units; reservations cannot be reconciled as quantities."
     : ambiguous ? "Base item and exact-variant reservations overlap; their combined quantity cannot be allocated safely."
     : state === "OVER_RESERVED" ? `Active reservations total ${activeQuantity}, exceeding ${evidence.observedQuantity} observed. Resolve the competing plans; inventory is unchanged.`
-    : state === "UNKNOWN" ? "Reservation availability is unknown because the source or relevant supply evidence is incomplete."
+    : state === "UNKNOWN" ? `Reservation availability is unknown because the source or relevant supply evidence is ${evidence.freshness === "recent" ? "incomplete" : `${evidence.freshness} and not current`}.`
     : activeQuantity ? `At least ${availableObservedLowerBound} observed units remain outside ${activeQuantity} explicitly reserved units; this is not proof of transferability or a live balance.`
     : evidence.observedQuantity !== undefined ? `No active reservations; ${evidence.observedQuantity} units are observed at this source, subject to freshness and completeness.`
     : "No explicit source supply is available to assess reservations.";
@@ -1610,10 +1610,10 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const totalReserved = reservations.reduce((sum, entry) => sum + entry.quantity, 0);
     const ambiguousItemScope = reservations.some((entry) => entry.ambiguous);
     const supply = reservation.sourceOwnerKey ? assessSharedStorageNeed(ownNeed, sharedStorage, now) : assessErpNeed(ownNeed, reservation.sourceIdentityKey ? snapshotsFor(reservation.sourceIdentityKey) : [], now, currencies, project.version);
-    const state = ownNeed.kind === "PROFESSION" || ownNeed.kind === "RECIPE" || supply.observedQuantity === undefined || ambiguousItemScope || (totalReserved > supply.observedQuantity && supply.unresolvedSections.length > 0)
+    const state = ownNeed.kind === "PROFESSION" || ownNeed.kind === "RECIPE" || supply.observedQuantity === undefined || supply.freshness !== "recent" || ambiguousItemScope || (totalReserved > supply.observedQuantity && supply.unresolvedSections.length > 0)
       ? "SUPPLY_UNKNOWN"
       : totalReserved <= supply.observedQuantity ? "WITHIN_OBSERVED_SUPPLY" : "EXCEEDS_OBSERVED_SUPPLY";
-    reservationReview.push({ reservationId: reservation.stableId, state, reservedQuantity: totalReserved, ...(supply.observedQuantity !== undefined ? { observedQuantity: supply.observedQuantity } : {}), reason: ambiguousItemScope ? `Reservations for base item ${needItemId(ownNeed)} and exact item variants overlap, but their quantities cannot be reconciled safely.` : state === "WITHIN_OBSERVED_SUPPLY" ? `Explicit reservations total ${totalReserved}; the selected source has ${supply.observedQuantity} observed at ${supply.freshness} freshness. Intent does not establish access or transferability.` : state === "EXCEEDS_OBSERVED_SUPPLY" ? `Reservations total ${totalReserved}, exceeding ${supply.observedQuantity} observed. Replanning is needed; no inventory is changed.` : `Supply for ${ownNeed.label} at the selected source is UNKNOWN; the reservation is intent, not possession.` });
+    reservationReview.push({ reservationId: reservation.stableId, state, reservedQuantity: totalReserved, ...(supply.observedQuantity !== undefined ? { observedQuantity: supply.observedQuantity } : {}), reason: ambiguousItemScope ? `Reservations for base item ${needItemId(ownNeed)} and exact item variants overlap, but their quantities cannot be reconciled safely.` : supply.freshness !== "recent" ? `The selected source observation is ${supply.freshness}; reservation coverage is UNKNOWN until current evidence is available.` : state === "WITHIN_OBSERVED_SUPPLY" ? `Explicit reservations total ${totalReserved}; the selected source has ${supply.observedQuantity} observed at recent freshness. Intent does not establish access or transferability.` : state === "EXCEEDS_OBSERVED_SUPPLY" ? `Reservations total ${totalReserved}, exceeding ${supply.observedQuantity} observed. Replanning is needed; no inventory is changed.` : `Supply for ${ownNeed.label} at the selected source is UNKNOWN; the reservation is intent, not possession.` });
   }
   return { ...project, needEvidence, resourceSourceScreens: resourceSourceScreens(project, snapshotsFor, allProjects, now, currencies, candidateSources), workOrderReadiness, workOrderProgress, reservationReview };
 }
