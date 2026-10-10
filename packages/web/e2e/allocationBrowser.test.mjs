@@ -445,6 +445,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     persistedProject = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
     persistedPurchase = persistedProject.workOrders.find((entry) => entry.title === "Review the observed item gap without purchasing");
     assert.equal(persistedPurchase.procurementPlan.targetNeedId, persistedProject.needs.find((entry) => entry.label === "Alternate purchase target").stableId);
+    assert.deepEqual(persistedPurchase.resourceNeedIds, [persistedPurchase.procurementPlan.targetNeedId, persistedPurchase.procurementPlan.budgetNeedId], "editing replaces procurement auto-links instead of retaining the old item target");
     assert.equal(persistedPurchase.procurementPlan.playerQuote, undefined, "a quote for a prior item target must not carry over to a replacement target");
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
