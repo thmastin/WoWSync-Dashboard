@@ -68,6 +68,61 @@ test("project requirements preserve observed lower bounds, unknown bank, and exp
   } finally { store.close(); }
 });
 
+test("gather review reports assigned character bag deltas without claiming cause or requiring unrelated bank access", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 7 }] }] }, bank: { unknown: true } }));
+    const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather stone", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+    const progress = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0];
+    assert.deepEqual(progress?.gatherObservationReviews?.map((review) => [review.gathererIdentityKey, review.state, review.freshness, review.comparisons.map((entry) => [entry.section, entry.delta]), review.interpretation]), [[identityKey, "RESOURCE_INCREASED", "recent", [["bags", 3]], "CAUSE_UNKNOWN"]]);
+    assert.equal(progress?.completionRecorded, false);
+    assert.match(progress?.gatherObservationReviews?.[0]?.reason ?? "", /does not establish gathering as the cause/);
+  } finally { store.close(); }
+});
+
+test("gather review leaves another character's resource change UNKNOWN", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "PLANNED", title: "Gather stone", resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+    const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderProgress[0]?.gatherObservationReviews?.[0];
+    assert.equal(review?.state, "UNKNOWN");
+    assert.match(review?.reason ?? "", /No gatherer is assigned/);
+  } finally { store.close(); }
+});
+
+test("gather review keeps stale, future, partial, unordered, wrong-version, and cross-character evidence UNKNOWN", () => {
+  const now = 1_700_000_200;
+  const cases = [
+    { name: "stale earlier bags", earlierBagAt: now - 4 * 86400, laterBagAt: now - 100 },
+    { name: "future-dated later bags", earlierBagAt: now - 200, laterBagAt: now + 600 },
+    { name: "partial later bags", earlierBagAt: now - 200, laterBagAt: now - 100, laterPartial: true },
+    { name: "unordered section timestamps", earlierBagAt: now - 100, laterBagAt: now - 200 },
+  ] as const;
+  for (const scenario of cases) {
+    const { store, identityKey } = seedStore({ generatedAt: now - 200, bags: { observedAt: scenario.earlierBagAt, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } });
+    try {
+      store.importSnapshot(buildWowSyncExport({ generatedAt: now - 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: scenario.laterBagAt, partial: "laterPartial" in scenario && scenario.laterPartial, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } }));
+      const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather stone", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+      const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now).workOrderProgress[0]?.gatherObservationReviews?.[0];
+      assert.equal(review?.state, "UNKNOWN", scenario.name);
+    } finally { store.close(); }
+  }
+
+  const { store, identityKey } = seedStore();
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: now - 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } }));
+    const base = project(identityKey);
+    for (const [name, workOrder] of [
+      ["wrong version", { stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather", assignedIdentityKey: "retail::character", resourceNeedIds: ["need_stone"], dependsOn: [] }],
+      ["need belongs to another character", { stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }],
+    ] as const) {
+      const p: ErpProject = { ...base, ...(name === "need belongs to another character" ? { needs: [{ ...base.needs[0]!, sourceIdentityKey: "classic-era::realm-a::other" }] } : {}), workOrders: [workOrder as ErpProject["workOrders"][number]] };
+      const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now).workOrderProgress[0]?.gatherObservationReviews?.[0];
+      assert.equal(review?.state, "UNKNOWN", name);
+    }
+  } finally { store.close(); }
+});
+
 test("LAST_SEEN stock is potential, never current coverage", () => {
   const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { lastSeen: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 7 }] }] } });
   try {

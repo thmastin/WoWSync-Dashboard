@@ -811,6 +811,7 @@ export interface ErpWorkOrderProgress {
   readonly sellObservationReviews?: readonly ErpSellObservationReview[];
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
   readonly craftInputObservationReviews?: readonly ErpCraftInputObservationReview[];
+  readonly gatherObservationReviews?: readonly ErpGatherObservationReview[];
   readonly reason: string;
 }
 
@@ -822,6 +823,18 @@ export interface ErpCraftInputObservationReview {
   readonly freshness: Freshness;
   readonly previousFreshness?: Freshness;
   readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly reason: string;
+}
+
+export interface ErpGatherObservationReview {
+  readonly needId: string;
+  readonly resourceKey: string;
+  readonly gathererIdentityKey?: string;
+  readonly state: "RESOURCE_INCREASED" | "RESOURCE_DECREASED" | "RESOURCE_UNCHANGED" | "UNKNOWN";
+  readonly freshness: Freshness;
+  readonly previousFreshness?: Freshness;
+  readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly interpretation: "CAUSE_UNKNOWN";
   readonly reason: string;
 }
 
@@ -1135,6 +1148,34 @@ function craftInputObservationReviews(project: ErpProject, order: ErpWorkOrder, 
   });
 }
 
+function gatherObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpGatherObservationReview[] {
+  if (order.kind !== "GATHER") return [];
+  return order.resourceNeedIds.flatMap<ErpGatherObservationReview>((needId) => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const gathererIdentityKey = order.assignedIdentityKey;
+    const unknown = (reason: string): ErpGatherObservationReview => ({ needId, resourceKey: need.resourceKey, ...(gathererIdentityKey ? { gathererIdentityKey } : {}), state: "UNKNOWN", freshness: "unknown", comparisons: [], interpretation: "CAUSE_UNKNOWN", reason });
+    if (!gathererIdentityKey) return [unknown("No gatherer is assigned; no character is selected from roster co-location.")];
+    if (!gathererIdentityKey.startsWith(`${project.version}::`)) return [unknown("The assigned gatherer does not match the project version; no cross-version inventory evidence is used.")];
+    if (need.sourceOwnerKey || need.sourceIdentityKey !== gathererIdentityKey || (need.destinationIdentityKey && need.destinationIdentityKey !== gathererIdentityKey)) return [unknown("The linked resource need does not explicitly scope both source and destination to the assigned gatherer. Shared storage or another character is not interpreted as gatherer inventory.")];
+    const evidence = assessErpNeed(need, snapshotsFor(gathererIdentityKey), now, undefined, project.version);
+    const bagComparison = evidence.observationChange?.comparisons.find((entry) => entry.section === "bags");
+    const comparisons = bagComparison ? [bagComparison] : [];
+    const currentBagSource = evidence.sourceSections.find((entry) => entry.section === "bags");
+    const previousFreshness: Freshness | undefined = bagComparison ? evidenceFreshness(bagComparison.previousObservedAt, now) : undefined;
+    const freshness = bagComparison ? evidenceFreshness(bagComparison.currentObservedAt, now) : currentBagSource?.state === "OBSERVED" ? evidenceFreshness(currentBagSource.observedAt, now) : "unknown";
+    const bagsComplete = currentBagSource?.state === "OBSERVED" && currentBagSource.completeness?.toLowerCase() === "complete";
+    const ordered = Boolean(bagComparison && bagComparison.currentObservedAt > bagComparison.previousObservedAt);
+    const state: ErpGatherObservationReview["state"] = !bagComparison || !bagsComplete || freshness !== "recent" || previousFreshness !== "recent" || !ordered ? "UNKNOWN"
+      : bagComparison.delta > 0 ? "RESOURCE_INCREASED" : bagComparison.delta < 0 ? "RESOURCE_DECREASED" : "RESOURCE_UNCHANGED";
+    const reason = state === "UNKNOWN" ? `${evidence.reason} A stale, future-dated, partial, unordered, or unidentified bag scope remains UNKNOWN. Bank evidence is outside this gatherer-bag comparison.`
+      : state === "RESOURCE_INCREASED" ? "The assigned gatherer's comparable item inventory increased. This does not establish gathering as the cause or identify a route."
+      : state === "RESOURCE_DECREASED" ? "The assigned gatherer's comparable item inventory decreased. This does not establish consumption, transfer, or cause."
+      : "Recent comparable item observations show no quantity change; this does not prove that no gathering occurred.";
+    return [{ needId, resourceKey: need.resourceKey, gathererIdentityKey, state, freshness, ...(previousFreshness ? { previousFreshness } : {}), comparisons, interpretation: "CAUSE_UNKNOWN", reason }];
+  });
+}
+
 function sellObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpSellObservationReview[] {
   if (order.kind !== "SELL_MANUALLY") return [];
   return order.resourceNeedIds.flatMap<ErpSellObservationReview>((needId) => {
@@ -1444,8 +1485,9 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const procurementReview = procurementObservationReview(project, order, snapshotsFor, now);
     const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
     const craftInputs = craftInputObservationReviews(project, order, snapshotsFor, now);
+    const gatherReviews = gatherObservationReviews(project, order, snapshotsFor, now);
     const saleReviews = sellObservationReviews(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(saleReviews.length ? { sellObservationReviews: saleReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), reason };
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(saleReviews.length ? { sellObservationReviews: saleReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), ...(gatherReviews.length ? { gatherObservationReviews: gatherReviews } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

@@ -117,7 +117,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "19");
+    assert.equal(account.body.schemaVersion, "20");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
     assert.deepEqual(summary.procurementQuoteStates, { PLAYER_REPORTED_WITHIN_CEILING: 1 });
@@ -281,9 +281,27 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "19");
+    assert.equal(context.body.schemaVersion, "20");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
+  });
+});
+
+test("assigned gatherer bag deltas agree across REST and AccountContext without attributing a cause", async () => {
+  await withServer(async (call, store) => {
+    const earlier = Math.floor(Date.now() / 1000) - 2;
+    store.importSnapshot(buildWowSyncExport({ generatedAt: earlier, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 1 }] }] }, bank: { containers: [] } }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: earlier + 1, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } }));
+    const character = store.listCharacters("classic-era")[0]!;
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Gather rough stone", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "IN_PROGRESS", title: "Gather the remaining stone", assignedIdentityKey: character.identityKey, resourceNeedIds: ["stone"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    const review = created.body.project.workOrderProgress[0].gatherObservationReviews[0];
+    assert.equal(review.state, "RESOURCE_INCREASED");
+    assert.equal(review.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.delta]), [["bags", 3]]);
+    const context = await call("GET", "/api/account-context");
+    assert.equal(context.body.schemaVersion, "20");
+    assert.deepEqual(context.body.planning.projects[0].gatherObservationStates, { RESOURCE_INCREASED: 1 });
   });
 });
 

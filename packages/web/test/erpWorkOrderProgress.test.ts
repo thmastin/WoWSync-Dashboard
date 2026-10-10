@@ -33,3 +33,12 @@ test("manual sale presentation separates item and gold observations and keeps sa
   assert.match(html, /bags: 4 → 2/);
   assert.match(html, /Neither change proves a sale/);
 });
+
+test("gather presentation shows assigned-gatherer bag deltas as non-causal evidence", () => {
+  const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { ...progress, reconciliation: "CURRENT_LINKED_NEEDS_UNMET", completionRecorded: false, recordedStatus: "IN_PROGRESS", reason: "The item need remains unmet.", gatherObservationReviews: [{ needId: "ore", resourceKey: "item:159:variant", gathererIdentityKey: "classic-era::realm a::crafter", state: "RESOURCE_INCREASED", freshness: "recent", previousFreshness: "recent", comparisons: [{ section: "bags", previousQuantity: 1, currentQuantity: 4, delta: 3, previousObservedAt: 100, currentObservedAt: 200 }], interpretation: "CAUSE_UNKNOWN", reason: "The assigned gatherer's comparable item inventory increased." }] } }));
+  assert.match(html, /assigned gatherer bag observations \(cause unknown\)/i);
+  assert.match(html, /item:159:variant/);
+  assert.match(html, /RESOURCE INCREASED/);
+  assert.match(html, /bags: 1/);
+  assert.match(html, /does not complete the work order/);
+});
