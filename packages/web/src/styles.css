@@ -1362,6 +1362,9 @@ button.roster-name-link {
 .erp-resource-commitments { margin: 20px 0 26px; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
 .erp-resource-commitments > p { color: #b8c2d0; max-width: 1000px; }
 .erp-commitment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 12px; }
+.erp-commitment-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 14px 0; }
+.erp-commitment-controls label { display: grid; gap: 4px; }
+.erp-commitment-controls span { color: #aab5c4; margin-left: auto; }
 .erp-commitment-card { min-width: 0; padding: 14px; border: 1px solid #ffffff1e; border-radius: 7px; background: #00000018; }
 .erp-commitment-card h3 { margin: 0 0 8px; overflow-wrap: anywhere; }
 .erp-commitment-card h3 small { display: block; margin-top: 4px; color: #aab5c4; font-weight: 400; }

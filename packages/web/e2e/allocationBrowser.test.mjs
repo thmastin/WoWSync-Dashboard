@@ -205,6 +205,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(commitmentText, /20 requested/, "planning intent is visible as its own quantity");
     assert.match(commitmentText, /2/, "observed source stock is shown independently from planned demand");
     assert.match(commitmentText, /Freshness:/);
+    await commitmentPanel.getByLabel("Commitment filter").selectOption("REVIEW");
+    assert.match(await commitmentPanel.getByText(/need review/).innerText(), /Showing \d+ of \d+ resource scopes/);
+    await commitmentPanel.getByLabel("Commitment filter").selectOption("RESERVED");
+    await commitmentPanel.locator(".erp-commitment-card").first().waitFor();
+    const reservedCommitments = await commitmentPanel.locator(".erp-commitment-card").allInnerTexts();
+    assert.ok(reservedCommitments.some((text) => /Reservations on these exact needs[\s\S]*1/.test(text)), "reserved resource scopes remain discoverable through the filter");
+    await commitmentPanel.getByLabel("Search commitments").fill("no matching resource name");
+    await commitmentPanel.getByText("No commitments match this filter.").waitFor();
+    await commitmentPanel.getByLabel("Search commitments").fill("");
+    await commitmentPanel.getByLabel("Commitment filter").selectOption("ALL");
 
     await needForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
