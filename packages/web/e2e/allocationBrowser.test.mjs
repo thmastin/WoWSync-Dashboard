@@ -6,6 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
@@ -1033,4 +1035,112 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] compose different manual work types and dep
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] create requirements, compose fulfillment, and read one project through UI, REST, AccountContext, and MCP", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-full-fulfillment-browser-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store;
+  let server;
+  let browser;
+  let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const imported = store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now, bags: observedSection([row(159, 2, { name: "Unrelated stone" })], now), bank: observedSection([], now) }));
+    const character = imported.character.identityKey;
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const createForm = page.locator("form.erp-create-form");
+    await createForm.getByLabel("Project title").fill("Repair kit for the workshop");
+    await createForm.getByLabel("Objective").fill("Record explicit item and recipe needs and plan manual fulfillment.");
+    await createForm.getByRole("button", { name: "Create project" }).click();
+    const project = page.locator(".erp-project-card").filter({ hasText: "Repair kit for the workshop" });
+    await project.waitFor();
+    await project.getByRole("button", { name: "Add requirement / work order" }).click();
+    const needForm = project.locator("form.erp-inline-form");
+    await needForm.getByLabel("Kind").selectOption("ITEM_ID");
+    await needForm.getByLabel("Resource key").fill("987654");
+    await needForm.getByLabel("Label").fill("Copper Ore for repair");
+    await needForm.getByLabel("Quantity").fill("8");
+    await needForm.getByLabel("Source character or shared owner").selectOption(character);
+    await needForm.getByLabel("Intended recipient").selectOption(character);
+    await needForm.getByRole("button", { name: "Add requirement" }).click();
+    await project.locator(".erp-need-list").getByText("Copper Ore for repair").waitFor();
+    await needForm.getByLabel("Kind").selectOption("RECIPE");
+    await needForm.getByLabel("Resource key").fill("123456");
+    await needForm.getByLabel("Label").fill("Repair recipe knowledge");
+    await needForm.getByLabel("Source character or shared owner").selectOption({ label: "None — supply UNKNOWN" });
+    await needForm.getByLabel("Intended recipient").selectOption(character);
+    await needForm.getByRole("button", { name: "Add requirement" }).click();
+    await project.locator(".erp-need-list").getByText("Repair recipe knowledge").waitFor();
+
+    await project.getByRole("button", { name: "Compose fulfillment work orders" }).click();
+    const composer = project.getByRole("region", { name: "Multi-need work-order composer for Repair kit for the workshop" });
+    await composer.locator(".erp-batch-need").filter({ hasText: "Copper Ore for repair" }).locator("input").check();
+    await composer.locator(".erp-batch-need").filter({ hasText: "Repair recipe knowledge" }).locator("input").check();
+    const itemTask = composer.locator(".erp-batch-order-draft").filter({ hasText: "Task for Copper Ore for repair" });
+    const recipeTask = composer.locator(".erp-batch-order-draft").filter({ hasText: "Task for Repair recipe knowledge" });
+    await itemTask.getByLabel("Manual work type").selectOption("GATHER");
+    await itemTask.getByLabel("Assigned character (optional)").selectOption(character);
+    await itemTask.getByLabel("Planned source character (optional)").selectOption(character);
+    await recipeTask.getByLabel("Manual work type").selectOption("INVESTIGATE");
+    await recipeTask.getByLabel("Assigned character (optional)").selectOption(character);
+    const firstTaskDependency = await recipeTask.locator('option[value^="draft:"]').getAttribute("value");
+    assert.ok(firstTaskDependency);
+    await recipeTask.getByLabel("Prerequisites (optional)").selectOption([firstTaskDependency]);
+    await composer.getByRole("button", { name: "Save 2 planned work orders" }).click();
+
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Repair kit for the workshop"));
+    assert.deepEqual(rest.needs.map((need) => [need.kind, need.resourceKey, need.label, need.requiredQuantity]), [
+      ["ITEM_ID", "987654", "Copper Ore for repair", 8],
+      ["RECIPE", "123456", "Repair recipe knowledge", 1],
+    ]);
+    const gather = rest.workOrders.find((order) => order.kind === "GATHER");
+    const investigate = rest.workOrders.find((order) => order.kind === "INVESTIGATE");
+    assert.deepEqual([gather.status, gather.resourceNeedIds, gather.sourceIdentityKey, gather.assignedIdentityKey], ["PLANNED", [rest.needs[0].stableId], character, character]);
+    assert.deepEqual([investigate.status, investigate.resourceNeedIds, investigate.dependsOn], ["PLANNED", [rest.needs[1].stableId], [gather.stableId]]);
+    assert.match(gather.instructions, /does not establish a gathering route/);
+    assert.match(investigate.instructions, /SYSTEM EVIDENCE BOUNDARY/);
+
+    const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const accountProject = account.planning.projects.find((entry) => entry.stableId === rest.stableId);
+    assert.ok(accountProject);
+    assert.deepEqual([accountProject.revision, accountProject.needsCount, accountProject.workOrderCounts, accountProject.fulfillment], [rest.revision, rest.needs.length, { PLANNED: 2 }, rest.fulfillment]);
+    const renderedWorkOrders = await project.locator(".erp-work-order-list").innerText();
+    assert.match(renderedWorkOrders, /GATHER: Copper Ore for repair[\s\S]*PLANNED/);
+    assert.match(renderedWorkOrders, /INVESTIGATE: Repair recipe knowledge[\s\S]*PLANNED/);
+    assert.match(renderedWorkOrders, /does not establish a gathering route/);
+    const mcpEntrypoint = path.resolve(process.cwd(), "packages/mcp/src/index.ts");
+    const mcp = new Client({ name: "wowsync-full-fulfillment-browser", version: "0.1.0" });
+    mcpClient = mcp;
+    await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [mcpEntrypoint], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const result = await mcp.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.equal(result.isError, undefined);
+    const mcpProject = result.structuredContent.projects.find((entry) => entry.stableId === rest.stableId);
+    assert.deepEqual(mcpProject.needs.map((need) => [need.stableId, need.resourceKey]), rest.needs.map((need) => [need.stableId, need.resourceKey]));
+    assert.deepEqual(mcpProject.workOrders.map((order) => [order.stableId, order.kind, order.resourceNeedIds, order.dependsOn]), rest.workOrders.map((order) => [order.stableId, order.kind, order.resourceNeedIds, order.dependsOn]));
+    assert.equal(mcpProject.fulfillment.activeWorkOrderCount, rest.fulfillment.activeWorkOrderCount);
+    assert.match(await project.innerText(), /Supply unknown|Evidence review required|UNKNOWN/);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+
 
