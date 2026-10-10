@@ -47,7 +47,7 @@ function selectedProvisioningSourceNote(project: ErpProjectView, needId: string,
 }
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
-export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; onPrefillConsumed?: () => void }) {
+export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview, projects, commitments, characters, busy, onSaved, prefillNeed, prefillNeeds, prefillReplanFrom, onPrefillConsumed }: { version: Version; triage: ErpFulfillmentTriage; sourceReview: ErpSourceFulfillmentReview; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void; prefillNeed?: { readonly projectId: string; readonly needId: string; readonly pathwayKind: ErpNeedFulfillmentOptionKind } | null; prefillNeeds?: readonly { readonly projectId: string; readonly needId: string }[] | null; prefillReplanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] } | null; onPrefillConsumed?: () => void }) {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.stableId, project])), [projects]);
   const candidates = triage.items.filter((row) => row.need && row.version === version && row.projectStatus === "ACTIVE" && row.workOrders.every((order) => order.status === "COMPLETED" || order.status === "CANCELLED") && projectById.get(row.projectId)?.needs.some((need) => need.stableId === row.need?.stableId));
   const [selected, setSelected] = useState<string[]>([]);
@@ -57,6 +57,9 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [review, setReview] = useState<PreparedReview | null>(null);
+  const [replanFrom, setReplanFrom] = useState<typeof prefillReplanFrom>(null);
+  const [replanCancelled, setReplanCancelled] = useState(false);
+  const activeReplanFrom = replanCancelled ? null : replanFrom ?? prefillReplanFrom ?? null;
   const eligibleCharacters = characters.filter((character) => character.identityKey.startsWith(`${version}::`));
   const keyOf = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
   const rowFor = (key: string) => candidates.find((row) => keyOf(row.projectId, row.need!.stableId) === key);
@@ -106,6 +109,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   }, [prefillNeed, editedDraftKeys]);
   useEffect(() => {
     if (!prefillNeeds?.length) return;
+    if (prefillReplanFrom) { setReplanCancelled(false); setReplanFrom({ batchId: prefillReplanFrom.batchId, needReferences: [...new Map(prefillReplanFrom.needReferences.map((need) => [keyOf(need.projectId, need.needId), need])).values()] }); }
     const unique = [...new Map(prefillNeeds.map((need) => [keyOf(need.projectId, need.needId), need])).values()];
     const available = unique.flatMap((need) => {
       const key = keyOf(need.projectId, need.needId);
@@ -128,12 +132,13 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     onPrefillConsumed?.();
     const first = additions[0]?.row;
     if (first) requestAnimationFrame(() => document.getElementById(`erp-cross-project-need-${encodeURIComponent(first.projectId)}-${encodeURIComponent(first.need!.stableId)}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }));
-  }, [prefillNeeds]);
+  }, [prefillNeeds, prefillReplanFrom]);
   const updateDraft = (key: string, patch: Partial<Draft>) => { setReview(null); setEditedDraftKeys((current) => current.includes(key) ? current : [...current, key]); setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } })); };
   function prepareReview() {
     if (!selected.length || saving || busy) return;
     setError("");
     try {
+      if (activeReplanFrom && activeReplanFrom.needReferences.some((reference) => !selected.includes(keyOf(reference.projectId, reference.needId)))) throw new Error("Keep every requirement carried forward from the reviewed batch selected, or cancel the follow-up link before preparing this plan.");
       const grouped = new Map<string, PreparedGroup>();
       const reservationRequests: PackageReservationRequest[] = [];
       const sourceDemandRequests: PackageSourceDemand[] = [];
@@ -203,8 +208,8 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
     if (!review?.groups.length || saving || busy || review.reservationGroups.some((group) => group.state !== "WITHIN_OBSERVED_LOWER_BOUND")) return;
     setSaving(true); setError("");
     try {
-      await appendErpWorkOrderBatch(version, review.groups.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })));
-      setSelected([]); setDrafts({}); setPathways({}); setReview(null); onSaved();
+      await appendErpWorkOrderBatch(version, review.groups.map(({ projectId, expectedRevision, tasks }) => ({ projectId, expectedRevision, tasks: tasks.map(({ task }) => task) })), activeReplanFrom ?? undefined);
+      setSelected([]); setDrafts({}); setPathways({}); setReview(null); setReplanFrom(null); setReplanCancelled(false); onSaved();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The grouped plan could not be saved. No partial update was accepted.");
       setReview(null); onSaved();
@@ -219,6 +224,7 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, sourceReview
   return <section className="erp-cross-project-plan" aria-labelledby="erp-cross-project-plan-title" data-testid="erp-cross-project-plan">
     <h2 id="erp-cross-project-plan-title">Plan manual work across projects</h2>
     <p>Select requirements from this {version} review queue to create one atomic planning update. You may explicitly request a reservation when one exact source has recent, complete, fully quantified evidence. Requests are planning commitments only: no work is executed, inventory is unchanged, and overlapping or over-capacity requests reject the whole save.</p>
+    {activeReplanFrom && <p data-testid="erp-replan-lineage-draft">Follow-up draft from saved batch <code>{activeReplanFrom.batchId}</code>, carrying {activeReplanFrom.needReferences.length} exact reviewed requirement references. The server will recheck the prior batch and terminal work before saving. {activeReplanFrom.needReferences.length} carried requirement{activeReplanFrom.needReferences.length === 1 ? " is" : "s are"} required in this draft. <button type="button" onClick={() => setReplanCancelled(true)}>Cancel follow-up link</button></p>}
     <div className="erp-cross-project-candidates">{candidates.map((row) => {
       const need = row.need!; const key = keyOf(row.projectId, need.stableId); const project = projectById.get(row.projectId)!;
       const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);

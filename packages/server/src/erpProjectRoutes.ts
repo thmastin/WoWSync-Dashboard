@@ -33,6 +33,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const { version } = req.params;
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
     const updates = req.body?.updates;
+    const replanFrom = req.body?.replanFrom as { batchId?: unknown; needReferences?: unknown } | undefined;
     if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) return res.status(400).json({ error: "Select work for 1 to 10 projects in one game version.", code: "INVALID_WORK_ORDER_BATCH" });
     const ids = new Set<string>();
     const selectedNeeds = new Set<string>();
@@ -40,6 +41,20 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const planningBatchId = `erp_batch_${randomUUID()}`;
     const planningBatchReviewedAt = Math.floor(Date.now() / 1000);
     const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
+    let validatedReplanFrom: NonNullable<ErpWorkOrder["planningBatch"]>["replanFrom"];
+    if (replanFrom !== undefined) {
+      if (!replanFrom || typeof replanFrom.batchId !== "string" || !/^erp_batch_[0-9a-f-]{36}$/.test(replanFrom.batchId) || !Array.isArray(replanFrom.needReferences) || replanFrom.needReferences.length < 1 || replanFrom.needReferences.length > 20 || replanFrom.needReferences.some((ref: unknown) => !ref || typeof ref !== "object" || typeof (ref as {projectId?: unknown}).projectId !== "string" || !(ref as {projectId: string}).projectId.trim() || (ref as {projectId: string}).projectId.length > 120 || typeof (ref as {needId?: unknown}).needId !== "string" || !(ref as {needId: string}).needId.trim() || (ref as {needId: string}).needId.length > 120)) return res.status(400).json({ error: "A follow-up must identify one saved batch and 1 to 20 exact project/need references.", code: "INVALID_REPLAN_LINEAGE" });
+      const references = replanFrom.needReferences as Array<{ projectId: string; needId: string }>;
+      const referenceKeys = references.map((ref) => JSON.stringify([ref.projectId, ref.needId]));
+      if (new Set(referenceKeys).size !== referenceKeys.length) return res.status(400).json({ error: "Follow-up requirement references must be unique.", code: "INVALID_REPLAN_LINEAGE" });
+      const prior = buildErpPortfolioFulfillmentReview([...projectViews.values()], version, 100).savedPlanningBatches.find((batch) => batch.stableId === replanFrom.batchId);
+      if (!prior || prior.version !== version || prior.lineageState === "FOLLOW_UP_CONTEXT_CONFLICT") return res.status(409).json({ error: "The prior planning batch is unavailable or has conflicting follow-up lineage in this version. Refresh the saved-plan review.", code: "REPLAN_SOURCE_BATCH_UNAVAILABLE" });
+      for (const ref of references) {
+        const reviewed = prior.steps.filter((step) => step.projectId === ref.projectId && step.needId === ref.needId);
+        if (!reviewed.length || reviewed.some((step) => (step.workOrderStatus !== "COMPLETED" && step.workOrderStatus !== "CANCELLED") || step.evidenceReview === "NEED_IDENTITY_CHANGED") || !reviewed.some((step) => step.evidenceReview !== "NO_NEWER_OBSERVATION") || prior.state === "CONFLICTING_BATCH_CONTEXT") return res.status(409).json({ error: "Each carried requirement must belong to the selected saved batch, retain its identity, have reviewable later evidence, and have only terminal prior work.", code: "REPLAN_SOURCE_STEP_UNAVAILABLE" });
+      }
+      validatedReplanFrom = { batchId: replanFrom.batchId, needReferences: references.map(({ projectId, needId }) => ({ projectId, needId })) };
+    }
     const pathwayKey = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
     const currentPathways = new Map(buildErpSourceFulfillmentReview([...projectViews.values()], version).sources.flatMap((source) => source.needs.map((need) => [pathwayKey(need.projectId, need.needId), need.fulfillmentPathways.options] as const)));
     const portfolioDependencyGraph = new Map<string, string[]>();
@@ -134,11 +149,15 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const boundary = "SYSTEM EVIDENCE BOUNDARY: This is player-authored planning intent only. WoWSync did not execute or verify an in-game action. Recheck current version-specific requirements, evidence, ownership, access, routes, prices, and outcomes manually; unknowns remain UNKNOWN.";
           const instructions = `${task.instructions.trim()}\n\n${boundary}`;
           if (instructions.length > 4000) return res.status(400).json({ error: "Instructions plus the required evidence boundary exceed the work-order limit.", code: "INVALID_WORK_ORDER_TEXT" });
-          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: planningBatchId, reviewedAt: planningBatchReviewedAt, version, needEvidence: { resourceKind: need.kind, resourceKey: need.resourceKey, ...(currentReview.evidence ? { state: currentReview.evidence.state, freshness: currentReview.evidence.freshness, ...(currentReview.evidence.observedQuantity !== undefined ? { observedQuantity: currentReview.evidence.observedQuantity } : {}), ...(currentReview.evidence.observedAt !== undefined ? { observedAt: currentReview.evidence.observedAt } : {}) } : { state: "UNKNOWN", freshness: "unknown" }) } }, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(pathwayContext ? { pathwayContext } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
+          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: planningBatchId, reviewedAt: planningBatchReviewedAt, version, ...(validatedReplanFrom ? { replanFrom: validatedReplanFrom } : {}), needEvidence: { resourceKind: need.kind, resourceKey: need.resourceKey, ...(currentReview.evidence ? { state: currentReview.evidence.state, freshness: currentReview.evidence.freshness, ...(currentReview.evidence.observedQuantity !== undefined ? { observedQuantity: currentReview.evidence.observedQuantity } : {}), ...(currentReview.evidence.observedAt !== undefined ? { observedAt: currentReview.evidence.observedAt } : {}) } : { state: "UNKNOWN", freshness: "unknown" }) } }, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(pathwayContext ? { pathwayContext } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
         }
         workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots, reservations });
       }
       if (totalOrders < 1 || totalOrders > 20) return res.status(400).json({ error: "A grouped update must contain between 1 and 20 work orders.", code: "INVALID_WORK_ORDER_BATCH" });
+      if (validatedReplanFrom) {
+        const selected = new Set(workOrdersByProject.flatMap((group) => group.workOrders.flatMap((order) => order.resourceNeedIds.map((needId) => JSON.stringify([group.projectId, needId])))));
+        if (validatedReplanFrom.needReferences.some((reference) => !selected.has(JSON.stringify([reference.projectId, reference.needId])))) return res.status(400).json({ error: "A confirmed follow-up must include every exact requirement the player carried forward from the prior batch.", code: "REPLAN_LINEAGE_NEED_OMITTED" });
+      }
       const visiting = new Set<string>(); const visited = new Set<string>();
       const hasCycle = (node: string): boolean => { if (visiting.has(node)) return true; if (visited.has(node)) return false; visiting.add(node); for (const dependency of portfolioDependencyGraph.get(node) ?? []) if (hasCycle(dependency)) return true; visiting.delete(node); visited.add(node); return false; };
       if ([...portfolioDependencyGraph.keys()].some(hasCycle)) return res.status(400).json({ error: "The selected portfolio prerequisites create a dependency cycle. No work or reservation was saved.", code: "PORTFOLIO_DEPENDENCY_CYCLE" });

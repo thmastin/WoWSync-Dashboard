@@ -36,6 +36,34 @@ test("saved planning batches compare later same-version evidence without attribu
   } finally { store.close(); }
 });
 
+test("saved follow-up lineage marks cycles and all descendants as conflicting", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: Math.floor(Date.now() / 1000) - 100, character: { name: "Lineage Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [] }, bank: { containers: [] } }));
+    const projects = ["A", "B", "C", "D", "E"].map((name) => store.createErpProject({ version: "classic-era", title: `Lineage ${name}`, needs: [{ stableId: `need-${name}`, kind: "ITEM_ID", resourceKey: `99${name.charCodeAt(0)}`, label: `Need ${name}`, requiredQuantity: 1 }] }));
+    const batchIds = ["erp_batch_00000000-0000-4000-8000-0000000000a1", "erp_batch_00000000-0000-4000-8000-0000000000b2", "erp_batch_00000000-0000-4000-8000-0000000000c3", "erp_batch_00000000-0000-4000-8000-0000000000d4", "erp_batch_00000000-0000-4000-8000-0000000000e5"];
+    const targets = [1, 0, 1, 0, 0]; // A -> B, B -> A creates a cycle; C -> B inherits it; D/E carry malformed references.
+    const allViews = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const views = projects.map((created) => allViews.find((project) => project.stableId === created.stableId)!).map((project, index) => ({
+      ...project,
+      workOrders: [{
+        stableId: `lineage-work-${index}`, kind: "OTHER" as const, status: "CANCELLED" as const, title: `Lineage ${index}`, resourceNeedIds: [`need-${String.fromCharCode(65 + index)}`], dependsOn: [],
+        planningBatch: {
+          stableId: batchIds[index]!, reviewedAt: 100 + index, version: "classic-era" as const,
+          replanFrom: { batchId: batchIds[targets[index]!]!, needReferences: (index === 3 ? [null] : index === 4 ? { malformed: true } : [{ projectId: projects[targets[index]!]!.stableId, needId: `need-${String.fromCharCode(65 + targets[index]!)}` }]) as any },
+        },
+      }],
+    }));
+    const review = buildErpSavedPlanningBatchReview(views, "classic-era");
+    assert.equal(review.batches.find((batch) => batch.stableId === batchIds[0])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT");
+    assert.equal(review.batches.find((batch) => batch.stableId === batchIds[1])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT");
+    assert.equal(review.batches.find((batch) => batch.stableId === batchIds[2])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "a descendant cannot appear valid when its parent chain contains a cycle");
+    assert.equal(review.batches.find((batch) => batch.stableId === batchIds[3])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "legacy lineage with a null reference fails closed without throwing");
+    assert.equal(review.batches.find((batch) => batch.stableId === batchIds[4])?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "legacy lineage with a non-array reference field fails closed without throwing");
+    assert.deepEqual(review.batches.find((batch) => batch.stableId === batchIds[1])?.followUpBatchIds, [batchIds[0], batchIds[2]].sort(), "structural child links remain visible for audit despite conflicted lineage");
+  } finally { store.close(); }
+});
+
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const now = Math.floor(Date.now() / 1000) - 200;

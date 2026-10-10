@@ -120,6 +120,9 @@ export interface ErpSavedPlanningBatch {
   readonly stableId: string;
   readonly version: WowVersion;
   readonly reviewedAt: number;
+  readonly replanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] };
+  readonly followUpBatchIds: readonly string[];
+  readonly lineageState: "NO_LINEAGE" | "VALID_FOLLOW_UP" | "FOLLOW_UP_CONTEXT_CONFLICT";
   readonly state: "AWAITING_NEW_OBSERVATION" | "NEWER_OBSERVATION_REVIEW" | "CURRENT_EVIDENCE_REVIEW" | "CONFLICTING_BATCH_CONTEXT";
   readonly steps: readonly {
     readonly projectId: string;
@@ -166,7 +169,7 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
   const batches = [...grouped.values()].map((entries): ErpSavedPlanningBatch => {
     const first = entries[0]!;
     const context = first.order.planningBatch!;
-    const conflictingContext = entries.some(({ order }) => order.planningBatch!.reviewedAt !== context.reviewedAt || order.planningBatch!.version !== context.version);
+    const conflictingContext = entries.some(({ order }) => order.planningBatch!.reviewedAt !== context.reviewedAt || order.planningBatch!.version !== context.version || JSON.stringify(order.planningBatch!.replanFrom ?? null) !== JSON.stringify(context.replanFrom ?? null));
     const steps = entries.flatMap(({ project, order }) => order.resourceNeedIds.flatMap((needId) => {
       const need = project.needs.find((candidate) => candidate.stableId === needId);
       if (!need) return [];
@@ -187,11 +190,61 @@ export function buildErpSavedPlanningBatchReview(projects: readonly ErpProjectVi
     }));
     const newerObservationReviewCount = steps.filter((step) => step.evidenceReview.startsWith("NEWER_OBSERVATION_")).length;
     const state: ErpSavedPlanningBatch["state"] = conflictingContext || steps.some((step) => step.evidenceReview === "NEED_IDENTITY_CHANGED") ? "CONFLICTING_BATCH_CONTEXT" : newerObservationReviewCount ? "NEWER_OBSERVATION_REVIEW" : steps.some((step) => step.evidenceReview === "CURRENT_EVIDENCE_STALE_OR_UNKNOWN" || step.evidenceReview === "NEED_IDENTITY_UNKNOWN") ? "CURRENT_EVIDENCE_REVIEW" : "AWAITING_NEW_OBSERVATION";
-    return { stableId: context.stableId, version, reviewedAt: context.reviewedAt, state, steps, openTaskCount: steps.filter((step) => step.workOrderStatus !== "COMPLETED" && step.workOrderStatus !== "CANCELLED").length, terminalTaskCount: steps.filter((step) => step.workOrderStatus === "COMPLETED" || step.workOrderStatus === "CANCELLED").length, newerObservationReviewCount, interpretation: "SAVED_PLAYER_INTENT_AND_CURRENT_EVIDENCE_REVIEW_ONLY" };
+    return { stableId: context.stableId, version, reviewedAt: context.reviewedAt, ...(context.replanFrom ? { replanFrom: context.replanFrom } : {}), followUpBatchIds: [], lineageState: context.replanFrom ? "VALID_FOLLOW_UP" : "NO_LINEAGE", state, steps, openTaskCount: steps.filter((step) => step.workOrderStatus !== "COMPLETED" && step.workOrderStatus !== "CANCELLED").length, terminalTaskCount: steps.filter((step) => step.workOrderStatus === "COMPLETED" || step.workOrderStatus === "CANCELLED").length, newerObservationReviewCount, interpretation: "SAVED_PLAYER_INTENT_AND_CURRENT_EVIDENCE_REVIEW_ONLY" };
   }).sort((a, b) => b.reviewedAt - a.reviewedAt || a.stableId.localeCompare(b.stableId));
+  const batchById = new Map(batches.map((batch) => [batch.stableId, batch]));
+  const successors = new Map<string, string[]>();
+  const lineageValidity = new Map<string, boolean>();
+  const visiting = new Set<string>();
+  const hasValidLinkShape = (batch: ErpSavedPlanningBatch): boolean => {
+    if (!batch.replanFrom) return true;
+    const lineage = batch.replanFrom;
+    const references = Array.isArray(lineage.needReferences) ? lineage.needReferences : [];
+    const referenceKeys = references.map((reference) => JSON.stringify([reference?.projectId, reference?.needId]));
+    return typeof lineage.batchId === "string" && /^erp_batch_[0-9a-f-]{36}$/.test(lineage.batchId) && lineage.batchId !== batch.stableId
+      && references.length >= 1 && references.length <= 20
+      && references.every((reference) => !!reference && typeof reference.projectId === "string" && !!reference.projectId.trim() && reference.projectId.length <= 120 && typeof reference.needId === "string" && !!reference.needId.trim() && reference.needId.length <= 120)
+      && new Set(referenceKeys).size === referenceKeys.length;
+  };
+  const hasValidLineage = (batch: ErpSavedPlanningBatch): boolean => {
+    const known = lineageValidity.get(batch.stableId);
+    if (known !== undefined) return known;
+    if (visiting.has(batch.stableId)) {
+      lineageValidity.set(batch.stableId, false);
+      return false;
+    }
+    visiting.add(batch.stableId);
+    let valid = true;
+    if (batch.replanFrom) {
+      const lineage = batch.replanFrom;
+      const references = Array.isArray(lineage.needReferences) ? lineage.needReferences : [];
+      const predecessor = hasValidLinkShape(batch) ? batchById.get(lineage.batchId) : undefined;
+      const referencesExist = !!predecessor && references.every((reference) => predecessor.steps.some((step) => step.projectId === reference.projectId && step.needId === reference.needId));
+      valid = !!predecessor && predecessor.version === batch.version && referencesExist && hasValidLineage(predecessor);
+    }
+    visiting.delete(batch.stableId);
+    lineageValidity.set(batch.stableId, valid);
+    return valid;
+  };
+  for (const batch of batches) {
+    if (!batch.replanFrom) continue;
+    if (!hasValidLinkShape(batch)) {
+      lineageValidity.set(batch.stableId, false);
+      continue;
+    }
+    const predecessor = batchById.get(batch.replanFrom.batchId);
+    // The server validates terminal prior work, current need identity, and changed evidence at confirmation.
+    // Re-evaluating those mutable facts here would retroactively invalidate an immutable historical decision
+    // when a later import changes the predecessor need again. The read projection checks only link structure.
+    const referencesExist = batch.replanFrom.needReferences.every((reference) => (predecessor?.steps.some((step) => step.projectId === reference.projectId && step.needId === reference.needId) ?? false));
+    if (!predecessor || predecessor.version !== batch.version || !referencesExist) lineageValidity.set(batch.stableId, false);
+    else successors.set(predecessor.stableId, [...(successors.get(predecessor.stableId) ?? []), batch.stableId]);
+  }
+  for (const batch of batches) hasValidLineage(batch);
+  const lineageBatches = batches.map((batch) => ({ ...batch, followUpBatchIds: [...new Set(successors.get(batch.stableId) ?? [])].sort(), ...(lineageValidity.get(batch.stableId) === false ? { lineageState: "FOLLOW_UP_CONTEXT_CONFLICT" as const } : {}) }));
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50;
-  const selected = batches.slice(0, safeLimit);
-  return { version, batches: selected, totalCount: batches.length, returnedCount: selected.length, truncated: selected.length < batches.length };
+  const selected = lineageBatches.slice(0, safeLimit);
+  return { version, batches: selected, totalCount: lineageBatches.length, returnedCount: selected.length, truncated: selected.length < lineageBatches.length };
 }
 
 export type ErpSourceFulfillmentNextReview = "REVIEW_EVIDENCE" | "REVIEW_RESERVATIONS" | "RECONCILE_OBSERVATIONS" | "PLAN_MANUAL_WORK" | "REVIEW_MANUAL_WORK" | "REVIEW_SOURCE_AND_ACCESS";

@@ -188,6 +188,33 @@ test("exact source lead creates an atomic supplemental provisioning review packa
   });
 });
 
+test("a conflicted saved-plan lineage cannot seed another REST follow-up", async () => {
+  await withServer(async (call, store) => {
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const first = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Corrupted-lineage source", needs: [{ stableId: "lineage-a", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey }] })).body.project;
+    const current = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((project: any) => project.stableId === first.stableId);
+    const reviewSnapshot = buildErpNeedReviewSnapshot(current, "lineage-a");
+    const saved = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [{ projectId: current.stableId, expectedRevision: current.revision, tasks: [{ needId: "lineage-a", reviewSnapshot, kind: "INVESTIGATE", title: "Initial review", instructions: "Review only." }] }] });
+    assert.equal(saved.status, 200);
+    let source = saved.body.projects.find((project: any) => project.stableId === first.stableId);
+    source.workOrders[0].status = "CANCELLED";
+    const closed = await call("PUT", `/api/versions/classic-era/erp/projects/${first.stableId}`, { expectedRevision: source.revision, project: source });
+    assert.equal(closed.status, 200);
+    source = store.getErpProject(first.stableId)!;
+    source.workOrders[0]!.planningBatch!.replanFrom = { batchId: source.workOrders[0]!.planningBatch!.stableId, needReferences: [{ projectId: source.stableId, needId: "lineage-a" }] };
+    (store as any).db.prepare("UPDATE erp_projects SET project_json = ? WHERE stable_id = ?").run(JSON.stringify(source), source.stableId);
+    const before = (await call("GET", "/api/versions/classic-era/erp/projects")).body;
+    const batchId = source.workOrders[0]!.planningBatch!.stableId;
+    assert.equal(before.portfolioFulfillment.savedPlanningBatches.find((batch: any) => batch.stableId === batchId)?.lineageState, "FOLLOW_UP_CONTEXT_CONFLICT", "a self-referential legacy row is surfaced as conflicted lineage");
+    const latest = before.projects.find((project: any) => project.stableId === first.stableId);
+    const rejected = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [{ projectId: latest.stableId, expectedRevision: latest.revision, tasks: [{ needId: "lineage-a", reviewSnapshot: buildErpNeedReviewSnapshot(latest, "lineage-a"), kind: "INVESTIGATE", title: "Attempt another review", instructions: "Review only." }] }], replanFrom: { batchId, needReferences: [{ projectId: first.stableId, needId: "lineage-a" }] } });
+    assert.equal(rejected.status, 409);
+    assert.equal(rejected.body.code, "REPLAN_SOURCE_BATCH_UNAVAILABLE");
+    const after = (await call("GET", "/api/versions/classic-era/erp/projects")).body;
+    assert.deepEqual(after.projects.filter((project: any) => project.stableId === first.stableId).map((project: any) => [project.revision, project.workOrders.length]), before.projects.filter((project: any) => project.stableId === first.stableId).map((project: any) => [project.revision, project.workOrders.length]), "rejection leaves the project and saved history untouched");
+  });
+});
+
 test("portfolio prerequisite links are version-scoped, cycle checked, and block until current evidence covers the need", async () => {
   await withServer(async (call, store) => {
     const at = Math.floor(Date.now() / 1000);
@@ -368,7 +395,7 @@ test("stale reservation coverage agrees across REST and AccountContext summaries
     assert.equal(created.body.project.fulfillment.changedObservationCauseUnknownCount, 0);
 
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "42");
+    assert.equal(context.body.schemaVersion, "43");
     const summary = context.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.reservationReviewStates, { SUPPLY_UNKNOWN: 1 }, "AccountContext exposes the same compact reservation result as the detailed REST projection");
     assert.deepEqual(summary.fulfillment, created.body.project.fulfillment, "AccountContext carries the same project fulfillment snapshot as REST");
@@ -452,7 +479,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "42");
+    assert.equal(account.body.schemaVersion, "43");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementBudgetNeedStates, { PLANNED_NEED_COVERS_CEILING: 1 });
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
@@ -625,7 +652,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "42");
+    assert.equal(context.body.schemaVersion, "43");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
@@ -644,7 +671,7 @@ test("assigned gatherer bag deltas agree across REST and AccountContext without 
     assert.equal(review.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.delta]), [["bags", 3]]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "42");
+    assert.equal(context.body.schemaVersion, "43");
     assert.deepEqual(context.body.planning.projects[0].gatherObservationStates, { RESOURCE_INCREASED: 1 });
   });
 });

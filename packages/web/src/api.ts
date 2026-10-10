@@ -416,10 +416,10 @@ export interface ErpWorkOrderBatchTaskDraft {
   readonly portfolioPrerequisites?: readonly { readonly projectId: string; readonly needId: string }[];
 }
 
-export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly tasks: readonly ErpWorkOrderBatchTaskDraft[] }[]) {
+export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly tasks: readonly ErpWorkOrderBatchTaskDraft[] }[], replanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] }) {
   return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; createdCount: number; atomic: true }>(
     `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`,
-    { method: "POST", body: JSON.stringify({ updates }) },
+    { method: "POST", body: JSON.stringify({ updates, ...(replanFrom ? { replanFrom } : {}) }) },
     { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.createdCount === "number" && body.atomic === true },
   );
 }

@@ -87,6 +87,11 @@ export interface ErpWorkOrderPlanningBatchContext {
   readonly stableId: string;
   readonly reviewedAt: number;
   readonly version: WowVersion;
+  /** Server-validated prior batch and exact reviewed requirements carried into this follow-up. */
+  readonly replanFrom?: {
+    readonly batchId: string;
+    readonly needReferences: readonly ErpPortfolioNeedReference[];
+  };
   readonly needEvidence?: {
     /** Requirement identity at confirmation; optional only for legacy saved batches. */
     readonly resourceKind?: ErpResourceKind;
@@ -245,6 +250,7 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
       if (!batch || typeof batch !== "object" || !/^erp_batch_[0-9a-f-]{36}$/.test(batch.stableId) || batch.version !== p.version || !Number.isSafeInteger(batch.reviewedAt) || batch.reviewedAt < 1 || w.resourceNeedIds.length !== 1) fail("INVALID_PLANNING_BATCH_CONTEXT", "A planning batch must be a same-version server batch linked to one reviewed requirement and timestamp.");
       if (batch.needEvidence !== undefined && (!batch.needEvidence || typeof batch.needEvidence !== "object" || (batch.needEvidence.resourceKind !== undefined && !ERP_RESOURCE_KINDS.includes(batch.needEvidence.resourceKind)) || (batch.needEvidence.resourceKey !== undefined && (!hasValue(batch.needEvidence.resourceKey) || batch.needEvidence.resourceKey.length > 512)) || (batch.needEvidence.resourceKind === "ITEM_REF" && batch.needEvidence.resourceKey !== undefined && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(batch.needEvidence.resourceKey)) || (batch.needEvidence.resourceKind === "ITEM_ID" && batch.needEvidence.resourceKey !== undefined && !/^[1-9]\d*$/.test(batch.needEvidence.resourceKey)) || !("COVERED_BY_OBSERVED POTENTIAL_COVERAGE_LAST_SEEN SHORTFALL_OBSERVED UNKNOWN UNSUPPORTED_EVIDENCE".split(" ").includes(batch.needEvidence.state)) || !("recent stale unknown".split(" ").includes(batch.needEvidence.freshness)) || (batch.needEvidence.observedQuantity !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedQuantity) || batch.needEvidence.observedQuantity < 0)) || (batch.needEvidence.observedAt !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedAt) || batch.needEvidence.observedAt < 1)))) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve a supported need identity, state, freshness, and optional nonnegative observed quantity and timestamp.");
       if (batch.needEvidence?.resourceKind !== undefined !== (batch.needEvidence?.resourceKey !== undefined)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve both requirement kind and resource key together.");
+      if (batch.replanFrom !== undefined && (!batch.replanFrom || typeof batch.replanFrom !== "object" || !/^erp_batch_[0-9a-f-]{36}$/.test(batch.replanFrom.batchId) || batch.replanFrom.batchId === batch.stableId || !Array.isArray(batch.replanFrom.needReferences) || batch.replanFrom.needReferences.length < 1 || batch.replanFrom.needReferences.length > 20 || batch.replanFrom.needReferences.some((ref) => !ref || typeof ref !== "object" || !hasValue(ref.projectId) || ref.projectId.length > 120 || !hasValue(ref.needId) || ref.needId.length > 120) || new Set(batch.replanFrom.needReferences.map((ref) => `${ref.projectId}\u0000${ref.needId}`)).size !== batch.replanFrom.needReferences.length)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A follow-up batch must retain one distinct prior batch and 1 to 20 exact project/need references.");
     }
     if (w.pathwayContext !== undefined) {
       const pathway = w.pathwayContext;
