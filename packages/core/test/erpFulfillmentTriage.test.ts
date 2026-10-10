@@ -25,6 +25,7 @@ test("saved planning batches compare later same-version evidence without attribu
     assert.ok(review.batches[0]?.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_UNCHANGED" && step.currentQuantity === 2 && step.reviewedQuantity === 2 && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"));
     const interval = review.batches[0]?.steps[0]?.observationInterval;
     assert.equal(interval?.state, "SAMPLES_AVAILABLE");
+    assert.equal(interval?.quantityReview, "OBSERVED_VARIATION", "the interval must preserve meaningful changes even when the last point returns to the baseline");
     assert.deepEqual(interval?.points.map((point) => point.sections.find((section) => section.section === "bags")?.quantity), [5, 2], "the interval preserves intervening observed changes even when the latest quantity returns to the saved baseline");
     assert.deepEqual(interval?.points.map((point) => point.sections.find((section) => section.section === "character bank")?.state), ["PARTIAL", "UNKNOWN"], "partial and absent bank evidence remain distinct and neither is interpreted as empty");
     assert.equal(interval?.points[0]?.sections.find((section) => section.section === "character bank")?.quantity, undefined, "partial bank evidence has no exact quantity claim");
@@ -86,6 +87,64 @@ test("saved planning batches compare later same-version evidence without attribu
     const legacyBatch = buildErpSavedPlanningBatchReview(legacyViews, "classic-era").batches[0];
     assert.equal(legacyBatch?.state, "CURRENT_EVIDENCE_REVIEW");
     assert.ok(legacyBatch?.steps.every((step) => step.evidenceReview === "NEED_IDENTITY_UNKNOWN"), "legacy quantity baselines without resource identity are never compared across a newer observation");
+  } finally { store.close(); }
+});
+
+test("saved requirement history prioritizes reconciliation when complete quantities vary then return to baseline", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 100;
+  const capture = (at: number, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Variation Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Observed Stone", qty: quantity }] }] }, bank: { containers: [] } });
+  try {
+    const first = store.importSnapshot(capture(now, 2));
+    store.importSnapshot(capture(now + 20, 5));
+    store.importSnapshot(capture(now + 30, 2));
+    store.createErpProject({ version: "classic-era", title: "Variation reconciliation", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Observed Stone", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey }], workOrders: [{ stableId: "work-stone", kind: "OTHER", status: "CANCELLED", title: "Review prior plan", resourceNeedIds: ["stone"], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c4", reviewedAt: now + 10, version: "classic-era", needEvidence: { resourceKind: "ITEM_REF", resourceKey: "item:159:0:0", sourceScope: { kind: "CHARACTER", identityKey: first.character.identityKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 2, observedAt: now } } }] });
+    const projects = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const batches = buildErpSavedPlanningBatchReview(projects, "classic-era").batches;
+    assert.equal(batches[0]?.steps[0]?.evidenceReview, "NEWER_OBSERVATION_UNCHANGED");
+    assert.equal(batches[0]?.steps[0]?.interveningEvidenceReview, "OBSERVED_VARIATION");
+    const history = buildErpSavedNeedHistoryReview(batches, "classic-era").histories[0];
+    assert.equal(history?.entries[0]?.interveningEvidenceReview, "OBSERVED_VARIATION");
+    assert.equal(history?.nextReview, "REVIEW_INTERVENING_EVIDENCE", `restored latest quantity must not erase the need to review an observed intermediate change; entry=${JSON.stringify(history?.entries[0])}`);
+    assert.equal(history?.entries[0]?.actionCausality, "UNKNOWN");
+  } finally { store.close(); }
+});
+
+test("saved interval review respects per-section timestamps, evaluates hidden samples, and fails closed on truncated history", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 100;
+  try {
+    const first = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Interval Boundaries", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Boundary Stone", qty: 1 }] }] }, bank: { containers: [] } }));
+    store.createErpProject({ version: "classic-era", title: "Interval boundary review", needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Boundary Stone", requiredQuantity: 3, sourceIdentityKey: first.character.identityKey }], workOrders: [{ stableId: "review-stone", kind: "OTHER", status: "PLANNED", title: "Review stone evidence", resourceNeedIds: ["stone"], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c5", reviewedAt: now + 10, version: "classic-era", needEvidence: { resourceKind: "ITEM_REF", resourceKey: "item:159:0:0", sourceScope: { kind: "CHARACTER", identityKey: first.character.identityKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 1, observedAt: now } } }] });
+    const baseProject = new DashboardReadModel(store, () => now + 40).getErpProjects({ version: "classic-era" })[0]!;
+    const needEvidence = baseProject.needEvidence.find((entry) => entry.needId === "stone")!;
+    const point = (index: number, bagAt: number, quantity: number, bankAt?: number) => ({ snapshotId: index, importedAt: bagAt, sections: [
+      { section: "bags" as const, state: "OBSERVED" as const, observedAt: bagAt, quantity },
+      ...(bankAt === undefined ? [] : [{ section: "character bank" as const, state: "UNKNOWN" as const, observedAt: bankAt }]),
+    ] });
+    const reviewFor = (history: NonNullable<typeof needEvidence.observationHistory>, truncated = false) => {
+      const project = { ...baseProject, needEvidence: baseProject.needEvidence.map((entry) => entry.needId === "stone" ? { ...entry, observationHistory: history, observationHistoryTruncated: truncated } : entry) };
+      return buildErpSavedPlanningBatchReview([project], "classic-era").batches[0]?.steps[0]?.observationInterval;
+    };
+
+    const mixedTimestamps = [point(1, now + 5, 999, now + 15), point(2, now + 20, 1, now + 20)];
+    const mixedReview = reviewFor(mixedTimestamps);
+    assert.equal(mixedReview?.quantityReview, "INSUFFICIENT_COMPARABLE_EVIDENCE", "an import's newer bank timestamp cannot make its pre-review bag quantity an intervening change, and one post-review bag sample cannot establish a no-change interval");
+    assert.equal(mixedReview?.observedVariations.length, 0);
+
+    const retainedHistory = Array.from({ length: 21 }, (_, index) => point(index + 1, now + 11 + index, index === 0 ? 1 : 2));
+    const cappedReview = reviewFor(retainedHistory);
+    assert.equal(cappedReview?.points.length, 20, "the player-facing interval remains bounded");
+    assert.equal(cappedReview?.omittedEarlierPointCount, 1);
+    assert.equal(cappedReview?.quantityReview, "OBSERVED_VARIATION", "variation in a retained but undisplayed sample still informs review");
+
+    const conflictingTimestamp = [point(1, now + 11, 2), point(2, now + 12, 2), point(3, now + 12, 3), point(4, now + 13, 2)];
+    assert.equal(reviewFor(conflictingTimestamp)?.quantityReview, "INSUFFICIENT_COMPARABLE_EVIDENCE", "conflicting quantities at one timestamp prevent a no-variation conclusion even when surrounding values agree");
+
+    const incompleteHistory = Array.from({ length: 21 }, (_, index) => point(index + 1, now + 11 + index, 2));
+    const truncatedReview = reviewFor(incompleteHistory, true);
+    assert.equal(truncatedReview?.state, "HISTORY_TRUNCATED");
+    assert.equal(truncatedReview?.quantityReview, "INSUFFICIENT_COMPARABLE_EVIDENCE", "a truncated underlying interval cannot support a no-variation conclusion");
   } finally { store.close(); }
 });
 
