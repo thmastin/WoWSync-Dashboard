@@ -38,7 +38,10 @@ Focused independent review initially found three defects: the reviewed payload w
 
 ## Repository and validation status
 
-Changes are limited to the authorized Dashboard worktree. No GearExport, production Dashboard, BankCleanup, SavedVariables, or installed addon files changed. The work is synthetic/browser validated only; no production or game deployment occurred. Commit and push SHAs are recorded in this report after delivery.
+Changes are limited to the authorized Dashboard worktree. No GearExport, production Dashboard, BankCleanup, SavedVariables, or installed addon files changed. The work is synthetic/browser validated only; no production or game deployment occurred. Code and documentation were committed and pushed separately on `feature/forever-gear-observation`:
+
+- Code/UI/tests: `f623cbd3203b869f244451f04bc5b0632e9958a5`
+- Checkpoint documentation: recorded in the repository log after the code commit.
 
 ## Cumulative capability status
 
