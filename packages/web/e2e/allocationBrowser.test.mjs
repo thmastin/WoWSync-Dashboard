@@ -349,6 +349,20 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(persistedCraft.destinationIdentityKey, outputRecipientKey);
     assert.equal(persistedCraft.outputObservationIdentityKey, outputObserverKey);
 
+    await craftOrder.getByRole("button", { name: "Edit plan" }).click();
+    const editCraftForm = projectCard.locator("form.erp-inline-form").last();
+    await editCraftForm.getByRole("heading", { name: "Edit manual work order" }).waitFor();
+    await editCraftForm.getByLabel("Action", { exact: true }).fill("Review and revise the craft plan");
+    await editCraftForm.getByRole("button", { name: "Save work-order plan" }).click();
+    const revisedCraft = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review and revise the craft plan" });
+    await revisedCraft.waitFor();
+    const persistedRevisedCraft = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter").workOrders.find((entry) => entry.title === "Review and revise the craft plan"));
+    assert.equal(persistedRevisedCraft.stableId, persistedCraft.stableId, "editing preserves the persistent work-order identity");
+    assert.equal(persistedRevisedCraft.status, persistedCraft.status, "editing plan fields does not change manual task status");
+    assert.deepEqual(persistedRevisedCraft.resourceNeedIds, persistedCraft.resourceNeedIds);
+    assert.equal(persistedRevisedCraft.outputObservationIdentityKey, outputObserverKey);
+    assert.equal(persistedRevisedCraft.destinationIdentityKey, outputRecipientKey);
+
     await craftForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const procurementNeedForm = projectCard.locator("form.erp-inline-form").first();
@@ -368,6 +382,13 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await plannedBudgetForm.getByLabel("Source character or shared owner").selectOption(buyerIdentityKey);
     await plannedBudgetForm.getByLabel("Intended recipient").selectOption(buyerIdentityKey);
     await plannedBudgetForm.getByRole("button", { name: "Add requirement" }).click();
+    await procurementNeedForm.getByLabel("Kind").selectOption("ITEM_ID");
+    await procurementNeedForm.getByLabel("Resource key").fill(String(ITEM_ID + 1));
+    await procurementNeedForm.getByLabel("Label").fill("Alternate purchase target");
+    await procurementNeedForm.getByLabel("Quantity").fill("1");
+    await procurementNeedForm.getByLabel("Source character or shared owner").selectOption(buyerIdentityKey);
+    await procurementNeedForm.getByLabel("Intended recipient").selectOption(buyerIdentityKey);
+    await procurementNeedForm.getByRole("button", { name: "Add requirement" }).click();
     const procurementForm = projectCard.locator("form.erp-inline-form").filter({ has: page.getByLabel("Action type") });
     await procurementForm.getByLabel("Action type").selectOption("PURCHASE");
     await procurementForm.getByLabel("Action", { exact: true }).fill("Review the observed item gap without purchasing");
@@ -416,6 +437,15 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(persistedPurchase.procurementPlan.spendingCeilingCopper, 100);
     assert.deepEqual(persistedPurchase.procurementPlan.playerQuote, { amountCopper: 80, quantity: 5, recordedAt: persistedPurchase.procurementPlan.playerQuote.recordedAt, sourceNote: "Town vendor checked by player" });
     assert.equal(persistedProject.needs.find((entry) => entry.stableId === persistedPurchase.procurementPlan.targetNeedId).destinationIdentityKey, persistedPurchase.assignedIdentityKey);
+    await purchaseOrder.getByRole("button", { name: "Edit plan" }).click();
+    const editPurchaseForm = projectCard.locator("form.erp-inline-form").last();
+    const alternateTargetOptions = await editPurchaseForm.getByLabel("Item target need").locator("option").allTextContents();
+    await editPurchaseForm.getByLabel("Item target need").selectOption({ label: alternateTargetOptions.find((label) => label.includes("Alternate purchase target")) });
+    await editPurchaseForm.getByRole("button", { name: "Save work-order plan" }).click();
+    persistedProject = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
+    persistedPurchase = persistedProject.workOrders.find((entry) => entry.title === "Review the observed item gap without purchasing");
+    assert.equal(persistedPurchase.procurementPlan.targetNeedId, persistedProject.needs.find((entry) => entry.label === "Alternate purchase target").stableId);
+    assert.equal(persistedPurchase.procurementPlan.playerQuote, undefined, "a quote for a prior item target must not carry over to a replacement target");
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
     assert.deepEqual(pageErrors, [], "project workflow reports no uncaught browser errors");
   } finally {

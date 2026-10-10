@@ -188,4 +188,8 @@ set, including the Azeroth ERP additions, is in
 Hardcore/SSF version handling is **not implemented** â€” it was previously (incorrectly) stated here
 as current behavior. It is a deferred design intent only; see
 [`ROADMAP.md`](ROADMAP.md#deferred--future) for the correctly-framed version.
-# Phase 32 (2026-10-09): Safe quantity adjustment for resource reservations is implemented in the existing project workbench. Reductions are allowed when supply cannot be established; increases require observed unreserved lower-bound units. Existing reservation identity and creation time remain stable. Unit and synthetic browser checks cover the limits. Full validation and independent review are recorded in `ERP_CHECKPOINT_20261009_PHASE32.md`.
+# Phase 34 (2026-10-09): Manual work-order plans are editable in place. Edits preserve stable IDs and status, keep explicit craft-output observation and dependency fields, and clear a recorded procurement quote when its item target changes. Full validation and review are recorded in `ERP_CHECKPOINT_20261009_PHASE34.md`.
+
+# Phase 33 (2026-10-09): A manual CRAFT plan can select the character whose inventory should be checked for the planned output, separately from crafter and intended recipient. Core, API, MCP, and UI preserve those roles and do not infer causation. See `ERP_CHECKPOINT_20261009_PHASE33.md`.
+
+# Phase 32 (2026-10-09): Safe quantity adjustment for resource reservations is implemented in the existing project workbench. Reductions are allowed when supply cannot be established; increases require observed unreserved lower-bound units. Existing reservation identity and creation time remain stable. Unit and synthetic browser checks cover the limits. See `ERP_CHECKPOINT_20261009_PHASE32.md`.
