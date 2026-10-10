@@ -34,6 +34,7 @@ See [ERP_CAPABILITY_INVENTORY.md](ERP_CAPABILITY_INVENTORY.md) for implemented/u
 
 Dashboard branch: `feature/forever-gear-observation`.
 Starting baseline: `b74d5794278ea01a4f3c7042d2f20329f298f7a0`.
+Validated implementation and documentation commit: `05f7067fabd011d42fe70bdc7cbd4251204bd1e7`, pushed to `origin/feature/forever-gear-observation`.
 Implementation files: `packages/web/src/components/erpFulfillmentReview.ts`, `packages/web/src/components/ErpProjectsWorkbench.tsx`, `packages/web/src/styles.css`, `packages/web/test/erpFulfillmentReview.test.ts`, `packages/web/e2e/allocationBrowser.test.mjs`.
 
 ## Next substantial milestone
