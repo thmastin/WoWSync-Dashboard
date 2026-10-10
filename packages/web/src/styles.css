@@ -1376,6 +1376,8 @@ button.roster-name-link {
 .erp-source-screen small { display: block; margin-top: 4px; color: #aeb7c5; }
 .erp-source-screen code { overflow-wrap: anywhere; color: #d7c8ef; }
 .erp-need-list small, .erp-work-order-list small { display: block; margin-top: 5px; color: #9da8b8; }
+.erp-reservation-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; }
+.erp-need-list .erp-reservation-actions button { margin-top: 5px; }
 .erp-resource-commitments { margin: 20px 0 26px; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
 .erp-resource-commitments > p { color: #b8c2d0; max-width: 1000px; }
 .erp-commitment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 12px; }

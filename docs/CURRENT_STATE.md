@@ -1,3 +1,5 @@
+# Phase 32 (2026-10-09): Safe quantity adjustment for resource reservations is implemented in the existing project workbench. Reductions are allowed when supply cannot be established; increases require observed unreserved lower-bound units. Existing reservation identity and creation time remain stable. Unit and synthetic browser checks cover the limits. Full validation and independent review are recorded in `ERP_CHECKPOINT_20261009_PHASE32.md`.
+
 **Latest feature-branch checkpoint (2026-10-09):** Phase 31 joins the work-order queue with resource needs that lack recent observed coverage or an open manual task. It also surfaces unfinished work orders in projects marked complete, explicitly preserving player-declared status separately from evidence. Full `npm.cmd run validate:erp` passed (Core 821; MCP 3; Server 259 plus 2 skips; Web 298; typecheck/build; 5 synthetic browser cases). Independent review found no actionable findings. No live or production validation. See `ERP_CHECKPOINT_20261009_PHASE31.md`.
 # Current WoWSync state
 
@@ -186,3 +188,4 @@ set, including the Azeroth ERP additions, is in
 Hardcore/SSF version handling is **not implemented** â€” it was previously (incorrectly) stated here
 as current behavior. It is a deferred design intent only; see
 [`ROADMAP.md`](ROADMAP.md#deferred--future) for the correctly-framed version.
+# Phase 32 (2026-10-09): Safe quantity adjustment for resource reservations is implemented in the existing project workbench. Reductions are allowed when supply cannot be established; increases require observed unreserved lower-bound units. Existing reservation identity and creation time remain stable. Unit and synthetic browser checks cover the limits. Full validation and independent review are recorded in `ERP_CHECKPOINT_20261009_PHASE32.md`.

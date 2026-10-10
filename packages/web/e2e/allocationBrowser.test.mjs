@@ -208,6 +208,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     page.once("dialog", (dialog) => dialog.accept("1"));
     await needEvidence.getByRole("button", { name: "Reserve" }).click();
     await needEvidence.locator(".erp-status").filter({ hasText: /1 reserved across overlapping plans/ }).waitFor();
+    page.once("dialog", (dialog) => dialog.accept("3"));
+    await needEvidence.getByRole("button", { name: "Adjust 1" }).click();
+    await page.getByRole("alert").filter({ hasText: "Enter a whole quantity from 1 to 2" }).waitFor();
+    page.once("dialog", (dialog) => dialog.accept("2"));
+    await needEvidence.getByRole("button", { name: "Adjust 1" }).click();
+    await needEvidence.locator(".erp-status").filter({ hasText: /2 reserved across overlapping plans/ }).waitFor();
     const sourceChange = needEvidence.getByRole("button", { name: "Set planned source" });
     assert.equal(await sourceChange.count(), 1, "the selected source is labelled as planned; the other candidate offers a change action");
     assert.equal(await sourceChange.evaluateAll((buttons) => buttons.every((button) => button.disabled)), true, "changing source while a reservation is active is blocked rather than causing a rejected project update");
@@ -224,7 +230,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await commitmentPanel.getByLabel("Commitment filter").selectOption("RESERVED");
     await commitmentPanel.locator(".erp-commitment-card").first().waitFor();
     const reservedCommitments = await commitmentPanel.locator(".erp-commitment-card").allInnerTexts();
-    assert.ok(reservedCommitments.some((text) => /Reservations on these exact needs[\s\S]*1/.test(text)), "reserved resource scopes remain discoverable through the filter");
+    assert.ok(reservedCommitments.some((text) => /Reservations on these exact needs[\s\S]*2/.test(text)), "the adjusted reservation remains visible in the cross-project filter");
     await commitmentPanel.getByLabel("Search commitments").fill("no matching resource name");
     await commitmentPanel.getByText("No commitments match this filter.").waitFor();
     await commitmentPanel.getByLabel("Search commitments").fill("");
