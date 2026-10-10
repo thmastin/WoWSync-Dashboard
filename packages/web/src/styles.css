@@ -1416,5 +1416,8 @@ button.roster-name-link {
 .erp-observation-change-queue { margin: 18px 0; padding: 14px; border: 1px solid #725d37; border-radius: 8px; background: #272216; }
 .erp-observation-change-queue > ol { display: grid; gap: 10px; padding-left: 24px; }
 .erp-observation-change-queue > ol > li { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 12px; border: 1px solid #51452e; border-radius: 6px; }
+.erp-observation-change-actions { display: grid; flex: 0 0 auto; gap: 8px; justify-items: start; }
+.erp-observation-change-actions label { display: flex; align-items: start; gap: 6px; max-width: 15rem; }
+.erp-observation-change-group { margin: 12px 0; padding-top: 12px; border-top: 1px solid #51452e; }
 .erp-need-list > li:focus { outline: 2px solid #cfaa51; outline-offset: 3px; }
-@media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
+@media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li, .erp-observation-change-queue > ol > li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }

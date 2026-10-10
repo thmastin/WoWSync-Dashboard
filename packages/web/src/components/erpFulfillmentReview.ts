@@ -6,6 +6,8 @@ export interface FulfillmentReviewDraft {
   readonly recordedAt: number;
   readonly assignedIdentityKey?: string;
   readonly dependsOn?: readonly string[];
+  /** Require that each linked need still has a current comparable changed observation. */
+  readonly requireChangedEvidence?: boolean;
 }
 
 const terminal = new Set(["COMPLETED", "CANCELLED"]);
@@ -28,6 +30,12 @@ export function buildFulfillmentReviewWorkOrder(project: ErpProjectView, draft: 
     if (!need) throw new Error("A selected resource need no longer exists. Refresh the project and try again.");
     const alreadyOpen = project.workOrders.some((order) => !terminal.has(order.status) && order.resourceNeedIds.includes(needId));
     if (alreadyOpen) throw new Error(`“${need.label}” already has an open work order. Refresh the project before planning it again.`);
+    if (draft.requireChangedEvidence) {
+      const evidence = project.needEvidence.find((entry) => entry.needId === needId);
+      if (evidence?.observationChange?.state !== "CHANGED" || !evidence.observationChange.comparisons.some((comparison) => comparison.delta !== 0)) {
+        throw new Error(`“${need.label}” no longer has a comparable changed observation. Refresh the review and select needs that still show a change.`);
+      }
+    }
     return need;
   });
   const prefix = `${project.version}::`;
@@ -48,11 +56,14 @@ export function buildFulfillmentReviewWorkOrder(project: ErpProjectView, draft: 
       ? `; ${evidence.reservationAssessment.activeQuantity} reserved, ${evidence.reservationAssessment.availableObservedLowerBound === undefined ? "remaining supply UNKNOWN" : `at least ${evidence.reservationAssessment.availableObservedLowerBound} unreserved observed`}`
       : "; reservation state UNKNOWN";
     const reason = (evidence?.reason ?? "No current assessment is available.").slice(0, 160);
-    return `• ${need.stableId} — ${need.label} (${need.kind}, need ${need.requiredQuantity}); source ${source}; ${state}/${freshness}, ${evidenceTime}; ${observed}${historical}${reserved}. ${reason}`.slice(0, 620);
+    const change = evidence?.observationChange?.state === "CHANGED"
+      ? `; changed sections ${evidence.observationChange.comparisons.filter((comparison) => comparison.delta !== 0).map((comparison) => `${comparison.section} ${comparison.previousQuantity}→${comparison.currentQuantity} (${comparison.delta > 0 ? "+" : ""}${comparison.delta}), previous ${isoTimestamp(comparison.previousObservedAt)}, latest ${isoTimestamp(comparison.currentObservedAt)}`).join("; ")}`
+      : "";
+    return `• ${need.stableId} — ${need.label} (${need.kind}, need ${need.requiredQuantity}); source ${source}; ${state}/${freshness}, ${evidenceTime}; ${observed}${historical}${reserved}${change}. ${reason}`.slice(0, 700);
   });
   const planTime = isoTimestamp(draft.recordedAt);
   const instructions = [
-    `Player-created grouped review of the linked resource requirements. This saved evidence summary was generated ${planTime}; its freshness does not update. Open each linked need for its full resource identity and current evidence, then decide the appropriate manual next step.`,
+    `Player-created grouped review of the linked resource requirements. This saved evidence summary was generated ${planTime}; its freshness does not update. The changed sections below preserve the prior-to-latest observed quantities and timestamps; they do not establish cause or action completion. Open each linked need for its full resource identity and current evidence, then decide the appropriate manual next step.`,
     ...lines,
     "This review step does not reserve or move resources and does not assert access, ownership, recipe inputs, procurement availability, craftability, or action completion. UNKNOWN and LAST_SEEN remain unresolved until new evidence is recorded.",
   ].join("\n").slice(0, 3900);

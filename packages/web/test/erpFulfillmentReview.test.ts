@@ -68,3 +68,19 @@ test("out-of-range timestamps remain explicit UNKNOWN text instead of throwing",
   assert.match(order.instructions ?? "", /summary was generated UNKNOWN \(timestamp is outside the supported date range\)/);
   assert.match(order.instructions ?? "", /evidence timestamp UNKNOWN \(timestamp is outside the supported date range\)/);
 });
+
+test("change-driven grouped review freezes the exact before/after evidence and rejects a refreshed-away change", () => {
+  const changed = (needId: string, previousQuantity: number, currentQuantity: number) => ({
+    needId, state: "SHORTFALL_OBSERVED" as const, sourceIdentityKey: "forever::realm::miner", observedQuantity: currentQuantity, requiredQuantity: 8,
+    observedAt: 300, freshness: "recent" as const, sourceSections: [], unresolvedSections: [], unknownQuantityRowCount: 0,
+    observationChange: { state: "CHANGED" as const, comparisons: [{ section: "bags" as const, previousQuantity, currentQuantity, delta: currentQuantity - previousQuantity, previousObservedAt: 200, currentObservedAt: 300 }], reason: "Comparable bag quantities changed; cause unknown." },
+    reason: "Observed shortfall; the change cause is unknown.",
+  });
+  const project = view({ needEvidence: [changed("ore", 5, 3), changed("herb", 4, 2)] });
+  const order = buildFulfillmentReviewWorkOrder(project, { stableId: "changed-review", needIds: ["ore", "herb"], recordedAt: 400, requireChangedEvidence: true });
+  assert.match(order.instructions ?? "", /bags 5→3 \(-2\), previous 1970-01-01T00:03:20\.000Z, latest 1970-01-01T00:05:00\.000Z/);
+  assert.match(order.instructions ?? "", /changed sections bags 4→2 \(-2\)/);
+  assert.match(order.instructions ?? "", /do not establish cause or action completion/);
+  const noLongerChanged = view({ needEvidence: [changed("ore", 5, 3), { ...changed("herb", 4, 2), observationChange: { state: "UNCHANGED", comparisons: [], reason: "No change." } }] });
+  assert.throws(() => buildFulfillmentReviewWorkOrder(noLongerChanged, { stableId: "stale-review", needIds: ["ore", "herb"], recordedAt: 400, requireChangedEvidence: true }), /no longer has a comparable changed observation/);
+});

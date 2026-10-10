@@ -11,7 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
-import { T, guildSection, observedSection, row, warbandSection } from "../../core/test/allocationFixtures.ts";
+import { T, fullRef, guildSection, observedSection, row, warbandSection } from "../../core/test/allocationFixtures.ts";
 import { renderExport } from "../../core/test/sharedStorageExports.ts";
 import { createApp } from "../../server/src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../../server/src/net.ts";
@@ -1140,6 +1140,75 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create requirements, compose fulfillment, a
     assert.deepEqual(mcpProject.workOrders.map((order) => [order.stableId, order.kind, order.resourceNeedIds, order.dependsOn]), rest.workOrders.map((order) => [order.stableId, order.kind, order.resourceNeedIds, order.dependsOn]));
     assert.equal(mcpProject.fulfillment.activeWorkOrderCount, rest.fulfillment.activeWorkOrderCount);
     assert.match(await project.innerText(), /Supply unknown|Evidence review required|UNKNOWN/);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-causal review plan consistently across UI, REST, AccountContext, and MCP", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-observation-review-browser-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store;
+  let server;
+  let browser;
+  let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const before = store.importSnapshot(renderExport({ name: "Observation Review Fixture", realm: "Cairne", generated: now - 120, bags: observedSection([row(ITEM_ID, 5), row(ITEM_ID + 1, 4)], now - 120), bank: observedSection([], now - 120) }));
+    store.importSnapshot(renderExport({ name: "Observation Review Fixture", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 3), row(ITEM_ID + 1, 2)], now), bank: observedSection([], now) }));
+    const project = store.createErpProject({ version: "retail", title: "Review changed workshop stock", needs: [
+      { stableId: "stone_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 6, sourceIdentityKey: before.character.identityKey },
+      { stableId: "herb_need", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Briarthorn", requiredQuantity: 5, sourceIdentityKey: before.character.identityKey },
+    ] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const queue = page.getByRole("region", { name: "Changed resource observations" });
+    await queue.getByText("Mycobloom").waitFor();
+    await queue.getByText("Briarthorn").waitFor();
+    assert.match(await queue.innerText(), /bags: 5 → 3 \(-2\)/);
+    assert.match(await queue.innerText(), /The cause remains unknown/);
+    await queue.getByRole("checkbox", { name: "Include Mycobloom in grouped review" }).check();
+    await queue.getByRole("checkbox", { name: "Include Briarthorn in grouped review" }).check();
+    await queue.getByRole("button", { name: "Save a planned review for 2 changed needs in Review changed workshop stock" }).click();
+
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Review changed workshop stock"));
+    assert.equal(rest.workOrders.length, 1);
+    assert.deepEqual([rest.workOrders[0].kind, rest.workOrders[0].status, rest.workOrders[0].resourceNeedIds], ["INVESTIGATE", "PLANNED", ["stone_need", "herb_need"]]);
+    assert.match(rest.workOrders[0].instructions, /saved evidence summary was generated/);
+    assert.match(rest.workOrders[0].instructions, /changed sections bags 5→3 \(-2\), previous /);
+    assert.match(rest.workOrders[0].instructions, /latest 20[0-9]{2}-[0-9]{2}-[0-9]{2}T/);
+    assert.match(rest.workOrders[0].instructions, /does not reserve or move resources/);
+    assert.match(rest.workOrders[0].instructions, /does not assert .* action completion/);
+    assert.match(rest.workOrders[0].instructions, /does not assert .* action completion/);
+
+    const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const accountProject = account.planning.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual([accountProject.revision, accountProject.workOrderCounts], [2, { PLANNED: 1 }]);
+    assert.equal(account.planning.needObservationChangeReviews.retail.changedNeedCount, 2, "change review remains a snapshot summary until comparable evidence changes");
+    const mcpEntrypoint = path.resolve(process.cwd(), "packages/mcp/src/index.ts");
+    const mcp = new Client({ name: "wowsync-observation-review-browser", version: "0.1.0" });
+    mcpClient = mcp;
+    await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [mcpEntrypoint], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const result = await mcp.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const mcpProject = result.structuredContent.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual(mcpProject.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), rest.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]));
+    assert.equal(result.structuredContent.observationChanges.totalCount, 2);
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();
