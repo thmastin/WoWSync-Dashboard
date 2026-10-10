@@ -220,10 +220,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual([procurementReview?.recordedGoldReservationState, procurementReview?.recordedGoldReservationsCopper], ["NO_RECORDED_RESERVATIONS", 0]);
     assert.equal(procurementReview?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER");
     assert.equal(procurementReview?.quoteVsRecordedGoldRemainderCopper, 500);
-    const procurementGoldProgress = procurementPlan?.workOrderProgress.find((entry) => entry.workOrderId === "procurement_review") as unknown as { procurementObservationReview?: { buyerIdentityKey: string; state: string; interpretation: string } } | undefined;
+    const procurementGoldProgress = procurementPlan?.workOrderProgress.find((entry) => entry.workOrderId === "procurement_review") as unknown as { procurementObservationReview?: { buyerIdentityKey: string; state: string; interpretation: string; targetItem?: { needId: string; resourceKey: string; state: string; freshness: string } } } | undefined;
     assert.equal(procurementGoldProgress?.procurementObservationReview?.buyerIdentityKey, procurementReview?.buyerIdentityKey);
     assert.equal(procurementGoldProgress?.procurementObservationReview?.state, "UNKNOWN", "MCP has only one export and does not invent a gold delta");
     assert.equal(procurementGoldProgress?.procurementObservationReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(procurementGoldProgress?.procurementObservationReview?.targetItem && [procurementGoldProgress.procurementObservationReview.targetItem.needId, procurementGoldProgress.procurementObservationReview.targetItem.resourceKey, procurementGoldProgress.procurementObservationReview.targetItem.state, procurementGoldProgress.procurementObservationReview.targetItem.freshness], ["procurement_target", "item:12345", "UNKNOWN", "recent"], "MCP carries the linked buyer item observation from the shared core projection without inventing a before/after comparison");
     assert.deepEqual(procurementReview && [procurementReview.marketAvailability, procurementReview.quotedPrice, procurementReview.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(procurementReview?.reason ?? "", /not a purchase recommendation or action/);
     const transferPlan = retailErpProjects.projects.find((entry) => entry.title === "Transfer observation protocol fixture");

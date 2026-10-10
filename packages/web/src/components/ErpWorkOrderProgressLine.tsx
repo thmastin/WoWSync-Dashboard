@@ -34,11 +34,12 @@ export function ErpWorkOrderProgressLine({ progress, characterName }: { progress
 
 function ProcurementObservationReviewView({ review, characterName }: { review: ErpProcurementObservationReview; characterName: (identityKey?: string) => string }) {
   const comparison = review.comparison;
-  return <section className="erp-procurement-observation-review" aria-label="Buyer gold observation review">
-    <h4>Buyer gold observation review</h4>
+  return <section className="erp-procurement-observation-review" aria-label="Procurement change review">
+    <h4>Procurement change review (cause unknown)</h4>
     <p>Buyer: {characterName(review.buyerIdentityKey)} · {review.state.replaceAll("_", " ")} · {review.freshness} latest evidence{review.previousFreshness ? ` · ${review.previousFreshness} earlier evidence` : ""}</p>
     {comparison && <p>Observed gold: {comparison.previousQuantity} → {comparison.currentQuantity} copper ({comparison.delta > 0 ? "+" : ""}{comparison.delta}); earlier {new Date(comparison.previousObservedAt * 1000).toLocaleString()}, later {new Date(comparison.currentObservedAt * 1000).toLocaleString()}.</p>}
-    <p>{review.reason} The change does not prove a purchase or attribute it to this work order.</p>
+    {review.targetItem && <div><strong>Linked item target {review.targetItem.state.replaceAll("_", " ")} · {review.targetItem.freshness} latest evidence{review.targetItem.previousFreshness ? ` · ${review.targetItem.previousFreshness} earlier evidence` : ""}</strong><p><code>{review.targetItem.resourceKey}</code>{review.targetItem.comparisons.length > 0 ? ` · ${review.targetItem.comparisons.map((entry) => `${entry.section}: ${entry.previousQuantity} → ${entry.currentQuantity} (${entry.delta > 0 ? "+" : ""}${entry.delta}), ${new Date(entry.previousObservedAt * 1000).toLocaleString()} → ${new Date(entry.currentObservedAt * 1000).toLocaleString()}`).join("; ")}` : " · no comparable section delta"}</p><p>{review.targetItem.reason}</p></div>}
+    <p>{review.reason} Gold and item changes are separate observations; neither proves a purchase or attributes either change to this work order.</p>
   </section>;
 }
 

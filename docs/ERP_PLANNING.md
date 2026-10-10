@@ -54,6 +54,8 @@ PURCHASE work orders may link an explicit same-character item target and store a
 
 ## User workflow
 
+For a PURCHASE work order with its required same-character item target, the read-time progress view now pairs two independent observations: the buyer's character-gold delta and the target item's per-section quantity deltas. Each side retains its own freshness; historical deltas remain visible as stale, and a missing comparable item section remains UNKNOWN. The pair is descriptive only: neither change is attributed to purchasing, a seller, or this work order. REST, MCP, and the workbench expose the same core projection; a single snapshot reports no invented before/after item change.
+
 Open **Projects & Work Orders** from a version tab. Create a project, add an explicit resource requirement and source character or observed Retail shared owner, record a manual task, and optionally reserve a quantity from directly observed supply. The UI shows evidence date/freshness, current versus historical coverage, cross-project reservations, and section-level changes since the previous complete export. A reservation can be explicitly released. The feature never issues equip, transfer, mail, bank, craft, purchase, or sell operations.
 
 ## Known limitations and next work

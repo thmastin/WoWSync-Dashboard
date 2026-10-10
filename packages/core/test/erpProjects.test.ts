@@ -855,12 +855,18 @@ test("purchase progress pairs buyer gold and linked item changes while keeping p
     assert.equal(review?.freshness, "recent");
     assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(review?.comparison && [review.comparison.previousQuantity, review.comparison.currentQuantity, review.comparison.delta], [1200, 950, -250]);
+    assert.equal(review?.targetItem?.needId, need.stableId);
+    assert.equal(review?.targetItem?.resourceKey, ITEM);
+    assert.equal(review?.targetItem?.state, "ITEM_CHANGED");
+    assert.deepEqual(review?.targetItem?.comparisons.filter((entry) => entry.delta !== 0).map((entry) => [entry.section, entry.previousQuantity, entry.currentQuantity, entry.delta]), [["bags", 0, 2, 2]]);
     assert.ok(progress.changedNeedIds.includes(need.stableId), "the linked item appearance remains separately visible");
     assert.equal(progress.completionRecorded, false, "paired deltas do not complete a manual purchase task");
     assert.match(review?.reason ?? "", /does not establish that a purchase occurred/);
     const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.procurementObservationReview;
     assert.equal(stale?.state, "GOLD_DECREASED", "the historical change remains visible");
     assert.equal(stale?.freshness, "stale", "historical comparison cannot appear current");
+    assert.equal(stale?.targetItem?.state, "ITEM_CHANGED", "historical item appearance remains visible without being current");
+    assert.equal(stale?.targetItem?.freshness, "stale");
   } finally { store.close(); }
 });
 

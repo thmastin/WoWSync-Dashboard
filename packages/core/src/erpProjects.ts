@@ -816,6 +816,16 @@ export interface ErpProcurementObservationReview {
   readonly freshness: Freshness;
   readonly comparison?: ResourceObservationChange["comparisons"][number];
   readonly previousFreshness?: Freshness;
+  /** Item evidence is reported beside gold but is never attributed to a purchase. */
+  readonly targetItem?: {
+    readonly needId: string;
+    readonly resourceKey: string;
+    readonly state: "ITEM_CHANGED" | "ITEM_UNCHANGED" | "UNKNOWN";
+    readonly freshness: Freshness;
+    readonly previousFreshness?: Freshness;
+    readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+    readonly reason: string;
+  };
   readonly interpretation: "CAUSE_UNKNOWN";
   readonly reason: string;
 }
@@ -914,14 +924,34 @@ function procurementObservationReview(project: ErpProject, order: ErpWorkOrder, 
   if (order.kind !== "PURCHASE" || !order.procurementPlan || !order.assignedIdentityKey) return undefined;
   const buyerIdentityKey = order.assignedIdentityKey;
   if (!buyerIdentityKey.startsWith(`${project.version}::`)) return { buyerIdentityKey, state: "UNKNOWN", freshness: "unknown", interpretation: "CAUSE_UNKNOWN", reason: "The recorded buyer identity does not match this project version; no cross-version gold evidence is used." };
+  const targetNeed = project.needs.find((need) => need.stableId === order.procurementPlan!.targetNeedId);
+  const targetItem = (() => {
+    if (!targetNeed || (targetNeed.kind !== "ITEM_ID" && targetNeed.kind !== "ITEM_REF")) return undefined;
+    if (targetNeed.sourceIdentityKey !== buyerIdentityKey || targetNeed.destinationIdentityKey !== buyerIdentityKey || targetNeed.sourceOwnerKey) return {
+      needId: targetNeed.stableId, resourceKey: targetNeed.resourceKey, state: "UNKNOWN" as const, freshness: "unknown" as const, comparisons: [],
+      reason: "The linked item target does not name the explicitly assigned buyer as both same-character source and intended recipient. No item delta is interpreted for this procurement step.",
+    };
+    const itemEvidence = assessErpNeed(targetNeed, snapshotsFor(buyerIdentityKey), now, undefined, project.version);
+    const comparisons = itemEvidence.observationChange?.comparisons ?? [];
+    const previousObservedAt = comparisons.length ? Math.min(...comparisons.map((entry) => entry.previousObservedAt)) : undefined;
+    const previousFreshness = previousObservedAt !== undefined ? evidenceFreshness(previousObservedAt, now) : undefined;
+    const state = itemEvidence.observationChange?.state === "CHANGED" ? "ITEM_CHANGED" as const
+      : itemEvidence.observationChange?.state === "UNCHANGED" ? "ITEM_UNCHANGED" as const : "UNKNOWN" as const;
+    const comparisonText = comparisons.length ? comparisons.map((entry) => `${entry.section} ${entry.previousQuantity} → ${entry.currentQuantity} (${entry.delta > 0 ? "+" : ""}${entry.delta})`).join("; ") : "no comparable section delta";
+    return {
+      needId: targetNeed.stableId, resourceKey: targetNeed.resourceKey, state, freshness: itemEvidence.freshness,
+      ...(previousFreshness ? { previousFreshness } : {}), comparisons,
+      reason: `${comparisonText}. ${state === "UNKNOWN" ? itemEvidence.reason : state === "ITEM_CHANGED" ? "The linked item observation changed; this does not identify who or what caused it." : "Comparable item observations show no quantity change; this does not prove that no purchase or other action occurred."}`,
+    };
+  })();
   const goldNeed: ErpResourceNeed = { stableId: `procurement-progress-gold:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Buyer gold observation", requiredQuantity: 1, sourceIdentityKey: buyerIdentityKey };
   const evidence = assessErpNeed(goldNeed, snapshotsFor(buyerIdentityKey), now, undefined, project.version);
   const comparison = evidence.observationChange?.comparisons.find((entry) => entry.section === "character gold");
-  if (!comparison) return { buyerIdentityKey, state: "UNKNOWN", freshness: evidence.freshness, interpretation: "CAUSE_UNKNOWN", reason: `${evidence.observationChange?.reason ?? evidence.reason} A gold delta alone could not establish whether this purchase or any other action caused it.` };
+  if (!comparison) return { buyerIdentityKey, state: "UNKNOWN", freshness: evidence.freshness, ...(targetItem ? { targetItem } : {}), interpretation: "CAUSE_UNKNOWN", reason: `${evidence.observationChange?.reason ?? evidence.reason} A gold delta alone could not establish whether this purchase or any other action caused it.` };
   const previousFreshness = evidenceFreshness(comparison.previousObservedAt, now);
   const state: ErpProcurementObservationReview["state"] = comparison.delta < 0 ? "GOLD_DECREASED" : comparison.delta > 0 ? "GOLD_INCREASED" : "GOLD_UNCHANGED";
   const freshnessText = evidence.freshness === "recent" && previousFreshness === "recent" ? "Both observations are recent." : `Freshness is ${previousFreshness} for the earlier observation and ${evidence.freshness} for the later observation.`;
-  return { buyerIdentityKey, state, freshness: evidence.freshness, comparison, previousFreshness, interpretation: "CAUSE_UNKNOWN", reason: `${freshnessText} Character gold changed from ${comparison.previousQuantity} to ${comparison.currentQuantity} copper (${comparison.delta > 0 ? "+" : ""}${comparison.delta}). This paired observation does not establish that a purchase occurred, identify an item or seller, or attribute the change to this work order.` };
+  return { buyerIdentityKey, state, freshness: evidence.freshness, comparison, previousFreshness, ...(targetItem ? { targetItem } : {}), interpretation: "CAUSE_UNKNOWN", reason: `${freshnessText} Character gold changed from ${comparison.previousQuantity} to ${comparison.currentQuantity} copper (${comparison.delta > 0 ? "+" : ""}${comparison.delta}). This paired observation does not establish that a purchase occurred, identify an item or seller, or attribute either change to this work order.` };
 }
 
 function assessPlannedCraftOutput(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpPlannedOutputAssessment | undefined {

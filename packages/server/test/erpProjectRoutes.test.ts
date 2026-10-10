@@ -87,6 +87,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     const procurementProgress = created.body.project.workOrderProgress[0];
     assert.deepEqual([procurementProgress.procurementObservationReview.state, procurementProgress.procurementObservationReview.comparison.delta], ["GOLD_DECREASED", -9100]);
     assert.equal(procurementProgress.procurementObservationReview.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual([procurementProgress.procurementObservationReview.targetItem.needId, procurementProgress.procurementObservationReview.targetItem.state], ["stone_target", "ITEM_UNCHANGED"], "comparable buyer item observations remain independently visible beside the gold delta");
     assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual([assessment.reviewState, assessment.budgetState], ["OBSERVED_ITEM_GAP", "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING"]);
     assert.deepEqual([assessment.quoteState, assessment.playerQuote.amountCopper, assessment.playerQuote.provenance], ["PLAYER_REPORTED_WITHIN_CEILING", 100, "PLAYER_REPORTED"]);
