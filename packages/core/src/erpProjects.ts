@@ -809,6 +809,18 @@ export interface ErpWorkOrderProgress {
   readonly retrievalObservationReviews?: readonly ErpRetrievalObservationReview[];
   readonly procurementObservationReview?: ErpProcurementObservationReview;
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
+  readonly craftInputObservationReviews?: readonly ErpCraftInputObservationReview[];
+  readonly reason: string;
+}
+
+export interface ErpCraftInputObservationReview {
+  readonly needId: string;
+  readonly resourceKey: string;
+  readonly crafterIdentityKey?: string;
+  readonly state: "CHANGED" | "UNCHANGED" | "UNKNOWN";
+  readonly freshness: Freshness;
+  readonly previousFreshness?: Freshness;
+  readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
   readonly reason: string;
 }
 
@@ -1082,6 +1094,29 @@ function assessPlannedCraftOutput(project: ErpProject, order: ErpWorkOrder, snap
     freshness: evidence.freshness, sourceSections: evidence.sourceSections, unresolvedSections: evidence.unresolvedSections, observationChange,
     reason: `${evidence.reason} ${changeDescription} A planned output is not added to resource supply, does not prove that crafting occurred, and does not auto-complete this work order.`,
   };
+}
+
+function craftInputObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpCraftInputObservationReview[] {
+  if (order.kind !== "CRAFT") return [];
+  return order.resourceNeedIds.flatMap<ErpCraftInputObservationReview>((needId) => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const crafterIdentityKey = order.assignedIdentityKey;
+    const unknown = (reason: string): ErpCraftInputObservationReview => ({ needId, resourceKey: need.resourceKey, ...(crafterIdentityKey ? { crafterIdentityKey } : {}), state: "UNKNOWN", freshness: "unknown", comparisons: [], reason });
+    if (!crafterIdentityKey) return [unknown("No assigned crafter is recorded; no character is selected from roster co-location.")];
+    if (!crafterIdentityKey.startsWith(`${project.version}::`)) return [unknown("The assigned crafter does not match the project version; no cross-version input observations are used.")];
+    if (need.sourceOwnerKey || need.sourceIdentityKey !== crafterIdentityKey) return [unknown("The input need does not explicitly name the assigned crafter as its source. Another character or shared-storage scope is not used to infer that these inputs were consumed by this craft.")];
+    const evidence = assessErpNeed(need, snapshotsFor(crafterIdentityKey), now, undefined, project.version);
+    const comparisons = evidence.observationChange?.comparisons ?? [];
+    const previousFreshnessValues = comparisons.map((entry) => evidenceFreshness(entry.previousObservedAt, now));
+    const previousFreshness: Freshness | undefined = previousFreshnessValues.length
+      ? previousFreshnessValues.includes("unknown") ? "unknown" : previousFreshnessValues.includes("stale") ? "stale" : "recent"
+      : undefined;
+    const state = previousFreshness === "unknown" ? "UNKNOWN" as const : evidence.observationChange?.state ?? "UNKNOWN";
+    const stateText = state === "CHANGED" ? "The assigned crafter's comparable input inventory changed; this does not establish consumption or a craft." : state === "UNCHANGED" ? "Comparable observations show no input inventory change; this does not prove that no crafting occurred." : evidence.reason;
+    const chronologyLimit = previousFreshness === "unknown" ? " A previous section timestamp is invalid or future-dated, so the paired before/after result remains UNKNOWN." : "";
+    return [{ needId, resourceKey: need.resourceKey, crafterIdentityKey, state, freshness: evidence.freshness, ...(previousFreshness ? { previousFreshness } : {}), comparisons, reason: `${stateText}${chronologyLimit} ${evidence.reason}` }];
+  });
 }
 
 function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvidence, allProjects: readonly ErpProject[], version: WowVersion): ErpNeedEvidence {
@@ -1362,7 +1397,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const retrievalReviews = retrievalObservationReviews(project, order, snapshotsFor, now, currencies, sharedJournal);
     const procurementReview = procurementObservationReview(project, order, snapshotsFor, now);
     const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), reason };
+    const craftInputs = craftInputObservationReviews(project, order, snapshotsFor, now);
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

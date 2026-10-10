@@ -77,6 +77,25 @@ test("planned craft outputs are returned through REST as intent plus character-s
   });
 });
 
+test("REST and AccountContext expose paired craft input observations from the assigned character only", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000) + 1;
+    const makeCapture = (at: number, quantity: number, outputQuantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Craft Pair", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: quantity }, ...(outputQuantity ? [{ itemRef: "item:999", name: "Planned Result", qty: outputQuantity }] : [])] }] }, bank: { containers: [] } });
+    const first = store.importSnapshot(makeCapture(generatedAt, 4, 0));
+    store.importSnapshot(makeCapture(generatedAt + 1, 2, 1));
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review paired craft evidence", needs: [{ stableId: "stone_input", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey }], workOrders: [{ stableId: "craft_pair", kind: "CRAFT", status: "PLANNED", title: "Review manual craft", assignedIdentityKey: first.character.identityKey, resourceNeedIds: ["stone_input"], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:999", label: "Planned Result", quantity: 1 } }] });
+    assert.equal(created.status, 201);
+    const progress = created.body.project.workOrderProgress[0];
+    assert.deepEqual(progress.craftInputObservationReviews.map((input: any) => [input.needId, input.crafterIdentityKey, input.state, input.comparisons[0].delta]), [["stone_input", first.character.identityKey, "CHANGED", -2]]);
+    assert.equal(progress.plannedOutputAssessment.observationChange, "CHANGED");
+    assert.equal(progress.completionRecorded, false);
+    const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
+    assert.deepEqual(listed.workOrderProgress[0].craftInputObservationReviews, progress.craftInputObservationReviews, "REST read-after-write retains the core projection");
+    const context = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    assert.deepEqual(context.craftInputObservationStates, { CHANGED: 1 }, "AccountContext summarizes the same input comparison without claiming crafting");
+  });
+});
+
 test("REST and AccountContext expose an explicit procurement review without asserting price or affordability", async () => {
   await withServer(async (call, store) => {
     const character = store.listCharacters("classic-era")[0]!;
@@ -98,7 +117,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "17");
+    assert.equal(account.body.schemaVersion, "18");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
     assert.deepEqual(summary.procurementQuoteStates, { PLAYER_REPORTED_WITHIN_CEILING: 1 });
@@ -242,7 +261,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "17");
+    assert.equal(context.body.schemaVersion, "18");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });

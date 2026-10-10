@@ -133,6 +133,44 @@ test("planned output change remains non-causal and stale output evidence is not 
   } finally { store.close(); }
 });
 
+test("CRAFT progress pairs only the assigned crafter's explicitly sourced item-input observations", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }, { itemRef: "item:999", name: "Declared output", qty: 1 }] }] }, bank: { containers: [] } }));
+    const itemNeed = { stableId: "craft_input", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [itemNeed], reservations: [], workOrders: [{ stableId: "craft_review", kind: "CRAFT", status: "IN_PROGRESS", title: "Review planned crafting", resourceNeedIds: [itemNeed.stableId], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: "item:999", label: "Declared output", quantity: 1 } }] };
+    const progress = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]!;
+    const input = progress.craftInputObservationReviews?.[0];
+    assert.equal(input?.state, "CHANGED");
+    assert.equal(input?.crafterIdentityKey, identityKey);
+    assert.equal(input?.freshness, "recent");
+    assert.deepEqual(input?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 4, 2, -2], ["character bank", 0, 0, 0]]);
+    assert.equal(progress.plannedOutputAssessment?.observationChange, "CHANGED");
+    assert.equal(progress.completionRecorded, false, "paired input/output changes never auto-complete a manual task");
+    assert.match(input?.reason ?? "", /does not establish consumption or a craft/);
+
+    const otherSource = { ...p, needs: [{ ...itemNeed, sourceIdentityKey: "retail::another realm::other" }] };
+    const wrongSource = evaluateErpProject(otherSource, (key) => store.listSnapshots(key), [otherSource], 1_700_000_101).workOrderProgress[0]?.craftInputObservationReviews?.[0];
+    assert.equal(wrongSource?.state, "UNKNOWN", "another character's supply is never reinterpreted as the assigned crafter's input");
+    assert.deepEqual(wrongSource?.comparisons, []);
+  } finally { store.close(); }
+});
+
+test("CRAFT input freshness keeps a future-dated prior section from being masked by another section", () => {
+  const baseAt = 1_700_000_000;
+  const { store, identityKey } = seedStore({ generatedAt: baseAt, bags: { observedAt: baseAt + 1_000, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { observedAt: baseAt, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: baseAt + 100, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { observedAt: baseAt + 100, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } }));
+    const need = { stableId: "craft_input", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [{ stableId: "craft_freshness", kind: "CRAFT", status: "PLANNED", title: "Review inputs", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey }] };
+    const input = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 101).workOrderProgress[0]?.craftInputObservationReviews?.[0];
+    assert.equal(input?.state, "UNKNOWN", "a future-dated prior section makes the paired before/after result unreliable");
+    assert.equal(input?.freshness, "recent", "current section timestamps are evaluated separately from historical freshness");
+    assert.equal(input?.previousFreshness, "unknown", "the future-dated earlier bag observation cannot be hidden by its recent bank timestamp");
+    assert.deepEqual(input?.comparisons.map(({ section }) => section), ["bags", "character bank"]);
+  } finally { store.close(); }
+});
+
 test("procurement ceiling is a limit, not a gold resource requirement or reservation", () => {
   const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 300 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } });
   try {
