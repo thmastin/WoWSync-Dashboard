@@ -18,7 +18,7 @@ export interface GearReviewEvidence {
 export interface GearReviewComparison {
   upgradeStatus: string;
   confidence: string;
-  rawComparisons: Array<{ slot: number; equippedItemRef: string; values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>; classification: string; reason: string }>;
+  rawComparisons: Array<{ slot: number; equippedItemRef: string; values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; labelProvenance: "LIVE_VALIDATED_FOREVER_70291" | "FOREVER_GLOBALSTRINGS_70205" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>; classification: string; reason: string }>;
 }
 export interface GearReviewCharacterEvidence {
   observedAt?: number;

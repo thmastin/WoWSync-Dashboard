@@ -1,5 +1,7 @@
 /** Forever 1.60.1 / build 70291 only. No Retail equipment or weighting rules. */
 
+import { FOREVER_STAT_LABELS } from "./foreverStatLabels.ts";
+
 export type ForeverSlotEvidence = {
   slot: number;
   itemRef?: string;
@@ -9,18 +11,33 @@ export type ForeverSlotEvidence = {
 
 export type ForeverStatEntry = { key: string; state: string; value?: unknown };
 export type ForeverStatTable = { state: string; complete: boolean; entries: ForeverStatEntry[] };
-export type ForeverStatPresentation = { label: string; labelState: "KNOWN" | "UNKNOWN" };
+export type ForeverStatPresentation = {
+  label: string;
+  labelState: "KNOWN" | "UNKNOWN";
+  labelProvenance: "LIVE_VALIDATED_FOREVER_70291" | "FOREVER_GLOBALSTRINGS_70205" | "UNKNOWN";
+};
 
-/** Labels verified for Forever 1.60.1 build 70291. Unknown raw keys stay unmapped. */
+/**
+ * Resolve only Forever stat identifiers. The data table is sourced from the
+ * versioned Forever enUS GlobalStrings snapshot; the Armor key also has direct
+ * 70291 tooltip validation. The key remains in the returned comparison as the
+ * authoritative raw identifier. This is presentation only and never affects
+ * eligibility or upgrade classification.
+ */
 export function presentForeverStatKey(key: string): ForeverStatPresentation {
-  if (key === "RESISTANCE0_NAME") return { label: "Armor", labelState: "KNOWN" };
-  return { label: "Unknown stat", labelState: "UNKNOWN" };
+  if (!Object.hasOwn(FOREVER_STAT_LABELS, key)) return { label: "Unknown stat", labelState: "UNKNOWN", labelProvenance: "UNKNOWN" };
+  const label = FOREVER_STAT_LABELS[key]!;
+  return {
+    label,
+    labelState: "KNOWN",
+    labelProvenance: key === "RESISTANCE0_NAME" ? "LIVE_VALIDATED_FOREVER_70291" : "FOREVER_GLOBALSTRINGS_70205",
+  };
 }
 
 export type ForeverStatComparison = {
   slot: number;
   equippedItemRef: string;
-  values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>;
+  values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; labelProvenance: ForeverStatPresentation["labelProvenance"]; candidate: number; equipped: number; delta: number }>;
   classification: "CANDIDATE_DOMINATES_RECORDED_STATS" | "EQUIPPED_DOMINATES_RECORDED_STATS" | "STAT_TRADEOFF" | "RECORDED_STAT_TIE";
   provenance: "DERIVED";
   reason: string;

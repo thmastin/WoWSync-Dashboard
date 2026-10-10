@@ -16,7 +16,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   recipient: { identityKey: "forever::classic-beta-pvp-2::hallo", name: "Hallo", realm: "Classic Beta PvP 2" },
   evidence: { provenance: "DERIVED", eligibility: "UNKNOWN", suitability: "UNKNOWN", transferability: "UNKNOWN", confidence: "UNKNOWN", reasons: ["Eligibility and transfer route are unknown."], whatWouldChange: ["Capture a validated eligibility result."] },
   // Observed Hallo/Fizzwick values are retained exactly; no allocation verdict is fabricated by this fixture.
-  comparison: { upgradeStatus: "UNKNOWN", confidence: "UNKNOWN", rawComparisons: [{ slot: 10, equippedItemRef: "item:6171", values: [{ key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", candidate: 7, equipped: 2, delta: 5 }], classification: "CANDIDATE_DOMINATES_RECORDED_STATS", reason: "Armor: candidate 7 vs equipped 2 (+5 Armor); this one metric is not a full upgrade assessment." }] },
+  comparison: { upgradeStatus: "UNKNOWN", confidence: "UNKNOWN", rawComparisons: [{ slot: 10, equippedItemRef: "item:6171", values: [{ key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", labelProvenance: "LIVE_VALIDATED_FOREVER_70291", candidate: 7, equipped: 2, delta: 5 }, { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", label: "damage per second", labelState: "KNOWN", labelProvenance: "FOREVER_GLOBALSTRINGS_70205", candidate: 3, equipped: 2, delta: 1 }], classification: "CANDIDATE_DOMINATES_RECORDED_STATS", reason: "Armor: candidate 7 vs equipped 2 (+5 Armor); this one metric is not a full upgrade assessment." }] },
   ...overrides,
 });
 const response = (rows: unknown[], version = "forever", ruleset = "forever-70291-allocation-screen-v2") => ({
@@ -44,18 +44,20 @@ test("the documented Fizzwick armor comparison is labeled while overall upgrade 
   assert.equal(comparison?.values[0]?.key, "RESISTANCE0_NAME", "the original key remains available for provenance");
   assert.equal(comparison?.values[0]?.label, "Armor");
   assert.equal(comparison?.values[0]?.delta, 5);
+  assert.equal(comparison?.values[0]?.labelProvenance, "LIVE_VALIDATED_FOREVER_70291");
   assert.match(comparison?.reason ?? "", /Armor: candidate 7 vs equipped 2 \(\+5 Armor\)/);
   assert.equal(group?.recipients[0]?.evidence.transferability, "UNKNOWN");
   assert.equal(group?.recipients[0]?.recipientEvidence.class?.value, "Hunter");
   assert.equal(group?.recipients[0]?.recipientEvidence.equipment.freshness, "FRESH");
 });
 
-test("Forever Gear Review renders the verified Armor label and signed Armor delta", () => {
+test("Forever Gear Review renders client-resolved stat labels without exposing raw keys", () => {
   const group = buildForeverGearReview([{ recipientIdentityKey: "forever::classic-beta-pvp-2::hallo", result: response([row()]) }])[0]!;
   const comparison = group.recipients[0]!.comparison!.rawComparisons[0]!;
   const markup = renderToStaticMarkup(createElement(ForeverComparisonDetail, { comparison, slot: 8 }));
   assert.equal(group.recipients[0]?.comparison?.rawComparisons[0]?.values[0]?.label, "Armor");
   assert.match(markup, /Armor: 7 vs 2 \(\+5 Armor\)/);
+  assert.match(markup, /damage per second: 3 vs 2 \(\+1 damage per second\)/);
   assert.doesNotMatch(markup, /RESISTANCE0_NAME/);
 });
 

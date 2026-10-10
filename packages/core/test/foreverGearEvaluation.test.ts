@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { FOREVER_STAT_LABELS } from "../src/foreverStatLabels.ts";
 import {
   assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta,
   classifyForeverRecordedUpgrade, compareForeverStatTables,
@@ -58,14 +60,36 @@ test("complete raw stat vectors distinguish dominance, losses, ties, and trade-o
   assert.equal(compareForeverStatTables(table({ ITEM_MOD_STAMINA_SHORT: 5 }, false), table({ ITEM_MOD_STAMINA_SHORT: 4 }), 5, "item:old"), undefined);
 });
 
-test("Forever stat presentation labels the verified resistance key as Armor and preserves unknown keys", () => {
+test("Forever stat presentation resolves the pinned client vocabulary and preserves label provenance", () => {
+  const vocabulary = Object.entries(FOREVER_STAT_LABELS).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  assert.equal(vocabulary.length, 140, "the source vocabulary should not shrink silently");
+  assert.equal(createHash("sha256").update(JSON.stringify(vocabulary)).digest("hex"), "9127b98b8343d8864bc520291261b3dde9ed978401012efae8460646d75260a4", "the complete key/label table should match its reviewed source snapshot");
+  for (const [key, expectedLabel] of vocabulary) {
+    const expectedProvenance = key === "RESISTANCE0_NAME" ? "LIVE_VALIDATED_FOREVER_70291" : "FOREVER_GLOBALSTRINGS_70205";
+    assert.deepEqual(presentForeverStatKey(key), { label: expectedLabel, labelState: "KNOWN", labelProvenance: expectedProvenance }, key);
+  }
+  for (const [key, expectedLabel] of [
+    ["ITEM_MOD_STRENGTH_SHORT", "Strength"],
+    ["ITEM_MOD_STAMINA_SHORT", "Stamina"],
+    ["ITEM_MOD_DAMAGE_PER_SECOND_SHORT", "damage per second"],
+    ["RESISTANCE0_NAME", "Armor"],
+    ["RESISTANCE2_NAME", "Fire Resistance"],
+  ]) {
+    assert.equal(presentForeverStatKey(key).label, expectedLabel);
+  }
+  assert.deepEqual(presentForeverStatKey("FUTURE_UNKNOWN_STAT"), { label: "Unknown stat", labelState: "UNKNOWN", labelProvenance: "UNKNOWN" });
+  assert.deepEqual(presentForeverStatKey("ITEM_MOD_CR_UNUSED_1_SHORT"), { label: "Unknown stat", labelState: "UNKNOWN", labelProvenance: "UNKNOWN" }, "placeholder globals are not treated as meaningful labels");
+  assert.deepEqual(presentForeverStatKey("toString"), { label: "Unknown stat", labelState: "UNKNOWN", labelProvenance: "UNKNOWN" }, "inherited object keys do not resolve as stats");
+});
+
+test("Forever comparisons retain raw identifiers and exact numeric results without changing classification", () => {
   const comparison = compareForeverStatTables(table({ RESISTANCE0_NAME: 7 }), table({ RESISTANCE0_NAME: 2 }), 8, "item:old")!;
-  assert.deepEqual(comparison.values[0], { key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", candidate: 7, equipped: 2, delta: 5 });
+  assert.deepEqual(comparison.values[0], { key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", labelProvenance: "LIVE_VALIDATED_FOREVER_70291", candidate: 7, equipped: 2, delta: 5 });
   assert.match(comparison.reason, /Armor: candidate 7 vs equipped 2 \(\+5 Armor\)/);
-  assert.deepEqual(presentForeverStatKey("FUTURE_UNKNOWN_STAT"), { label: "Unknown stat", labelState: "UNKNOWN" });
   const unknown = compareForeverStatTables(table({ FUTURE_UNKNOWN_STAT: 7 }), table({ FUTURE_UNKNOWN_STAT: 2 }), 8, "item:old")!;
-  assert.deepEqual(unknown.values[0], { key: "FUTURE_UNKNOWN_STAT", label: "Unknown stat", labelState: "UNKNOWN", candidate: 7, equipped: 2, delta: 5 });
+  assert.deepEqual(unknown.values[0], { key: "FUTURE_UNKNOWN_STAT", label: "Unknown stat", labelState: "UNKNOWN", labelProvenance: "UNKNOWN", candidate: 7, equipped: 2, delta: 5 });
   assert.match(unknown.reason, /Unknown stat: candidate 7 vs equipped 2 \(\+5\)/);
+  assert.equal(unknown.classification, "CANDIDATE_DOMINATES_RECORDED_STATS", "label lookup has no effect on comparison decisions");
 });
 
 test("stat delta direction is calibrated against exact GetItemStats values, never guessed", () => {
