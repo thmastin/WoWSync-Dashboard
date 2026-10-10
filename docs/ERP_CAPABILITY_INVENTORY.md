@@ -1,6 +1,6 @@
 # WoWSync ERP capability inventory
 
-Updated: 2026-10-10, Phase 58-59. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
+Updated: 2026-10-10, Phase 60. This is a cumulative status view, not a claim that every domain is live-validated. See the linked phase reports and `ERP_PLANNING.md` for contracts and limits.
 
 | Capability | Status | What a player can do / evidence status |
 |---|---|---|
@@ -21,8 +21,8 @@ Updated: 2026-10-10, Phase 58-59. This is a cumulative status view, not a claim 
 | Observation-backed reconciliation | Partial; synthetic-tested | Shows comparable resource deltas, staleness, and contradictions with cause UNKNOWN. It cannot attribute disappearance/increase to a particular action or infer completion. |
 | REST, AccountContext, MCP consistency | Implemented; automated-tested | Existing project/read-model projections are shared. MCP is read-only; project mutations remain player-authored through Dashboard/REST. |
 | Browser workflow | Implemented; synthetic browser-tested | Temporary SQLite and headless-browser scenarios exercise project needs, planning, reservations, manual orders, evidence, and parity. These fixtures are not real-account or game validation. |
-| Dependency-ordered portfolio fulfillment package | Partial | Existing within-project tasks can declare prerequisites; the cross-project composer currently creates at most one task for each selected need and does not author a multi-project sequence as one dependency graph. |
-| Automatic cross-project optimizer / route scheduler | Missing | No global solver chooses craft/gather/buy/retrieve combinations, optimizes competing resources, or automatically schedules dependency graphs. |
+| Dependency-ordered portfolio fulfillment package (Phase 60) | Implemented; synthetic browser-tested only | Across selected needs in up to 10 active same-version projects, the player can connect manual steps to fully qualified prerequisite project/need references. Core readiness requires the prerequisite need to be currently covered by recent OBSERVED evidence; stale, partial, missing, and shortfall evidence blocks. Same-version existence and acyclic links are checked at request time and again inside the SQLite write transaction. UI, REST, AccountContext, and MCP expose the same qualified links/readiness. These links express a player-authored evidence gate, not action causation, recipe inference, ownership, access, or execution. |
+| Automatic cross-project optimizer / route scheduler | Missing | No global solver chooses craft/gather/buy/retrieve combinations, optimizes competing resources, or automatically schedules dependency graphs. The Phase 60 links are entered and reviewed by the player. |
 | Verified general craft execution, market prices, and causal action attribution | Missing or unsupported | Must remain unknown until version-specific evidence and safe contracts exist. |
 | Broader multi-character allocation and version-specific live acceptance | Requires live validation | Automated fixtures test logic. Current real observations validate only their documented characters/events and cannot establish account membership or general transfer rules. |
 

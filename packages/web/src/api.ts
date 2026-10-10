@@ -406,6 +406,8 @@ export interface ErpWorkOrderBatchTaskDraft {
   readonly spendingCeilingCopper?: number;
   /** For an INVESTIGATE step only: a version-scoped, observed source-screen lead; not an ownership/access claim. */
   readonly sourceLeadIdentityKey?: string;
+  /** Same-version requirement gates selected for a player-authored portfolio package. */
+  readonly portfolioPrerequisites?: readonly { readonly projectId: string; readonly needId: string }[];
 }
 
 export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly tasks: readonly ErpWorkOrderBatchTaskDraft[] }[]) {

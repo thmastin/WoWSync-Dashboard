@@ -1266,8 +1266,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.match(await firstEvidence.innerText(), /2 observed/);
     assert.match(await firstEvidence.innerText(), /2 active needs \/ 8 planned units · 1 exact-scope units reserved/);
     assert.match(await firstEvidence.innerText(), /1 observed lower-bound units not reserved/);
-    const firstTask = composer.locator("fieldset").filter({ hasText: "Provision the crafter: Mycobloom" });
-    const secondTask = composer.locator("fieldset").filter({ hasText: "Prepare the second recipe: Briarthorn" });
+    const firstTask = composer.getByRole("group", { name: "Provision the crafter: Mycobloom" });
+    const secondTask = composer.getByRole("group", { name: "Prepare the second recipe: Briarthorn" });
+    assert.equal(await composer.locator('select[aria-label^="Portfolio prerequisites for "]').count(), 3);
+    const secondPrerequisites = composer.getByLabel("Portfolio prerequisites for Briarthorn", { exact: true });
+    await secondPrerequisites.selectOption(JSON.stringify([first.stableId, "mycobloom_need"]));
+    const firstPrerequisites = composer.getByLabel("Portfolio prerequisites for Mycobloom", { exact: true });
+    await firstPrerequisites.selectOption(JSON.stringify([second.stableId, "briar_need"]));
+    assert.match(await composer.getByRole("alert").innerText(), /contain a cycle/);
+    assert.equal(await composer.getByRole("button", { name: "Create 3 planned manual steps" }).isDisabled(), true, "the UI refuses a cyclic player-authored package");
+    await firstPrerequisites.selectOption([]);
     await firstTask.getByLabel("Manual step type").selectOption("INVESTIGATE");
     const sourceLead = firstTask.getByLabel("Observed source to investigate for Mycobloom");
     assert.equal(await sourceLead.locator("option").filter({ hasText: /Possible Source Lead/ }).count(), 1);
@@ -1276,7 +1284,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     await secondTask.getByLabel("Manual step type").selectOption("PURCHASE");
     await secondTask.getByLabel("Assigned same-version character").selectOption(source.character.identityKey);
     await secondTask.getByLabel("Purchase spending ceiling for Briarthorn").fill("25000");
-    const thirdTask = composer.locator("fieldset").filter({ hasText: "Provision the reserve crafter: Mycobloom reserve" });
+    const thirdTask = composer.getByRole("group", { name: "Provision the reserve crafter: Mycobloom reserve" });
     await thirdTask.getByLabel("Manual step type").selectOption("GATHER");
     const firstReserve = firstTask.getByLabel("Optional reservation quantity for Mycobloom");
     const thirdReserve = thirdTask.getByLabel("Optional reservation quantity for Mycobloom reserve");
@@ -1302,6 +1310,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.match(await investigationOrder.innerText(), /Observed source lead to investigate: Possible Source Lead/);
     assert.match(await investigationOrder.innerText(), /Account membership, access, and transferability remain UNKNOWN/);
     assert.deepEqual(secondRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["PURCHASE", "PLANNED", ["briar_need"]]]);
+    assert.deepEqual(secondRead.workOrders[0].portfolioPrerequisites, [{ projectId: first.stableId, needId: "mycobloom_need" }]);
+    assert.equal(secondRead.workOrderReadiness[0].state, "WAITING_FOR_PORTFOLIO_PREREQUISITE");
+    assert.equal(secondRead.workOrderReadiness[0].portfolioPrerequisites[0].state, "OBSERVED_SHORTFALL");
+    const downstreamOrder = page.locator(".erp-work-order-list li").filter({ has: page.getByText("Review fulfillment: Briarthorn", { exact: true }) });
+    assert.match(await downstreamOrder.innerText(), /Waiting for a portfolio prerequisite observation/);
+    assert.match(await downstreamOrder.innerText(), /Provision the crafter: Mycobloom/);
     assert.deepEqual(secondRead.workOrders[0].procurementPlan, { targetNeedId: "briar_need", spendingCeilingCopper: 25000 }, "the player-set copper limit remains linked to the selected item need");
     assert.deepEqual(thirdRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds]), [["GATHER", "PLANNED", ["reserve_myco_need"]]]);
     assert.deepEqual(firstRead.reservations.map((reservation) => [reservation.quantity, reservation.status]), [[1, "ACTIVE"], [1, "ACTIVE"]], "the accepted player request is recorded beside the existing reservation");
@@ -1311,6 +1325,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(context.planning.projects.some((project) => project.title === firstRead.title && project.revision === firstRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === secondRead.title && project.revision === secondRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
+    assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
@@ -1320,6 +1335,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
       assert.deepEqual(mcpProjectsById.get(project.stableId).reservations, project.reservations, "MCP and REST expose the same explicit reservation intent");
     }
     assert.equal(mcpProjectsById.get(firstRead.stableId).workOrders[0].investigationSourceLeadIdentityKey, observedLead.character.identityKey, "MCP preserves the lead as a separate field from the need source");
+    assert.deepEqual(mcpProjectsById.get(secondRead.stableId).workOrders[0].portfolioPrerequisites, secondRead.workOrders[0].portfolioPrerequisites, "MCP and REST preserve the cross-project prerequisite link");
+    assert.deepEqual(mcpProjectsById.get(secondRead.stableId).workOrderReadiness[0].portfolioPrerequisites, secondRead.workOrderReadiness[0].portfolioPrerequisites, "MCP and REST expose the same prerequisite evidence state");
     store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now + 20, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now + 20), bank: observedSection([], now + 20) }));
     await page.reload();
     const afterObservation = await read();

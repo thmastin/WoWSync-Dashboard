@@ -63,6 +63,12 @@ export interface ErpProcurementPlan {
   readonly playerQuote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly sourceNote?: string };
 }
 
+/** Player-authored portfolio prerequisite. It links to a need, not proof that its work or intended action occurred. */
+export interface ErpPortfolioNeedReference {
+  readonly projectId: string;
+  readonly needId: string;
+}
+
 export interface ErpWorkOrder {
   readonly stableId: string;
   readonly kind: ErpWorkOrderType;
@@ -78,6 +84,8 @@ export interface ErpWorkOrder {
   readonly outputObservationIdentityKey?: string;
   readonly resourceNeedIds: readonly string[];
   readonly dependsOn: readonly string[];
+  /** Optional cross-project evidence gates; only recent observed coverage satisfies them. */
+  readonly portfolioPrerequisites?: readonly ErpPortfolioNeedReference[];
   /** Optional player intent. A plan does not add output to observed supply. */
   readonly plannedOutput?: ErpPlannedCraftOutput;
   /** Optional procurement intent; market availability and price remain unknown until observed by the player. */
@@ -189,6 +197,16 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
     if (!(ERP_WORK_ORDER_TYPES as readonly string[]).includes(w.kind) || !(ERP_WORK_ORDER_STATUSES as readonly string[]).includes(w.status)) fail("INVALID_WORK_ORDER_STATE", "Unsupported work order type or status.");
     if (!hasValue(w.title) || w.title.length > 160 || (w.instructions !== undefined && w.instructions.length > 4000)) fail("INVALID_WORK_ORDER_TEXT", "Work order title/instructions exceed their limits.");
     if (!Array.isArray(w.dependsOn) || !Array.isArray(w.resourceNeedIds)) fail("INVALID_WORK_ORDER_LINKS", "Work order dependencies and resource links must be arrays.");
+    if (w.portfolioPrerequisites !== undefined) {
+      if (!Array.isArray(w.portfolioPrerequisites) || w.portfolioPrerequisites.length > 10) fail("INVALID_PORTFOLIO_PREREQUISITES", "A work order may name at most 10 portfolio prerequisite needs.");
+      const refs = new Set<string>();
+      for (const ref of w.portfolioPrerequisites) {
+        if (!ref || typeof ref !== "object" || !hasValue(ref.projectId) || ref.projectId.length > 120 || !hasValue(ref.needId) || ref.needId.length > 120) fail("INVALID_PORTFOLIO_PREREQUISITES", "Each portfolio prerequisite must name a bounded project and need ID.");
+        const key = `${ref.projectId}\u0000${ref.needId}`;
+        if (refs.has(key)) fail("INVALID_PORTFOLIO_PREREQUISITES", "Portfolio prerequisite references must be unique.");
+        refs.add(key);
+      }
+    }
     identity(w.assignedIdentityKey, "Assigned character"); identity(w.sourceIdentityKey, "Work order source"); identity(w.investigationSourceLeadIdentityKey, "Investigation source lead"); identity(w.destinationIdentityKey, "Work order destination"); identity(w.outputObservationIdentityKey, "Craft output observation character");
     if (w.investigationSourceLeadIdentityKey !== undefined && w.kind !== "INVESTIGATE") fail("INVALID_INVESTIGATION_SOURCE_LEAD", "An observed source lead can be attached only to a manual INVESTIGATE work order.");
     if (w.outputObservationIdentityKey !== undefined && (w.kind !== "CRAFT" || w.plannedOutput === undefined)) fail("INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET", "An output observation character is supported only for a CRAFT work order with a declared planned output.");
@@ -800,7 +818,7 @@ export function buildErpResourceCommitmentSummary(projects: readonly ErpProjectV
 
 export interface ErpWorkOrderReadiness {
   readonly workOrderId: string;
-  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "OBSERVED_RESOURCE_SHORTFALL" | "MANUAL_SUPPLY_STEP_RECOMMENDED" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
+  readonly state: "PROJECT_NOT_ACTIVE" | "TERMINAL" | "BLOCKED_BY_DEPENDENCY" | "WAITING_FOR_PORTFOLIO_PREREQUISITE" | "OBSERVED_RESOURCE_SHORTFALL" | "MANUAL_SUPPLY_STEP_RECOMMENDED" | "RESOURCE_ALLOCATION_REQUIRES_REVIEW" | "WAITING_FOR_EVIDENCE" | "OBSERVATION_CHANGED_REQUIRES_REVIEW" | "READY_FOR_PLAYER_REVIEW";
   readonly blockingWorkOrderIds: readonly string[];
   readonly unresolvedNeedIds: readonly string[];
   readonly actionTargetNeedIds: readonly string[];
@@ -808,6 +826,20 @@ export interface ErpWorkOrderReadiness {
   readonly capabilityChecks?: readonly ErpCraftingCapabilityCheck[];
   readonly linkedNeeds?: readonly ErpWorkOrderNeedCheck[];
   readonly procurementAssessment?: ErpProcurementAssessment;
+  readonly portfolioPrerequisites?: readonly ErpPortfolioPrerequisiteCheck[];
+  readonly reason: string;
+}
+
+export interface ErpPortfolioPrerequisiteCheck {
+  readonly projectId: string;
+  readonly projectTitle: string;
+  readonly needId: string;
+  readonly label?: string;
+  readonly state: "OBSERVED_MET" | "OBSERVED_SHORTFALL" | "UNKNOWN" | "MISSING";
+  readonly requiredQuantity?: number;
+  readonly observedQuantity?: number;
+  readonly freshness: Freshness;
+  readonly observedAt?: number;
   readonly reason: string;
 }
 
@@ -1446,6 +1478,25 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     return assessErpNeed({ ...need, sourceIdentityKey: order.assignedIdentityKey, sourceOwnerKey: undefined }, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
   };
   const workOrderReadiness: ErpWorkOrderReadiness[] = project.workOrders.map((order) => {
+    const portfolioPrerequisites: ErpPortfolioPrerequisiteCheck[] = (order.portfolioPrerequisites ?? []).map((reference) => {
+      const prerequisiteProject = allProjects.find((candidate) => candidate.stableId === reference.projectId && candidate.version === project.version);
+      if (!prerequisiteProject) return { ...reference, projectTitle: "Unavailable same-version project", state: "MISSING", freshness: "unknown", reason: "The referenced project is not available in this explicitly selected version. No cross-version project was read." };
+      const prerequisiteNeed = prerequisiteProject.needs.find((candidate) => candidate.stableId === reference.needId);
+      if (!prerequisiteNeed) return { ...reference, projectTitle: prerequisiteProject.title, state: "MISSING", freshness: "unknown", reason: "The referenced prerequisite requirement is no longer present; review the saved portfolio link." };
+      const rawEvidence = prerequisiteNeed.sourceOwnerKey
+        ? assessSharedStorageNeed(prerequisiteNeed, sharedStorage, now)
+        : assessErpNeed(prerequisiteNeed, prerequisiteNeed.sourceIdentityKey ? snapshotsFor(prerequisiteNeed.sourceIdentityKey) : [], now, currencies, project.version);
+      const evidence = applyReservationAssessment(prerequisiteNeed, rawEvidence, allProjects, project.version);
+      const state: ErpPortfolioPrerequisiteCheck["state"] = evidence.freshness !== "recent" || evidence.observedAt === undefined ? "UNKNOWN"
+        : evidence.state === "COVERED_BY_OBSERVED" ? "OBSERVED_MET"
+          : evidence.state === "SHORTFALL_OBSERVED" ? "OBSERVED_SHORTFALL" : "UNKNOWN";
+      return { ...reference, projectTitle: prerequisiteProject.title, needId: prerequisiteNeed.stableId, label: prerequisiteNeed.label, state,
+        requiredQuantity: prerequisiteNeed.requiredQuantity, ...(evidence.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), freshness: evidence.freshness,
+        ...(evidence.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), reason: state === "OBSERVED_MET"
+          ? `Recent observed evidence covers this prerequisite (${evidence.observedQuantity} observed of ${evidence.requiredQuantity} required). This confirms the need evidence only; it does not establish which action occurred.`
+          : state === "OBSERVED_SHORTFALL" ? `Recent observed evidence is below this prerequisite (${evidence.observedQuantity} observed of ${evidence.requiredQuantity} required).`
+            : `This prerequisite is ${evidence.state.replaceAll("_", " ")} with ${evidence.freshness} freshness; current satisfaction remains UNKNOWN. ${evidence.reason}` };
+    });
     const capabilityChecks: ErpCraftingCapabilityCheck[] = order.kind === "CRAFT" ? order.resourceNeedIds.flatMap<ErpCraftingCapabilityCheck>((needId): ErpCraftingCapabilityCheck[] => {
       const need = project.needs.find((entry) => entry.stableId === needId);
       if (!need || (need.kind !== "PROFESSION" && need.kind !== "RECIPE")) return [];
@@ -1533,7 +1584,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
           : playerQuote ? " The quote cannot be compared with a strictly later recent gross-gold snapshot after recorded reservations." : "";
       return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, recordedGoldReservationState, recordedGoldReservationsCopper: goldReservationEvidence.activeQuantity, ...(recordedGoldRemainder !== undefined ? { recordedGoldAfterReservationsCopper: recordedGoldRemainder } : {}), spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, ...(budgetNeedAssessment ? { budgetNeedAssessment } : {}), quoteState, quoteVsPlannedBudgetState, ...(quoteVsPlannedBudgetState === "PLAYER_QUOTE_AT_OR_BELOW_PLANNED_BUDGET" || quoteVsPlannedBudgetState === "PLAYER_QUOTE_ABOVE_PLANNED_BUDGET" ? { quoteVsPlannedBudgetCopper: budgetNeedAssessment!.need.requiredQuantity } : {}), quoteVsRecordedGoldState, ...(quoteVsRecordedGoldState !== "EVIDENCE_NOT_COMPARABLE" && quoteVsRecordedGoldState !== "NO_PLAYER_REPORTED_QUOTE" ? { quoteVsRecordedGoldRemainderCopper: recordedGoldRemainder } : {}), ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${plannedBudgetText}${quoteText}${reservationText}${quoteGoldText}${quotePlannedBudgetText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
     })() : undefined;
-    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}) };
+    const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}), ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);
     const staleOrUnknown = linkedEvidence.filter((evidence) => evidence.state !== "COVERED_BY_OBSERVED" || evidence.freshness === "stale" || evidence.freshness === "unknown");
     const changedNeedEvidence = linkedEvidence.filter((evidence) => evidence.observationChange?.comparisons.some((comparison) => comparison.delta !== 0));
@@ -1548,6 +1599,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     if (project.status !== "ACTIVE") return { ...base, state: "PROJECT_NOT_ACTIVE", reason: `The project is ${project.status}; no next action is presented until the player resumes an active project.` };
     const blockingWorkOrderIds = order.dependsOn.filter((dependencyId) => project.workOrders.find((candidate) => candidate.stableId === dependencyId)?.status !== "COMPLETED");
     if (blockingWorkOrderIds.length) return { ...base, state: "BLOCKED_BY_DEPENDENCY", blockingWorkOrderIds, reason: `Complete and record these prerequisite work orders first: ${blockingWorkOrderIds.join(", ")}. A cancelled prerequisite does not satisfy a dependency.` };
+    const unmetPortfolioPrerequisites = portfolioPrerequisites.filter((check) => check.state !== "OBSERVED_MET");
+    if (unmetPortfolioPrerequisites.length) return { ...base, state: "WAITING_FOR_PORTFOLIO_PREREQUISITE", reason: `This player-authored package step is waiting for prerequisite evidence in ${unmetPortfolioPrerequisites.map((check) => `${check.projectTitle}: ${check.label ?? check.needId} (${check.state.replaceAll("_", " ")})`).join("; ")}. A prerequisite must be currently OBSERVED as met; task completion text, stale supply, or intended actions do not substitute for that evidence.` };
     const unmetCapabilities = capabilityChecks.filter((check) => check.state === "REQUIREMENT_NOT_MET");
     if (unmetCapabilities.length) return { ...base, state: "OBSERVED_RESOURCE_SHORTFALL", unresolvedNeedIds: unmetCapabilities.map((check) => check.needId), reason: `${unmetCapabilities.map((check) => check.reason).join(" ")} This is a character capability shortfall, not a substitute crafter recommendation.` };
     const unresolvedCapabilities = capabilityChecks.filter((check) => check.state !== "SUPPORTED_FOR_ASSIGNEE");

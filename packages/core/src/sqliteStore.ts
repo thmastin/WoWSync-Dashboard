@@ -4,6 +4,32 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
 import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
+
+function validatePortfolioNeedDependencies(projects: readonly ErpProject[]): void {
+  const byId = new Map(projects.map((project) => [project.stableId, project]));
+  const graph = new Map<string, string[]>();
+  const node = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
+  for (const project of projects) for (const order of project.workOrders) {
+    const dependencies = (order.portfolioPrerequisites ?? []).map((reference) => {
+      const prerequisite = byId.get(reference.projectId);
+      if (!prerequisite || prerequisite.version !== project.version || !prerequisite.needs.some((need) => need.stableId === reference.needId)) throw new ErpProjectConflictError("PORTFOLIO_PREREQUISITE_STALE", "A portfolio prerequisite must refer to a current need in the same game version.");
+      return node(reference.projectId, reference.needId);
+    });
+    for (const needId of order.resourceNeedIds) {
+      const key = node(project.stableId, needId);
+      graph.set(key, [...(graph.get(key) ?? []), ...dependencies]);
+    }
+  }
+  const visiting = new Set<string>(); const visited = new Set<string>();
+  const hasCycle = (key: string): boolean => {
+    if (visiting.has(key)) return true;
+    if (visited.has(key)) return false;
+    visiting.add(key);
+    for (const dependency of graph.get(key) ?? []) if (hasCycle(dependency)) return true;
+    visiting.delete(key); visited.add(key); return false;
+  };
+  if ([...graph.keys()].some(hasCycle)) throw new ErpProjectConflictError("PORTFOLIO_DEPENDENCY_CYCLE", "Portfolio prerequisite needs cannot form a dependency cycle.");
+}
 import {
   DemandConflictError,
   storedDemandToExplicitDemand,
@@ -1625,6 +1651,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     };
     validateErpProject(project, (key) => this.getCharacter(key)?.version === project.version);
     this.inTransaction(() => {
+      validatePortfolioNeedDependencies([...this.listErpProjects(project.version), project]);
       this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
         .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
       this.recordErpProjectEvent(project, "CREATED", ["project"]);
@@ -1642,6 +1669,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const changedFields = trackedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(project[field]));
       const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
       validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+      validatePortfolioNeedDependencies(this.listErpProjects(updated.version).map((candidate) => candidate.stableId === updated.stableId ? updated : candidate));
       const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
         .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
       if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
@@ -1669,6 +1697,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (existingProjects.some((project) => !project)) return undefined;
       const existing = existingProjects as ErpProject[];
       const currentViews = new Map(new DashboardReadModel(this).getErpProjects({ version }).map((project) => [project.stableId, project]));
+      const portfolioProjects = new Map<string, ErpProject>([...currentViews].map(([id, view]) => [id, view]));
+      for (const entry of updates) {
+        const view = currentViews.get(entry.projectId);
+        if (!view) throw new ErpProjectConflictError("PORTFOLIO_PREREQUISITE_STALE", "A selected project changed before the portfolio plan could be committed.");
+        portfolioProjects.set(entry.projectId, { ...view, workOrders: [...view.workOrders, ...entry.workOrders] });
+      }
+      validatePortfolioNeedDependencies([...portfolioProjects.values()]);
       const proposed: Array<{ reservation: ErpReservation; review: ErpNeedReviewSnapshot }> = updates.flatMap((entry) => (entry.reservations ?? []).flatMap((reservation: ErpReservation | undefined, index: number) => reservation ? [{ reservation, review: entry.reviewSnapshots[index]! }] : []));
       const allocationGroups = new Map<string, { quantity: number; available: number; needId: string }>();
       for (const { reservation, review } of proposed) {

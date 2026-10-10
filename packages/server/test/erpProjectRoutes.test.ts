@@ -102,6 +102,60 @@ test("cross-project manual work is saved atomically from reviewed same-version e
   });
 });
 
+test("portfolio prerequisite links are version-scoped, cycle checked, and block until current evidence covers the need", async () => {
+  await withServer(async (call, store) => {
+    const at = Math.floor(Date.now() / 1000);
+    store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } }));
+    const identityKey = store.listCharacters("classic-era")[0]!.identityKey;
+    const prerequisite = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "First supply step", needs: [{ stableId: "shared-local-need-id", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "First supply", requiredQuantity: 5, sourceIdentityKey: identityKey }] })).body.project;
+    const dependent = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Downstream work", needs: [{ stableId: "shared-local-need-id", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Downstream supply", requiredQuantity: 3, sourceIdentityKey: identityKey }] })).body.project;
+    const retailProject = (await call("POST", "/api/versions/retail/erp/projects", { title: "Other version", needs: [{ stableId: "other", kind: "ITEM_ID", resourceKey: "159", label: "Other version need", requiredQuantity: 1 }] })).body.project;
+    const classic = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const first = classic.find((project: any) => project.stableId === prerequisite.stableId);
+    const second = classic.find((project: any) => project.stableId === dependent.stableId);
+    const task = (project: any, needId: string, portfolioPrerequisites: unknown[] = []) => ({ projectId: project.stableId, expectedRevision: project.revision, tasks: [{ needId, reviewSnapshot: buildErpNeedReviewSnapshot(project, needId), kind: "INVESTIGATE", title: `Review ${needId}`, instructions: "Review the prerequisite evidence and decide manually.", portfolioPrerequisites }] });
+    const wrongVersion = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(second, "shared-local-need-id", [{ projectId: retailProject.stableId, needId: "other" }])] });
+    assert.equal(wrongVersion.status, 409);
+    assert.equal(wrongVersion.body.code, "PORTFOLIO_PREREQUISITE_STALE", "a project from another version is not resolved through a co-located ID");
+    const missingNeed = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(second, "shared-local-need-id", [{ projectId: first.stableId, needId: "absent" }])] });
+    assert.equal(missingNeed.status, 409);
+    assert.equal(missingNeed.body.code, "PORTFOLIO_PREREQUISITE_STALE");
+    const accepted = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [task(second, "shared-local-need-id", [{ projectId: first.stableId, needId: "shared-local-need-id" }])] });
+    assert.equal(accepted.status, 200);
+    const saved = accepted.body.projects.find((project: any) => project.stableId === second.stableId);
+    assert.deepEqual(saved.workOrders[0].portfolioPrerequisites, [{ projectId: first.stableId, needId: "shared-local-need-id" }]);
+    assert.equal(saved.workOrderReadiness[0].state, "WAITING_FOR_PORTFOLIO_PREREQUISITE");
+    assert.equal(saved.workOrderReadiness[0].portfolioPrerequisites[0].state, "OBSERVED_SHORTFALL");
+    assert.deepEqual(saved.workOrderReadiness[0].unresolvedNeedIds, [], "a foreign prerequisite's project-local ID is not misreported as a need on the dependent project");
+    const context = await call("GET", "/api/account-context");
+    assert.deepEqual(context.body.planning.projects.find((project: any) => project.stableId === second.stableId).workOrderReadinessStates, { WAITING_FOR_PORTFOLIO_PREREQUISITE: 1 });
+    store.importSnapshot(buildWowSyncExport({ generatedAt: at + 1, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 5 }] }] }, bank: { containers: [] } }));
+    const afterEvidence = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((project: any) => project.stableId === second.stableId);
+    assert.equal(afterEvidence.workOrderReadiness[0].portfolioPrerequisites[0].state, "OBSERVED_MET", "a later same-version complete observation satisfies the evidence gate without completing either project");
+    assert.equal(afterEvidence.workOrderReadiness[0].state, "OBSERVATION_CHANGED_REQUIRES_REVIEW", "new evidence satisfies the gate, then the existing non-causal changed-observation guard asks the player to review the change");
+    assert.equal(afterEvidence.status, "ACTIVE", "portfolio evidence changes readiness but do not change saved project status");
+
+    const cycleA = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Cycle A", needs: [{ stableId: "a", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "A", requiredQuantity: 1, sourceIdentityKey: identityKey }] })).body.project;
+    const cycleB = (await call("POST", "/api/versions/classic-era/erp/projects", { title: "Cycle B", needs: [{ stableId: "b", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "B", requiredQuantity: 1, sourceIdentityKey: identityKey }] })).body.project;
+    const before = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const cycle = await call("POST", "/api/versions/classic-era/erp/work-order-batches", { updates: [
+      task(before.find((project: any) => project.stableId === cycleA.stableId), "a", [{ projectId: cycleB.stableId, needId: "b" }]),
+      task(before.find((project: any) => project.stableId === cycleB.stableId), "b", [{ projectId: cycleA.stableId, needId: "a" }]),
+    ] });
+    assert.equal(cycle.status, 400);
+    assert.equal(cycle.body.code, "PORTFOLIO_DEPENDENCY_CYCLE");
+    const after = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [cycleA.stableId, cycleB.stableId].includes(project.stableId));
+    assert.deepEqual(after.map((project: any) => [project.revision, project.workOrders.length]), [[1, 0], [1, 0]], "a cyclic package is rejected without partial writes");
+    const addDependency = (project: any, workOrderId: string, prerequisiteProjectId: string, prerequisiteNeedId: string) => call("PUT", `/api/versions/classic-era/erp/projects/${project.stableId}`, { expectedRevision: project.revision, project: { title: project.title, status: project.status, priority: project.priority, needs: project.needs, reservations: project.reservations, workOrders: [...project.workOrders, { stableId: workOrderId, kind: "INVESTIGATE", status: "PLANNED", title: `Review ${workOrderId}`, instructions: "Review evidence manually.", resourceNeedIds: [project.needs[0].stableId], dependsOn: [], portfolioPrerequisites: [{ projectId: prerequisiteProjectId, needId: prerequisiteNeedId }] }] } });
+    const savedA = await addDependency(after.find((project: any) => project.stableId === cycleA.stableId), "cycle_a_task", cycleB.stableId, "b");
+    assert.equal(savedA.status, 200, "an existing same-version prerequisite can be linked to a manual project work order");
+    const latestB = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.find((project: any) => project.stableId === cycleB.stableId);
+    const reverse = await addDependency(latestB, "cycle_b_task", cycleA.stableId, "a");
+    assert.equal(reverse.status, 409, "ordinary project edits cannot bypass the portfolio cycle guard");
+    assert.equal(reverse.body.code, "PORTFOLIO_DEPENDENCY_CYCLE");
+  });
+});
+
 test("cross-project reservation requests are capacity checked together and saved atomically with work", async () => {
   await withServer(async (call, store) => {
     const at = Math.floor(Date.now() / 1000);

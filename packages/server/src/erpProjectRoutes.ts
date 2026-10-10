@@ -23,6 +23,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
       const project = store.createErpProject({ version, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
       res.status(201).json({ project: new DashboardReadModel(store).getErpProjects({ version }).find((entry) => entry.stableId === project.stableId) });
     } catch (err) {
+      if (err instanceof ErpProjectConflictError) return res.status(409).json({ error: err.message, code: err.code });
       if (err instanceof ErpProjectValidationError || err instanceof TypeError) return res.status(400).json({ error: err.message, code: err instanceof ErpProjectValidationError ? err.code : "INVALID_PROJECT" });
       throw err;
     }
@@ -35,8 +36,16 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const ids = new Set<string>();
     const selectedNeeds = new Set<string>();
     const workOrdersByProject: Array<{ projectId: string; expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[]; reservations: Array<ErpReservation | undefined> }> = [];
-    let totalOrders = 0;
     const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
+    const portfolioDependencyGraph = new Map<string, string[]>();
+    const needNode = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
+    for (const project of projectViews.values()) for (const order of project.workOrders) {
+      for (const needId of order.resourceNeedIds) {
+        const node = needNode(project.stableId, needId);
+        portfolioDependencyGraph.set(node, [...(portfolioDependencyGraph.get(node) ?? []), ...(order.portfolioPrerequisites ?? []).map((reference) => needNode(reference.projectId, reference.needId))]);
+      }
+    }
+    let totalOrders = 0;
     try {
       for (const update of updates) {
         if (!update || typeof update !== "object" || typeof update.projectId !== "string" || !update.projectId.trim() || !Number.isSafeInteger(update.expectedRevision) || !Array.isArray(update.tasks) || update.tasks.length < 1) return res.status(400).json({ error: "Every project group requires an ID, expected revision, and at least one task.", code: "INVALID_WORK_ORDER_BATCH" });
@@ -62,6 +71,22 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const currentReview = buildErpNeedReviewSnapshot(project, need.stableId);
           if (!currentReview || !isDeepStrictEqual(task.reviewSnapshot, currentReview)) return res.status(409).json({ error: `Evidence or saved source intent for ${need.label} changed after review. Refresh before creating a manual work order.`, code: "NEED_REVIEW_STALE" });
           reviewSnapshots.push(currentReview);
+          let portfolioPrerequisites: NonNullable<ErpWorkOrder["portfolioPrerequisites"]> = [];
+          if (task.portfolioPrerequisites !== undefined) {
+            if (!Array.isArray(task.portfolioPrerequisites) || task.portfolioPrerequisites.length > 10) return res.status(400).json({ error: "A manual step may name at most 10 same-version portfolio prerequisite needs.", code: "INVALID_PORTFOLIO_PREREQUISITES" });
+            const refs = new Set<string>();
+            for (const reference of task.portfolioPrerequisites) {
+              if (!reference || typeof reference.projectId !== "string" || typeof reference.needId !== "string") return res.status(400).json({ error: "Each portfolio prerequisite must name a project and need.", code: "INVALID_PORTFOLIO_PREREQUISITES" });
+              const key = needNode(reference.projectId, reference.needId);
+              if (refs.has(key) || key === needNode(project.stableId, need.stableId)) return res.status(400).json({ error: "Portfolio prerequisites must be unique and cannot refer to the task's own requirement.", code: "INVALID_PORTFOLIO_PREREQUISITES" });
+              refs.add(key);
+              const prerequisiteProject = projectViews.get(reference.projectId);
+              if (!prerequisiteProject || !prerequisiteProject.needs.some((entry) => entry.stableId === reference.needId)) return res.status(409).json({ error: "A portfolio prerequisite is missing from the explicitly selected game version; refresh the project review.", code: "PORTFOLIO_PREREQUISITE_STALE" });
+            }
+            portfolioPrerequisites = task.portfolioPrerequisites.map((reference: { projectId: string; needId: string }) => ({ projectId: reference.projectId, needId: reference.needId }));
+          }
+          const taskNode = needNode(project.stableId, need.stableId);
+          portfolioDependencyGraph.set(taskNode, [...(portfolioDependencyGraph.get(taskNode) ?? []), ...portfolioPrerequisites.map((reference) => needNode(reference.projectId, reference.needId))]);
           let reservation: ErpReservation | undefined;
           if (task.reservationQuantity !== undefined) {
             if (!Number.isSafeInteger(task.reservationQuantity) || task.reservationQuantity < 1 || task.reservationQuantity > 1_000_000_000) return res.status(400).json({ error: "A requested reservation quantity must be a positive bounded integer.", code: "INVALID_RESERVATION_REQUEST" });
@@ -85,11 +110,14 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const boundary = "SYSTEM EVIDENCE BOUNDARY: This is player-authored planning intent only. WoWSync did not execute or verify an in-game action. Recheck current version-specific requirements, evidence, ownership, access, routes, prices, and outcomes manually; unknowns remain UNKNOWN.";
           const instructions = `${task.instructions.trim()}\n\n${boundary}`;
           if (instructions.length > 4000) return res.status(400).json({ error: "Instructions plus the required evidence boundary exceed the work-order limit.", code: "INVALID_WORK_ORDER_TEXT" });
-          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...(need.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
+          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...(need.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
         }
         workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots, reservations });
       }
       if (totalOrders < 1 || totalOrders > 20) return res.status(400).json({ error: "A grouped update must contain between 1 and 20 work orders.", code: "INVALID_WORK_ORDER_BATCH" });
+      const visiting = new Set<string>(); const visited = new Set<string>();
+      const hasCycle = (node: string): boolean => { if (visiting.has(node)) return true; if (visited.has(node)) return false; visiting.add(node); for (const dependency of portfolioDependencyGraph.get(node) ?? []) if (hasCycle(dependency)) return true; visiting.delete(node); visited.add(node); return false; };
+      if ([...portfolioDependencyGraph.keys()].some(hasCycle)) return res.status(400).json({ error: "The selected portfolio prerequisites create a dependency cycle. No work or reservation was saved.", code: "PORTFOLIO_DEPENDENCY_CYCLE" });
       const saved = store.appendErpWorkOrdersAtomically(version, workOrdersByProject);
       if (!saved) return res.status(404).json({ error: "A selected project was removed before the grouped update could be committed.", code: "PROJECT_NOT_FOUND" });
       return res.json({ version, projects: read(version).filter((project) => ids.has(project.stableId)), createdCount: totalOrders, atomic: true });

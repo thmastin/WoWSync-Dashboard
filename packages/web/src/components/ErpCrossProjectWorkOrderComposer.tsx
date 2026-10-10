@@ -6,8 +6,8 @@ import { appendErpWorkOrderBatch, type ErpWorkOrderBatchTaskDraft } from "../api
 import type { CharacterFacts, VersionOrUnknown } from "../types.ts";
 
 type Version = Exclude<VersionOrUnknown, "unknown-version">;
-interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: string; assignedIdentityKey: string; sourceLeadIdentityKey: string; reservationQuantity: string; spendingCeilingCopper: string }
-const defaultDraft = (label: string): Draft => ({ kind: "INVESTIGATE", title: `Review fulfillment: ${label}`.slice(0, 160), instructions: "Review the current requirement, source evidence, reservations, and version-specific constraints. Decide the next manual step only after checking the game and current account evidence.", assignedIdentityKey: "", sourceLeadIdentityKey: "", reservationQuantity: "0", spendingCeilingCopper: "" });
+interface Draft { kind: ErpWorkOrder["kind"]; title: string; instructions: string; assignedIdentityKey: string; sourceLeadIdentityKey: string; reservationQuantity: string; spendingCeilingCopper: string; prerequisiteKeys: string[] }
+const defaultDraft = (label: string): Draft => ({ kind: "INVESTIGATE", title: `Review fulfillment: ${label}`.slice(0, 160), instructions: "Review the current requirement, source evidence, reservations, and version-specific constraints. Decide the next manual step only after checking the game and current account evidence.", assignedIdentityKey: "", sourceLeadIdentityKey: "", reservationQuantity: "0", spendingCeilingCopper: "", prerequisiteKeys: [] });
 
 /** Creates player-authored work across active projects using one version-scoped optimistic transaction. */
 export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, commitments, characters, busy, onSaved }: { version: Version; triage: ErpFulfillmentTriage; projects: readonly ErpProjectView[]; commitments: ErpResourceCommitmentSummary; characters: readonly CharacterFacts[]; busy: boolean; onSaved: () => void }) {
@@ -18,12 +18,24 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const eligibleCharacters = characters.filter((character) => character.identityKey.startsWith(`${version}::`));
-  const keyOf = (projectId: string, needId: string) => `${projectId}\u0000${needId}`;
+  const keyOf = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
   const rowFor = (key: string) => candidates.find((row) => keyOf(row.projectId, row.need!.stableId) === key);
+  const hasPackageCycle = useMemo(() => {
+    const selectedSet = new Set(selected); const visiting = new Set<string>(); const visited = new Set<string>();
+    const visit = (key: string): boolean => { if (visiting.has(key)) return true; if (visited.has(key)) return false; visiting.add(key); for (const next of drafts[key]?.prerequisiteKeys ?? []) if (selectedSet.has(next) && visit(next)) return true; visiting.delete(key); visited.add(key); return false; };
+    return selected.some(visit);
+  }, [drafts, selected]);
   const toggle = (row: typeof candidates[number]) => {
     const key = keyOf(row.projectId, row.need!.stableId);
+    if (selected.includes(key) && Object.entries(drafts).some(([draftKey, draft]) => draftKey !== key && selected.includes(draftKey) && draft.prerequisiteKeys.includes(key))) {
+      setError("This requirement is a prerequisite for another selected step. Remove that prerequisite link before removing the step from the package.");
+      return;
+    }
+    setError("");
     setSelected((current) => current.includes(key) ? current.filter((entry) => entry !== key) : current.length >= 20 ? current : [...current, key]);
-    setDrafts((current) => ({ ...current, [key]: current[key] ?? defaultDraft(row.need!.label) }));
+    setDrafts((current) => {
+      return selected.includes(key) ? current : { ...current, [key]: current[key] ?? defaultDraft(row.need!.label) };
+    });
   };
   const updateDraft = (key: string, patch: Partial<Draft>) => setDrafts((current) => ({ ...current, [key]: { ...current[key]!, ...patch } }));
   async function save() {
@@ -42,7 +54,8 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
         if (!Number.isSafeInteger(reservationQuantity) || reservationQuantity < 0) throw new Error("Reservation quantity must be zero or a positive whole number.");
         const ceiling = draft.spendingCeilingCopper.trim() ? Number(draft.spendingCeilingCopper) : undefined;
         if (ceiling !== undefined && (!Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > 1_000_000_000)) throw new Error("Purchase ceiling must be a positive whole-copper amount.");
-        group.tasks.push({ needId: row.need.stableId, reviewSnapshot, kind: draft.kind, title: draft.title.trim(), instructions: draft.instructions.trim(), ...(draft.assignedIdentityKey ? { assignedIdentityKey: draft.assignedIdentityKey } : {}), ...(draft.kind === "INVESTIGATE" && draft.sourceLeadIdentityKey ? { sourceLeadIdentityKey: draft.sourceLeadIdentityKey } : {}), ...(reservationQuantity > 0 ? { reservationQuantity } : {}), ...(ceiling !== undefined ? { spendingCeilingCopper: ceiling } : {}) });
+        const portfolioPrerequisites = draft.prerequisiteKeys.flatMap((dependencyKey) => { const prerequisite = rowFor(dependencyKey); return prerequisite ? [{ projectId: prerequisite.projectId, needId: prerequisite.need!.stableId }] : []; });
+        group.tasks.push({ needId: row.need.stableId, reviewSnapshot, kind: draft.kind, title: draft.title.trim(), instructions: draft.instructions.trim(), ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(draft.assignedIdentityKey ? { assignedIdentityKey: draft.assignedIdentityKey } : {}), ...(draft.kind === "INVESTIGATE" && draft.sourceLeadIdentityKey ? { sourceLeadIdentityKey: draft.sourceLeadIdentityKey } : {}), ...(reservationQuantity > 0 ? { reservationQuantity } : {}), ...(ceiling !== undefined ? { spendingCeilingCopper: ceiling } : {}) });
         grouped.set(project.stableId, group);
       }
       await appendErpWorkOrderBatch(version, [...grouped.values()]);
@@ -76,9 +89,11 @@ export function ErpCrossProjectWorkOrderComposer({ version, triage, projects, co
       <label>Assigned same-version character<select value={draft.assignedIdentityKey} onChange={(event) => updateDraft(key, { assignedIdentityKey: event.target.value })}><option value="">Unassigned</option>{eligibleCharacters.map((character) => <option key={character.identityKey} value={character.identityKey}>{character.name}{character.surname ? ` ${character.surname}` : ""} · {character.realm}</option>)}</select></label>
       {draft.kind === "PURCHASE" && structuredPurchase ? <label>Maximum total purchase budget (copper)<input aria-label={`Purchase spending ceiling for ${need.label}`} type="number" min="1" max="1000000000" step="1" value={draft.spendingCeilingCopper} onChange={(event) => updateDraft(key, { spendingCeilingCopper: event.target.value })} required /><small>Buyer must be the explicitly named same-version source and recipient ({need.sourceIdentityKey}). The ceiling is player intent, not a market quote, current price, affordability check, or purchase. Existing gold need and reservations remain separate.</small></label> : draft.kind === "PURCHASE" ? <small>This need does not name the same observed-version character as both source and intended buyer. A structured procurement ceiling is unavailable; keep the manual purchase review conditional.</small> : null}
       {draft.kind === "INVESTIGATE" && (() => { const screen = projectById.get(row.projectId)?.resourceSourceScreens.find((entry) => entry.needId === row.need?.stableId); return screen?.candidates.length ? <label>Observed source to investigate<select aria-label={`Observed source to investigate for ${row.need?.label}`} value={draft.sourceLeadIdentityKey} onChange={(event) => updateDraft(key, { sourceLeadIdentityKey: event.target.value })}><option value="">No source lead</option>{screen.candidates.map((candidate) => <option key={candidate.sourceIdentityKey} value={candidate.sourceIdentityKey}>{candidate.sourceName}{candidate.sourceSurname ? ` ${candidate.sourceSurname}` : ""} · {candidate.sourceRealm} · {candidate.state} · {candidate.freshness} freshness</option>)}</select><small>A source lead only points to matching location evidence. Account membership, access, and transferability remain UNKNOWN; this creates no movement plan.</small></label> : null; })()}
+      {selected.length > 1 && <label>Portfolio prerequisites (optional)<select multiple aria-label={`Portfolio prerequisites for ${need.label}`} value={draft.prerequisiteKeys.filter((dependency) => selected.includes(dependency))} onChange={(event) => updateDraft(key, { prerequisiteKeys: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{selected.filter((dependency) => dependency !== key).flatMap((dependency) => { const prerequisite = rowFor(dependency); return prerequisite ? <option key={dependency} value={dependency}>{projectById.get(prerequisite.projectId)?.title}: {prerequisite.need!.label}</option> : []; })}</select><small>Choose earlier package requirements that must be observed as met before this step is ready. Work-order completion notes do not satisfy this evidence gate.</small></label>}
     </fieldset>; })}
+    {hasPackageCycle && <p role="alert">Portfolio prerequisites contain a cycle. Remove one or more links before saving the package.</p>}
     {error && <p role="alert">{error} The workbench is refreshing so you can review current evidence.</p>}
-    <button type="button" className="primary-button" disabled={!selected.length || saving || busy || selected.some((key) => { const row = rowFor(key); const draft = drafts[key]; if (!row?.need || !draft?.title.trim() || !draft.instructions.trim()) return true; const need = row.need; const itemNeed = need.kind === "ITEM_ID" || need.kind === "ITEM_REF"; const structured = itemNeed && Boolean(need.sourceIdentityKey && need.destinationIdentityKey && need.sourceIdentityKey === need.destinationIdentityKey && need.sourceIdentityKey.startsWith(`${version}::`)); if (draft.kind !== "PURCHASE" || !structured) return false; const ceiling = Number(draft.spendingCeilingCopper); return draft.assignedIdentityKey !== need.sourceIdentityKey || !Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > 1_000_000_000; })} onClick={() => void save()}>{saving ? "Saving grouped plan…" : `Create ${selected.length} planned manual step${selected.length === 1 ? "" : "s"}`}</button>
+    <button type="button" className="primary-button" disabled={!selected.length || hasPackageCycle || saving || busy || selected.some((key) => { const row = rowFor(key); const draft = drafts[key]; if (!row?.need || !draft?.title.trim() || !draft.instructions.trim()) return true; const need = row.need; const itemNeed = need.kind === "ITEM_ID" || need.kind === "ITEM_REF"; const structured = itemNeed && Boolean(need.sourceIdentityKey && need.destinationIdentityKey && need.sourceIdentityKey === need.destinationIdentityKey && need.sourceIdentityKey.startsWith(`${version}::`)); if (draft.kind !== "PURCHASE" || !structured) return false; const ceiling = Number(draft.spendingCeilingCopper); return draft.assignedIdentityKey !== need.sourceIdentityKey || !Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > 1_000_000_000; })} onClick={() => void save()}>{saving ? "Saving grouped plan…" : `Create ${selected.length} planned manual step${selected.length === 1 ? "" : "s"}`}</button>
     <small>New work orders remain PLANNED. Project intent and recorded evidence are not proof that an action occurred or a resource is accessible.</small>
   </section>;
 }
