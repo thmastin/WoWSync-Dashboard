@@ -519,6 +519,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await procurementForm.getByRole("button", { name: "Add work order" }).click();
     const purchaseOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Review the observed item gap without purchasing" });
     await purchaseOrder.waitFor();
+    const queuedPurchaseOrder = page.getByRole("region", { name: "Work order review queue" }).locator("li").filter({ hasText: "Review the observed item gap without purchasing" });
+    await queuedPurchaseOrder.waitFor();
     const goldCommitment = commitmentPanel.locator(".erp-commitment-card").filter({ hasText: "Planned purchase budget" });
     const goldSectionEvidence = goldCommitment.locator(".erp-commitment-sections");
     await goldSectionEvidence.locator("summary").click();
@@ -526,13 +528,13 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
       "a non-item source section is not mislabeled as an unknown item count");
     const quoteAnswers = [" "];
     page.on("dialog", async (dialog) => dialog.accept(quoteAnswers.shift() ?? ""));
-    await purchaseOrder.getByRole("button", { name: "Record checked quote…" }).click();
+    await queuedPurchaseOrder.getByRole("button", { name: "Record quote..." }).click();
     await page.locator(".erp-form-error").filter({ hasText: "Enter a non-negative whole-copper amount" }).waitFor();
     let persistedProject = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
     let persistedPurchase = persistedProject.workOrders.find((entry) => entry.title === "Review the observed item gap without purchasing");
     assert.equal(persistedPurchase.procurementPlan.playerQuote, undefined, "blank price input cannot create a zero-copper player quote");
     quoteAnswers.push("80", "5", "Town vendor checked by player");
-    await purchaseOrder.getByRole("button", { name: "Record checked quote…" }).click();
+    await queuedPurchaseOrder.getByRole("button", { name: "Record quote..." }).click();
     await purchaseOrder.locator(".erp-procurement-review").filter({ hasText: "Town vendor checked by player" }).waitFor();
     const purchaseText = await purchaseOrder.innerText();
     assert.match(purchaseText, /Purchase review \(not a recommendation\)/);
@@ -704,7 +706,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills
     const purchaseOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Purchase: Rough Stone" });
     await purchaseOrder.waitFor();
     assert.match(await purchaseOrder.innerText(), /Manual supply step can address an observed gap/);
-    assert.match(await purchaseOrder.innerText(), /Record checked quote/);
+    assert.match(await purchaseOrder.innerText(), /Manage in review queue/);
     assert.match(await purchaseOrder.innerText(), /Explicit planned gold budget/);
     assert.match(await purchaseOrder.innerText(), /PLANNED NEED BELOW CEILING/);
     assert.match(await purchaseOrder.innerText(), /1000 copper reserved/);
@@ -1389,3 +1391,68 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
 
 
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] manage manual work-order lifecycle from the cross-project queue and preserve player completion evidence", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-queue-lifecycle-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const imported = store.importSnapshot(renderExport({ name: "Queue Operator", realm: "Cairne", generated: now, bags: observedSection([], now), bank: observedSection([], now) }));
+    const project = store.createErpProject({ version: "retail", title: "Queue lifecycle project", needs: [{ stableId: "material", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }], workOrders: [{ stableId: "manual-gather", kind: "GATHER", status: "PLANNED", title: "Manually review gathering", instructions: "Player controlled only", assignedIdentityKey: imported.character.identityKey, sourceIdentityKey: imported.character.identityKey, resourceNeedIds: ["material"], dependsOn: [] }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const queue = page.getByRole("region", { name: "Work order review queue" });
+    const task = queue.getByTestId(`erp-queue-order-${project.stableId}-manual-gather`);
+    await task.waitFor();
+    assert.match(await task.innerText(), /MANUAL SUPPLY STEP RECOMMENDED/);
+    await task.getByRole("button", { name: "Open project" }).click();
+    const projectOrders = page.locator(".erp-work-order-list");
+    await projectOrders.getByRole("button", { name: "Manage in review queue" }).waitFor();
+    assert.equal(await projectOrders.getByRole("button", { name: "Mark in progress" }).count(), 0, "status mutation is available from one queue surface");
+    await projectOrders.getByRole("button", { name: "Manage in review queue" }).click();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "erp-work-order-queue-title", "detail action returns the player to the shared queue");
+    await task.getByRole("button", { name: "Mark in progress" }).click();
+    await task.getByText(/GATHER · IN_PROGRESS/).waitFor();
+    let rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    let current = rest.projects.find((entry) => entry.stableId === project.stableId);
+    assert.equal(current.workOrders[0].status, "IN_PROGRESS");
+    let context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(context.planning.projects.find((entry) => entry.stableId === project.stableId).workOrderCounts.IN_PROGRESS, 1);
+    mcpClient = new Client({ name: "wowsync-queue-lifecycle-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    let mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.equal(mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId).workOrders[0].status, current.workOrders[0].status);
+    await task.getByRole("button", { name: "Wait for evidence" }).click();
+    await task.getByText(/GATHER · WAITING_FOR_EVIDENCE/).waitFor();
+    await task.getByRole("button", { name: "Resume manual work" }).click();
+    await task.getByText(/GATHER · IN_PROGRESS/).waitFor();
+    page.once("dialog", (dialog) => dialog.accept("Player reports the check is complete; no resource outcome is asserted."));
+    await task.getByRole("button", { name: /Record completion/ }).click();
+    await page.getByText("No unfinished work orders currently require evidence review.").waitFor();
+    rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    current = rest.projects.find((entry) => entry.stableId === project.stableId);
+    assert.equal(current.workOrders[0].status, "COMPLETED");
+    assert.equal(current.workOrders[0].completionNote, "Player reports the check is complete; no resource outcome is asserted.");
+    assert.equal(current.workOrderProgress[0].reconciliation, "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL", "the player-entered completion is kept distinct from contrary current supply evidence");
+    context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(context.planning.projects.find((entry) => entry.stableId === project.stableId).workOrderProgressStates.COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL, 1);
+    mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const mcpProject = mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual(mcpProject.workOrders, current.workOrders);
+    assert.deepEqual(mcpProject.workOrderProgress, current.workOrderProgress);
+    assert.match(await page.locator(".erp-work-order-list").innerText(), /Completion note conflicts with a linked shortfall/);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close();
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
