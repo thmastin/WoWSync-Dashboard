@@ -127,6 +127,62 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
       throw err;
     }
   });
+  app.post("/api/versions/:version/erp/provisioning-review-batches", (req, res) => {
+    const { version } = req.params;
+    if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
+    const { buyerIdentityKey, sourceIdentityKey, resourceKey, tasks } = req.body ?? {};
+    if (typeof buyerIdentityKey !== "string" || !buyerIdentityKey.startsWith(`${version}::`) || typeof sourceIdentityKey !== "string" || !sourceIdentityKey.startsWith(`${version}::`) || sourceIdentityKey === buyerIdentityKey || typeof resourceKey !== "string" || !/^item:[1-9]\d*(?::[^\s]*)?$/.test(resourceKey)) return res.status(400).json({ error: "A batch requires one same-version buyer, a different same-version source, and one exact itemString resource identity.", code: "INVALID_PROVISIONING_REVIEW_BATCH" });
+    if (!Array.isArray(tasks) || tasks.length < 2 || tasks.length > 20 || tasks.some((task) => !task || typeof task !== "object" || typeof task.projectId !== "string" || !task.projectId.trim())) return res.status(400).json({ error: "Select 2 to 20 linked requirements across at least two projects for a grouped provisioning review.", code: "INVALID_PROVISIONING_REVIEW_BATCH" });
+    const requestedProjectIds = new Set(tasks.map((task) => task.projectId.trim()));
+    if (requestedProjectIds.size < 2 || requestedProjectIds.size > 10) return res.status(400).json({ error: "A grouped provisioning review must span 2 to 10 distinct projects.", code: "INVALID_PROVISIONING_REVIEW_BATCH" });
+    const knownCharacters = new Set(store.listCharacters(version).map((character) => character.identityKey));
+    if (!knownCharacters.has(buyerIdentityKey) || !knownCharacters.has(sourceIdentityKey)) return res.status(409).json({ error: "The buyer and source must both resolve to observed characters in this explicit game version.", code: "PROVISIONING_CHARACTER_UNRESOLVED" });
+    const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
+    const selectedNeeds = new Set<string>();
+    const selectedProjectIds = new Set<string>();
+    const selectedProjects = new Map<string, { expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[] }>();
+    let skippedExistingCount = 0;
+    try {
+      for (const task of tasks) {
+        if (!task || typeof task !== "object" || typeof task.projectId !== "string" || !task.projectId.trim() || typeof task.needId !== "string" || !task.needId.trim() || !Number.isSafeInteger(task.expectedRevision)) return res.status(400).json({ error: "Each review must identify a project, requirement, and expected revision.", code: "INVALID_PROVISIONING_REVIEW_BATCH_TASK" });
+        const project = projectViews.get(task.projectId);
+        if (!project) return res.status(404).json({ error: "A selected project was not found in this version.", code: "PROJECT_NOT_FOUND" });
+        selectedProjectIds.add(project.stableId);
+        if (project.status !== "ACTIVE") return res.status(409).json({ error: "A selected project is no longer active; refresh the buyer package.", code: "PROJECT_NOT_ACTIVE" });
+        if (project.revision !== task.expectedRevision) return res.status(409).json({ error: "A selected project changed after review. Refresh the buyer package.", code: "ERP_PROJECT_CONFLICT" });
+        const needKey = `${project.stableId}:${task.needId}`;
+        if (selectedNeeds.has(needKey)) return res.status(400).json({ error: "A requirement may appear only once in one provisioning batch.", code: "DUPLICATE_PROJECT_NEED" });
+        selectedNeeds.add(needKey);
+        const need = project.needs.find((entry) => entry.stableId === task.needId);
+        if (!need || need.kind !== "ITEM_REF" || need.resourceKey !== resourceKey || need.sourceOwnerKey || need.destinationIdentityKey !== buyerIdentityKey) return res.status(409).json({ error: "Every selected requirement must keep the exact same itemString and intended buyer; broad item IDs and owner-scoped needs cannot join this package.", code: "PROVISIONING_NEED_SCOPE_MISMATCH" });
+        const review = buildErpNeedReviewSnapshot(project, need.stableId);
+        if (!review) return res.status(409).json({ error: "The selected requirement changed; refresh the buyer package.", code: "NEED_REVIEW_STALE" });
+        const candidate = review.resourceSourceScreen?.candidates.find((entry) => entry.sourceIdentityKey === sourceIdentityKey && entry.kind === "ITEM_REF" && entry.resourceKey === resourceKey);
+        const hasExactObservedItem = candidate?.matchingItems.some((item) => item.itemRef === resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+        if (!candidate || candidate.state !== "OBSERVED" || candidate.freshness !== "recent" || candidate.reservationState !== "UNRESERVED" || candidate.activeReservationQuantity !== 0 || (candidate.availableObservedLowerBound ?? 0) < 1 || !hasExactObservedItem) return res.status(409).json({ error: "A recent, positively observed, exact-variant, unreserved source lead is required for every selected buyer requirement.", code: "PROVISIONING_SOURCE_EVIDENCE_UNAVAILABLE" });
+        const duplicate = project.workOrders.some((order) => order.kind === "PROVISION" && order.status !== "COMPLETED" && order.status !== "CANCELLED" && order.resourceNeedIds.includes(need.stableId) && order.sourceIdentityKey === sourceIdentityKey && order.destinationIdentityKey === buyerIdentityKey);
+        if (duplicate) { skippedExistingCount++; continue; }
+        const exactRows = candidate.matchingItems.filter((item) => item.itemRef === resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0);
+        const observed = exactRows.map((item) => `${item.itemRef} in ${item.section}${item.observedAt !== undefined ? `, observed ${new Date(item.observedAt * 1000).toISOString()}` : ", time UNKNOWN"}${item.quantity !== undefined ? `, quantity ${item.quantity}` : `, at least ${item.knownLowerBound}`}`).join("; ");
+        const boundary = `This manual review uses a recent observed location lead for ${sourceIdentityKey}: ${observed}. It does not establish ownership, account membership, access, binding, or a valid transfer route. Recheck both characters and the exact itemString in game. No item is reserved or moved; later changes do not prove this review caused them.`;
+        const group = selectedProjects.get(project.stableId) ?? { expectedRevision: project.revision, workOrders: [], reviewSnapshots: [] };
+        group.workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: "PROVISION", status: "PLANNED", title: `Review ${resourceKey} source for ${need.label}`, instructions: boundary, resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: buyerIdentityKey, sourceIdentityKey, destinationIdentityKey: buyerIdentityKey });
+        group.reviewSnapshots.push(review);
+        selectedProjects.set(project.stableId, group);
+      }
+      if (selectedProjectIds.size > 10) return res.status(400).json({ error: "A grouped provisioning review may span at most 10 projects.", code: "INVALID_PROVISIONING_REVIEW_BATCH" });
+      if (selectedProjects.size) {
+        const updates = [...selectedProjects].map(([projectId, group]) => ({ projectId, expectedRevision: group.expectedRevision, workOrders: group.workOrders, reviewSnapshots: group.reviewSnapshots }));
+        const saved = store.appendErpWorkOrdersAtomically(version, updates);
+        if (!saved) return res.status(404).json({ error: "A selected project was removed before the grouped update could be committed.", code: "PROJECT_NOT_FOUND" });
+      }
+      return res.json({ version, projects: read(version).filter((project) => selectedProjectIds.has(project.stableId)), createdCount: [...selectedProjects.values()].reduce((sum, group) => sum + group.workOrders.length, 0), skippedExistingCount, atomic: true });
+    } catch (err) {
+      if (err instanceof ErpProjectConflictError) return res.status(409).json({ error: err.message, code: err.code });
+      if (err instanceof ErpProjectValidationError || err instanceof TypeError) return res.status(400).json({ error: err.message, code: err instanceof ErpProjectValidationError ? err.code : "INVALID_PROVISIONING_REVIEW_BATCH" });
+      throw err;
+    }
+  });
   app.put("/api/versions/:version/erp/projects/:stableId", (req, res) => {
     const { version, stableId } = req.params;
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });

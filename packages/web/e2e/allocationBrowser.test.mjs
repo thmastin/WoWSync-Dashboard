@@ -1564,6 +1564,19 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.equal(provisionProject?.needs.find((need) => need.stableId === selectedNeedId)?.sourceIdentityKey, selectedEvidence.need?.sourceIdentityKey, "a buyer-scoped purchase requirement retains its existing source identity");
     assert.match(plannedProvisioning.instructions, /No transfer is executed/);
     assert.match(plannedProvisioning.instructions, /does not .* prove ownership, account membership/);
+    await resourcePackage.getByRole("button", { name: "Plan manual source reviews for 2 linked requirements" }).click();
+    await page.getByText(/1 manual provisioning review\(s\) added across 2 project\(s\); 1 matching review\(s\) already existed/).waitFor();
+    const afterBatchRest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const packagedProjects = [project.stableId, secondProject.stableId].map((projectId) => afterBatchRest.projects.find((entry) => entry.stableId === projectId));
+    for (const packagedProject of packagedProjects) {
+      const need = packagedProject.needs.find((entry) => entry.kind === "ITEM_REF" && entry.resourceKey === fullRef(ITEM_ID));
+      const sourceReviews = packagedProject.workOrders.filter((order) => order.kind === "PROVISION" && order.resourceNeedIds.includes(need.stableId));
+      assert.equal(sourceReviews.length, 1, "the grouped player action leaves one idempotent review per linked project requirement");
+      assert.equal(sourceReviews[0].sourceIdentityKey, observedSourceKey);
+      assert.equal(sourceReviews[0].destinationIdentityKey, buyer);
+      assert.equal(need.sourceIdentityKey, buyer, "the package review does not retarget the buyer requirement");
+      assert.match(sourceReviews[0].instructions, /No item is reserved or moved/);
+    }
     assert.match(await resourcePackage.innerText(), /2 projects, 2 needs · 4 combined observed gap units · 4 recent quoted units for 11650 copper/);
     assert.match(await line.innerText(), /RECENT QUOTES COVER OBSERVED GAPS/);
     assert.match(await line.innerText(), /1050 copper in recent player-entered quotes/);
@@ -1580,7 +1593,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
     assert.equal(context.schemaVersion, "32");
-    assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, provisionProject.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
+    assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
     assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, unresolvedBuyerOrderCount: 0, truncated: false });
     assert.equal(rest.procurementBuyerReview.buyers[0].resourcePackages[0].resourceKey, fullRef(ITEM_ID), "the package preserves the exact itemString variant rather than collapsing to its base item ID");
@@ -1593,6 +1606,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(mcp.structuredContent.procurementBuyerReview, rest.procurementBuyerReview);
     const mcpProvisioning = mcp.structuredContent.projects.flatMap((entry) => entry.workOrders).find((order) => order.stableId === plannedProvisioning.stableId);
     assert.deepEqual(mcpProvisioning, plannedProvisioning, "the explicitly created manual provisioning intent is consistent in REST and MCP");
+    for (const packagedProject of packagedProjects) {
+      const restReviews = rest.projects.find((entry) => entry.stableId === packagedProject.stableId).workOrders.filter((order) => order.kind === "PROVISION");
+      const mcpReviews = mcp.structuredContent.projects.find((entry) => entry.stableId === packagedProject.stableId).workOrders.filter((order) => order.kind === "PROVISION");
+      assert.deepEqual(mcpReviews, restReviews, "REST and MCP expose the same grouped reviews");
+    }
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();

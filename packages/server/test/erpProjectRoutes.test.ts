@@ -102,6 +102,54 @@ test("cross-project manual work is saved atomically from reviewed same-version e
   });
 });
 
+test("exact source lead creates an atomic supplemental provisioning review package across buyer projects", async () => {
+  await withServer(async (call, store) => {
+    const at = Math.floor(Date.now() / 1000);
+    const capture = (name: string, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name, realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: quantity }] }] }, bank: { unknown: true } });
+    store.importSnapshot(capture("Mira", 0));
+    const source = store.importSnapshot(capture("Stone Holder", 4)).character;
+    const buyer = store.listCharacters("classic-era").find((character) => character.name === "Mira")!.identityKey;
+    const createBuyerProject = async (title: string, suffix: string) => (await call("POST", "/api/versions/classic-era/erp/projects", {
+      title,
+      needs: [{ stableId: `stone-${suffix}`, kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact Rough Stone variant", requiredQuantity: 3, sourceIdentityKey: buyer, destinationIdentityKey: buyer }],
+      workOrders: [{ stableId: `purchase-${suffix}`, kind: "PURCHASE", status: "PLANNED", title: "Review buyer purchase", resourceNeedIds: [`stone-${suffix}`], dependsOn: [], assignedIdentityKey: buyer, procurementPlan: { targetNeedId: `stone-${suffix}`, spendingCeilingCopper: 500 } }],
+    })).body.project;
+    const first = await createBuyerProject("Prepare tool A", "a");
+    const second = await createBuyerProject("Prepare tool B", "b");
+    const projects = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects;
+    const payload = (project: any, needId: string, expectedRevision = project.revision) => ({ projectId: project.stableId, needId, expectedRevision });
+    const body = { buyerIdentityKey: buyer, sourceIdentityKey: source.identityKey, resourceKey: "item:159:0:0", tasks: [payload(projects.find((project: any) => project.stableId === first.stableId), "stone-a"), payload(projects.find((project: any) => project.stableId === second.stableId), "stone-b")] };
+    const single = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, tasks: [body.tasks[0]] });
+    assert.equal(single.status, 400, "the grouped endpoint requires at least two linked requirements");
+    const sameProject = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, tasks: [body.tasks[0], { ...body.tasks[0], needId: "stone-a-copy" }] });
+    assert.equal(sameProject.status, 400, "the grouped endpoint requires distinct projects");
+    const tooManyProjects = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, tasks: Array.from({ length: 11 }, (_, index) => ({ projectId: `project-${index}`, needId: `need-${index}`, expectedRevision: 1 })) });
+    assert.equal(tooManyProjects.status, 400, "the project bound is checked before idempotent duplicate filtering or project lookup");
+    const invalid = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, tasks: [body.tasks[0], { ...body.tasks[1], expectedRevision: 999 }] });
+    assert.equal(invalid.status, 409, "a stale project revision prevents the complete multi-project write");
+    let readback = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId));
+    assert.deepEqual(readback.map((project: any) => project.workOrders.length), [1, 1], "failed batch leaves both buyer purchase plans untouched");
+
+    const saved = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", body);
+    assert.equal(saved.status, 200);
+    assert.deepEqual([saved.body.atomic, saved.body.createdCount, saved.body.skippedExistingCount], [true, 2, 0]);
+    for (const project of saved.body.projects) {
+      const need = project.needs[0];
+      const review = project.workOrders.find((order: any) => order.kind === "PROVISION");
+      assert.equal(need.sourceIdentityKey, buyer, "buyer need's planned source is unchanged");
+      assert.equal(need.destinationIdentityKey, buyer);
+      assert.deepEqual([review.sourceIdentityKey, review.destinationIdentityKey, review.assignedIdentityKey], [source.identityKey, buyer, buyer]);
+      assert.match(review.instructions, /does not establish ownership, account membership, access, binding, or a valid transfer route/);
+      assert.match(review.instructions, /No item is reserved or moved/);
+    }
+    readback = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects.filter((project: any) => [first.stableId, second.stableId].includes(project.stableId));
+    const repeated = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, tasks: readback.map((project: any) => payload(project, project.needs[0].stableId)) });
+    assert.deepEqual([repeated.status, repeated.body.createdCount, repeated.body.skippedExistingCount], [200, 0, 2], "retry is idempotent for existing source/destination reviews");
+    const wrongVariant = await call("POST", "/api/versions/classic-era/erp/provisioning-review-batches", { ...body, resourceKey: "item:159:0:1" });
+    assert.equal(wrongVariant.status, 409, "a near variant cannot be substituted for the exact buyer need");
+  });
+});
+
 test("portfolio prerequisite links are version-scoped, cycle checked, and block until current evidence covers the need", async () => {
   await withServer(async (call, store) => {
     const at = Math.floor(Date.now() / 1000);

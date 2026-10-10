@@ -418,6 +418,20 @@ export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: read
   );
 }
 
+/** Creates supplemental manual provisioning reviews for one exact observed source across linked buyer needs. It records intent only. */
+export function appendErpProvisioningReviewBatch(version: VersionOrUnknown, input: {
+  readonly buyerIdentityKey: string;
+  readonly resourceKey: string;
+  readonly sourceIdentityKey: string;
+  readonly tasks: readonly { readonly projectId: string; readonly expectedRevision: number; readonly needId: string }[];
+}) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; createdCount: number; skippedExistingCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/provisioning-review-batches`,
+    { method: "POST", body: JSON.stringify(input) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.createdCount === "number" && typeof body.skippedExistingCount === "number" && body.atomic === true },
+  );
+}
+
 export function createErpProject(version: VersionOrUnknown, input: Omit<ErpProjectDraft, "version">) {
   return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, { method: "POST", body: JSON.stringify(input) }, { validate: hasObject("project") });
 }
