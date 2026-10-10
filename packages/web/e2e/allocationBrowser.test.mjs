@@ -372,6 +372,47 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
   }
 });
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] assigned gatherer progress shows only fresh, complete bag deltas and keeps cause unknown", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-gather-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const earlier = store.importSnapshot(renderExport({ name: "Gatherer", realm: "Realm A", generated: now - 100, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now - 100), bank: observedSection([], now - 100) }));
+    store.importSnapshot(renderExport({ name: "Gatherer", realm: "Realm A", generated: now, bags: observedSection([row(159, 4, { name: "Rough Stone" })], now), bank: observedSection([], now) }));
+    store.createErpProject({ version: "retail", title: "Gather review", needs: [{ stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: earlier.character.identityKey, destinationIdentityKey: earlier.character.identityKey }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "IN_PROGRESS", title: "Gather one more", assignedIdentityKey: earlier.character.identityKey, resourceNeedIds: ["stone"], dependsOn: [] }] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const workOrder = page.locator(".erp-work-order-list li").filter({ hasText: "Gather one more" });
+    await workOrder.waitFor();
+    await workOrder.getByText("Compare assigned gatherer bag observations (cause unknown)").click();
+    const review = await workOrder.innerText();
+    assert.match(review, /RESOURCE INCREASED/);
+    assert.match(review, /bags: 1 .* 4 \(\+3\)/);
+    assert.match(review, /does not establish gathering as the cause/);
+    assert.match(review, /does not complete the work order/);
+    assert.doesNotMatch(review, /GATHER.*COMPLETED/);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank and bag evidence without declaring the work complete", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-retrieval-browser-"));
