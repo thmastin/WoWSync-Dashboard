@@ -184,6 +184,16 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.match(verificationText, /item:940101\S* \(OBSERVED in bags, seen /);
     assert.match(verificationText, /Account membership, source access, recipient access, and a valid transfer route are UNKNOWN/);
     assert.match(verificationText, /does not authorize or perform a transfer/);
+    const workQueue = page.getByRole("region", { name: "Work order review queue" });
+    await workQueue.getByText("Verify possible source for Mycobloom").waitFor();
+    assert.match(await workQueue.innerText(), /review needed/);
+    assert.match(await workQueue.innerText(), /Provision the crafter/);
+    await workQueue.getByLabel("Search work orders").fill("not present");
+    await workQueue.getByText("No work orders match this search.").waitFor();
+    await workQueue.getByLabel("Search work orders").fill("");
+    await workQueue.getByRole("button", { name: "Open project" }).click();
+    assert.ok(await projectCard.getAttribute("id"), "queue navigation points to the existing project card");
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Provision the crafter", "keyboard and screen-reader focus moves to the project heading");
     await possibleSource.getByText("Source verification work order already exists for this need.").waitFor();
     await possibleSource.getByRole("button", { name: "Set planned source" }).first().click();
     await needEvidence.getByText(/Recorded as the planned source/).waitFor();

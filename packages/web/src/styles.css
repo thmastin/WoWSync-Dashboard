@@ -1326,6 +1326,16 @@ button.roster-name-link {
 .erp-workbench .eyebrow { font-size: .72rem; letter-spacing: .12em; font-weight: 700; color: var(--accent); }
 .erp-scope-note, .erp-status { border: 1px solid #ffffff24; border-radius: 999px; padding: 4px 9px; font-size: .76rem; color: #c9d1df; white-space: nowrap; }
 .erp-evidence-note { margin: 18px 0; padding: 12px 15px; background: #d49a2420; border-left: 3px solid #d49a24; border-radius: 4px; color: #e5d5ab; }
+.erp-work-order-queue { margin: 18px 0; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
+.erp-work-order-queue > p { color: #b8c2d0; max-width: 1000px; }
+.erp-queue-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 14px 0; }
+.erp-queue-controls label { display: grid; gap: 4px; }
+.erp-queue-controls input, .erp-queue-controls select { min-width: 160px; padding: 7px 9px; color: inherit; background: #111923; border: 1px solid #ffffff2b; border-radius: 4px; }
+.erp-queue-controls span { color: #aab5c4; margin-left: auto; }
+.erp-work-order-queue ol { display: grid; gap: 9px; padding-left: 24px; }
+.erp-work-order-queue li { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid #ffffff1a; border-radius: 6px; background: #00000018; }
+.erp-work-order-queue li p { margin: 5px 0; color: #c2cad6; }
+.erp-work-order-queue li button { align-self: center; flex: 0 0 auto; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
 .erp-create-form, .erp-inline-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; border: 1px solid #ffffff1a; border-radius: 8px; background: #ffffff06; margin: 18px 0; }
 .erp-create-form h2, .erp-inline-form h4 { flex-basis: 100%; margin: 0; }
 .erp-create-form label, .erp-inline-form label, .erp-project-actions label { display: grid; gap: 5px; font-size: .8rem; color: #b9c0cc; }
@@ -1379,4 +1389,4 @@ button.roster-name-link {
 .erp-status-paused { color: #ffd486; }
 .erp-status-completed { color: #9cc8ff; }
 .erp-status-cancelled { color: #ffb6a8; }
-@media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
+@media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
