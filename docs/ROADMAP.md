@@ -506,3 +506,7 @@ Guard against re-adding. This is not a changelog.
   trust hardening, shared storage, item metadata, provider-neutral read model,
   strict read-only MCP, and Phase 6 live ChatGPT/Tunnel validation. It remains
   a feature branch and has not been merged to `main`.
+
+## Recently completed - ERP Phase 49 (2026-10-10)
+
+Grouped player-authored fulfillment review for multiple uncovered project requirements, reusing the existing work-order model and evidence projections. Synthetic browser and full ERP validation passed; no live/production validation. Current inventory and next milestone: [`ERP_CAPABILITY_INVENTORY.md`](ERP_CAPABILITY_INVENTORY.md) and [`CURRENT_STATE.md`](CURRENT_STATE.md).

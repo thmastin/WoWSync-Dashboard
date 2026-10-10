@@ -905,3 +905,68 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] stale observed stock cannot enable a new re
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("[SYNTHETIC BROWSER ACCEPTANCE] group multiple assessed requirements into one linked fulfillment review", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-multi-need-review-browser-"));
+  let store;
+  let server;
+  let browser;
+  try {
+    store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
+    const now = Math.floor(Date.now() / 1000);
+    const imported = store.importSnapshot(renderExport({ name: "Workshop Planner", realm: "Cairne", generated: now, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now), bank: observedSection([], now) }));
+    const character = imported.character.identityKey;
+    const created = store.createErpProject({ version: "retail", title: "Prepare a multi-input repair", needs: [
+      { stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 4, sourceIdentityKey: character, destinationIdentityKey: character },
+      { stableId: "herb", kind: "ITEM_REF", resourceKey: "item:2447:0:0:0:0:0:0:0", label: "Peacebloom", requiredQuantity: 2 },
+    ] });
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const project = page.locator(".erp-project-card").filter({ hasText: "Prepare a multi-input repair" });
+    await project.getByRole("button", { name: "Build grouped review" }).click();
+    const planner = project.getByRole("region", { name: "Multi-need fulfillment planner for Prepare a multi-input repair" });
+    const stone = planner.locator(".erp-batch-need").filter({ hasText: "Rough Stone" });
+    const herb = planner.locator(".erp-batch-need").filter({ hasText: "Peacebloom" });
+    assert.match(await stone.innerText(), /SHORTFALL OBSERVED.*recent freshness/);
+    assert.match(await herb.innerText(), /UNKNOWN.*unknown freshness/);
+    await stone.locator("input").check();
+    await herb.locator("input").check();
+    await planner.locator('select[aria-label="Assigned reviewer for grouped fulfillment review"]').selectOption(character);
+    await planner.getByRole("button", { name: "Create review for 2 needs" }).click();
+    const review = project.locator(".erp-work-order-list li").filter({ hasText: "Review fulfillment for 2 requirements" });
+    await review.waitFor();
+    const reviewText = await review.innerText();
+    assert.match(reviewText, /Rough Stone.*SHORTFALL_OBSERVED\/recent, evidence timestamp .*; 1 observed/);
+    assert.match(reviewText, /Peacebloom.*UNKNOWN\/unknown, evidence time UNKNOWN; observed quantity UNKNOWN/);
+    assert.match(reviewText, /does not reserve or move resources/);
+    const listed = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Prepare a multi-input repair"));
+    const workOrder = listed.workOrders.find((entry) => entry.title === "Review fulfillment for 2 requirements");
+    assert.equal(workOrder.kind, "INVESTIGATE");
+    assert.deepEqual(workOrder.resourceNeedIds, ["stone", "herb"]);
+    const readiness = listed.workOrderReadiness.find((entry) => entry.workOrderId === workOrder.stableId);
+    assert.deepEqual(readiness.linkedNeeds.map((entry) => [entry.needId, entry.state]), [["stone", "SHORTFALL_OBSERVED"], ["herb", "UNKNOWN"]]);
+    const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const accountProject = context.planning.projects.find((entry) => entry.stableId === listed.stableId);
+    assert.deepEqual(accountProject.workOrderCounts, { PLANNED: 1 }, "AccountContext sees the same saved manual plan");
+    assert.deepEqual(accountProject.workOrderReadinessStates, { [readiness.state]: 1 }, "AccountContext reflects the exact readiness assessment returned by REST");
+    assert.equal(accountProject.fulfillment.state, listed.fulfillment.state, "AccountContext and REST share the same project fulfillment state");
+    assert.equal((await project.locator(".erp-fulfillment-snapshot").innerText()).match(/1 open manual work orders/) !== null, true);
+    assert.deepEqual(pageErrors, []);
+    assert.ok(created.stableId);
+  } finally {
+    if (browser) await browser.close();
+    if (server) await new Promise((resolve) => server.close(() => resolve()));
+    store?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -1403,4 +1403,10 @@ button.roster-name-link {
 .erp-status-paused { color: #ffd486; }
 .erp-status-completed { color: #9cc8ff; }
 .erp-status-cancelled { color: #ffb6a8; }
+.erp-batch-fulfillment { margin: 18px 0; padding: 14px; border: 1px solid #56708a; border-radius: 8px; background: #162433; }
+.erp-batch-fulfillment-form { display: grid; gap: 12px; }
+.erp-batch-fulfillment-form fieldset { display: grid; gap: 8px; }
+.erp-batch-need { display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; background: #ffffff08; }
+.erp-batch-need input { margin-top: 4px; }
+.erp-batch-need small { display: block; margin-top: 4px; color: #aeb8c5; }
 @media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
