@@ -452,7 +452,7 @@ test("[REAL] AccountContext carries a forever version alongside the others, embe
     assert.equal(hallo.transitions[0].inventoryChanged, false);
     // Trainer view reuses the existing summarizer; Forever has observed no trainer categories.
     assert.deepEqual(hallo.trainer, []);
-    assert.equal(ctx.schemaVersion, "20");
+    assert.equal(ctx.schemaVersion, "21");
     assert.ok(ctx.currency.note.includes("Copper"));
   } finally {
     store.close();

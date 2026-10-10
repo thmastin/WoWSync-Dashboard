@@ -422,8 +422,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills
   try {
     store = new SqliteSnapshotStore(path.join(directory, "browser.sqlite"));
     const now = Math.floor(Date.now() / 1000);
-    const imported = store.importSnapshot(renderExport({ name: "Provisioner", realm: "Realm A", generated: now, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now), bank: observedSection([], now) }));
-    store.createErpProject({ version: "retail", title: "Supply the repair", needs: [{ stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey }], workOrders: [] });
+    const text = renderExport({ name: "Provisioner", realm: "Realm A", generated: now, bags: observedSection([row(159, 1, { name: "Rough Stone" })], now), bank: observedSection([], now) }).replace("MoneyCopper: ?", "MoneyCopper: 10000");
+    const imported = store.importSnapshot(text);
+    store.createErpProject({ version: "retail", title: "Supply the repair", needs: [
+      { stableId: "stone", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey },
+      { stableId: "budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Purchase budget", requiredQuantity: 3000, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey },
+    ], reservations: [{ stableId: "budget-reservation", needId: "budget", sourceIdentityKey: imported.character.identityKey, quantity: 1000, status: "ACTIVE", createdAt: now, updatedAt: now }], workOrders: [] });
     const other = store.importSnapshot(renderExport({ name: "Other Recipient", realm: "Realm B", generated: now, bags: observedSection([], now), bank: observedSection([], now) }));
     store.createErpProject({ version: "retail", title: "Do not shortcut ambiguous plans", needs: [
       { stableId: "reserved", kind: "ITEM_ID", resourceKey: "300", label: "Reserved Stone", requiredQuantity: 5, sourceIdentityKey: imported.character.identityKey, destinationIdentityKey: imported.character.identityKey },
@@ -469,6 +473,18 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills
     assert.equal(await orderForm.getByLabel("Action type").inputValue(), "PURCHASE");
     assert.equal(await orderForm.getByLabel("Assigned character").inputValue(), imported.character.identityKey);
     assert.equal(await orderForm.getByLabel("Item target need").inputValue(), "stone");
+    await orderForm.getByLabel("Explicit gold budget need (optional)").selectOption("budget");
+    await orderForm.getByLabel("Spending ceiling (copper)").fill("5000");
+    await orderForm.getByRole("button", { name: "Cancel prefilled step" }).click();
+    await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
+    const cancelledOrderForm = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await cancelledOrderForm.getByLabel("Action type").inputValue(), "INVESTIGATE");
+    assert.equal(await cancelledOrderForm.getByRole("textbox", { name: "Action", exact: true }).inputValue(), "");
+    assert.equal(await cancelledOrderForm.getByLabel("Assigned character").inputValue(), "");
+    await need.getByRole("button", { name: "Plan manual purchase step" }).click();
+    orderForm = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await orderForm.getByLabel("Explicit gold budget need (optional)").inputValue(), "");
+    await orderForm.getByLabel("Explicit gold budget need (optional)").selectOption("budget");
     await orderForm.getByLabel("Spending ceiling (copper)").fill("5000");
     assert.match(await orderForm.innerText(), /market\/vendor availability, current price, routes, unreserved spending power, and affordability remain UNKNOWN/i);
     await orderForm.getByRole("button", { name: "Add work order" }).click();
@@ -476,6 +492,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills
     await purchaseOrder.waitFor();
     assert.match(await purchaseOrder.innerText(), /Manual supply step can address an observed gap/);
     assert.match(await purchaseOrder.innerText(), /Record checked quote/);
+    assert.match(await purchaseOrder.innerText(), /Explicit planned gold budget/);
+    assert.match(await purchaseOrder.innerText(), /PLANNED NEED BELOW CEILING/);
+    assert.match(await purchaseOrder.innerText(), /1000 copper reserved/);
+    assert.match(await purchaseOrder.innerText(), /10000 copper observed/);
+    assert.match(await purchaseOrder.innerText(), /not proof of reserved or spendable funds/);
     assert.doesNotMatch(await purchaseOrder.innerText(), /purchase completed/i);
     assert.match(await need.innerText(), /An active GATHER step is already linked/);
     assert.match(await need.innerText(), /An active PURCHASE step is already linked/);

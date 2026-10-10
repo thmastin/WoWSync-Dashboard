@@ -295,6 +295,27 @@ test("procurement declarations validate the positive copper ceiling and explicit
   } finally { store.close(); }
 });
 
+test("procurement can link an explicit buyer gold need without conflating ceiling, observed balance, or reservation", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const target = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const budget = { stableId: "budget", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Procurement budget", requiredQuantity: 400, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [target, budget], reservations: [{ stableId: "budget-reservation", needId: "budget", sourceIdentityKey: identityKey, quantity: 300, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "target", budgetNeedId: "budget", spendingCeilingCopper: 500 } }] };
+    validateErpProject(p, (key) => store.getCharacter(key)?.version === "classic-era");
+    const assessment = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.budgetState, "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING");
+    assert.equal(assessment?.budgetNeedAssessment?.ceilingCoverage, "PLANNED_NEED_BELOW_CEILING");
+    assert.deepEqual([assessment?.budgetNeedAssessment?.need.state, assessment?.budgetNeedAssessment?.need.reservationState], ["COVERED_BY_OBSERVED", "WITHIN_OBSERVED_SUPPLY"]);
+    assert.match(assessment?.budgetNeedAssessment?.reason ?? "", /plans 400 copper against a 500 copper ceiling/);
+    assert.match(assessment?.reason ?? "", /does not establish a complete budget, reserved funds, or affordability/);
+    assert.equal(assessment?.affordability, "UNKNOWN");
+    const wrongCharacterBudget = { ...p, needs: [target, { ...budget, destinationIdentityKey: "classic-era::realm a::other" }] };
+    assert.throws(() => validateErpProject(wrongCharacterBudget, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_BUDGET_NEED");
+    const unlinkedBudget = { ...p, workOrders: [{ ...p.workOrders[0]!, resourceNeedIds: ["target"] }] };
+    assert.throws(() => validateErpProject(unlinkedBudget, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_BUDGET_NEED");
+  } finally { store.close(); }
+});
+
 test("procurement keeps incomplete item and gold evidence unknown", () => {
   const { store, identityKey } = seedStore({ bags: { partial: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true }, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" } });
   try {

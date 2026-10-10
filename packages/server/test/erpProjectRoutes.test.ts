@@ -101,7 +101,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     const character = store.listCharacters("classic-era")[0]!;
     const generatedAt = Math.floor(Date.now() / 1000) + 1;
     store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 900 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } }));
-    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review a manual purchase", needs: [{ stableId: "stone_target", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Check quote manually", assignedIdentityKey: character.identityKey, resourceNeedIds: ["stone_target"], dependsOn: [], procurementPlan: { targetNeedId: "stone_target", spendingCeilingCopper: 500, playerQuote: { amountCopper: 100, quantity: 5, recordedAt: generatedAt - 1, sourceNote: "Player checked at vendor" } } }] });
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review a manual purchase", needs: [{ stableId: "stone_target", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }, { stableId: "purchase_budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Player planned purchase budget", requiredQuantity: 600, sourceIdentityKey: character.identityKey, destinationIdentityKey: character.identityKey }], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Check quote manually", assignedIdentityKey: character.identityKey, resourceNeedIds: ["stone_target", "purchase_budget"], dependsOn: [], procurementPlan: { targetNeedId: "stone_target", budgetNeedId: "purchase_budget", spendingCeilingCopper: 500, playerQuote: { amountCopper: 100, quantity: 5, recordedAt: generatedAt - 1, sourceNote: "Player checked at vendor" } } }] });
     assert.equal(created.status, 201);
     const readiness = created.body.project.workOrderReadiness[0];
     const assessment = readiness.procurementAssessment;
@@ -112,13 +112,16 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual([assessment.reviewState, assessment.budgetState], ["OBSERVED_ITEM_GAP", "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING"]);
     assert.deepEqual([assessment.quoteState, assessment.playerQuote.amountCopper, assessment.playerQuote.provenance], ["PLAYER_REPORTED_WITHIN_CEILING", 100, "PLAYER_REPORTED"]);
+    assert.equal(assessment.budgetNeedAssessment.ceilingCoverage, "PLANNED_NEED_COVERS_CEILING");
+    assert.deepEqual([assessment.budgetNeedAssessment.need.needId, assessment.budgetNeedAssessment.need.requiredQuantity], ["purchase_budget", 600]);
     assert.equal(assessment.playerQuote.quantity, 5);
     assert.deepEqual([assessment.recordedGoldReservationsCopper, assessment.recordedGoldReservationState], [0, "NO_RECORDED_RESERVATIONS"]);
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "20");
+    assert.equal(account.body.schemaVersion, "21");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    assert.deepEqual(summary.procurementBudgetNeedStates, { PLANNED_NEED_COVERS_CEILING: 1 });
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
     assert.deepEqual(summary.procurementQuoteStates, { PLAYER_REPORTED_WITHIN_CEILING: 1 });
     assert.deepEqual(summary.procurementQuoteFreshnessStates, { recent: 1 });
@@ -281,7 +284,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "20");
+    assert.equal(context.body.schemaVersion, "21");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });
@@ -300,7 +303,7 @@ test("assigned gatherer bag deltas agree across REST and AccountContext without 
     assert.equal(review.interpretation, "CAUSE_UNKNOWN");
     assert.deepEqual(review.comparisons.map((entry: any) => [entry.section, entry.delta]), [["bags", 3]]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "20");
+    assert.equal(context.body.schemaVersion, "21");
     assert.deepEqual(context.body.planning.projects[0].gatherObservationStates, { RESOURCE_INCREASED: 1 });
   });
 });

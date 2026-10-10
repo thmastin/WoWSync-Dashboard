@@ -54,6 +54,8 @@ export interface ErpProcurementPlan {
   readonly targetNeedId: string;
   /** Player-entered maximum quote to consider; this is not a resource demand or observed balance. */
   readonly spendingCeilingCopper: number;
+  /** Optional explicit same-buyer GOLD_COPPER need; a planned budget is not an automatic reservation. */
+  readonly budgetNeedId?: string;
   /** Player-reported quote note. This is not an addon or market-feed observation. */
   /** The total quoted amount for the explicit quantity; no unit-price extrapolation is performed. */
   readonly playerQuote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly sourceNote?: string };
@@ -196,6 +198,10 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
       if (!w.resourceNeedIds.includes(plan.targetNeedId)) fail("INVALID_PROCUREMENT_PLAN", "The procurement item target must be linked to the PURCHASE work order.");
       const target = p.needs.find((need) => need.stableId === plan.targetNeedId);
       if (!target || (target.kind !== "ITEM_ID" && target.kind !== "ITEM_REF") || target.sourceIdentityKey !== w.assignedIdentityKey || target.destinationIdentityKey !== w.assignedIdentityKey) fail("INVALID_PROCUREMENT_PLAN", "The item target must be an item need explicitly scoped to the same buyer/recipient character.");
+      if (plan.budgetNeedId !== undefined) {
+        const budgetNeed = p.needs.find((need) => need.stableId === plan.budgetNeedId);
+        if (!hasValue(plan.budgetNeedId) || !w.resourceNeedIds.includes(plan.budgetNeedId) || !budgetNeed || budgetNeed.kind !== "GOLD_COPPER" || budgetNeed.sourceIdentityKey !== w.assignedIdentityKey || budgetNeed.destinationIdentityKey !== w.assignedIdentityKey) fail("INVALID_PROCUREMENT_BUDGET_NEED", "A linked procurement budget must be an explicitly linked GOLD_COPPER need sourced from and intended for the assigned buyer.");
+      }
     }
     for (const id of [...w.dependsOn, ...w.resourceNeedIds]) if (!hasValue(id)) fail("INVALID_WORK_ORDER_LINKS", "Work order links must use non-empty IDs.");
     if (w.resourceNeedIds.some((id) => !needIds.has(id))) fail("UNKNOWN_WORK_ORDER_NEED", "Every work order resource link must refer to a need in this project.");
@@ -772,6 +778,11 @@ export interface ErpProcurementAssessment {
   readonly quoteVsRecordedGoldRemainderCopper?: number;
   /** Player-entered upper bound; never counted as an amount needed or reserved. */
   readonly spendingCeilingCopper: number;
+  readonly budgetNeedAssessment?: {
+    readonly need: ErpWorkOrderNeedCheck;
+    readonly ceilingCoverage: "PLANNED_NEED_COVERS_CEILING" | "PLANNED_NEED_BELOW_CEILING";
+    readonly reason: string;
+  };
   readonly quoteState: "NO_PLAYER_REPORTED_QUOTE" | "PLAYER_REPORTED_WITHIN_CEILING" | "PLAYER_REPORTED_ABOVE_CEILING";
   readonly playerQuote?: { readonly amountCopper: number; readonly quantity: number; readonly recordedAt: number; readonly freshness: Freshness; readonly sourceNote?: string; readonly provenance: "PLAYER_REPORTED" };
   readonly marketAvailability: "UNKNOWN";
@@ -1354,6 +1365,12 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const procurementAssessment: ErpProcurementAssessment | undefined = order.kind === "PURCHASE" && order.procurementPlan && order.assignedIdentityKey ? (() => {
       const targetNeed = linkedNeeds.find((need) => need.needId === order.procurementPlan!.targetNeedId);
       if (!targetNeed) return undefined;
+      const plannedBudgetNeed = order.procurementPlan.budgetNeedId ? linkedNeeds.find((need) => need.needId === order.procurementPlan!.budgetNeedId) : undefined;
+      const budgetNeedAssessment: ErpProcurementAssessment["budgetNeedAssessment"] = plannedBudgetNeed ? {
+        need: plannedBudgetNeed,
+        ceilingCoverage: plannedBudgetNeed.requiredQuantity >= order.procurementPlan.spendingCeilingCopper ? "PLANNED_NEED_COVERS_CEILING" : "PLANNED_NEED_BELOW_CEILING",
+        reason: `The explicitly linked GOLD_COPPER need plans ${plannedBudgetNeed.requiredQuantity} copper against a ${order.procurementPlan.spendingCeilingCopper} copper ceiling. Its observed state is ${plannedBudgetNeed.state} (${plannedBudgetNeed.freshness} freshness); a planned amount or observed gold does not establish a complete budget, reserved funds, or affordability.`,
+      } : undefined;
       const goldNeed: ErpResourceNeed = { stableId: `procurement-gold-evidence:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed buyer gold evidence", requiredQuantity: 1, sourceIdentityKey: order.assignedIdentityKey };
       const goldEvidence = assessErpNeed(goldNeed, snapshotsFor(order.assignedIdentityKey), now, currencies, project.version);
       const goldReservationEvidence = applyReservationAssessment(goldNeed, goldEvidence, allProjects, project.version).reservationAssessment!;
@@ -1392,12 +1409,13 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
           : recordedGoldReservationState === "RECENT_GROSS_GOLD_BELOW_RECORDED_RESERVATIONS"
             ? ` WoWSync records ${goldReservationEvidence.activeQuantity} copper in active same-version plan reservations, exceeding the recent gross gold snapshot. Review the plan conflict; no spendable amount is inferred.`
             : ` WoWSync records ${goldReservationEvidence.activeQuantity} copper in active same-version plan reservations, but gross gold evidence is not recent enough to compare them.`;
+      const plannedBudgetText = budgetNeedAssessment ? ` ${budgetNeedAssessment.reason}` : " No separate explicit gold budget need is linked to this procurement plan.";
       const quoteGoldText = quoteVsRecordedGoldState === "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER"
         ? ` The player-entered quote total is at or below ${recordedGoldRemainder} copper remaining in the later gross-gold snapshot after explicitly recorded same-buyer reservations only.`
         : quoteVsRecordedGoldState === "PLAYER_QUOTE_ABOVE_RECORDED_GOLD_REMAINDER"
           ? ` The player-entered quote total is above ${recordedGoldRemainder} copper remaining in the later gross-gold snapshot after explicitly recorded same-buyer reservations only.`
           : playerQuote ? " The quote cannot be compared with a strictly later recent gross-gold snapshot after recorded reservations." : "";
-      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, recordedGoldReservationState, recordedGoldReservationsCopper: goldReservationEvidence.activeQuantity, ...(recordedGoldRemainder !== undefined ? { recordedGoldAfterReservationsCopper: recordedGoldRemainder } : {}), spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, quoteState, quoteVsRecordedGoldState, ...(quoteVsRecordedGoldState !== "EVIDENCE_NOT_COMPARABLE" && quoteVsRecordedGoldState !== "NO_PLAYER_REPORTED_QUOTE" ? { quoteVsRecordedGoldRemainderCopper: recordedGoldRemainder } : {}), ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${quoteText}${reservationText}${quoteGoldText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
+      return { buyerIdentityKey: order.assignedIdentityKey, targetNeed, reviewState, budgetState, budgetEvidence: { ...(goldEvidence.observedQuantity !== undefined ? { observedCopper: goldEvidence.observedQuantity } : {}), ...(goldEvidence.observedAt !== undefined ? { observedAt: goldEvidence.observedAt } : {}), freshness: goldEvidence.freshness, reason: goldEvidence.reason }, recordedGoldReservationState, recordedGoldReservationsCopper: goldReservationEvidence.activeQuantity, ...(recordedGoldRemainder !== undefined ? { recordedGoldAfterReservationsCopper: recordedGoldRemainder } : {}), spendingCeilingCopper: order.procurementPlan.spendingCeilingCopper, ...(budgetNeedAssessment ? { budgetNeedAssessment } : {}), quoteState, quoteVsRecordedGoldState, ...(quoteVsRecordedGoldState !== "EVIDENCE_NOT_COMPARABLE" && quoteVsRecordedGoldState !== "NO_PLAYER_REPORTED_QUOTE" ? { quoteVsRecordedGoldRemainderCopper: recordedGoldRemainder } : {}), ...(playerQuote ? { playerQuote: { amountCopper: playerQuote.amountCopper, quantity: playerQuote.quantity, recordedAt: playerQuote.recordedAt, freshness: quoteFreshness!, ...(playerQuote.sourceNote ? { sourceNote: playerQuote.sourceNote } : {}), provenance: "PLAYER_REPORTED" as const } } : {}), marketAvailability: "UNKNOWN", quotedPrice: playerQuote ? "PLAYER_REPORTED" : "UNKNOWN", affordability: "UNKNOWN", reason: `${gapText} ${budgetText}${plannedBudgetText}${quoteText}${reservationText}${quoteGoldText} Current stock availability, purchase route, unreserved spendable balance, and affordability are UNKNOWN. This assessment is a player review prompt, not a purchase recommendation or action.` };
     })() : undefined;
     const base = { workOrderId: order.stableId, blockingWorkOrderIds: [] as string[], unresolvedNeedIds: [] as string[], actionTargetNeedIds: [] as string[], changedNeedIds: [] as string[], ...(capabilityChecks.length ? { capabilityChecks } : {}), ...(linkedNeeds.length ? { linkedNeeds } : {}), ...(procurementAssessment ? { procurementAssessment } : {}) };
     const linkedEvidence = order.resourceNeedIds.map((needId) => evidenceForOrderNeed(order, needId)!).filter(Boolean);
