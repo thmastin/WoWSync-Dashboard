@@ -82,6 +82,22 @@ export interface ErpWorkOrderPathwayContext {
   readonly candidateLocations?: readonly { readonly characterKey: string; readonly characterName: string; readonly realm: string; readonly provenance: "OBSERVED" | "LAST_SEEN"; readonly freshness: "recent" | "stale" | "unknown"; readonly observedAt?: number }[];
 }
 
+/** Server-recorded link and evidence baseline for one player-confirmed cross-project planning batch. */
+export interface ErpWorkOrderPlanningBatchContext {
+  readonly stableId: string;
+  readonly reviewedAt: number;
+  readonly version: WowVersion;
+  readonly needEvidence?: {
+    /** Requirement identity at confirmation; optional only for legacy saved batches. */
+    readonly resourceKind?: ErpResourceKind;
+    readonly resourceKey?: string;
+    readonly state: NeedSupplyState;
+    readonly freshness: Freshness;
+    readonly observedQuantity?: number;
+    readonly observedAt?: number;
+  };
+}
+
 export interface ErpWorkOrder {
   readonly stableId: string;
   readonly kind: ErpWorkOrderType;
@@ -99,6 +115,8 @@ export interface ErpWorkOrder {
   readonly dependsOn: readonly string[];
   /** Optional cross-project evidence gates; only recent observed coverage satisfies them. */
   readonly portfolioPrerequisites?: readonly ErpPortfolioNeedReference[];
+  /** Groups tasks saved by one atomic player-confirmed multi-project planning request. */
+  readonly planningBatch?: ErpWorkOrderPlanningBatchContext;
   /** The exact evidence pathway reviewed at creation, kept separate from requirement source and work-order source. */
   readonly pathwayContext?: ErpWorkOrderPathwayContext;
   /** Optional player intent. A plan does not add output to observed supply. */
@@ -221,6 +239,12 @@ export function validateErpProject(value: unknown, identityExists: (identityKey:
         if (refs.has(key)) fail("INVALID_PORTFOLIO_PREREQUISITES", "Portfolio prerequisite references must be unique.");
         refs.add(key);
       }
+    }
+    if (w.planningBatch !== undefined) {
+      const batch = w.planningBatch;
+      if (!batch || typeof batch !== "object" || !/^erp_batch_[0-9a-f-]{36}$/.test(batch.stableId) || batch.version !== p.version || !Number.isSafeInteger(batch.reviewedAt) || batch.reviewedAt < 1 || w.resourceNeedIds.length !== 1) fail("INVALID_PLANNING_BATCH_CONTEXT", "A planning batch must be a same-version server batch linked to one reviewed requirement and timestamp.");
+      if (batch.needEvidence !== undefined && (!batch.needEvidence || typeof batch.needEvidence !== "object" || (batch.needEvidence.resourceKind !== undefined && !ERP_RESOURCE_KINDS.includes(batch.needEvidence.resourceKind)) || (batch.needEvidence.resourceKey !== undefined && (!hasValue(batch.needEvidence.resourceKey) || batch.needEvidence.resourceKey.length > 512)) || (batch.needEvidence.resourceKind === "ITEM_REF" && batch.needEvidence.resourceKey !== undefined && !/^item:[1-9]\d*(?::[^\s]*)?$/.test(batch.needEvidence.resourceKey)) || (batch.needEvidence.resourceKind === "ITEM_ID" && batch.needEvidence.resourceKey !== undefined && !/^[1-9]\d*$/.test(batch.needEvidence.resourceKey)) || !("COVERED_BY_OBSERVED POTENTIAL_COVERAGE_LAST_SEEN SHORTFALL_OBSERVED UNKNOWN UNSUPPORTED_EVIDENCE".split(" ").includes(batch.needEvidence.state)) || !("recent stale unknown".split(" ").includes(batch.needEvidence.freshness)) || (batch.needEvidence.observedQuantity !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedQuantity) || batch.needEvidence.observedQuantity < 0)) || (batch.needEvidence.observedAt !== undefined && (!Number.isSafeInteger(batch.needEvidence.observedAt) || batch.needEvidence.observedAt < 1)))) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve a supported need identity, state, freshness, and optional nonnegative observed quantity and timestamp.");
+      if (batch.needEvidence?.resourceKind !== undefined !== (batch.needEvidence?.resourceKey !== undefined)) fail("INVALID_PLANNING_BATCH_CONTEXT", "A batch evidence baseline must preserve both requirement kind and resource key together.");
     }
     if (w.pathwayContext !== undefined) {
       const pathway = w.pathwayContext;

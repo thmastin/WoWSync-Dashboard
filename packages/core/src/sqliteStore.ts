@@ -1659,12 +1659,22 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return project;
   }
 
-  updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined {
+  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch = false): ErpProject | undefined {
     return this.inTransaction(() => {
       const existing = this.getErpProject(project.stableId);
       if (!existing) return undefined;
       if (!Number.isSafeInteger(expectedRevision) || existing.revision !== expectedRevision) throw new ErpProjectConflictError();
       if (project.version !== existing.version || project.createdAt !== existing.createdAt) throw new TypeError("Project version and creation time are immutable.");
+      for (const previous of existing.workOrders) {
+        if (previous.planningBatch && !project.workOrders.some((order) => order.stableId === previous.stableId)) {
+          throw new ErpProjectConflictError("PLANNING_BATCH_IMMUTABLE", "A saved planning batch task cannot be removed; transition it to a terminal status to preserve its review history.");
+        }
+      }
+      for (const order of project.workOrders) {
+        const previous = existing.workOrders.find((entry) => entry.stableId === order.stableId);
+        if (previous?.planningBatch && JSON.stringify(previous.planningBatch) !== JSON.stringify(order.planningBatch)) throw new ErpProjectConflictError("PLANNING_BATCH_IMMUTABLE", "A saved planning batch's identity and evidence baseline cannot be rewritten.");
+        if (!previous && order.planningBatch && !allowNewPlanningBatch) throw new ErpProjectConflictError("PLANNING_BATCH_SERVER_CREATED", "Planning batch evidence can be added only by the atomic grouped-plan operation.");
+      }
       const trackedFields = ["title", "objective", "status", "completionNote", "priority", "needs", "reservations", "workOrders"] as const;
       const changedFields = trackedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(project[field]));
       const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
@@ -1862,7 +1872,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         const entry = updates[index]!;
         const project = existing[index]!;
         const additions = entry.reservations?.filter((reservation: ErpReservation | undefined): reservation is ErpReservation => reservation !== undefined) ?? [];
-        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders], reservations: [...project.reservations, ...additions] }, entry.expectedRevision);
+        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders], reservations: [...project.reservations, ...additions] }, entry.expectedRevision, true);
         if (!result) throw new ErpProjectConflictError();
         updated.push(result);
       }

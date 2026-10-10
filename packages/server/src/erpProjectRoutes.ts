@@ -20,6 +20,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
     const body = req.body ?? {};
     try {
+      if (Array.isArray(body.workOrders) && body.workOrders.some((order: unknown) => Boolean(order && typeof order === "object" && "planningBatch" in order))) return res.status(400).json({ error: "Planning batch identity and evidence baselines are assigned only when the server atomically confirms a grouped plan.", code: "PLANNING_BATCH_SERVER_CREATED" });
       const project = store.createErpProject({ version, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
       res.status(201).json({ project: new DashboardReadModel(store).getErpProjects({ version }).find((entry) => entry.stableId === project.stableId) });
     } catch (err) {
@@ -36,6 +37,8 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const ids = new Set<string>();
     const selectedNeeds = new Set<string>();
     const workOrdersByProject: Array<{ projectId: string; expectedRevision: number; workOrders: ErpWorkOrder[]; reviewSnapshots: NonNullable<ReturnType<typeof buildErpNeedReviewSnapshot>>[]; reservations: Array<ErpReservation | undefined> }> = [];
+    const planningBatchId = `erp_batch_${randomUUID()}`;
+    const planningBatchReviewedAt = Math.floor(Date.now() / 1000);
     const projectViews = new Map(read(version).map((project) => [project.stableId, project]));
     const pathwayKey = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
     const currentPathways = new Map(buildErpSourceFulfillmentReview([...projectViews.values()], version).sources.flatMap((source) => source.needs.map((need) => [pathwayKey(need.projectId, need.needId), need.fulfillmentPathways.options] as const)));
@@ -131,7 +134,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
           const boundary = "SYSTEM EVIDENCE BOUNDARY: This is player-authored planning intent only. WoWSync did not execute or verify an in-game action. Recheck current version-specific requirements, evidence, ownership, access, routes, prices, and outcomes manually; unknowns remain UNKNOWN.";
           const instructions = `${task.instructions.trim()}\n\n${boundary}`;
           if (instructions.length > 4000) return res.status(400).json({ error: "Instructions plus the required evidence boundary exceed the work-order limit.", code: "INVALID_WORK_ORDER_TEXT" });
-          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(pathwayContext ? { pathwayContext } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
+          workOrders.push({ stableId: `erp_work_${randomUUID()}`, kind: task.kind as ErpWorkOrder["kind"], status: "PLANNED", title: task.title.trim(), instructions, resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: planningBatchId, reviewedAt: planningBatchReviewedAt, version, needEvidence: { resourceKind: need.kind, resourceKey: need.resourceKey, ...(currentReview.evidence ? { state: currentReview.evidence.state, freshness: currentReview.evidence.freshness, ...(currentReview.evidence.observedQuantity !== undefined ? { observedQuantity: currentReview.evidence.observedQuantity } : {}), ...(currentReview.evidence.observedAt !== undefined ? { observedAt: currentReview.evidence.observedAt } : {}) } : { state: "UNKNOWN", freshness: "unknown" }) } }, ...(portfolioPrerequisites.length ? { portfolioPrerequisites } : {}), ...(pathwayContext ? { pathwayContext } : {}), ...(assignedIdentityKey ? { assignedIdentityKey } : {}), ...((provisioningSourceIdentityKey ?? need.sourceIdentityKey) ? { sourceIdentityKey: provisioningSourceIdentityKey ?? need.sourceIdentityKey } : {}), ...(sourceLeadIdentityKey ? { investigationSourceLeadIdentityKey: sourceLeadIdentityKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), ...(procurementPlan ? { procurementPlan } : {}) });
         }
         workOrdersByProject.push({ projectId: project.stableId, expectedRevision: update.expectedRevision, workOrders, reviewSnapshots, reservations });
       }

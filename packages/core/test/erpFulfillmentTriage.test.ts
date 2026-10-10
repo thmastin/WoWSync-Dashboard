@@ -3,7 +3,38 @@ import { test } from "node:test";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview } from "../src/erpFulfillmentTriage.ts";
+import { buildErpFulfillmentTriage, buildErpNeedReviewSnapshot, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview, buildErpSavedPlanningBatchReview } from "../src/erpFulfillmentTriage.ts";
+
+test("saved planning batches compare later same-version evidence without attributing task completion", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000) - 100;
+  const capture = (at: number, quantity: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Batch Review", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Fixture Stone", qty: quantity }] }] }, bank: { containers: [] } });
+  try {
+    const first = store.importSnapshot(capture(now, 2));
+    store.importSnapshot(capture(now + 20, 5));
+    const createdProject = store.createErpProject({ version: "classic-era", title: "Saved multi-need plan", needs: [
+      { stableId: "stone-a", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone A", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
+      { stableId: "stone-b", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Stone B", requiredQuantity: 4, sourceIdentityKey: first.character.identityKey },
+    ], workOrders: ["stone-a", "stone-b"].map((needId) => ({ stableId: `work-${needId}`, kind: "PROVISION" as const, status: "PLANNED" as const, title: `Review ${needId}`, resourceNeedIds: [needId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-000000000097", reviewedAt: now + 10, version: "classic-era" as const, needEvidence: { resourceKind: "ITEM_REF" as const, resourceKey: "item:159:0:0", state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } })) });
+    const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const review = buildErpSavedPlanningBatchReview(views, "classic-era");
+    assert.equal(review.totalCount, 1);
+    assert.equal(review.batches[0]?.steps.length, 2, "the atomic batch remains grouped across its two requirements");
+    assert.equal(review.batches[0]?.state, "NEWER_OBSERVATION_REVIEW");
+    assert.ok(review.batches[0]?.steps.every((step) => step.evidenceReview === "NEWER_OBSERVATION_QUANTITY_CHANGED" && step.currentQuantity === 5 && step.reviewedQuantity === 2 && step.workOrderStatus === "PLANNED" && step.actionCausality === "UNKNOWN"));
+    assert.equal(buildErpSavedPlanningBatchReview(views, "forever").totalCount, 0, "batch identity is version isolated");
+    const changedNeedProject = store.getErpProject(createdProject.stableId);
+    assert.ok(changedNeedProject);
+    store.updateErpProject({ ...changedNeedProject, needs: changedNeedProject.needs.map((need) => need.stableId === "stone-a" ? { ...need, resourceKey: "item:160:0:0" } : need) }, changedNeedProject.revision);
+    const changedIdentityBatch = buildErpSavedPlanningBatchReview(new DashboardReadModel(store).getErpProjects({ version: "classic-era" }), "classic-era").batches[0];
+    assert.equal(changedIdentityBatch?.state, "CONFLICTING_BATCH_CONTEXT");
+    assert.equal(changedIdentityBatch?.steps.find((step) => step.needId === "stone-a")?.evidenceReview, "NEED_IDENTITY_CHANGED", "a later quantity must never be compared against a different resource identity");
+    const legacyViews = views.map((project) => ({ ...project, workOrders: project.workOrders.map((order) => order.planningBatch ? { ...order, planningBatch: { ...order.planningBatch, needEvidence: { state: "SHORTFALL_OBSERVED" as const, freshness: "recent" as const, observedQuantity: 2, observedAt: now } } } : order) }));
+    const legacyBatch = buildErpSavedPlanningBatchReview(legacyViews, "classic-era").batches[0];
+    assert.equal(legacyBatch?.state, "CURRENT_EVIDENCE_REVIEW");
+    assert.ok(legacyBatch?.steps.every((step) => step.evidenceReview === "NEED_IDENTITY_UNKNOWN"), "legacy quantity baselines without resource identity are never compared across a newer observation");
+  } finally { store.close(); }
+});
 
 test("fulfillment triage joins changed evidence, reservation review, and manual work without inferring cause", () => {
   const store = new SqliteSnapshotStore(":memory:");

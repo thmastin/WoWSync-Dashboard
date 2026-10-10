@@ -68,6 +68,18 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
       {sourceReview.truncated && <p role="note">Showing {sourceReview.returnedSourceCount} of {sourceReview.totalSourceCount} source/resource groups; this review is incomplete.</p>}
       <small>Changed quantities and paired observations preserve cause UNKNOWN. Reservations remain commitments, not proof of possession.</small>
     </section>
+    <h3>Saved planning batches</h3>
+    <p>These are atomic player-authored batches already saved across projects. Later observations are compared with the evidence recorded at confirmation; a quantity change does not prove that a planned action caused it.</p>
+    <p>{review.totalSavedPlanningBatchCount} saved batch{review.totalSavedPlanningBatchCount === 1 ? "" : "es"} · {review.savedPlanningBatches.reduce((sum, batch) => sum + batch.steps.length, 0)} returned steps.</p>
+    {!review.savedPlanningBatches.length ? <p>No grouped planning batches have been saved for this version.</p> : <ol data-testid="erp-saved-planning-batches">{review.savedPlanningBatches.map((batch) => <li key={batch.stableId} data-testid={`erp-saved-batch-${encodeURIComponent(batch.stableId)}`}>
+      <h4>Saved batch · {batch.state.replaceAll("_", " ")} · reviewed {new Date(batch.reviewedAt * 1000).toLocaleString()}</h4>
+      <p>{batch.openTaskCount} open manual task{batch.openTaskCount === 1 ? "" : "s"} · {batch.terminalTaskCount} terminal task{batch.terminalTaskCount === 1 ? "" : "s"} · {batch.newerObservationReviewCount} newer evidence row{batch.newerObservationReviewCount === 1 ? "" : "s"} to inspect.</p>
+      <ul>{batch.steps.map((step) => <li key={`${step.projectId}:${step.workOrderId}`}>
+        <a href={`#${erpWorkOrderAnchorId(step.projectId, step.workOrderId)}`}>{step.projectTitle}: {step.workOrderTitle}</a> · {step.workOrderStatus.replaceAll("_", " ")} · {step.workOrderKind.replaceAll("_", " ")} · <code>{step.resourceKey}</code>
+        <p>Evidence review: {step.evidenceReview.replaceAll("_", " ")} · current {step.currentEvidenceState.replaceAll("_", " ")}, {step.currentFreshness} freshness{step.currentQuantity !== undefined ? ` · ${step.currentQuantity} observed` : " · quantity UNKNOWN"}{step.currentObservedAt !== undefined ? ` · seen ${new Date(step.currentObservedAt * 1000).toLocaleString()}` : " · timestamp UNKNOWN"}{step.reviewedQuantity !== undefined ? ` · at review ${step.reviewedQuantity}` : " · review quantity UNKNOWN"} · active reservation intent {step.activeReservationQuantity}. Action cause: UNKNOWN.</p>
+      </li>)}</ul>
+    </li>)}</ol>}
+    {review.savedPlanningBatchesTruncated && <p role="note">Saved planning batches are capped; narrow the version's project list to inspect the full history.</p>}
     <h3>Player-authored dependency packages</h3>
     <p>These sequences follow prerequisites the player linked across projects. Steps are ordered by those links; this does not select a crafting, purchase, or transfer route or claim any task was performed.</p>
     <p>{review.totalPackageCount} package{review.totalPackageCount === 1 ? "" : "s"} · {review.totalStepCount} linked requirement steps · {review.stepsNeedingReview} step{review.stepsNeedingReview === 1 ? "" : "s"} need review.</p>
