@@ -9,7 +9,7 @@ function project(status: ErpProjectView["status"], workStatus?: ErpProjectView["
   return {
     stableId: `project-${status}-${workStatus ?? "none"}-${evidenceState}-${freshness}`, version: "forever", title: "Provision character", status, priority: 3, revision: 1, createdAt: 1, updatedAt: 1, needs: [need], reservations: [], workOrders, history: [], historyEventCount: 0, historyTruncated: false,
     needEvidence: [{ needId: need.stableId, state: evidenceState as never, freshness: freshness as never, requiredQuantity: 10, observedQuantity: evidenceState === "SHORTFALL_OBSERVED" ? 2 : undefined, sourceSections: [], unresolvedSections: [], unknownQuantityRowCount: 0, reason: "fixture evidence" }],
-    resourceSourceScreens: [], workOrderReadiness: [], workOrderProgress: [], reservationReview: [],
+    resourceSourceScreens: [], workOrderReadiness: [], workOrderProgress: [], reservationReview: [], fulfillment: { state: "EVIDENCE_REVIEW_REQUIRED", projectStatus: status, requirementCount: 1, currentObservedCoverageCount: 0, currentObservedShortfallCount: evidenceState === "SHORTFALL_OBSERVED" && freshness === "recent" ? 1 : 0, historicalOrStaleEvidenceCount: freshness === "stale" ? 1 : 0, unresolvedEvidenceCount: evidenceState === "UNKNOWN" || freshness === "unknown" ? 1 : 0, activeWorkOrderCount: workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").length, reservationReviewStates: {}, changedObservationCauseUnknownCount: 0, interpretation: "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY", reason: "fixture summary" },
   } as ErpProjectView;
 }
 

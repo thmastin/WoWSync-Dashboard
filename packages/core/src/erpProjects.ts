@@ -596,6 +596,23 @@ export interface ErpProjectView extends ErpProject {
   readonly workOrderReadiness: readonly ErpWorkOrderReadiness[];
   readonly workOrderProgress: readonly ErpWorkOrderProgress[];
   readonly reservationReview: readonly { reservationId: string; state: "WITHIN_OBSERVED_SUPPLY" | "EXCEEDS_OBSERVED_SUPPLY" | "SUPPLY_UNKNOWN"; reservedQuantity: number; observedQuantity?: number; reason: string }[];
+  readonly fulfillment: ErpProjectFulfillmentSummary;
+}
+
+/** Cross-domain read summary. Counts evidence and saved intent separately; never claims project completion. */
+export interface ErpProjectFulfillmentSummary {
+  readonly state: "NO_REQUIREMENTS" | "EVIDENCE_REVIEW_REQUIRED" | "RESERVATIONS_NEED_REVIEW" | "OBSERVED_SHORTFALLS" | "CURRENT_OBSERVATIONS_COVER_NEEDS";
+  readonly projectStatus: ErpProjectStatus;
+  readonly requirementCount: number;
+  readonly currentObservedCoverageCount: number;
+  readonly currentObservedShortfallCount: number;
+  readonly historicalOrStaleEvidenceCount: number;
+  readonly unresolvedEvidenceCount: number;
+  readonly activeWorkOrderCount: number;
+  readonly reservationReviewStates: Partial<Record<ErpProjectView["reservationReview"][number]["state"], number>>;
+  readonly changedObservationCauseUnknownCount: number;
+  readonly interpretation: "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY";
+  readonly reason: string;
 }
 
 export interface ErpResourceSourceLocation {
@@ -1615,5 +1632,44 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
       : totalReserved <= supply.observedQuantity ? "WITHIN_OBSERVED_SUPPLY" : "EXCEEDS_OBSERVED_SUPPLY";
     reservationReview.push({ reservationId: reservation.stableId, state, reservedQuantity: totalReserved, ...(supply.observedQuantity !== undefined ? { observedQuantity: supply.observedQuantity } : {}), reason: ambiguousItemScope ? `Reservations for base item ${needItemId(ownNeed)} and exact item variants overlap, but their quantities cannot be reconciled safely.` : supply.freshness !== "recent" ? `The selected source observation is ${supply.freshness}; reservation coverage is UNKNOWN until current evidence is available.` : state === "WITHIN_OBSERVED_SUPPLY" ? `Explicit reservations total ${totalReserved}; the selected source has ${supply.observedQuantity} observed at recent freshness. Intent does not establish access or transferability.` : state === "EXCEEDS_OBSERVED_SUPPLY" ? `Reservations total ${totalReserved}, exceeding ${supply.observedQuantity} observed. Replanning is needed; no inventory is changed.` : `Supply for ${ownNeed.label} at the selected source is UNKNOWN; the reservation is intent, not possession.` });
   }
-  return { ...project, needEvidence, resourceSourceScreens: resourceSourceScreens(project, snapshotsFor, allProjects, now, currencies, candidateSources), workOrderReadiness, workOrderProgress, reservationReview };
+  const evidenceByNeed = new Map(needEvidence.map((entry) => [entry.needId, entry]));
+  const currentObservedCoverageCount = project.needs.filter((need) => {
+    const evidence = evidenceByNeed.get(need.stableId);
+    return evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent";
+  }).length;
+  const currentObservedShortfallCount = project.needs.filter((need) => {
+    const evidence = evidenceByNeed.get(need.stableId);
+    return evidence?.state === "SHORTFALL_OBSERVED" && evidence.freshness === "recent";
+  }).length;
+  const historicalOrStaleEvidenceCount = project.needs.filter((need) => {
+    const evidence = evidenceByNeed.get(need.stableId);
+    return evidence?.state === "POTENTIAL_COVERAGE_LAST_SEEN" || evidence?.freshness === "stale";
+  }).length;
+  const unresolvedEvidenceCount = project.needs.filter((need) => {
+    const evidence = evidenceByNeed.get(need.stableId);
+    return !evidence || evidence.freshness === "unknown" || evidence.state === "UNKNOWN" || evidence.state === "UNSUPPORTED_EVIDENCE";
+  }).length;
+  const reservationReviewStates = Object.fromEntries([...new Set(reservationReview.map((entry) => entry.state))].sort().map((state) => [state, reservationReview.filter((entry) => entry.state === state).length])) as ErpProjectFulfillmentSummary["reservationReviewStates"];
+  const reservationsNeedReview = reservationReview.some((entry) => entry.state !== "WITHIN_OBSERVED_SUPPLY");
+  const hasHistoricalOrUnknown = historicalOrStaleEvidenceCount > 0 || unresolvedEvidenceCount > 0;
+  const fulfillmentState: ErpProjectFulfillmentSummary["state"] = project.needs.length === 0 ? "NO_REQUIREMENTS"
+    : reservationsNeedReview ? "RESERVATIONS_NEED_REVIEW"
+      : hasHistoricalOrUnknown ? "EVIDENCE_REVIEW_REQUIRED"
+        : currentObservedShortfallCount > 0 ? "OBSERVED_SHORTFALLS"
+          : currentObservedCoverageCount === project.needs.length ? "CURRENT_OBSERVATIONS_COVER_NEEDS"
+            : "EVIDENCE_REVIEW_REQUIRED";
+  const fulfillmentReason = fulfillmentState === "NO_REQUIREMENTS" ? "No resource requirements are recorded for this project."
+    : fulfillmentState === "RESERVATIONS_NEED_REVIEW" ? "At least one active reservation has unknown or excessive coverage; review reservation scope and current source evidence."
+      : fulfillmentState === "EVIDENCE_REVIEW_REQUIRED" ? "At least one requirement relies on stale, historical, unsupported, or unresolved evidence; refresh or clarify that evidence before treating the plan as covered."
+        : fulfillmentState === "OBSERVED_SHORTFALLS" ? "Current observations show one or more requirement gaps. This is evidence about selected sources, not a gathering, crafting, procurement, or transfer instruction."
+          : "Current observations meet the recorded quantities for every requirement. Reservations, access, task outcomes, and player-declared project completion remain separate.";
+  const fulfillment: ErpProjectFulfillmentSummary = {
+    state: fulfillmentState, projectStatus: project.status, requirementCount: project.needs.length,
+    currentObservedCoverageCount, currentObservedShortfallCount, historicalOrStaleEvidenceCount, unresolvedEvidenceCount,
+    activeWorkOrderCount: project.workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED").length,
+    reservationReviewStates,
+    changedObservationCauseUnknownCount: workOrderProgress.filter((entry) => entry.reconciliation === "OBSERVATION_CHANGED_CAUSE_UNKNOWN").length,
+    interpretation: "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY", reason: fulfillmentReason,
+  };
+  return { ...project, needEvidence, resourceSourceScreens: resourceSourceScreens(project, snapshotsFor, allProjects, now, currencies, candidateSources), workOrderReadiness, workOrderProgress, reservationReview, fulfillment };
 }

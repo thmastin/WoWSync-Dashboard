@@ -9,7 +9,7 @@ function project(stableId: string, status: ErpProjectView["status"], priority: n
     stableId, version: "retail", title: `Project ${stableId}`, status, priority, revision: 1, createdAt: 1, updatedAt: 1, needs: [], reservations: [], workOrders: [order], history: [], historyEventCount: 0, historyTruncated: false,
     needEvidence: [], resourceSourceScreens: [], workOrderReadiness: [{ workOrderId: order.stableId, state: readinessState as never, blockingWorkOrderIds: [], unresolvedNeedIds: [], actionTargetNeedIds: [], changedNeedIds: [], reason: `Readiness ${stableId}` }],
     workOrderProgress: [{ workOrderId: order.stableId, recordedStatus: orderStatus, completionRecorded: false, linkedNeedState: "NO_LINKED_NEEDS", observationChange: "UNKNOWN", reconciliation: reconciliation as never, coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: [], allocationConflictNeedIds: [], changedNeedIds: [], reason: `Progress ${stableId}` }],
-    reservationReview: [],
+    reservationReview: [], fulfillment: { state: "NO_REQUIREMENTS", projectStatus: status, requirementCount: 0, currentObservedCoverageCount: 0, currentObservedShortfallCount: 0, historicalOrStaleEvidenceCount: 0, unresolvedEvidenceCount: 0, activeWorkOrderCount: orderStatus === "COMPLETED" || orderStatus === "CANCELLED" ? 0 : 1, reservationReviewStates: {}, changedObservationCauseUnknownCount: reconciliation === "OBSERVATION_CHANGED_CAUSE_UNKNOWN" ? 1 : 0, interpretation: "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY", reason: "fixture summary" },
   } as ErpProjectView;
 }
 

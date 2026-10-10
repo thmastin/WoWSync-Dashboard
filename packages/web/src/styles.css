@@ -1352,6 +1352,11 @@ button.roster-name-link {
 .erp-form-help, .erp-project-meta { flex-basis: 100%; color: #9da8b8; font-size: .78rem; }
 .erp-history { flex-basis: 100%; color: #c2cad6; font-size: .82rem; }
 .erp-history summary { cursor: pointer; color: #b7c7dc; }
+.erp-fulfillment-snapshot { margin: 12px 0 18px; padding: 12px 14px; border: 1px solid #7794b33d; border-radius: 7px; background: #7794b30a; }
+.erp-fulfillment-snapshot h3 { margin: 0 0 6px; }
+.erp-fulfillment-snapshot p { margin: 5px 0; color: #c2cad6; }
+.erp-fulfillment-snapshot ul { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 8px 0; padding-left: 18px; color: #c2cad6; }
+.erp-fulfillment-snapshot small { color: #9da8b8; }
 .erp-history ol { display: grid; gap: 7px; padding-left: 22px; }
 .erp-history li small { display: block; color: #9da8b8; margin-top: 3px; }
 .erp-history p { color: #9da8b8; }

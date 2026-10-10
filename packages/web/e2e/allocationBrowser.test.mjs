@@ -157,6 +157,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await createForm.getByRole("button", { name: "Create project" }).click();
     const projectCard = page.locator(".erp-project-card").filter({ hasText: "Provision the crafter" });
     await projectCard.waitFor();
+    const fulfillmentSnapshot = projectCard.getByTestId("erp-fulfillment-snapshot");
+    await fulfillmentSnapshot.getByText(/NO REQUIREMENTS/).waitFor();
+    assert.match(await fulfillmentSnapshot.innerText(), /player project status active/i);
+    assert.match(await fulfillmentSnapshot.innerText(), /does not mean resources are unreserved or accessible/);
 
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
     const needForm = projectCard.locator("form.erp-inline-form");
@@ -167,6 +171,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await needForm.getByLabel("Source character or shared owner").selectOption({ label: "None — supply UNKNOWN" });
     await needForm.getByLabel("Intended recipient").selectOption({ label: "Project Fixture — Cairne" });
     await needForm.getByRole("button", { name: "Add requirement" }).click();
+    await fulfillmentSnapshot.getByText(/EVIDENCE REVIEW REQUIRED/).waitFor();
+    assert.match(await fulfillmentSnapshot.innerText(), /1 unresolved/);
     const unworkedNeeds = page.getByRole("region", { name: "Resource needs without an open work order" });
     await unworkedNeeds.getByText("Mycobloom").waitFor();
     assert.match(await unworkedNeeds.innerText(), /UNKNOWN/);
@@ -183,6 +189,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     await possibleSource.getByRole("button", { name: "Create source verification task" }).first().click();
     const verifySourceOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Verify possible source for Mycobloom" });
     await verifySourceOrder.waitFor();
+    assert.match(await fulfillmentSnapshot.innerText(), /1 open manual work orders/);
     await unworkedNeeds.getByText("No uncovered resource needs are missing an open manual work order.").waitFor();
     const verificationText = await verifySourceOrder.innerText();
     assert.match(verificationText, /item:940101\S* \(OBSERVED in bags, seen /);

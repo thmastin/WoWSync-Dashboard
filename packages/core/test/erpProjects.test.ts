@@ -64,7 +64,17 @@ test("project requirements preserve observed lower bounds, unknown bank, and exp
     assert.deepEqual(read.needEvidence[0]?.unresolvedSections, ["character bank", "storage completeness is partial or unconfirmed"]);
     assert.equal(read.reservationReview[0]?.state, "WITHIN_OBSERVED_SUPPLY");
     assert.equal(read.reservationReview[0]?.reservedQuantity, 2);
+    assert.equal(read.fulfillment.state, "EVIDENCE_REVIEW_REQUIRED", "unknown bank evidence remains visible even when the observed lower bound covers recorded reservations");
+    assert.equal(read.fulfillment.requirementCount, 1);
+    assert.equal(read.fulfillment.unresolvedEvidenceCount, 1);
+    assert.equal(read.fulfillment.activeWorkOrderCount, 1);
+    assert.equal(read.fulfillment.interpretation, "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY");
     assert.equal(read.workOrders[0]?.status, "PLANNED", "an inventory snapshot never auto-completes a manual work order");
+    const lowerBoundCovered = { ...p, needs: p.needs.map((need) => ({ ...need, requiredQuantity: 3 })) };
+    const coveredSummary = evaluateErpProject(lowerBoundCovered, (key) => store.listSnapshots(key), [lowerBoundCovered], 1_700_000_001).fulfillment;
+    assert.equal(coveredSummary.state, "CURRENT_OBSERVATIONS_COVER_NEEDS", "a sufficient observed lower bound can cover a requirement while unknown bank access remains outside the claim");
+    assert.equal(coveredSummary.currentObservedCoverageCount, 1);
+    assert.equal(coveredSummary.unresolvedEvidenceCount, 0);
   } finally { store.close(); }
 });
 
@@ -82,6 +92,9 @@ test("stale inventory preserves reservation intent but cannot establish current 
     assert.match(evidence.reservationAssessment?.reason ?? "", /stale and not current/);
     assert.equal(view.reservationReview[0]?.state, "SUPPLY_UNKNOWN");
     assert.match(view.reservationReview[0]?.reason ?? "", /observation is stale/);
+    assert.equal(view.fulfillment.state, "RESERVATIONS_NEED_REVIEW");
+    assert.equal(view.fulfillment.historicalOrStaleEvidenceCount, 1);
+    assert.equal(view.fulfillment.currentObservedShortfallCount, 0, "stale stock never becomes a current shortfall");
   } finally { store.close(); }
 });
 
