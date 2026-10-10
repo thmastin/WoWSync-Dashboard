@@ -66,8 +66,11 @@ Ask My Account (POC)           packages/server/src/llm.ts, app.ts
 
 ## Current external read and research path (Phase 6 validated)
 
-The MCP integration is a separate, optional read path; it does not route
-ChatGPT through the Dashboard Express API or replace the normal import/UI path:
+The MCP integration is a separate, optional path; retrieval uses the read
+model and does not replace normal import/UI workflows. When the process
+operator explicitly enables plan-only writes, fixed MCP planning tools call
+the local loopback REST routes so the existing revision and evidence checks
+remain shared:
 
 ```text
 WoWSync export -> normal writable SqliteSnapshotStore -> Dashboard UI/import
@@ -75,18 +78,19 @@ WoWSync export -> normal writable SqliteSnapshotStore -> Dashboard UI/import
                          +-> SQLite opened by SqliteSnapshotReadStore
                                -> DashboardReadModel
                                -> fixed ResearchRegistry
-                               -> packages/mcp (bounded read-only tool surface, stdio)
+                               -> packages/mcp (bounded stdio tools: default read-only; optional loopback REST plan writes)
                                -> tunnel-client (outbound Secure MCP Tunnel)
                                -> personal ChatGPT MCP App (normal-chat invocation validated)
 ```
 
-The normal Dashboard store can import and perform the explicitly supported
-local management operations. The external path is structurally narrower:
-`DashboardReadModel` depends on `SnapshotReadStore`, and the MCP process opens
-SQLite with `readOnly: true` through `SqliteSnapshotReadStore`. It never opens
-the writable `SqliteSnapshotStore`, initializes or migrates schema, or performs
-database backfills. Schema upgrades belong to the normal writable application
-path, not to MCP startup. (Separately, the Dashboard server
+The normal Dashboard store handles imports and local management. MCP retrieval
+is structurally narrower: `DashboardReadModel` depends on `SnapshotReadStore`,
+and MCP opens SQLite with `readOnly: true` through `SqliteSnapshotReadStore`.
+Optional plan-only tools do not open a writable store; they call fixed local
+REST routes, which perform the established revision/evidence validation and
+transactional writes. MCP does not initialize or migrate schema or perform
+backfills; schema upgrades belong to the normal writable application path,
+not MCP startup. (Separately, the Dashboard server
 constructs an in-process `DashboardReadModel` over its own store for one read route,
 `GET /api/versions/:version/allocation-review`; that is not the MCP path and changes none of the
 above. See `SYSTEM_REFERENCE.md`.) A live WAL database may create SQLite coordination

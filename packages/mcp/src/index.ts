@@ -5,6 +5,7 @@ const defaults = defaultMcpConfiguration();
 const configuration = {
   databasePath: process.env.WOWSYNC_MCP_DB_PATH || defaults.databasePath,
   researchRoot: process.env.WOWSYNC_MCP_RESEARCH_ROOT || defaults.researchRoot,
+  planningApiBaseUrl: process.env.WOWSYNC_MCP_PLANNING_API_URL || undefined,
 };
 
 let transport: ReturnType<typeof serveStdio> | undefined;

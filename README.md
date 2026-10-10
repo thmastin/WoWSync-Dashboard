@@ -18,10 +18,11 @@ the rest of this README if you're navigating the docs rather than just running t
 
 ## What this is (and isn't)
 
-- **Is:** a read-only consumer of WoWSync exports. You paste or drop a
-  `.txt` export; the dashboard parses it, stores a timestamped snapshot,
-  diffs it against the character's previous snapshot, and shows you the
-  result.
+- **Is:** a local consumer of WoWSync exports and player-authored planning
+  records. You paste or drop a `.txt` export; the dashboard parses it, stores
+  a timestamped snapshot, diffs it against the character's previous snapshot,
+  and shows you the result. Planning records are intent only and never run
+  in-game actions.
 - **Isn't:** a WoW automation tool. It never reads WoW process memory,
   injects code, simulates input, or takes any gameplay action. The addon
   captures state; this app only reads what the addon already exported.
@@ -35,7 +36,7 @@ the rest of this README if you're navigating the docs rather than just running t
 - **Forever gear observations:** Forever character detail shows observed equipped slots and carried
   items with exact item-string variants and the available capture source/time. It does not identify
   speculative candidates or claim equipability, suitability, upgrades, or transferability. The
-  read-only MCP tool `get_forever_gear_observation` exposes the same conservative observation view;
+  MCP tool `get_forever_gear_observation` exposes the same conservative observation view;
   absent bank data remains UNKNOWN. See [`docs/FOREVER_GEAR_OBSERVATION.md`](docs/FOREVER_GEAR_OBSERVATION.md).
 
 ## Supported WoW versions
@@ -71,8 +72,10 @@ The Dashboard itself runs on your machine:
 The ordinary Dashboard does not synchronize data to a hosted service. Two
 separate, explicitly configured features can send selected information
 outbound: **Ask My Account** sends its request context to the configured LLM
-provider, and the optional read-only MCP integration sends only requested MCP
-tool results through OpenAI Secure MCP Tunnel. The MCP server and Dashboard
+provider, and the optional MCP integration sends only requested MCP tool
+results through OpenAI Secure MCP Tunnel. MCP retrieval is read-only by default;
+opt-in planning tools can write only player-authored ERP intent through the
+loopback Dashboard REST API. The MCP server and Dashboard
 remain local; the tunnel is a separate process and does not expose the
 Dashboard's HTTP API. See [MCP development and operations](docs/MCP_DEVELOPMENT.md).
 
@@ -658,8 +661,10 @@ and real imported character data.
   account-context JSON, and question to the provider you configure.
 - The optional WoWSync MCP connection is separately opt-in: when the local
   `tunnel-client` runs, it makes outbound HTTPS connections to OpenAI and
-  relays requested, bounded results from the dedicated read-only MCP process.
-  It does not make the Dashboard API public or upload the SQLite database.
+  relays requested, bounded results from the MCP process. Retrieval is
+  read-only by default; a separate opt-in enables only player-plan writes via
+  the local loopback REST API. It does not make the Dashboard API public or
+  upload the SQLite database.
 - Without either feature being used, the Dashboard's account data remains on
   this machine. See [MCP operations](docs/MCP_DEVELOPMENT.md) for the local
   process and trust boundary.
@@ -693,6 +698,10 @@ is read — never the generic `HOST`/`HOSTNAME` variables.)
 
 The optional WoWSync MCP integration does not require a LAN bind: keep the
 Dashboard on loopback and use its separate outbound Secure MCP Tunnel process.
+MCP planning-write tools remain disabled unless `WOWSYNC_MCP_PLANNING_API_URL`
+is explicitly set to the loopback Dashboard origin. These tools reuse REST
+revision/evidence checks and cannot perform in-game actions; see
+[`docs/MCP_DEVELOPMENT.md`](docs/MCP_DEVELOPMENT.md) before enabling them.
 Do not widen `WOWSYNC_HOST` as a ChatGPT connectivity workaround.
 
 **Upgrading from an older build:** stop any running WoWSync server first. Older

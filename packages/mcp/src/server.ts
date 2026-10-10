@@ -37,12 +37,17 @@ const realmSchema = z.string().trim().min(1).max(64);
 const limitSchema = z.number().int().min(1);
 const documentClassSchema = z.enum(["VERSIONED_RESEARCH", "OPERATIONAL_TRUTH"]);
 const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveHint: false } as const;
+const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: false } as const;
+const planReplacementAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
+const reservationWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 
 export interface WoWSyncMcpConfiguration {
   /** Process configuration only. MCP callers cannot select databases. */
   databasePath?: string;
   /** Process configuration only. MCP callers cannot select research roots. */
   researchRoot?: string;
+  /** Optional process-owned loopback Dashboard origin. Enables planning-record writes through the existing REST validation boundary. */
+  planningApiBaseUrl?: string;
 }
 
 export interface WoWSyncMcpServer {
@@ -50,7 +55,7 @@ export interface WoWSyncMcpServer {
   close(): Promise<void>;
 }
 
-export function defaultMcpConfiguration(): Required<WoWSyncMcpConfiguration> {
+export function defaultMcpConfiguration(): { databasePath: string; researchRoot: string } {
   return { databasePath: DEFAULT_DATABASE_PATH, researchRoot: DEFAULT_RESEARCH_ROOT };
 }
 
@@ -84,20 +89,69 @@ function documentMetadata(document: ReturnType<ResearchRegistry["listDocuments"]
   };
 }
 
-/**
- * A deliberately thin MCP adapter. Its only data dependencies are the strict
- * read-only SQLite store and the registered-path ResearchRegistry. It never
- * constructs SqliteSnapshotStore or exposes SQL, files, HTTP, or commands.
- */
+function resolvePlanningApiBaseUrl(value: string | undefined): URL | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  let url: URL;
+  try { url = new URL(value); } catch { throw new TypeError("WoWSync MCP planning API must be an absolute loopback HTTP origin."); }
+  const loopbackNames = new Set(["127.0.0.1", "[::1]"]);
+  if (url.protocol !== "http:" || !loopbackNames.has(url.hostname.toLowerCase()) || url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new TypeError("WoWSync MCP planning writes accept only a plain HTTP loopback IP origin (127.0.0.1 or ::1), without credentials or a path.");
+  }
+  return new URL(url.origin);
+}
+
+async function forwardPlanningRequest(baseUrl: URL, method: "POST" | "PUT", route: string, body: unknown) {
+  const encoded = JSON.stringify(body);
+  if (Buffer.byteLength(encoded, "utf8") > 64_000) return safeFailure("PLANNING_REQUEST_TOO_LARGE", "The planning request exceeds the 64 KB MCP limit.");
+  try {
+    const response = await fetch(new URL(route, baseUrl), {
+      method,
+      headers: { "content-type": "application/json" },
+      body: encoded,
+      redirect: "error",
+      signal: AbortSignal.timeout(8_000),
+    });
+    const reader = response.body?.getReader();
+    if (!reader) return safeFailure("PLANNING_API_INVALID_RESPONSE", "The local Dashboard returned an empty response stream.");
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > 2_000_000) {
+        await reader.cancel();
+        return safeFailure("PLANNING_RESPONSE_TOO_LARGE", "The local Dashboard returned an oversized planning response.");
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const text = new TextDecoder().decode(bytes);
+    let result: unknown;
+    try { result = JSON.parse(text); } catch { return safeFailure("PLANNING_API_INVALID_RESPONSE", "The local Dashboard returned a non-JSON response; no game action was performed."); }
+    if (!response.ok) return safeFailure("PLANNING_API_REJECTED", `The local Dashboard rejected the planning request with HTTP ${response.status}: ${JSON.stringify(result).slice(0, 2_000)}`);
+    return textResult(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Local Dashboard request failed.";
+    return safeFailure("PLANNING_API_UNAVAILABLE", `Could not reach the configured loopback Dashboard planning API: ${message.slice(0, 500)}`);
+  }
+}
+
+/** A thin MCP adapter: reads from a read-only snapshot store, with optional fixed loopback REST writes for player plan records. */
 export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = {}): WoWSyncMcpServer {
   const defaults = defaultMcpConfiguration();
+  const planningApiBaseUrl = resolvePlanningApiBaseUrl(configuration.planningApiBaseUrl);
   const store = new SqliteSnapshotReadStore(configuration.databasePath ?? defaults.databasePath);
   const readModel = new DashboardReadModel(store);
   const registry = new ResearchRegistry(configuration.researchRoot ?? defaults.researchRoot, DASHBOARD_RESEARCH_REGISTRATIONS);
   const server = new McpServer(
-    { name: "wowsync-readonly", version: "0.1.0" },
+    { name: planningApiBaseUrl ? "wowsync-local-erp" : "wowsync-readonly", version: "0.1.0" },
     {
-      instructions: "Read-only WoWSync retrieval. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance.",
+      instructions: planningApiBaseUrl
+        ? "WoWSync retrieval plus optional local ERP plan recording. Require an explicit WoW version. Planning tools write only player-authored planning records through the loopback Dashboard REST API; they never execute in-game actions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance."
+        : "Read-only WoWSync retrieval. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance.",
       supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
     },
   );
@@ -145,6 +199,40 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const portfolioNextActions = buildErpPortfolioNextActionReview(projects, version);
     return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, sourceFulfillment, portfolioNextActions, procurementBudgetReview, procurementBuyerReview });
   });
+
+  if (planningApiBaseUrl) {
+    const boundedRecord = z.record(z.string().max(80), z.unknown());
+    server.registerTool("create_erp_project", {
+      title: "Create a WoWSync ERP project plan",
+      description: "Creates a version-scoped player planning record through the local Dashboard REST API. Requires explicit version, title, need identities, and quantities. This records intent only: it does not reserve observed supply, execute game actions, or establish possession. REST revalidates the project and character identities.",
+      inputSchema: z.object({ version: versionSchema, title: z.string().trim().min(1).max(160), objective: z.string().max(2_000).optional(), priority: z.number().int().min(1).max(5).optional(), needs: z.array(boundedRecord).max(20).optional() }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ version, title, objective, priority, needs }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/projects`, { title, ...(objective !== undefined ? { objective } : {}), ...(priority !== undefined ? { priority } : {}), ...(needs !== undefined ? { needs } : {}) }));
+
+    server.registerTool("plan_erp_work_order_batch", {
+      title: "Save a reviewed WoWSync ERP work plan",
+      description: "Atomically saves bounded player-authored manual work orders for 1–10 projects through the Dashboard REST validation path. Each task must include the current reviewed need evidence and expected project revision. Stale evidence, existing open work, invalid dependencies, or any conflict rejects the plan without partial writes. It never performs the planned actions in game.",
+      inputSchema: z.object({ version: versionSchema, updates: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), tasks: z.array(boundedRecord).min(1).max(20) }).strict()).min(1).max(10) }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ version, updates }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`, { updates }));
+
+    server.registerTool("update_erp_project_plan", {
+      title: "Update a WoWSync ERP plan",
+      description: "Saves an explicitly versioned, revision-checked player edit to one complete project plan through Dashboard REST. This can update needs, work-order notes/statuses, or project status and records player intent; status is not proof the corresponding game action happened. The server preserves saved-batch history, checks reservation increases against exact current evidence, validates character/version identity, and rejects stale revisions.",
+      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), project: boundedRecord }).strict(),
+      annotations: planReplacementAnnotations,
+    }, async ({ version, projectId, expectedRevision, project }) => {
+      if (project.stableId !== projectId || project.version !== version) return safeFailure("PROJECT_IDENTITY_MISMATCH", "The submitted project must retain the exact stable ID and explicit game version in the request.");
+      return forwardPlanningRequest(planningApiBaseUrl, "PUT", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}`, { expectedRevision, project });
+    });
+
+    server.registerTool("replan_erp_reservations", {
+      title: "Apply a reviewed ERP reservation reduction",
+      description: "Atomically applies an explicitly reviewed reservation list through the local Dashboard REST endpoint. The server only permits reduction or release of existing reservation intent and checks project revisions; it cannot add supply, move resources, or execute game actions.",
+      inputSchema: z.object({ version: versionSchema, projects: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), reservations: z.array(boundedRecord).max(100) }).strict()).min(1).max(10) }).strict(),
+      annotations: reservationWriteAnnotations,
+    }, async ({ version, projects }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/reservation-replans`, { projects }));
+  }
 
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
   server.registerTool("get_character_summary", {

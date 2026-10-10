@@ -154,10 +154,10 @@ for the full semantics; this section lists only the cross-cutting invariants.
 10. **`SEND_HELLOMAGS` is a label/recommendation only.** No mail, vendor, auction, or other
     execute code exists anywhere in this repository. Approval and execution are explicitly
     separate, later concerns.
-11. `get_item_allocation` and `get_allocation_review` (the MCP tools) are structurally read-only,
-    like every other MCP tool.
-    Demand CRUD HTTP routes exist (`packages/server/src/demandRoutes.ts`) but have no caller
-    anywhere in this codebase today — no UI, no MCP mutation tool. The only way to manage a
+11. `get_item_allocation` and `get_allocation_review` remain read-only retrieval tools. The
+    optional ERP planning tools write only version-scoped project intent through fixed local REST
+    routes; they do not write allocation demand. Demand CRUD HTTP routes exist
+    (`packages/server/src/demandRoutes.ts`) but have no UI or MCP caller. The only way to manage a
     demand today is a direct HTTP call.
 12. Market evidence cannot create demand. No pricing input exists anywhere in `allocation.ts`,
     `allocationReview.ts`, or `demand.ts`.
@@ -215,16 +215,15 @@ future implementer has somewhere correct to stand, without Slice 1 having built 
 
 **ENFORCED IN CODE TODAY**
 
-1. MCP is structurally read-only at two independent layers:
-   - SQLite is opened with `readOnly: true` (OS-level `SQLITE_OPEN_READONLY`) via
-     `SqliteSnapshotReadStore`. The MCP process never instantiates the writable
-     `SqliteSnapshotStore`.
-   - The TypeScript interface given to MCP (`SnapshotReadStore`) has no write methods defined at
-     all — this is a compile-time guarantee, not a runtime check or a convention.
-2. MCP never initializes, migrates, backfills, or otherwise repairs the database. Schema changes
+1. MCP retrieval uses the read-only `SqliteSnapshotReadStore`. Its default
+   configuration exposes no planning mutations. Optional planning tools are
+   registered only when process configuration supplies a loopback Dashboard
+   REST origin; they call fixed ERP plan routes, never open a writable SQLite
+   store, and inherit REST revision/evidence/atomicity validation. They mutate
+   player-authored intent only and cannot issue game actions.
+2. MCP never initializes, migrates, backfills, or repairs the database. Schema changes
    belong exclusively to the ordinary writable application/migration path.
-3. **MCP never authors demand.** Enforced structurally (no mutation tool exists), not merely by
-   convention.
+3. **MCP never authors demand.** No demand mutation tool is registered.
 4. Research tools (`list_research_documents`, `search_research`, `get_research_section`,
    `get_research_document`) resolve only fixed registry IDs. They never accept a caller-supplied
    filesystem path.

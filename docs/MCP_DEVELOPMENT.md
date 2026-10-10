@@ -25,8 +25,8 @@ and its credential material) is intentionally retained on the Windows host at
 `%APPDATA%\tunnel-client\wowsync.yaml` for rollback only; its tunnel ID is not
 reproduced here. The old MCP must not be described or treated as active.
 
-`@wowsync-dashboard/mcp` is a thin STDIO adapter over the provider-neutral
-core. Its process path is deliberately:
+`@wowsync-dashboard/mcp` is a STDIO adapter over the provider-neutral
+core. Its default process path is deliberately read-only:
 
 ```text
 SqliteSnapshotReadStore (SQLite readOnly: true)
@@ -35,9 +35,13 @@ SqliteSnapshotReadStore (SQLite readOnly: true)
   -> STDIO MCP tools
 ```
 
-It never creates `SqliteSnapshotStore`, so it cannot initialize, import into,
-or mutate the WoWSync database. It exposes no SQL, filesystem, shell, HTTP
-proxy, raw export, mutation, account-dump, or shared-storage tool.
+The default MCP configuration never creates `SqliteSnapshotStore`, so it
+cannot initialize, import into, or mutate the WoWSync database. In a separate
+explicit opt-in mode, four narrowly scoped plan-only tools forward fixed ERP
+planning routes to a process-configured loopback Dashboard origin. They do not
+accept a caller-selected URL, path, database, shell command, or SQL, and the
+Dashboard REST handlers retain revision, evidence, identity, and atomic-write
+validation. Those tools write saved planning intent only; no game action runs.
 
 ## STDIO output and launch commands
 
@@ -82,6 +86,31 @@ The default registered research root is `docs/`. Set
 The tool surface remains constrained to the fixed research registration
 manifest, not paths supplied by an MCP caller.
 
+### Optional ERP planning writes
+
+MCP remains read-only unless the process environment explicitly sets
+`WOWSYNC_MCP_PLANNING_API_URL` to the local Dashboard origin, for example
+`http://127.0.0.1:4173`. Only loopback IP literals `127.0.0.1` and `::1` are
+accepted; hostnames are rejected to avoid name-resolution ambiguity. Startup rejects non-HTTP, non-loopback, credentialed,
+or path-bearing values. Tool callers cannot select or change this destination.
+When enabled, `create_erp_project`, `plan_erp_work_order_batch`,
+`update_erp_project_plan`, and `replan_erp_reservations` call only the
+corresponding fixed version-scoped REST routes. The server validates the same
+project revisions and reviewed evidence
+used by the UI and rejects stale requests atomically. Reservation changes can
+only reduce or release existing intent. MCP annotations mark these as writes
+(`readOnlyHint=false`). Whole-plan replacement and reservation changes also
+set `destructiveHint=true`, so clients can apply their usual user review
+policy.
+
+The active Secure MCP Tunnel profile is not enabled for writes by this code
+change. Do not set the environment variable there until its client-side tool
+approval behavior has been deliberately configured and tested. For local
+integration testing, run the Dashboard on loopback and set the variable only
+on the MCP child process. If the Dashboard is unavailable, planning tools
+return `PLANNING_API_UNAVAILABLE`; retrieval tools continue using the configured
+read-only database. No generic HTTP proxy is exposed.
+
 The read-only SQLite path refuses missing or incompatible databases and never
 creates schemas, runs migrations/backfills, or changes journal mode. A live
 WAL database can create empty `-wal` / `-shm` coordination sidecars when a
@@ -118,6 +147,9 @@ imports may update the database.
 | `get_character_storage` | Retrieve bounded character-owned storage for one character. |
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
+| `create_erp_project` (opt-in) | Create a version-scoped project and explicit needs through Dashboard REST; no game action. |
+| `plan_erp_work_order_batch` (opt-in) | Atomically save reviewed manual work orders with REST revision/evidence checks. |
+| `replan_erp_reservations` (opt-in) | Atomically reduce or release existing reservation intent; cannot increase or move reservations. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. Slice 3 (shipped and live-validated): every result carries `confirmedItemStringIdentity`/`potentialItemStringIdentity` and `confirmedBinding`/`potentialBinding`; a `BASE_ITEM_AGGREGATION_UNPROVEN` result (confirmed item-string variants or a bare `item:<id>`) has no `allocated`/`confirmedDeficit`/`confirmedSurplus`; confirmed bound/binding-unknown rows withhold `SEND_HELLOMAGS`. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §24 and the live-validation record. |
 | `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. Slice 3 (shipped and live-validated): `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the REQUIRES_REVIEW group; unallocated entries add the four identity/binding facets (still evidence only), and `unallocatedItemStringIdentityCounts` covers the whole unallocated list. `itemNames` maps each base item ID on the returned demanded page to its name observed in account-owned evidence (presentation only; never inside an allocation result; no key when no name was observed). The Dashboard-only unallocated search `q` is not an MCP input (the strict schema rejects it). See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23–§25. |
 | `get_gear_candidate_evidence` | Return snapshot-scoped Retail candidate evidence. Use its identity key, snapshot ID, and one-based row ordinal to select a row. |
@@ -241,7 +273,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Research list/search/section | MCP PARITY | Fixed `ResearchRegistry`, registered-only. |
 | Research metadata/outline/full registered doc | MCP PARITY | Registry metadata, bounded outline and 40,000-character registered document read. |
 | Spell/trainer historical comparison | CAPTURED BUT NOT MCP-EXPOSED | Snapshot diff does not compare these sections: spellbook capture coverage can vary and trainer visits are point-in-time observations, not learned-state transitions. |
-| External game data, auction prices, arbitrary paths/SQL, raw snapshots, mutations | INTENTIONALLY OUT OF MCP SCOPE | Not a provider-neutral captured read capability; no such MCP surface is exposed. |
+| External game data, auction prices, arbitrary paths/SQL, raw snapshots, game-action mutations | INTENTIONALLY OUT OF MCP SCOPE | These are not provider-neutral captured facts or safe plan-only writes. The optional ERP tools are limited to fixed local planning routes. |
 
 This pass added five tools, bringing the implementation to 24 registered tools
 **at that time (2026-09-30)** — since superseded by the later Azeroth ERP
