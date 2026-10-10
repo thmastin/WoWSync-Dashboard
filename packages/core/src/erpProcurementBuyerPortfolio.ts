@@ -1,4 +1,4 @@
-import type { ErpProjectView } from "./erpProjects.ts";
+import type { ErpNeedEvidence, ErpProjectStatus, ErpProjectView, ErpWorkOrder, ErpWorkOrderStatus } from "./erpProjects.ts";
 import type { VersionOrUnknown, WowVersion } from "./types.ts";
 
 export type ErpProcurementSourceReviewState = "OBSERVED_POTENTIAL_SOURCES" | "POTENTIAL_SOURCES_SCAN_INCOMPLETE" | "NO_MATCHING_SOURCE_OBSERVED" | "NO_OTHER_CHARACTERS_TO_SCAN" | "SOURCE_SCAN_INCOMPLETE" | "SOURCE_REVIEW_UNAVAILABLE";
@@ -54,6 +54,36 @@ export interface ErpProcurementBuyerResourcePackage {
   /** Exact-resource character locations already found by per-need source screening. These are leads to review, not accessible supply. */
   readonly sourceReviewState: ErpProcurementSourceReviewState;
   readonly observedSources: readonly ErpProcurementSourceLead[];
+  /** Per-project demand and existing-work context; requirements are never merged merely because item identity matches. */
+  readonly needReviews: readonly {
+    readonly projectId: string;
+    readonly projectTitle: string;
+    readonly projectStatus: ErpProjectStatus;
+    readonly projectRevision: number;
+    readonly projectPriority: number;
+    readonly needId: string;
+    readonly label: string;
+    readonly state: ErpNeedEvidence["state"];
+    readonly requiredQuantity: number;
+    readonly observedQuantity?: number;
+    readonly potentialQuantity?: number;
+    readonly observedAt?: number;
+    readonly freshness: ErpNeedEvidence["freshness"];
+    readonly reservationState?: NonNullable<ErpNeedEvidence["reservationAssessment"]>["state"];
+    readonly activeReservationQuantity?: number;
+    readonly sourceSections: ErpNeedEvidence["sourceSections"];
+    readonly unresolvedSections: ErpNeedEvidence["unresolvedSections"];
+    readonly reason: string;
+    readonly linkedWorkOrders: readonly {
+      readonly workOrderId: string;
+      readonly kind: ErpWorkOrder["kind"];
+      readonly status: ErpWorkOrderStatus;
+      readonly title: string;
+      readonly readinessState?: ErpProjectView["workOrderReadiness"][number]["state"];
+      readonly progressState?: ErpProjectView["workOrderProgress"][number]["reconciliation"];
+      readonly reason?: string;
+    }[];
+  }[];
   readonly reason: string;
   readonly orders: readonly ErpProcurementBuyerOrder[];
 }
@@ -106,6 +136,7 @@ interface Candidate {
   goldFreshness?: string;
   reservationTotal?: number;
   reservationState?: string;
+  needReview: ErpProcurementBuyerResourcePackage["needReviews"][number];
 }
 
 function reviewSources(project: ErpProjectView | undefined, needId: string, kind: "ITEM_ID" | "ITEM_REF", resourceKey: string): ErpProcurementSourceReview {
@@ -146,6 +177,11 @@ export function buildErpProcurementBuyerPortfolioReview(
       if (!target || !assessment || assessment.buyerIdentityKey !== buyer) { unresolvedBuyerOrderCount++; continue; }
       const quote = order.procurementPlan.playerQuote;
       const targetNeed = assessment.targetNeed;
+      const linkedWorkOrders = project.workOrders.filter((candidate) => candidate.resourceNeedIds.includes(target.stableId)).map((candidate) => {
+        const readiness = project.workOrderReadiness.find((entry) => entry.workOrderId === candidate.stableId);
+        const progress = project.workOrderProgress.find((entry) => entry.workOrderId === candidate.stableId);
+        return { workOrderId: candidate.stableId, kind: candidate.kind, status: candidate.status, title: candidate.title, ...(readiness ? { readinessState: readiness.state } : {}), ...(progress ? { progressState: progress.reconciliation, reason: progress.reason } : readiness ? { reason: readiness.reason } : {}) };
+      });
       const entry: Candidate = {
         projectId: project.stableId, projectTitle: project.title, workOrderId: order.stableId,
         targetNeedId: target.stableId, targetLabel: target.label, targetResourceKey: target.resourceKey,
@@ -160,6 +196,7 @@ export function buildErpProcurementBuyerPortfolioReview(
         goldFreshness: assessment.budgetEvidence.freshness,
         reservationTotal: assessment.recordedGoldReservationsCopper,
         reservationState: assessment.recordedGoldReservationState,
+        needReview: { projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectRevision: project.revision, projectPriority: project.priority, needId: target.stableId, label: target.label, state: targetNeed.state, requiredQuantity: targetNeed.requiredQuantity, ...(targetNeed.observedQuantity !== undefined ? { observedQuantity: targetNeed.observedQuantity } : {}), ...(targetNeed.potentialQuantity !== undefined ? { potentialQuantity: targetNeed.potentialQuantity } : {}), ...(targetNeed.observedAt !== undefined ? { observedAt: targetNeed.observedAt } : {}), freshness: targetNeed.freshness, ...(targetNeed.reservationState ? { reservationState: targetNeed.reservationState } : {}), ...(targetNeed.activeReservationQuantity !== undefined ? { activeReservationQuantity: targetNeed.activeReservationQuantity } : {}), sourceSections: targetNeed.sourceSections, unresolvedSections: targetNeed.unresolvedSections, reason: targetNeed.reason, linkedWorkOrders },
       };
       const list = grouped.get(buyer) ?? [];
       list.push(entry);
@@ -230,6 +267,7 @@ export function buildErpProcurementBuyerPortfolioReview(
       const quoteTotal = packageQuotes.reduce((sum, entry) => sum + BigInt(entry.amount!), 0n);
       const unsafe = gapTotal > BigInt(Number.MAX_SAFE_INTEGER) || quoteQuantity > BigInt(Number.MAX_SAFE_INTEGER) || quoteTotal > BigInt(Number.MAX_SAFE_INTEGER);
       const first = group[0]!;
+      const needReviews = [...new Map(group.map((entry) => [`${entry.projectId}\u0000${entry.targetNeedId}`, entry.needReview])).values()].sort((a, b) => b.projectPriority - a.projectPriority || a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId));
       const sourceReviewRows = uniqueNeeds.flatMap((entry) => {
         const project = projectsById.get(entry.projectId);
         const screen = project?.resourceSourceScreens.find((candidate) => candidate.needId === entry.targetNeedId);
@@ -263,7 +301,7 @@ export function buildErpProcurementBuyerPortfolioReview(
             : "QUOTE_QUANTITY_BELOW_COMBINED_OBSERVED_GAPS";
       return [{
         kind: first.targetKind, resourceKey: first.targetResourceKey, projectCount: packageProjectCount, needCount: uniqueNeeds.length, state,
-        sourceReviewState, observedSources: sourceReviews,
+        sourceReviewState, observedSources: sourceReviews, needReviews,
         ...(!unsafe && completeGaps ? { combinedObservedGapQuantity: Number(gapTotal) } : {}),
         ...(!unsafe && packageQuotes.length ? { recentQuotedQuantity: Number(quoteQuantity), recentQuoteTotalCopper: Number(quoteTotal) } : {}),
         reason: unsafe ? "An exact quantity or quote aggregate exceeds the safe display range; package comparison is withheld."

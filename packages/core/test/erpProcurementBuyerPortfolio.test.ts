@@ -67,6 +67,11 @@ test("cross-project buyer review totals only complete recent quotes against one 
     assert.equal(sourcedPackage.observedSources[0]!.matchingItems[0]!.itemRef, "item:1001:0:0:0:0:0:0:0", "exact item variant remains available for route review");
     assert.equal(sourcedPackage.combinedObservedGapQuantity, 5, "observed source leads do not reduce or satisfy destination needs");
     assert.equal(sourcedPackage.state, "QUOTE_QUANTITY_COVERS_COMBINED_OBSERVED_GAPS", "source location evidence does not replace quote coverage evidence");
+    assert.deepEqual(sourcedPackage.needReviews.map((need) => [need.projectTitle, need.needId, need.state, need.requiredQuantity, need.observedQuantity, need.freshness]), [
+      ["gear-a", "item-gear-a", "SHORTFALL_OBSERVED", 3, 0, "recent"],
+      ["gear-b", "item-gear-b", "SHORTFALL_OBSERVED", 2, 0, "recent"],
+    ], "the grouped resource view retains separate project requirements and their evidence rather than only a combined gap");
+    assert.ok(sourcedPackage.needReviews.every((need) => need.linkedWorkOrders.some((order) => order.kind === "PURCHASE" && order.status === "PLANNED")), "the package shows the existing player-authored purchase work for each requirement");
     const incompleteSourceScreens = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, unresolvedCharacterCount: 1, candidates: [] })) }));
     assert.equal(buildErpProcurementBuyerPortfolioReview(incompleteSourceScreens, "retail").buyers[0]!.resourcePackages[0]!.sourceReviewState, "SOURCE_SCAN_INCOMPLETE", "no source found in a partial roster scan is not reported as none available");
     const partialWithLead = withSourceReview.map((project) => ({ ...project, resourceSourceScreens: project.resourceSourceScreens.map((screen) => ({ ...screen, unresolvedCharacterCount: 1 })) }));
@@ -146,6 +151,9 @@ test("AccountContext labels buyer quote aggregates as returned-page counts when 
       returnedPackagesWithObservedSourceLeads: 0,
       returnedPackagesWithIncompleteSourceReview: 0,
       returnedObservedSourceLeadRows: 0,
+      returnedPackageNeedReviewCount: 0,
+      returnedPackageNeedReviewStates: {},
+      returnedPackagesWithOpenProvisioningReview: 0,
       unresolvedBuyerOrderCount: 0,
       truncated: true,
     });
