@@ -2,6 +2,10 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Latest checkpoint — cross-domain project fulfillment snapshot
+
+Each project now has one read-only fulfillment summary composed from the existing need evidence, reservation review, work-order progress, and saved task state. It counts recent observed coverage and shortfalls separately from historical/stale or unresolved evidence; reports reservation states and open manual work orders; and counts changed observations whose cause remains unknown. The summary is available from the shared project view used by REST and MCP, and AccountContext schema 24 includes the same project summary. The Dashboard shows it before the detailed requirement and work-order sections. Project state remains the player's saved status; evidence coverage never completes a task or project. The display explicitly says coverage is not proof of access, reservation availability, or action completion. Full `npm.cmd run validate:erp` and synthetic browser acceptance passed. No live game or production validation. See `ERP_CHECKPOINT_20261010_PHASE48.md`.
+
 ## Latest checkpoint — stale reservation state in AccountContext
 
 AccountContext schema 23 includes compact per-project `reservationReviewStates` counts projected by the same core assessment used by REST and MCP. This keeps stale-source reservations visible as `SUPPLY_UNKNOWN` in the account summary. The underlying observed quantity and saved reservation intent remain available, but stale evidence does not establish current quantity availability or an available lower bound. The workbench continues to disable creating a new reservation from stale supply. A server regression covers REST create/list and AccountContext parity. Full ERP validation and focused review passed; this is synthetic validation, with no live game or production validation. See `ERP_CHECKPOINT_20261010_PHASE47.md`.
