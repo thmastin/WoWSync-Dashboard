@@ -1499,12 +1499,20 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual(portfolioPackage.steps.map((step) => step.needId), ["mycobloom_need", "briar_need"], "portfolio view puts the evidence prerequisite before dependent work");
     assert.equal(portfolioPackage.steps[0].reviewState, "WORK_ORDER_REVIEW");
     assert.equal(portfolioPackage.steps[1].reviewState, "WORK_ORDER_REVIEW");
+    const packagePathways = portfolioPackage.steps.find((step) => step.projectId === first.stableId && step.needId === "mycobloom_need")?.fulfillmentPathways;
+    assert.deepEqual(packagePathways, rest.sourceFulfillment.sources.flatMap((source) => source.needs).find((need) => need.projectId === first.stableId && need.needId === "mycobloom_need")?.fulfillmentPathways, "the ordered project package and source review share the same evidence pathway contract");
+    assert.ok(packagePathways?.options.some((option) => option.kind === "FOLLOW_EXISTING_MANUAL_PLAN"));
     assert.equal(portfolioPackage.steps[1].prerequisiteGate.state, "PREREQUISITE_EVIDENCE_REVIEW", "fresh but short observed supply does not satisfy the dependent step's evidence gate");
     assert.equal(portfolioPackage.steps[1].prerequisiteGate.blockers[0].evidenceState, "SHORTFALL_OBSERVED");
     const portfolioPanel = page.getByTestId("erp-portfolio-fulfillment");
     assert.match(await portfolioPanel.innerText(), /Player-authored dependency packages/);
     assert.match(await portfolioPanel.innerText(), /prerequisites the player linked/);
     assert.match(await portfolioPanel.innerText(), /Shared source and resource review/);
+    const packagePathwayPanel = portfolioPanel.getByTestId(`erp-package-pathways-${first.stableId}-mycobloom_need`);
+    assert.match(await packagePathwayPanel.innerText(), /Current evidence pathways: CURRENT SOURCE SHORTFALL/);
+    assert.match(await packagePathwayPanel.innerText(), /FOLLOW EXISTING MANUAL PLAN/);
+    assert.match(await packagePathwayPanel.innerText(), /Location lead only; ownership, access, and route remain UNKNOWN/);
+    assert.ok((await packagePathwayPanel.innerText()).includes(observedLead.character.identityKey), "same-name roster leads retain a visible canonical identity discriminator in the ordered package view");
     assert.match(await portfolioPanel.innerText(), /Mycobloom reserve/);
     assert.equal(firstRead.revision, 2); assert.equal(secondRead.revision, 2);
     assert.deepEqual(firstRead.workOrders.map((order) => [order.kind, order.status, order.resourceNeedIds, order.sourceIdentityKey, order.destinationIdentityKey, order.investigationSourceLeadIdentityKey]), [["PROVISION", "PLANNED", ["mycobloom_need"], observedLead.character.identityKey, source.character.identityKey, undefined]], "one mixed portfolio batch can name a currently eligible exact-variant source for its manual provisioning step");
@@ -1541,7 +1549,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
     assert.ok(context.planning.resourceCommitments.retail.linesWithReservations >= 2, "AccountContext counts the source-scoped reservation lines without claiming stock movement");
-    assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
+    assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, pathwayReviewTruncated: false, truncated: false });
     assert.deepEqual(context.planning.sourceFulfillment.retail, { sourceCount: 2, needCount: 3, needsReviewCount: 2, groupsWithAlternativeLocations: 2, alternativeLocationCount: 2, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 1, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 2, REVIEW_SOURCE_AND_ACCESS: 0 }, pathwayStates: { CURRENT_SOURCE_SHORTFALL: 3 }, pathwayOptionKinds: { FOLLOW_EXISTING_MANUAL_PLAN: 3, INVESTIGATE_OTHER_CHARACTER_LOCATION: 3 }, truncated: false }, "AccountContext summarizes the same source/resource groups and evidence-qualified review options");
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
@@ -1784,6 +1792,122 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] manage manual work-order lifecycle from the
   }
 });
 
+test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output, procurement, and later reconciliation in one player workflow", async () => {
+  assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-fulfillment-journey-"));
+  const databasePath = path.join(directory, "browser.sqlite");
+  let store; let server; let browser; let mcpClient;
+  try {
+    store = new SqliteSnapshotStore(databasePath);
+    const now = Math.floor(Date.now() / 1000);
+    const before = renderExport({ name: "Journey Crafter", realm: "Cairne", generated: now, bags: observedSection([row(ITEM_ID, 1), row(ITEM_ID + 1, 4)], now), bank: observedSection([row(ITEM_ID, 2)], now) }).replace("MoneyCopper: ?", "MoneyCopper: 12000");
+    const imported = store.importSnapshot(before); const character = imported.character.identityKey;
+    const project = store.createErpProject({ version: "retail", title: "Multi-need field provisioning", priority: 5, needs: [
+      { stableId: "bank_reagent", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Bank reagent", requiredQuantity: 3, sourceIdentityKey: character, destinationIdentityKey: character },
+      { stableId: "craft_reagent", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 1), label: "Craft reagent", requiredQuantity: 3, sourceIdentityKey: character, destinationIdentityKey: character },
+      { stableId: "craft_output", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 2), label: "Crafted field kit", requiredQuantity: 1, sourceIdentityKey: character, destinationIdentityKey: character },
+      { stableId: "purchase_reagent", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 3), label: "Purchased reagent", requiredQuantity: 1, sourceIdentityKey: character, destinationIdentityKey: character },
+      { stableId: "gold_budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Player-planned copper ceiling", requiredQuantity: 1500, sourceIdentityKey: character, destinationIdentityKey: character },
+    ], reservations: [{ stableId: "craft-reagent-hold", needId: "craft_reagent", sourceIdentityKey: character, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }], workOrders: [{
+      stableId: "craft-field-kit", kind: "CRAFT", status: "PLANNED", title: "Review declared field-kit craft", instructions: "Synthetic planning fixture only; verify recipe and inputs in game.", assignedIdentityKey: character, sourceIdentityKey: character, destinationIdentityKey: character, resourceNeedIds: ["craft_output", "craft_reagent"], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID + 2), label: "Field kit output as declared by player", quantity: 1 },
+    }] });
+    // Use the persisted project id for an explicit prerequisite relationship.
+    const createdProject = store.getErpProject(project.stableId); assert.ok(createdProject);
+    const withDependencies = { ...createdProject, workOrders: createdProject.workOrders.map((order) => ({ ...order, portfolioPrerequisites: [{ projectId: project.stableId, needId: "bank_reagent" }, { projectId: project.stableId, needId: "purchase_reagent" }] })) };
+    store.updateErpProject(withDependencies, createdProject.revision);
+    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
+    browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+    const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
+    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    const portfolio = page.getByTestId("erp-portfolio-fulfillment");
+    const restBefore = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const packageBefore = restBefore.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "craft_output"));
+    assert.ok(packageBefore, "the player-authored craft prerequisites create one ordered fulfillment package");
+    assert.deepEqual(packageBefore.steps.map((step) => step.needId), ["bank_reagent", "purchase_reagent", "craft_output", "craft_reagent"], "source prerequisites are shown before the craft task and its input needs");
+    const bankPath = portfolio.getByTestId(`erp-package-pathways-${project.stableId}-bank_reagent`);
+    assert.match(await bankPath.innerText(), /REVIEW PERSONAL BANK RETRIEVAL/);
+    await bankPath.getByRole("button", { name: "Plan this manual review" }).click();
+    const composer = page.getByTestId("erp-cross-project-plan");
+    await composer.waitFor();
+    const bankTask = composer.getByRole("group", { name: /Multi-need field provisioning: Bank reagent/ });
+    assert.equal(await bankTask.getByLabel("Manual step type").inputValue(), "RETRIEVE", "the package handoff prepares a manual retrieval review from the observed personal-bank pathway");
+    await bankTask.getByLabel("Assigned same-version character").selectOption(character);
+    await composer.getByRole("button", { name: "Review 1 planned manual step" }).click();
+    await composer.getByTestId("erp-cross-project-plan-review").getByRole("button", { name: "Confirm and create 1 planned manual step" }).click();
+    await page.waitForFunction(async (needId) => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.some((entry) => entry.title === "Multi-need field provisioning" && entry.workOrders.some((order) => order.kind === "RETRIEVE" && order.resourceNeedIds.includes(needId))), "bank_reagent");
+    const purchasePath = portfolio.getByTestId(`erp-package-pathways-${project.stableId}-purchase_reagent`);
+    await purchasePath.getByRole("button", { name: "Plan this manual review" }).click();
+    const purchaseTask = composer.getByRole("group", { name: /Multi-need field provisioning: Purchased reagent/ });
+    await purchaseTask.getByLabel("Manual step type").selectOption("PURCHASE");
+    await purchaseTask.getByLabel("Assigned same-version character").selectOption(character);
+    await purchaseTask.locator('input[aria-label^="Purchase spending ceiling"]').fill("1500");
+    await composer.getByRole("button", { name: "Review 1 planned manual step" }).click();
+    await composer.getByTestId("erp-cross-project-plan-review").getByRole("button", { name: "Confirm and create 1 planned manual step" }).click();
+    await page.waitForFunction(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.some((entry) => entry.title === "Multi-need field provisioning" && entry.workOrders.some((order) => order.kind === "PURCHASE" && order.resourceNeedIds.includes("purchase_reagent"))));
+
+    let current = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Multi-need field provisioning"));
+    const retrievalOrder = current.workOrders.find((order) => order.kind === "RETRIEVE");
+    const purchaseOrder = current.workOrders.find((order) => order.kind === "PURCHASE");
+    const craftOrder = current.workOrders.find((order) => order.kind === "CRAFT");
+    assert.deepEqual([retrievalOrder.pathwayContext.kind, retrievalOrder.pathwayContext.needId], ["REVIEW_PERSONAL_BANK_RETRIEVAL", "bank_reagent"]);
+    assert.equal(purchaseOrder.procurementPlan.spendingCeilingCopper, 1500, "the copper limit is the player's declared ceiling, not an inferred price");
+    assert.deepEqual(craftOrder.resourceNeedIds, ["craft_output", "craft_reagent"]);
+    assert.match(craftOrder.instructions, /Synthetic planning fixture/);
+    await page.getByLabel("Queue view").selectOption("ALL_OPEN");
+    for (const order of [retrievalOrder, purchaseOrder]) {
+      const queueOrder = page.getByTestId(`erp-queue-order-${project.stableId}-${order.stableId}`);
+      await queueOrder.getByRole("button", { name: "Mark in progress" }).click();
+      await queueOrder.getByText(new RegExp(`${order.kind} · IN_PROGRESS`)).waitFor();
+    }
+
+    const laterAt = now + 20;
+    const after = renderExport({ name: "Journey Crafter", realm: "Cairne", generated: laterAt, bags: observedSection([row(ITEM_ID, 3), row(ITEM_ID + 1, 2), row(ITEM_ID + 2, 1), row(ITEM_ID + 3, 1)], laterAt), bank: observedSection([], laterAt) }).replace("MoneyCopper: ?", "MoneyCopper: 10500");
+    const importResult = await page.evaluate(async (text) => fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }).then((response) => response.json()), after);
+    assert.equal(importResult.result.character.identityKey, character, "the later export is attached to the same verified source identity");
+    await page.reload(); await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    current = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Multi-need field provisioning"));
+    const retrieved = current.workOrderProgress.find((entry) => entry.workOrderId === retrievalOrder.stableId);
+    assert.equal(retrieved.retrievalObservationReviews[0].state, "BAGS_AND_BANK_CHANGED");
+    assert.equal(retrieved.retrievalObservationReviews[0].interpretation, "CAUSE_UNKNOWN");
+    assert.match(retrieved.retrievalObservationReviews[0].reason, /does not establish|cause/i);
+    const crafted = current.workOrderProgress.find((entry) => entry.workOrderId === craftOrder.stableId);
+    assert.equal(crafted.plannedOutputAssessment.state, "COVERED_BY_OBSERVED");
+    assert.equal(crafted.plannedOutputAssessment.observationChange, "CHANGED");
+    assert.match(crafted.plannedOutputAssessment.reason, /does not prove that crafting occurred/);
+    assert.equal(crafted.craftInputObservationReviews.find((entry) => entry.needId === "craft_reagent").state, "CHANGED");
+    const purchased = current.workOrderProgress.find((entry) => entry.workOrderId === purchaseOrder.stableId);
+    assert.equal(purchased.procurementObservationReview.state, "GOLD_DECREASED");
+    assert.equal(purchased.procurementObservationReview.targetItem.state, "ITEM_CHANGED");
+    assert.equal(purchased.procurementObservationReview.interpretation, "CAUSE_UNKNOWN");
+    assert.ok([retrievalOrder, purchaseOrder].every((order) => current.workOrders.find((entry) => entry.stableId === order.stableId).status === "IN_PROGRESS"), "new stock does not auto-complete either player-authored order");
+    assert.equal(current.workOrders.find((entry) => entry.stableId === craftOrder.stableId).status, "PLANNED");
+    assert.match(await portfolio.innerText(), /CAUSE UNKNOWN|cause remains unknown/i);
+    const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
+    const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(context.schemaVersion, "40");
+    const contextProject = context.planning.projects.find((entry) => entry.stableId === project.stableId);
+    const progressStates = Object.fromEntries([...new Set(current.workOrderProgress.map((entry) => entry.reconciliation))].sort().map((state) => [state, current.workOrderProgress.filter((entry) => entry.reconciliation === state).length]));
+    assert.deepEqual(contextProject.workOrderProgressStates, progressStates, "AccountContext summarizes the same later evidence state as the project read model");
+    assert.equal(context.planning.portfolioFulfillment.retail.pathwayReviewTruncated, false);
+    mcpClient = new Client({ name: "wowsync-erp-journey-browser", version: "0.1.0" });
+    await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
+    const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    const mcpProject = mcp.structuredContent.projects.find((entry) => entry.stableId === project.stableId);
+    const restProject = rest.projects.find((entry) => entry.stableId === project.stableId);
+    assert.deepEqual(mcpProject.workOrderProgress, restProject.workOrderProgress);
+    assert.deepEqual(mcpProject.workOrderReadiness, restProject.workOrderReadiness);
+    assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    if (mcpClient) await mcpClient.close(); if (browser) await browser.close();
+    if (server) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    store?.close(); rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceilings against linked planned gold across UI, REST, AccountContext, and MCP", async () => {
   assert.ok(existsSync(path.join(webDist, "index.html")), "build the web UI before browser acceptance");
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-erp-procurement-budget-review-"));
@@ -1862,7 +1986,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await resourcePackage.innerText(), /Review the separate provisioning need.*PROVISION.*PLANNED/);
     assert.match(await resourcePackage.innerText(), /These are separate plans, not reservations/);
     const accountContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(accountContext.schemaVersion, "39");
+    assert.equal(accountContext.schemaVersion, "40");
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedSourceCoverageReviewsWithOtherProjectNeeds, 1);
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedOtherSourceScopedNeedCount, 1);
     const otherPlanReview = resourcePackage.getByRole("button", { name: "Review this project need" });
@@ -1949,7 +2073,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "39");
+    assert.equal(context.schemaVersion, "40");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
     assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, returnedSourceCoverageReviewsWithOtherProjectNeeds: 1, returnedOtherSourceScopedNeedCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });

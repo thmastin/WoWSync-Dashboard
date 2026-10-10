@@ -85,6 +85,18 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
             <p><strong>Prerequisite evidence gate:</strong> {prerequisiteGateLabel(step.prerequisiteGate.state)}{step.prerequisiteGate.blockers.length > 0 && <> Review: {step.prerequisiteGate.blockers.map((blocker) => <span key={`${blocker.projectId}/${blocker.needId}`}> <a href={`#${erpNeedAnchorId(blocker.projectId, blocker.needId)}`}>{blocker.projectId}/{blocker.needId}</a> ({blocker.evidenceState.replaceAll("_", " ")}, {blocker.freshness})</span>)}</>}</p>
             {step.workOrders.length ? <ul aria-label={`Manual work for ${step.needLabel}`}>{step.workOrders.map((order) => <li key={order.stableId}><a href={`#${erpNeedAnchorId(step.projectId, step.needId)}`}>{order.title}</a> · recorded status {order.status.replaceAll("_", " ")} · readiness {order.readinessState.replaceAll("_", " ")}{order.progressState ? ` · reconciliation ${order.progressState.replaceAll("_", " ")}` : ""}</li>)}</ul> : <p>No linked manual work order is recorded for this requirement.</p>}
             <p>{step.reason}</p>
+            {step.fulfillmentPathways && <section aria-label={`Fulfillment pathways in package for ${step.needLabel}`} data-testid={`erp-package-pathways-${step.projectId}-${step.needId}`}>
+              <strong>Current evidence pathways: {step.fulfillmentPathways.state.replaceAll("_", " ")}</strong>
+              <p>{step.fulfillmentPathways.reason}</p>
+              {step.fulfillmentPathways.options.length ? <ul>{step.fulfillmentPathways.options.map((option, optionIndex) => <li key={`${option.kind}:${optionIndex}`}>
+                <span>{option.kind.replaceAll("_", " ")} · {option.provenance}: {option.reason}</span>
+                {option.workOrderIds?.length ? <span> Linked manual work: {option.workOrderIds.join(", ")}.</span> : null}
+                {option.observedLocation ? <span> Observed {option.observedLocation.quantity} in {option.observedLocation.section}{option.observedLocation.itemRef ? ` (${option.observedLocation.itemRef})` : ""} at {new Date(option.observedLocation.observedAt * 1000).toLocaleString()}.</span> : null}
+                {option.candidateLocations?.length ? <ul>{option.candidateLocations.map((location) => <li key={location.characterKey}>{location.characterName} · {location.realm} · identity <code>{location.characterKey}</code> · {location.provenance}, {location.freshness}{location.observedAt !== undefined ? ` · ${new Date(location.observedAt * 1000).toLocaleString()}` : " · timestamp UNKNOWN"}. Location lead only; ownership, access, and route remain UNKNOWN.</li>)}</ul> : null}
+                {onPlanNeed && step.projectStatus === "ACTIVE" && step.workOrders.every((order) => order.status === "COMPLETED" || order.status === "CANCELLED") && ["REVIEW_PERSONAL_BANK_RETRIEVAL", "INVESTIGATE_OTHER_CHARACTER_LOCATION", "CHOOSE_MANUAL_SUPPLY_PLAN", "REFRESH_OR_CLARIFY_EVIDENCE"].includes(option.kind) && <button type="button" disabled={busy} onClick={() => onPlanNeed(step.projectId, step.needId, option.kind as ErpSourceFulfillmentReview["sources"][number]["needs"][number]["fulfillmentPathways"]["options"][number]["kind"])}>Plan this manual review</button>}
+              </li>)}</ul> : <p>No pathway can be supported by the recorded evidence.</p>}
+              <small>These are evidence-qualified review options, not selected routes or completion claims.</small>
+            </section>}
             <a href={`#${erpNeedAnchorId(step.projectId, step.needId)}`}>Open this project requirement</a>
           </li>)}</ol>
           {item.nextReviewStepId && <p><strong>Next player review:</strong> {item.nextReviewStepId}</p>}
@@ -92,6 +104,7 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
       </li>)}
     </ol>}
     {review.truncated && <p>Showing {review.returnedPackageCount} of {review.totalPackageCount} packages. Narrow the version's project list to review all packages.</p>}
+    {review.pathwayReviewTruncated && <p role="note">The shared source review is capped; some package steps may omit pathway details. Open the full source review before treating an absent pathway as unavailable.</p>}
     <small>Observed resource changes remain non-causal. Reservations and work orders describe saved intent, not possession, free stock, availability, or execution.</small>
   </section>;
 }

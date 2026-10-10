@@ -40,6 +40,7 @@ export interface ErpFulfillmentTriage {
 export interface ErpPortfolioFulfillmentStep {
   readonly projectId: string;
   readonly projectTitle: string;
+  readonly projectStatus?: ErpProjectView["status"];
   readonly projectPriority: number;
   readonly needId: string;
   readonly needLabel: string;
@@ -57,6 +58,8 @@ export interface ErpPortfolioFulfillmentStep {
   /** Existing source/resource-scope assessment, including overlapping same-version project commitments. Never an availability figure. */
   readonly reservationAssessment?: ErpNeedEvidence["reservationAssessment"];
   readonly prerequisiteNeedIds: readonly { readonly projectId: string; readonly needId: string }[];
+  /** Same evidence-qualified pathway options shown in source review, embedded beside the ordered prerequisite step. */
+  readonly fulfillmentPathways?: ErpNeedFulfillmentPathwayReview;
   /** Re-evaluated from the referenced requirements' current observations; it is not a game-action or work-order completion claim. */
   readonly prerequisiteGate: {
     readonly state: "NO_PREREQUISITES" | "CURRENT_OBSERVED_EVIDENCE_MET" | "PREREQUISITE_EVIDENCE_REVIEW" | "MISSING_PREREQUISITE" | "CYCLE_REVIEW";
@@ -85,6 +88,8 @@ export interface ErpPortfolioFulfillmentReview {
   readonly totalStepCount: number;
   readonly stepsNeedingReview: number;
   readonly stepsWithPrerequisiteReview: number;
+  /** True when the shared source-pathway review was capped and some package steps may have no embedded pathway detail. */
+  readonly pathwayReviewTruncated: boolean;
   readonly truncated: boolean;
   readonly interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY";
 }
@@ -233,6 +238,8 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
   const counts = emptyCounts();
   if (version === "unknown-version") return { version, items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, counts, truncated: false, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" };
   const entries: ErpFulfillmentTriageItem[] = [];
+  const sourceReview = buildErpSourceFulfillmentReview(projects, version, 200);
+  const retrievalPathways = new Set(sourceReview.sources.flatMap((source) => source.needs.filter((need) => need.fulfillmentPathways.options.some((option) => option.kind === "REVIEW_PERSONAL_BANK_RETRIEVAL") && !need.workOrders.some((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED")).map((need) => `${need.projectId}\0${need.needId}`)));
   for (const project of projects) {
     if (project.version !== version || project.status === "CANCELLED") continue;
     const openOrders = project.workOrders.filter((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED");
@@ -245,7 +252,8 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
       });
       const signals: ErpFulfillmentTriageSignal[] = [];
       if (evidence?.observationChange?.state === "CHANGED" && evidence.observationChange.comparisons.some((comparison) => comparison.delta !== 0)) signals.push("CHANGED_OBSERVATION");
-      if (!linkedOrders.length && !(evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent")) signals.push("UNWORKED_REQUIREMENT");
+      const bankRetrievalReview = retrievalPathways.has(`${project.stableId}\0${need.stableId}`);
+      if (!linkedOrders.length && (!(evidence?.state === "COVERED_BY_OBSERVED" && evidence.freshness === "recent") || bankRetrievalReview)) signals.push("UNWORKED_REQUIREMENT");
       if (reservations.length) signals.push("RESERVATION_REVIEW");
       if (linkedOrders.length) signals.push("OPEN_WORK_ORDER");
       if (!signals.length) return;
@@ -257,7 +265,7 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
       entries.push({ stableId: `${project.stableId}:${need.stableId}`, version, projectId: project.stableId, projectTitle: project.title, projectStatus: project.status, projectPriority: project.priority,
         need: { stableId: need.stableId, kind: need.kind, resourceKey: need.resourceKey, label: need.label, requiredQuantity: need.requiredQuantity, ...(need.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(need.sourceOwnerKey ? { sourceOwnerKey: need.sourceOwnerKey } : {}), ...(need.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), evidenceState: evidence?.state ?? "UNKNOWN", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.potentialQuantity !== undefined ? { potentialQuantity: evidence.potentialQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), ...(evidence?.observationChange ? { observationChange: evidence.observationChange } : {}), freshness: evidence?.freshness ?? "unknown" },
         workOrders: orders, reservationReviews: reservations, signals,
-        reason: [evidence?.reason, ...reservations.map((entry) => entry.reason), ...orders.map((order) => `${order.title}: ${order.readinessState ?? "readiness UNKNOWN"}; ${order.progressState ?? "progress UNKNOWN"}`)].filter(Boolean).join(" ") || "Evidence and saved planning intent require review.",
+        reason: [bankRetrievalReview ? "A current personal-bank location is recorded for this need, but no manual retrieval review is linked; observed aggregate coverage does not establish that the resource is in the usable destination." : evidence?.reason, ...reservations.map((entry) => entry.reason), ...orders.map((order) => `${order.title}: ${order.readinessState ?? "readiness UNKNOWN"}; ${order.progressState ?? "progress UNKNOWN"}`)].filter(Boolean).join(" ") || "Evidence and saved planning intent require review.",
       });
     };
     for (const need of project.needs) addNeed(need);
@@ -279,8 +287,10 @@ export function buildErpFulfillmentTriage(projects: readonly ErpProjectView[], v
 
 /** Builds a compact, dependency-first view of player-authored cross-project packages. It never selects routes or attributes actions. */
 export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 50): ErpPortfolioFulfillmentReview {
-  if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
+  if (version === "unknown-version") return { version, packages: [], totalPackageCount: 0, returnedPackageCount: 0, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
   const projectById = new Map(projects.filter((project) => project.version === version && project.status !== "CANCELLED").map((project) => [project.stableId, project]));
+  const sourceReview = buildErpSourceFulfillmentReview(projects, version);
+  const pathwayByNeed = new Map(sourceReview.sources.flatMap((source) => source.needs.map((need) => [`${need.projectId}\u0000${need.needId}`, need.fulfillmentPathways] as const)));
   const nodeKey = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
   const nodes = new Map<string, { projectId: string; needId: string }>();
   const edges = new Map<string, Set<string>>();
@@ -354,7 +364,7 @@ export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProject
           : missingPrerequisite ? { state: "MISSING_PREREQUISITE", blockers: prerequisiteEvidence.filter((entry) => !entry.exists).map(({ projectId, needId, evidenceState, freshness, observedAt }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}) })) }
             : allPrerequisitesMet ? { state: "CURRENT_OBSERVED_EVIDENCE_MET", blockers: [] }
               : { state: "PREREQUISITE_EVIDENCE_REVIEW", blockers: prerequisiteEvidence.filter((entry) => !entry.isMet).map(({ projectId, needId, evidenceState, freshness, observedAt }) => ({ projectId, needId, evidenceState, freshness, ...(observedAt !== undefined ? { observedAt } : {}) })) };
-      return { projectId: reference.projectId, projectTitle: project?.title ?? "Unavailable project", projectPriority: project?.priority ?? 0, needId: reference.needId, needLabel: need?.label ?? reference.needId, resourceKey: need?.resourceKey ?? "UNKNOWN", ...(need ? { requiredQuantity: need.requiredQuantity } : {}), ...(need?.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(need?.sourceOwnerKey ? { sourceOwnerKey: need.sourceOwnerKey } : {}), ...(need?.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), evidenceState: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), ...(projectReservationIntentQuantity !== undefined ? { projectReservationIntentQuantity } : {}), ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), prerequisiteNeedIds: prerequisites, prerequisiteGate, workOrders: workOrders.map((order, index) => ({ stableId: order.stableId, title: order.title, status: order.status, readinessState: orderReadiness[index]!, ...(project?.workOrderProgress.find((entry) => entry.workOrderId === order.stableId) ? { progressState: project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId)!.reconciliation } : {}) })), reviewState, reason };
+      return { projectId: reference.projectId, projectTitle: project?.title ?? "Unavailable project", ...(project ? { projectStatus: project.status } : {}), projectPriority: project?.priority ?? 0, needId: reference.needId, needLabel: need?.label ?? reference.needId, resourceKey: need?.resourceKey ?? "UNKNOWN", ...(need ? { requiredQuantity: need.requiredQuantity } : {}), ...(need?.sourceIdentityKey ? { sourceIdentityKey: need.sourceIdentityKey } : {}), ...(need?.sourceOwnerKey ? { sourceOwnerKey: need.sourceOwnerKey } : {}), ...(need?.destinationIdentityKey ? { destinationIdentityKey: need.destinationIdentityKey } : {}), evidenceState: evidence?.state ?? "UNKNOWN", freshness: evidence?.freshness ?? "unknown", ...(evidence?.observedQuantity !== undefined ? { observedQuantity: evidence.observedQuantity } : {}), ...(evidence?.observedAt !== undefined ? { observedAt: evidence.observedAt } : {}), ...(projectReservationIntentQuantity !== undefined ? { projectReservationIntentQuantity } : {}), ...(evidence?.reservationAssessment ? { reservationAssessment: evidence.reservationAssessment } : {}), ...(pathwayByNeed.get(`${reference.projectId}\u0000${reference.needId}`) ? { fulfillmentPathways: pathwayByNeed.get(`${reference.projectId}\u0000${reference.needId}`)! } : {}), prerequisiteNeedIds: prerequisites, prerequisiteGate, workOrders: workOrders.map((order, index) => ({ stableId: order.stableId, title: order.title, status: order.status, readinessState: orderReadiness[index]!, ...(project?.workOrderProgress.find((entry) => entry.workOrderId === order.stableId) ? { progressState: project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId)!.reconciliation } : {}) })), reviewState, reason };
     });
     const stableId = `portfolio:${JSON.stringify([version, component.map((key) => { const node = nodes.get(key)!; return [node.projectId, node.needId]; }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))])}`;
     const crossProjectDependencyCount = component.reduce((count, key) => count + [...(edges.get(key) ?? [])].filter((dependency) => nodes.get(dependency)!.projectId !== nodes.get(key)!.projectId).length, 0);
@@ -364,7 +374,7 @@ export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProject
   packages.sort((a, b) => a.steps[0]!.projectTitle.localeCompare(b.steps[0]!.projectTitle) || a.stableId.localeCompare(b.stableId));
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 50;
   const selected = packages.slice(0, safeLimit);
-  return { version, packages: selected, totalPackageCount: packages.length, returnedPackageCount: selected.length, totalStepCount: packages.reduce((sum, item) => sum + item.steps.length, 0), stepsNeedingReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.reviewState !== "OBSERVED_NEED_MET").length, 0), stepsWithPrerequisiteReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.prerequisiteGate.state !== "NO_PREREQUISITES" && step.prerequisiteGate.state !== "CURRENT_OBSERVED_EVIDENCE_MET").length, 0), truncated: selected.length < packages.length, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
+  return { version, packages: selected, totalPackageCount: packages.length, returnedPackageCount: selected.length, totalStepCount: packages.reduce((sum, item) => sum + item.steps.length, 0), stepsNeedingReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.reviewState !== "OBSERVED_NEED_MET").length, 0), stepsWithPrerequisiteReview: packages.reduce((sum, item) => sum + item.steps.filter((step) => step.prerequisiteGate.state !== "NO_PREREQUISITES" && step.prerequisiteGate.state !== "CURRENT_OBSERVED_EVIDENCE_MET").length, 0), pathwayReviewTruncated: sourceReview.truncated, truncated: selected.length < packages.length, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" };
 }
 
 /** Groups explicitly source-scoped active/paused requirements with their already-derived evidence and linked manual-work observations. */

@@ -74,9 +74,14 @@ test("portfolio fulfillment review orders prerequisite evidence first and preser
     assert.equal(packageView.steps[1]?.projectReservationIntentQuantity, 1, "this project's recorded reservation intent remains explicit");
     assert.equal(packageView.steps[1]?.reservationAssessment?.activeQuantity, 3, "shared source/resource assessment includes the overlapping commitment from the other project");
     assert.equal(packageView.steps[1]?.reservationAssessment?.state, "WITHIN_OBSERVED_SUPPLY");
+    const sourcePathways = buildErpSourceFulfillmentReview(projects, "classic-era").sources.flatMap((source) => source.needs).find((need) => need.projectId === prerequisite.stableId && need.needId === "shared")?.fulfillmentPathways;
+    assert.deepEqual(packageView.steps[0]?.fulfillmentPathways, sourcePathways, "dependency-first package embeds the exact pathway review derived for the same need, without recomputing or strengthening it");
+    assert.equal(packageView.steps[0]?.projectStatus, "ACTIVE");
+    assert.equal(packageView.steps[0]?.fulfillmentPathways?.state, "CURRENT_SOURCE_COVERAGE");
     assert.equal(packageView.steps[1]?.workOrders[0]?.readinessState, "OBSERVED_RESOURCE_SHORTFALL", "the prerequisite is currently met, so the dependent step's own source shortfall controls readiness");
     assert.equal(packageView.nextReviewStepId, `${dependent.stableId}/shared`);
     assert.equal(packageView.interpretation, "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY");
+    assert.equal(portfolio.pathwayReviewTruncated, false);
     assert.equal(buildErpPortfolioFulfillmentReview(projects, "forever").totalPackageCount, 0, "version-scoped portfolio cannot leak Classic Era plans into Forever");
     assert.equal(buildErpPortfolioFulfillmentReview(projects, "unknown-version").totalPackageCount, 0);
     assert.equal(buildErpPortfolioFulfillmentReview(projects, "classic-era").packages[0]?.stableId, packageView.stableId, "stable output is deterministic");
