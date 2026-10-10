@@ -25,11 +25,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
   try {
     store = new SqliteSnapshotStore(databasePath);
     const now = Math.floor(Date.now() / 1000);
-    const observed = store.importSnapshot(renderExport({ name: "Reservation Planner", realm: "Cairne", generated: now, bags: observedSection([row(940211, 4, { name: "Mycobloom" }), row(940212, 1, { name: "Craft reagent" })], now), bank: observedSection([], now) }));
+    const observed = store.importSnapshot(renderExport({ name: "Reservation Planner", realm: "Cairne", generated: now, bags: observedSection([row(940211, 4, { name: "Mycobloom" }), row(940212, 1, { name: "Craft reagent" }), row(940213, 2, { name: "Provisioning reagent" })], now), bank: observedSection([], now) }));
     const sourceKey = observed.character.identityKey;
     const makeProject = (title, needId, reservationId) => store.createErpProject({ version: "retail", title, needs: [{ stableId: needId, kind: title.includes("Second") ? "ITEM_REF" : "ITEM_ID", resourceKey: title.includes("Second") ? itemRef : "940211", label: title.includes("Second") ? "Second requirement" : "Mycobloom", requiredQuantity: 3, sourceIdentityKey: sourceKey }], reservations: [{ stableId: reservationId, needId, sourceIdentityKey: sourceKey, quantity: 3, status: "ACTIVE", createdAt: now, updatedAt: now }] });
     const first = makeProject("First requirement", "first_need", "first_hold");
     const second = makeProject("Second requirement", "second_need", "second_hold");
+    const sourceReviewProject = store.createErpProject({ version: "retail", title: "Review source access", needs: [{ stableId: "source_access_need", kind: "ITEM_REF", resourceKey: fullRef(940213), label: "Provisioning reagent", requiredQuantity: 1, sourceIdentityKey: sourceKey }] });
     const downstream = store.createErpProject({ version: "retail", title: "Craft after supply review", needs: [{ stableId: "craft_need", kind: "ITEM_REF", resourceKey: fullRef(940212), label: "Craft reagent", requiredQuantity: 1, sourceIdentityKey: sourceKey }], workOrders: [{ stableId: "craft_order", kind: "CRAFT", status: "PLANNED", title: "Review craft after supply", resourceNeedIds: ["craft_need"], dependsOn: [], portfolioPrerequisites: [{ projectId: first.stableId, needId: "first_need" }] }] });
     server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
     const address = server.address(); assert.ok(address && typeof address !== "string");
@@ -46,6 +47,28 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     assert.equal(baseItemLine.reservationState, "UNKNOWN", "cross-kind overlap stays unknown before the player resolves planning intent");
     assert.equal(baseItemLine.overlappingReservationQuantity, 3);
     assert.equal(baseItemLine.overlappingReservations[0].resourceKey, itemRef, "the competing exact variant remains explicit");
+    const portfolio = page.getByTestId("erp-portfolio-next-actions");
+    const reservationAction = initialCommitments.portfolioNextActions.items.find((item) => item.action === "REVIEW_RESERVATIONS" && item.resource?.kind === "ITEM_ID" && item.resource.resourceKey === "940211");
+    assert.ok(reservationAction, "the shared review model identifies the exact base-item reservation conflict");
+    const reservationLink = portfolio.locator("article").filter({ hasText: "Mycobloom" }).getByRole("link", { name: "Open this exact source/resource reservation review" });
+    const reservationHref = `#erp-reservation-scope-${encodeURIComponent(JSON.stringify([baseItemLine.version, baseItemLine.sourceScope, baseItemLine.sourceIdentityKey, baseItemLine.sourceOwnerKey, baseItemLine.kind, baseItemLine.resourceKey]))}`;
+    assert.equal(await reservationLink.getAttribute("href"), reservationHref, "the portfolio action routes to the exact version/source/resource reservation identity");
+    const routeBeforeReview = new URL(page.url()).hash;
+    await reservationLink.click();
+    assert.equal(new URL(page.url()).hash, routeBeforeReview, "focusing a review target preserves the Dashboard's hash route");
+    assert.equal(await page.locator(`[id="${reservationHref.slice(1)}"]`).count(), 1, "the exact review target exists in the reservation panel");
+    await page.waitForFunction((id) => document.activeElement?.id === id, reservationHref.slice(1));
+    const sourceAccessLine = initialCommitments.sourceFulfillment.sources.find((line) => line.kind === "ITEM_REF" && line.resourceKey === fullRef(940213));
+    assert.ok(sourceAccessLine, "the mixed portfolio scenario includes a distinct source/access review");
+    const sourceAction = initialCommitments.portfolioNextActions.items.find((item) => item.action === "REVIEW_SOURCE_AND_ACCESS" && item.resource?.kind === "ITEM_REF" && item.resource.resourceKey === fullRef(940213));
+    assert.ok(sourceAction, "shared model emits source/access attention for the exact second resource");
+    const sourceLink = portfolio.locator("article").filter({ hasText: "Provisioning reagent" }).getByRole("link", { name: "Open this exact source and access review" });
+    const sourceHref = `#erp-source-fulfillment-${encodeURIComponent(sourceAccessLine.stableId)}`;
+    assert.equal(await sourceLink.getAttribute("href"), sourceHref);
+    await sourceLink.click();
+    assert.equal(new URL(page.url()).hash, routeBeforeReview, "source/access navigation preserves the application route");
+    assert.equal(await page.locator(`[id="${sourceHref.slice(1)}"]`).count(), 1, "source/access action reaches its exact source/resource evidence group");
+    await page.waitForFunction((id) => document.activeElement?.id === id, sourceHref.slice(1));
     await panel.getByRole("button", { name: /Review .* reservations/ }).first().click();
     assert.equal(await panel.getByLabel(/New reservation quantity for First requirement:/).inputValue(), "3");
     assert.equal(await panel.getByLabel(/New reservation quantity for Second requirement:/).inputValue(), "3");
@@ -77,6 +100,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(mcp.structuredContent.portfolioFulfillment, rest.portfolioFulfillment);
     assert.deepEqual(mcp.structuredContent.resourceCommitments, rest.resourceCommitments);
+    assert.deepEqual(mcp.structuredContent.portfolioNextActions, rest.portfolioNextActions, "the mixed reservation/source attention queue is identical in REST and MCP");
+    const accountContext = await page.evaluate(async () => await (await fetch("/api/account-context")).json());
+    assert.ok(accountContext.planning.portfolioNextActions.retail.counts.REVIEW_RESERVATIONS >= 1);
+    assert.ok(accountContext.planning.portfolioNextActions.retail.counts.REVIEW_SOURCE_AND_ACCESS >= 1);
+    assert.equal(accountContext.planning.portfolioNextActions.forever.totalCount, 0, "the synthetic Retail fulfillment scenario remains isolated from Forever");
     assert.equal(rest.resourceCommitments.items.find((line) => line.resourceKey === itemRef).observedQuantity, 4, "reservation planning does not change observed stock");
     assert.deepEqual(pageErrors, []);
   } finally {

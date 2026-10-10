@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ErpProjectView, ErpResourceCommitmentLine, ErpReservation } from "@wowsync-dashboard/core";
 import { replanErpReservations } from "../api.ts";
 import type { VersionOrUnknown } from "../types.ts";
+import { erpReservationScopeAnchorId } from "./erpObservationChangeQueue.ts";
 
 type ReservationRow = { projectId: string; projectTitle: string; revision: number; needId: string; needLabel: string; kind: ErpResourceCommitmentLine["kind"]; resourceKey: string; sourceIdentityKey?: string; sourceOwnerKey?: string; reservation: ErpReservation; newQuantity: number };
 
@@ -80,7 +81,7 @@ export function ErpReservationReplanPanel({ version, projects, lines, busy, sour
   return <section className="erp-reservation-replan" aria-labelledby="erp-reservation-replan-title" data-testid="erp-reservation-replan">
     <h2 id="erp-reservation-replan-title">Replan conflicting reservations</h2>
       <p>Known OVER RESERVED groups and explicit base-item/exact-variant overlaps marked UNKNOWN are listed. UNKNOWN overlaps are not treated as confirmed shortages. A reviewed batch may reduce or release existing intent across several projects atomically. It cannot increase or move a reservation, and does not move resources.</p>
-    {conflicted.length ? <ul>{conflicted.map((line) => <li key={keyFor(line)}><span><strong>{line.label}</strong> · {sourceLabel(line)} · {line.activeReservationQuantity} exact-scope units reserved against {line.observedQuantity ?? "UNKNOWN"} observed · {line.freshness} evidence{line.overlappingReservations.length ? " | base/variant overlap; combined availability UNKNOWN" : ""}</span><button type="button" disabled={busy || saving} onClick={() => open(line)}>Review {line.label} reservations</button></li>)}</ul> : <p>No exact-source over-reservation groups are currently established.</p>}
+    {conflicted.length ? <ul>{conflicted.map((line) => <li id={erpReservationScopeAnchorId(line)} key={keyFor(line)} tabIndex={-1}><span><strong>{line.label}</strong> · {sourceLabel(line)} · {line.activeReservationQuantity} exact-scope units reserved against {line.observedQuantity ?? "UNKNOWN"} observed · {line.freshness} evidence{line.overlappingReservations.length ? " | base/variant overlap; combined availability UNKNOWN" : ""}</span><button type="button" disabled={busy || saving} onClick={() => open(line)}>Review {line.label} reservations</button></li>)}</ul> : <p>No exact-source over-reservation groups are currently established.</p>}
     {selectedLine && <div className="erp-reservation-replan-session" aria-label={`Reservation review for ${selectedLine.label}`}>
       <h3>Proposed changes: {selectedLine.label} at {sourceLabel(selectedLine)}</h3>
       <p>Source scope, resource identity, and project revision are frozen for this review. Enter a lower quantity; set zero to release. Existing released history is retained.</p>

@@ -2,6 +2,12 @@
 
 Status: implemented on `feature/forever-gear-observation`; automated-tested, including synthetic browser acceptance; not deployed or live-game validated.
 
+## Current development position — Phase 108
+
+The portfolio attention queue now carries exact source/resource reservation conflicts and exact source/access findings to their existing review panels without changing the hash-based route. Target identity matches version, resource kind/key, source scope, and source identity; missing bounded results fall back to the exact requirement and ask the player to refresh. The mixed scenario has UI, REST, AccountContext, and MCP read parity. See `ERP_CHECKPOINT_20261010_PHASE108.md` and the full surface-by-surface audit in `ERP_CAPABILITY_INVENTORY.md`.
+
+Final `npm.cmd run validate:erp`: Core 856, MCP 3, Server 269 + 2 platform skips, Web 315, browser 22/22, TypeScript and production build passed. Synthetic only for this phase. The controlled wrap-up explicitly defers starting another feature in this run; resume using `D:\dev\wow-stuff\truth\WOWSYNC_ERP_RESUME_20261014.md` after the stated usage reset.
+
 ## Phase 104 - source-scoped resource history
 
 Saved grouped plans now freeze the exact requirement source scope alongside resource kind and key: a canonical same-version character, an explicit Retail shared-storage owner, or UNSCOPED. Later edits to the requirement source become an identity conflict instead of comparing a new source's evidence to the old plan. Legacy baselines without source scope remain UNKNOWN and have no comparable interval. The Projects workbench shows reviewed and current source scopes.

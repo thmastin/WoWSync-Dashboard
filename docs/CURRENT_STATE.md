@@ -1,3 +1,9 @@
+# Current WoWSync ERP state — Phase 108 (2026-10-10)
+
+The active ERP development branch is `feature/forever-gear-observation`. Phases 106–108 connect saved resource-history variation and current evidence/reservation/source attention to exact review targets and draft-only planning paths. Phase 108 added exact-focus routing for reservation conflicts and source/access questions. Final `npm.cmd run validate:erp` passed: Core 856, MCP 3, Server 269 plus 2 Windows skips, Web 315, TypeScript/build, and 22/22 synthetic browser acceptances. Independent review found no blockers. No live game or production Dashboard validation was performed for this phase. See `ERP_CHECKPOINT_20261010_PHASE108.md` and `ERP_CAPABILITY_INVENTORY.md`.
+
+The ERP initiative remains active. The current controlled wrap-up requests no next feature in this run; resume from the self-contained truth handoff after the usage reset. MCP is read-only; Dashboard/REST can save plans, never game actions.
+
 # Phase 35 (2026-10-09): An explicit same-version character-sourced RECIPE need can prefill a manual CRAFT review work order assigned to that character. The exact recipe need and any explicit destination are retained; duplicates are suppressed. Wording explicitly leaves skill, unlocks, reagents, craftability, output, and completion unproven. Full validation and focused independent review passed; synthetic browser acceptance only. See `ERP_CHECKPOINT_20261009_PHASE35.md`.
 
 # Phase 34 (2026-10-09): Nonterminal manual work-order plans are editable in place, preserving stable identity/status and distinct source, destination, assigned character, and craft-output observation roles. A player-entered procurement quote is cleared when its item target changes. Full validation and focused independent review passed; no live or production validation. See `ERP_CHECKPOINT_20261009_PHASE34.md`.

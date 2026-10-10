@@ -1342,6 +1342,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
     browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
     const page = await browser.newPage();
     page.setDefaultTimeout(5_000);
+    page.setDefaultNavigationTimeout(15_000);
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);

@@ -1,5 +1,5 @@
 import type { ErpPortfolioFulfillmentReview, ErpSavedNeedHistory, ErpSourceFulfillmentReview } from "@wowsync-dashboard/core";
-import { erpNeedAnchorId, erpSavedNeedHistoryAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
+import { erpNeedAnchorId, erpSavedNeedHistoryAnchorId, erpSourceFulfillmentAnchorId, erpWorkOrderAnchorId } from "./erpObservationChangeQueue.ts";
 
 function prerequisiteGateLabel(state: ErpPortfolioFulfillmentReview["packages"][number]["steps"][number]["prerequisiteGate"]["state"]): string {
   switch (state) {
@@ -47,7 +47,7 @@ export function ErpPortfolioFulfillmentPanel({ review, sourceReview, characterNa
       <p>{sourceReview.openProvisioningPlanCount} open provisioning work order{sourceReview.openProvisioningPlanCount === 1 ? "" : "s"} across active and paused projects. These are player-authored plans, not reservations, current stock, or proof of movement.</p>
       <p>These rows join active and paused requirements that explicitly select the same source and exact resource identity, with each need&apos;s evidence, reservations, and linked task observations. This is not a route or availability calculation.</p>
       <p>{sourceReview.totalSourceCount} source/resource groups Â· {sourceReview.totalNeedCount} needs Â· {sourceReview.needsReviewCount} groups have a next review step.</p>
-      {!sourceReview.sources.length ? <p>No active or paused needs explicitly select a source for this version.</p> : <ol>{sourceReview.sources.map((source) => <li key={source.stableId} data-testid={`erp-source-fulfillment-${encodeURIComponent(source.stableId)}`}>
+      {!sourceReview.sources.length ? <p>No active or paused needs explicitly select a source for this version.</p> : <ol>{sourceReview.sources.map((source) => <li id={erpSourceFulfillmentAnchorId(source.stableId)} key={source.stableId} data-testid={`erp-source-fulfillment-${encodeURIComponent(source.stableId)}`} tabIndex={-1}>
         <h4>{source.sourceIdentityKey ? characterName(source.sourceIdentityKey) : `Shared owner ${source.sourceOwnerKey}`} Â· {source.label} (<code>{source.resourceKey}</code>) Â· {source.kind}</h4>
         <p><strong>Next review:</strong> {nextReviewLabel(source.nextReview)}. {source.reason}</p>
         <section aria-label="Other observed locations for this resource">
