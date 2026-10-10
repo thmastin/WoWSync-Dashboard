@@ -77,3 +77,8 @@ Open **Projects & Work Orders** from a version tab. Create a project, add an exp
 - Gathering routes, location requirements, yield, and action completion are not inferred from bag deltas. Automated tests use existing real import fixtures plus synthetic project plans. Synthetic Playwright browser acceptances exercise work-order planning and assigned-gatherer progress against temporary SQLite and server instances. They are not live account or production browser validation; no in-game planning session was performed.
 
 See the current branch checkpoint in `CURRENT_STATE.md` and the durable architecture invariants before extending these contracts.
+
+
+## Phase 26: manual supply quick-start
+
+Eligible recent, complete same-character item shortfalls can prefill a player-controlled gather or procurement work order. Prefills require an active project, a version-matched explicit character source, no conflicting recipient, and reservation state that does not exceed observed supply. Duplicate active orders are suppressed. Closing and reopening forms resets all prefilled work-order inputs. Procurement still requires a player-entered upper spending ceiling; it does not establish a quote, price, route, availability, or affordability. This is planning intent only. See [ERP_CHECKPOINT_20261009_PHASE26.md](ERP_CHECKPOINT_20261009_PHASE26.md).
