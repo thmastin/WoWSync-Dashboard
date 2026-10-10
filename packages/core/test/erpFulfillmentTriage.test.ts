@@ -100,12 +100,13 @@ test("source fulfillment review joins exact source/resource needs, reservations,
     const source = store.importSnapshot(makeExport(now, "Crafter"));
     store.importSnapshot(makeExport(now + 20, "Crafter"));
     const otherSource = store.importSnapshot(makeExport(now + 20, "Alt Crafter"));
+    const recipient = store.importSnapshot(buildWowSyncExport({ generatedAt: now + 20, character: { name: "Recipient", realm: "Source Realm", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [] } }));
     store.createErpProject({ version: "classic-era", title: "Craft and provision", priority: 5, needs: [
-      { stableId: "stone-input", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact stone input", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey },
+      { stableId: "stone-input", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact stone input", requiredQuantity: 3, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: recipient.character.identityKey },
       { stableId: "variant-input", kind: "ITEM_REF", resourceKey: "item:159:0:1", label: "Distinct variant", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey },
     ], reservations: [{ stableId: "stone-hold", needId: "stone-input", sourceIdentityKey: source.character.identityKey, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now + 20 }], workOrders: [
-      { stableId: "craft-stone", kind: "CRAFT", status: "PLANNED", title: "Review craft inputs", assignedIdentityKey: source.character.identityKey, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:200:0:0", label: "Planned result", quantity: 1 } },
-      { stableId: "provision-stone", kind: "PROVISION", status: "IN_PROGRESS", title: "Review provision pair", sourceIdentityKey: source.character.identityKey, destinationIdentityKey: otherSource.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [] },
+      { stableId: "craft-stone", kind: "CRAFT", status: "PLANNED", title: "Review craft inputs", assignedIdentityKey: source.character.identityKey, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: recipient.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [], plannedOutput: { kind: "ITEM_REF", resourceKey: "item:200:0:0", label: "Planned result", quantity: 1 } },
+      { stableId: "provision-stone", kind: "PROVISION", status: "IN_PROGRESS", title: "Review provision pair", sourceIdentityKey: otherSource.character.identityKey, destinationIdentityKey: recipient.character.identityKey, resourceNeedIds: ["stone-input"], dependsOn: [] },
     ] });
     store.createErpProject({ version: "classic-era", status: "PAUSED", title: "Separate source plan", priority: 2, needs: [{ stableId: "same-resource", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Another need", requiredQuantity: 8, sourceIdentityKey: source.character.identityKey }] });
     store.createErpProject({ version: "classic-era", title: "Different character source", priority: 2, needs: [{ stableId: "other-source-need", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Other crafter", requiredQuantity: 1, sourceIdentityKey: otherSource.character.identityKey }] });
@@ -115,8 +116,12 @@ test("source fulfillment review joins exact source/resource needs, reservations,
     assert.ok(exactSource);
     assert.equal(exactSource.needs.length, 2, "only exact source + kind + resource needs are grouped across active and paused projects");
     assert.equal(exactSource.projectCount, 2);
-    assert.equal(exactSource.alternativeLocationReview, "SOURCE_SCAN_INCOMPLETE", "one missing per-need scan keeps the grouped location review explicitly incomplete");
+    assert.equal(exactSource.alternativeLocationReview, "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE", "candidate leads remain visible while one missing per-need scan keeps the grouped location review explicitly incomplete");
     assert.ok(exactSource.alternativeLocations.every((location) => location.sourceIdentityKey !== source.character.identityKey && location.accountMembership === "UNKNOWN" && location.access === "UNKNOWN" && location.transferability === "UNKNOWN"), "returned alternatives exclude the selected source and never imply membership, access, or a route");
+    const plannedAlternative = exactSource.alternativeLocations.find((location) => location.sourceIdentityKey === otherSource.character.identityKey)!;
+    assert.equal(plannedAlternative.selectedProvisioningPlanCount, 1, "an exact alternative source with an open selected-source plan is surfaced beside its current location evidence");
+    assert.deepEqual(plannedAlternative.selectedProvisioningPlans.map((order) => [order.projectId, order.needId, order.workOrderId, order.destinationIdentityKey]), [[review.sources.find((entry) => entry.resourceKey === "item:159:0:0")?.needs.find((need) => need.needId === "stone-input")?.projectId, "stone-input", "provision-stone", recipient.character.identityKey]]);
+    assert.equal(review.openProvisioningPlanCount, 1, "the root count reports open manual plans without treating them as reservations");
     assert.ok(exactSource.needs.some((need) => need.projectStatus === "PAUSED"));
     assert.equal(exactSource.needs[0]?.reservationAssessment?.activeQuantity, 1, "reservation intent stays on the related need");
     const craft = exactSource.needs.flatMap((need) => need.workOrders).find((order) => order.stableId === "craft-stone");

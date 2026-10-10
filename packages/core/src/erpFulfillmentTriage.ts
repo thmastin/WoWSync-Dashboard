@@ -105,7 +105,7 @@ export interface ErpSourceFulfillmentLine {
   readonly nextReview: ErpSourceFulfillmentNextReview;
   readonly reason: string;
   readonly alternativeLocationReview: "OBSERVED_POTENTIAL_LOCATIONS" | "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE" | "NO_MATCHING_LOCATION_OBSERVED" | "NO_OTHER_CHARACTERS_TO_SCAN" | "SOURCE_SCAN_INCOMPLETE" | "SOURCE_REVIEW_UNAVAILABLE";
-  readonly alternativeLocations: readonly (Pick<ErpResourceSourceCandidate, "sourceIdentityKey" | "sourceName" | "sourceSurname" | "sourceRealm" | "state" | "observedQuantity" | "potentialQuantity" | "activeReservationQuantity" | "reservationState" | "availableObservedLowerBound" | "freshness" | "observedAt" | "locations" | "matchingItems" | "accountMembership" | "access" | "transferability" | "reason"> & { readonly needReferences: readonly { readonly projectId: string; readonly projectTitle: string; readonly needId: string }[] })[];
+  readonly alternativeLocations: readonly (Pick<ErpResourceSourceCandidate, "sourceIdentityKey" | "sourceName" | "sourceSurname" | "sourceRealm" | "state" | "observedQuantity" | "potentialQuantity" | "activeReservationQuantity" | "reservationState" | "availableObservedLowerBound" | "freshness" | "observedAt" | "locations" | "matchingItems" | "accountMembership" | "access" | "transferability" | "reason"> & { readonly needReferences: readonly { readonly projectId: string; readonly projectTitle: string; readonly needId: string }[]; readonly selectedProvisioningPlanCount: number; readonly selectedProvisioningPlansTruncated: boolean; readonly selectedProvisioningPlans: readonly { readonly projectId: string; readonly projectTitle: string; readonly needId: string; readonly needLabel: string; readonly workOrderId: string; readonly workOrderTitle: string; readonly workOrderStatus: string; readonly destinationIdentityKey?: string; readonly reconciliationState?: ErpProjectView["workOrderProgress"][number]["reconciliation"] }[] })[];
   readonly alternativeLocationCount: number;
   readonly alternativeLocationsTruncated: boolean;
   readonly needs: readonly {
@@ -153,6 +153,8 @@ export interface ErpSourceFulfillmentReview {
   readonly groupsWithAlternativeLocations: number;
   readonly alternativeLocationCount: number;
   readonly groupsWithIncompleteSourceScan: number;
+  /** Open player-authored PROVISION orders across active/paused projects; not a stock reservation or resource quantity. */
+  readonly openProvisioningPlanCount: number;
   readonly truncated: boolean;
   readonly interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY";
 }
@@ -321,7 +323,7 @@ export function buildErpPortfolioFulfillmentReview(projects: readonly ErpProject
 export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectView[], version: VersionOrUnknown, limit = 100): ErpSourceFulfillmentReview {
   const emptyCounts = (): Record<ErpSourceFulfillmentNextReview, number> => ({ REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0 });
   const nextReviewCounts = emptyCounts();
-  if (version === "unknown-version") return { version, sources: [], totalSourceCount: 0, returnedSourceCount: 0, totalNeedCount: 0, needsReviewCount: 0, nextReviewCounts, groupsWithAlternativeLocations: 0, alternativeLocationCount: 0, groupsWithIncompleteSourceScan: 0, truncated: false, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" };
+  if (version === "unknown-version") return { version, sources: [], totalSourceCount: 0, returnedSourceCount: 0, totalNeedCount: 0, needsReviewCount: 0, nextReviewCounts, groupsWithAlternativeLocations: 0, alternativeLocationCount: 0, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 0, truncated: false, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" };
   const projectById = new Map(projects.filter((project) => project.version === version && (project.status === "ACTIVE" || project.status === "PAUSED")).map((project) => [project.stableId, project]));
   type Entry = { project: ErpProjectView; need: ErpResourceNeed; evidence?: ErpProjectView["needEvidence"][number] };
   const grouped = new Map<string, Entry[]>();
@@ -357,7 +359,13 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
         alternativeEvidence.set(evidenceKey, { evidence, needReferences: previous ? [...previous.needReferences, reference] : [reference] });
       }
     }
-    const alternativeLocations = [...alternativeEvidence.values()].map(({ evidence, needReferences }) => ({ ...evidence, needReferences: needReferences.sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId)) })).sort((a, b) => a.sourceName.localeCompare(b.sourceName) || a.sourceRealm.localeCompare(b.sourceRealm) || a.sourceIdentityKey.localeCompare(b.sourceIdentityKey) || (a.observedAt ?? 0) - (b.observedAt ?? 0));
+    const alternativeLocations = [...alternativeEvidence.values()].map(({ evidence, needReferences }) => {
+      const planned = [...projectById.values()].flatMap((project) => project.needs.flatMap((need) => {
+        if (need.kind !== first.need.kind || need.resourceKey !== first.need.resourceKey) return [];
+        return project.workOrders.filter((order) => order.kind === "PROVISION" && order.status !== "COMPLETED" && order.status !== "CANCELLED" && order.sourceIdentityKey === evidence.sourceIdentityKey && order.resourceNeedIds.includes(need.stableId)).map((order) => ({ projectId: project.stableId, projectTitle: project.title, needId: need.stableId, needLabel: need.label, workOrderId: order.stableId, workOrderTitle: order.title, workOrderStatus: order.status, ...(order.destinationIdentityKey ? { destinationIdentityKey: order.destinationIdentityKey } : {}), ...(project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId) ? { reconciliationState: project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId)!.reconciliation } : {}) }));
+      })).sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needLabel.localeCompare(b.needLabel) || a.workOrderId.localeCompare(b.workOrderId));
+      return { ...evidence, needReferences: needReferences.sort((a, b) => a.projectTitle.localeCompare(b.projectTitle) || a.needId.localeCompare(b.needId)), selectedProvisioningPlanCount: planned.length, selectedProvisioningPlansTruncated: planned.length > 25, selectedProvisioningPlans: planned.slice(0, 25) };
+    }).sort((a, b) => a.sourceName.localeCompare(b.sourceName) || a.sourceRealm.localeCompare(b.sourceRealm) || a.sourceIdentityKey.localeCompare(b.sourceIdentityKey) || (a.observedAt ?? 0) - (b.observedAt ?? 0));
     const alternativeLocationReview: ErpSourceFulfillmentLine["alternativeLocationReview"] = sourceReviewCount === 0 ? "SOURCE_REVIEW_UNAVAILABLE" : alternativeLocations.length && sourceScanIncomplete ? "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE" : alternativeLocations.length ? "OBSERVED_POTENTIAL_LOCATIONS" : nonEmptyRosterScanCount === 0 ? "NO_OTHER_CHARACTERS_TO_SCAN" : sourceScanIncomplete ? "SOURCE_SCAN_INCOMPLETE" : "NO_MATCHING_LOCATION_OBSERVED";
     const needs = entries.map(({ project, need, evidence }) => {
       const workOrders = project.workOrders.filter((order) => order.resourceNeedIds.includes(need.stableId)).sort((a, b) => a.stableId.localeCompare(b.stableId)).map((order) => {
@@ -398,5 +406,6 @@ export function buildErpSourceFulfillmentReview(projects: readonly ErpProjectVie
   lines.sort((a, b) => order[a.nextReview] - order[b.nextReview] || b.needs[0]!.projectPriority - a.needs[0]!.projectPriority || a.label.localeCompare(b.label) || a.stableId.localeCompare(b.stableId));
   const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 200) : 100;
   const sources = lines.slice(0, safeLimit);
-  return { version, sources, totalSourceCount: lines.length, returnedSourceCount: sources.length, totalNeedCount: lines.reduce((sum, line) => sum + line.needs.length, 0), needsReviewCount: lines.length, nextReviewCounts, groupsWithAlternativeLocations: lines.filter((line) => line.alternativeLocationCount > 0).length, alternativeLocationCount: lines.reduce((sum, line) => sum + line.alternativeLocationCount, 0), groupsWithIncompleteSourceScan: lines.filter((line) => line.alternativeLocationReview === "SOURCE_SCAN_INCOMPLETE" || line.alternativeLocationReview === "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE" || line.alternativeLocationReview === "SOURCE_REVIEW_UNAVAILABLE").length, truncated: sources.length < lines.length, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" };
+  const openProvisioningPlanCount = [...projectById.values()].reduce((count, project) => count + project.workOrders.filter((order) => order.kind === "PROVISION" && order.status !== "COMPLETED" && order.status !== "CANCELLED").length, 0);
+  return { version, sources, totalSourceCount: lines.length, returnedSourceCount: sources.length, totalNeedCount: lines.reduce((sum, line) => sum + line.needs.length, 0), needsReviewCount: lines.length, nextReviewCounts, groupsWithAlternativeLocations: lines.filter((line) => line.alternativeLocationCount > 0).length, alternativeLocationCount: lines.reduce((sum, line) => sum + line.alternativeLocationCount, 0), groupsWithIncompleteSourceScan: lines.filter((line) => line.alternativeLocationReview === "SOURCE_SCAN_INCOMPLETE" || line.alternativeLocationReview === "POTENTIAL_LOCATIONS_SCAN_INCOMPLETE" || line.alternativeLocationReview === "SOURCE_REVIEW_UNAVAILABLE").length, openProvisioningPlanCount, truncated: sources.length < lines.length, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" };
 }
