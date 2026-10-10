@@ -22,7 +22,7 @@ Focused independent review found no blocking findings. It verified exact resourc
 
 ## Repositories and next action
 
-Dashboard repository: `D:\dev\wow-addons\WoWSync-Dashboard-Forever-Gear`, branch `feature/forever-gear-observation`. Starting commit was `577b11d65b9b9165f5e81344f55db69988d46267`; implementation and documentation commit will be recorded after validation and push.
+Dashboard repository: `D:\dev\wow-addons\WoWSync-Dashboard-Forever-Gear`, branch `feature/forever-gear-observation`. Starting commit: `577b11d65b9b9165f5e81344f55db69988d46267`. Implementation and documentation commit: `fe791dd133948725aa7ec3b79086b9a1c0c653ba`, pushed to `origin/feature/forever-gear-observation`.
 
 Canonical truth remains in `D:\dev\wow-stuff\truth\`. GearExport, SavedVariables, the production Dashboard, and game state were not modified.
 
