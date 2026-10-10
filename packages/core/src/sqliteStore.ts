@@ -1749,6 +1749,14 @@ export class SqliteSnapshotStore implements SnapshotStore {
           if (!currentReview || !isDeepStrictEqual(review, currentReview)) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "Requirement evidence changed while the grouped plan was being saved; refresh and review again.");
           const order = entry.workOrders[reviewedNeedIds.size - 1];
           if (order?.investigationSourceLeadIdentityKey && (order.kind !== "INVESTIGATE" || !currentReview.resourceSourceScreen?.candidates.some((candidate) => candidate.sourceIdentityKey === order.investigationSourceLeadIdentityKey))) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "The selected investigation source is no longer a matching same-version observation; refresh and review again.");
+          if (order?.kind === "PROVISION" && order.sourceIdentityKey && order.sourceIdentityKey !== review.need.sourceIdentityKey) {
+            const need = review.need;
+            const candidate = currentReview.resourceSourceScreen?.candidates.find((entry) => entry.needId === need.stableId && entry.sourceIdentityKey === order.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey);
+            const exactObservedItem = candidate?.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+            if (need.kind !== "ITEM_REF" || need.sourceOwnerKey !== undefined || !need.destinationIdentityKey || order.destinationIdentityKey !== need.destinationIdentityKey || order.sourceIdentityKey === need.destinationIdentityKey || !candidate || candidate.state !== "OBSERVED" || candidate.freshness !== "recent" || candidate.reservationState !== "UNRESERVED" || candidate.activeReservationQuantity !== 0 || candidate.availableObservedLowerBound === undefined || candidate.availableObservedLowerBound < 1 || !exactObservedItem) {
+              throw new ErpProjectConflictError("PROVISIONING_SOURCE_EVIDENCE_UNAVAILABLE", "The alternative provisioning source no longer has a recent, exact, unreserved observed item row for this same-version recipient; refresh and review again.");
+            }
+          }
         }
         if (entry.workOrders.some((order: ErpWorkOrder, orderIndex: number) => order.status !== "PLANNED" || order.resourceNeedIds.length !== 1 || order.resourceNeedIds[0] !== entry.reviewSnapshots[orderIndex]?.need.stableId || order.completionNote !== undefined)) throw new TypeError("A grouped plan can append only unfinished PLANNED work orders, each linked exactly to its reviewed requirement.");
       }

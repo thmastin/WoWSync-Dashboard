@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { ErpNeedEvidence, ErpProject, ErpProjectStatus, ErpResourceCommitmentLine, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpWorkOrder } from "@wowsync-dashboard/core";
-import { appendErpProvisioningReviewBatch, createErpProject, fetchErpProjects, fetchSharedStorage, setErpProjectStatus, updateErpProject } from "../api.ts";
+import type { ErpNeedEvidence, ErpProject, ErpProjectStatus, ErpResourceCommitmentLine, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
+import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
+import { appendErpProvisioningReviewBatch, appendErpWorkOrderBatch, createErpProject, fetchErpProjects, fetchSharedStorage, setErpProjectStatus, updateErpProject, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
 import { ErpProjectHistory } from "./ErpProjectHistory.tsx";
 import { ErpWorkOrderReadinessLine } from "./ErpWorkOrderReadinessLine.tsx";
 import { ErpWorkOrderProgressLine } from "./ErpWorkOrderProgressLine.tsx";
@@ -313,6 +314,47 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save the grouped provisioning reviews."); }
     finally { setBusy(false); }
   }
+  async function planSourceLeadBatch(source: ErpSourceFulfillmentReview["sources"][number], lead: ErpSourceFulfillmentReview["sources"][number]["alternativeLocations"][number], mode: "INVESTIGATE" | "PROVISION") {
+    if (!usableVersion || !load.state.data) return;
+    const projectsById = new Map(load.state.data.projects.map((project) => [project.stableId, project]));
+    const sourceLeadIdentityKey = lead.sourceIdentityKey;
+    const uniqueReferences = [...new Map(lead.needReferences.map((reference) => [`${reference.projectId}:${reference.needId}`, reference])).values()];
+    const groups = new Map<string, { projectId: string; expectedRevision: number; tasks: ErpWorkOrderBatchTaskDraft[] }>();
+    let skipped = 0;
+    const skippedReasons = new Map<string, number>();
+    for (const reference of uniqueReferences) {
+      const project = projectsById.get(reference.projectId);
+      const need = project?.needs.find((entry) => entry.stableId === reference.needId);
+      const screen = project?.resourceSourceScreens.find((entry) => entry.needId === reference.needId);
+      const leadIsCurrent = screen?.candidates.some((candidate) => candidate.sourceIdentityKey === sourceLeadIdentityKey && candidate.kind === source.kind && candidate.resourceKey === source.resourceKey);
+      const hasOpenWork = project?.workOrders.some((order) => order.status !== "COMPLETED" && order.status !== "CANCELLED" && order.resourceNeedIds.includes(reference.needId));
+      const snapshot = project && need ? buildErpNeedReviewSnapshot(project, need.stableId) : undefined;
+      const provisionEvidenceValid = mode !== "PROVISION" || (source.kind === "ITEM_REF" && need?.kind === "ITEM_REF" && !need.sourceOwnerKey && lead.state === "OBSERVED" && lead.freshness === "recent" && lead.reservationState === "UNRESERVED" && lead.activeReservationQuantity === 0 && (lead.availableObservedLowerBound ?? 0) > 0 && lead.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0));
+      const reason = !project ? "missing-project" : project.status !== "ACTIVE" ? "not-active" : !need?.destinationIdentityKey ? "no-recipient" : need.destinationIdentityKey === sourceLeadIdentityKey ? "recipient-is-lead" : !need.destinationIdentityKey.startsWith(`${version}::`) ? "wrong-version" : !leadIsCurrent ? "lead-not-current-for-need" : !provisionEvidenceValid ? "provision-evidence-unavailable" : hasOpenWork ? "open-work" : !snapshot ? "snapshot-unavailable" : undefined;
+      if (reason) { skipped++; skippedReasons.set(reason, (skippedReasons.get(reason) ?? 0) + 1); continue; }
+      if (!project || !need || !snapshot) continue;
+      const group = groups.get(project.stableId) ?? { projectId: project.stableId, expectedRevision: project.revision, tasks: [] };
+      const instructions = mode === "PROVISION"
+        ? `Player-selected possible source: ${lead.sourceName} on ${lead.sourceRealm}. The current source screen observed the exact ITEM_REF ${need.resourceKey} recently, with no recorded reservations against this source review. This does not establish ownership, account membership, recipient access, binding, transferability, or a valid route, and the observation can become stale. Recheck both characters and the exact item variant in game before deciding whether any provisioning action is possible. No item is reserved or moved, and no action is executed.`
+        : `Recheck the exact ${need.kind} resource ${need.resourceKey} at the currently observed location lead before deciding any manual action. This saved candidate does not establish account membership, ownership, current access, binding, transferability, or a route. Verify requirements and both characters in game; record only what was directly confirmed. No item is reserved or moved, and no action is executed.`;
+      group.tasks.push({ needId: need.stableId, reviewSnapshot: snapshot, kind: mode, title: mode === "PROVISION" ? `Review provisioning ${need.label} to ${name(need.destinationIdentityKey)}` : `Verify possible source for ${need.label}`, instructions, ...(mode === "INVESTIGATE" ? { sourceLeadIdentityKey } : { provisioningSourceIdentityKey: sourceLeadIdentityKey }), ...(chars.some((character) => character.identityKey === need.destinationIdentityKey) ? { assignedIdentityKey: need.destinationIdentityKey } : {}) });
+      groups.set(project.stableId, group);
+    }
+    const taskCount = [...groups.values()].reduce((sum, group) => sum + group.tasks.length, 0);
+    if (taskCount < 2 || taskCount > 20 || groups.size > 10) {
+      const labels: Record<string, string> = { "missing-project": "project unavailable", "not-active": "project not active", "no-recipient": "recipient not selected", "recipient-is-lead": "lead is already the recipient", "wrong-version": "recipient belongs to another version", "lead-not-current-for-need": "lead no longer matches this need", "provision-evidence-unavailable": "exact, recent, unreserved item evidence unavailable", "open-work": "unfinished work already exists", "snapshot-unavailable": "need review unavailable" };
+      const reasons = [...skippedReasons].map(([reason, count]) => `${count} ${labels[reason] ?? "need skipped"}`).join(", ");
+      setError(`This lead matches ${taskCount} currently eligible requirement${taskCount === 1 ? "" : "s"} out of ${uniqueReferences.length}${reasons ? `; ${reasons}` : ""}. At least two eligible needs are required. The limit is 20 needs across 10 projects.`);
+      return;
+    }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const result = await appendErpWorkOrderBatch(version as Version, [...groups.values()]);
+      setNotice(`${result.createdCount} ${mode === "PROVISION" ? "manual provisioning review" : "source investigation work order"}${result.createdCount === 1 ? "" : "s"} saved across ${result.projects.length} projects${skipped ? `; ${skipped} linked needs were skipped because their project, recipient, evidence lead, or open-work state no longer qualifies` : ""}. No resource was reserved or moved.`);
+      onRefresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save the grouped source investigation reviews."); }
+    finally { setBusy(false); }
+  }
   async function recordProcurementQuote(project: import("@wowsync-dashboard/core").ErpProjectView, order: ErpWorkOrder) {
     if (order.kind !== "PURCHASE" || !order.procurementPlan || order.status === "COMPLETED" || order.status === "CANCELLED") return;
     const target = project.workOrderReadiness.find((entry) => entry.workOrderId === order.stableId)?.procurementAssessment?.targetNeed;
@@ -346,7 +388,7 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
   return <section className="erp-workbench">
       <header className="erp-workbench-header"><div><p className="eyebrow">{String(version).toUpperCase()} · PLANNING</p><h1>Projects &amp; Work Orders</h1><p>Record goals, resource needs, reservations, and manual next steps against this version's observed characters.</p></div><span className="erp-scope-note">Version isolated · no game actions are executed</span></header>
     <aside className="erp-evidence-note"><strong>Evidence boundary:</strong> a project is player intent. Character co-location does not establish account membership or transfer access. Unknown or inaccessible storage is not treated as empty. Completing a work order requires a player-entered note; it does not itself verify the game outcome.</aside>
-    {usableVersion && load.state.data?.portfolioFulfillment && load.state.data.sourceFulfillment && <ErpPortfolioFulfillmentPanel review={load.state.data.portfolioFulfillment} sourceReview={load.state.data.sourceFulfillment} characterName={name} />}
+    {usableVersion && load.state.data?.portfolioFulfillment && load.state.data.sourceFulfillment && <ErpPortfolioFulfillmentPanel review={load.state.data.portfolioFulfillment} sourceReview={load.state.data.sourceFulfillment} characterName={name} busy={busy} onPlanSourceLeadBatch={planSourceLeadBatch} />}
     {usableVersion && load.state.data?.procurementBudgetReview && <ErpProcurementBudgetPanel review={load.state.data.procurementBudgetReview} characterName={name} onOpenProject={(projectId) => { const target = document.getElementById(`erp-project-title-${encodeURIComponent(projectId)}`); target?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" }); target?.focus({ preventScroll: true }); }} onReviewOrder={focusProcurementQuote} />}
     {usableVersion && load.state.data?.procurementBuyerReview && <ErpProcurementBuyerPanel review={load.state.data.procurementBuyerReview} characterName={name} onReviewOrder={focusProcurementQuote} onReviewNeed={focusProcurementNeed} onPlanSourcePackage={planBuyerSourcePackage} />}
     {usableVersion && load.state.data?.fulfillmentTriage && <ErpFulfillmentTriagePanel triage={load.state.data.fulfillmentTriage} characterName={name} />}

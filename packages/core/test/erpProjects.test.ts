@@ -137,6 +137,38 @@ test("the atomic work-order transaction rechecks reviewed evidence after the rou
   } finally { store.close(); }
 });
 
+test("atomic provisioning work orders revalidate alternate exact sources inside the transaction", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const recipient = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Recipient", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [] } })).character.identityKey;
+    const currentSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Current Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const reservedSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Reserved Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const staleSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now - 30 * 86400, character: { name: "Stale Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const mismatchSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Variant Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:42", name: "Variant Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    store.createErpProject({ version: "classic-era", title: "Existing source commitment", needs: [{ stableId: "held_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: reservedSource }], reservations: [{ stableId: "held_reservation", needId: "held_need", sourceIdentityKey: reservedSource, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+
+    function reviewedOrder(sourceIdentityKey: string, suffix: string) {
+      const plan = store.createErpProject({ version: "classic-era", title: `Provision ${suffix}`, needs: [{ stableId: `need_${suffix}`, kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, destinationIdentityKey: recipient }] });
+      const view = new DashboardReadModel(store).getErpProjects({ version: "classic-era" }).find((entry) => entry.stableId === plan.stableId)!;
+      const review = buildErpNeedReviewSnapshot(view, `need_${suffix}`)!;
+      const order: ErpProject["workOrders"][number] = { stableId: `order_${suffix}`, kind: "PROVISION", status: "PLANNED", title: "Review manual source", assignedIdentityKey: recipient, sourceIdentityKey, destinationIdentityKey: recipient, resourceNeedIds: [`need_${suffix}`], dependsOn: [] };
+      return { plan, review, order };
+    }
+
+    const valid = reviewedOrder(currentSource, "valid_alt_source");
+    const appended = store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: valid.plan.stableId, expectedRevision: valid.plan.revision, workOrders: [valid.order], reviewSnapshots: [valid.review] }]);
+    assert.equal(appended?.[0]?.workOrders[0]?.sourceIdentityKey, currentSource, "a recent exact observed source is accepted as a conditional manual plan");
+
+    for (const [source, suffix] of [[reservedSource, "reserved_candidate"], [staleSource, "stale_candidate"], [mismatchSource, "wrong_variant"]] as const) {
+      const attempted = reviewedOrder(source, suffix);
+      assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: attempted.plan.stableId, expectedRevision: attempted.plan.revision, workOrders: [attempted.order], reviewSnapshots: [attempted.review] }]), (error: unknown) => error instanceof ErpProjectConflictError && error.code === "PROVISIONING_SOURCE_EVIDENCE_UNAVAILABLE");
+      const unchanged = store.getErpProject(attempted.plan.stableId)!;
+      assert.deepEqual([unchanged.revision, unchanged.workOrders.length], [attempted.plan.revision, 0], "rejected direct store calls do not append work or change project revisions");
+    }
+  } finally { store.close(); }
+});
+
 test("stale inventory preserves reservation intent but cannot establish current coverage or new availability", () => {
   const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000 });
   try {

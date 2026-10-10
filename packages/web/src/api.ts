@@ -406,6 +406,8 @@ export interface ErpWorkOrderBatchTaskDraft {
   readonly spendingCeilingCopper?: number;
   /** For an INVESTIGATE step only: a version-scoped, observed source-screen lead; not an ownership/access claim. */
   readonly sourceLeadIdentityKey?: string;
+  /** For a PROVISION review: exact, current source-screen lead selected by the player. This records plan intent only. */
+  readonly provisioningSourceIdentityKey?: string;
   /** Same-version requirement gates selected for a player-authored portfolio package. */
   readonly portfolioPrerequisites?: readonly { readonly projectId: string; readonly needId: string }[];
 }

@@ -1397,6 +1397,66 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const recoveredMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(recoveredMcp.structuredContent.portfolioFulfillment, afterRecovery.portfolioFulfillment, "the satisfied gate stays consistent across REST and MCP after a later export");
     assert.equal(recoveredMcp.structuredContent.portfolioFulfillment.packages[0].steps[1].prerequisiteGate.state, "CURRENT_OBSERVED_EVIDENCE_MET");
+
+    const investigationA = store.createErpProject({ version: "retail", title: "Review lead for first provision", needs: [{ stableId: "lead_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom for first crafter", requiredQuantity: 2, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    const investigationB = store.createErpProject({ version: "retail", title: "Review lead for second provision", needs: [{ stableId: "lead_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom for second crafter", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    await page.reload();
+    const currentReview = await read();
+    const currentSourceGroup = currentReview.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
+    const currentLead = currentSourceGroup.alternativeLocations.find((location) => location.sourceIdentityKey === observedLead.character.identityKey);
+    assert.ok(currentLead.needReferences.some((reference) => reference.projectId === investigationA.stableId));
+    assert.ok(currentLead.needReferences.some((reference) => reference.projectId === investigationB.stableId));
+    const sourceGroupUi = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(currentSourceGroup.stableId)}`);
+    const leadUi = sourceGroupUi.locator("li").filter({ hasText: "Possible Source Lead" }).first();
+    await leadUi.getByRole("button", { name: "Create linked investigation reviews" }).click();
+    await page.waitForFunction(() => Boolean(document.querySelector('[role="status"]') || document.querySelector('[role="alert"]')));
+    assert.match(await page.locator('p[role="status"], p[role="alert"]').last().innerText(), /2 source investigation work orders saved across 2 projects/);
+    const planned = await read();
+    for (const projectId of [investigationA.stableId, investigationB.stableId]) {
+      const project = planned.projects.find((entry) => entry.stableId === projectId);
+      assert.equal(project.workOrders.length, 1);
+      assert.deepEqual([project.workOrders[0].kind, project.workOrders[0].status, project.workOrders[0].resourceNeedIds, project.workOrders[0].investigationSourceLeadIdentityKey], ["INVESTIGATE", "PLANNED", [project.needs[0].stableId], observedLead.character.identityKey]);
+      assert.match(project.workOrders[0].instructions, /account membership.*ownership.*access.*binding.*transferability.*route/i);
+      assert.equal(project.reservations.length, 0, "grouped lead review does not reserve or move the item");
+    }
+    const plannedContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    for (const projectId of [investigationA.stableId, investigationB.stableId]) assert.equal(plannedContext.planning.projects.find((entry) => entry.stableId === projectId).workOrderCounts.PLANNED, 1);
+    const plannedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    for (const projectId of [investigationA.stableId, investigationB.stableId]) {
+      const restProject = planned.projects.find((entry) => entry.stableId === projectId);
+      const mcpProject = plannedMcp.structuredContent.projects.find((entry) => entry.stableId === projectId);
+      assert.deepEqual(mcpProject.workOrders, restProject.workOrders, "MCP preserves the grouped player-authored lead reviews");
+    }
+    assert.equal(plannedMcp.structuredContent.sourceFulfillment.sources.find((entry) => entry.stableId === currentSourceGroup.stableId).alternativeLocations[0].accountMembership, "UNKNOWN");
+
+    const provisioningA = store.createErpProject({ version: "retail", title: "Provision first crafter", needs: [{ stableId: "provision_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for first crafter", requiredQuantity: 2, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    const provisioningB = store.createErpProject({ version: "retail", title: "Provision second crafter", needs: [{ stableId: "provision_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for second crafter", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
+    await page.reload();
+    const provisioningReview = await read();
+    const provisioningGroup = provisioningReview.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
+    const observedItemLead = provisioningGroup.alternativeLocations.find((location) => location.sourceIdentityKey === observedLead.character.identityKey);
+    assert.equal(observedItemLead.state, "OBSERVED");
+    assert.equal(observedItemLead.freshness, "recent");
+    assert.equal(observedItemLead.reservationState, "UNRESERVED");
+    const provisioningGroupUi = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(provisioningGroup.stableId)}`);
+    const observedItemLeadUi = provisioningGroupUi.locator("li").filter({ hasText: "Possible Source Lead" }).first();
+    await observedItemLeadUi.getByRole("button", { name: "Create linked manual provisioning reviews" }).click();
+    await page.locator('p[role="status"]').last().getByText(/2 manual provisioning reviews saved across 2 projects/).waitFor();
+    const provisioned = await read();
+    for (const projectId of [provisioningA.stableId, provisioningB.stableId]) {
+      const project = provisioned.projects.find((entry) => entry.stableId === projectId);
+      assert.deepEqual([project.workOrders[0].kind, project.workOrders[0].status, project.workOrders[0].sourceIdentityKey, project.workOrders[0].destinationIdentityKey], ["PROVISION", "PLANNED", observedLead.character.identityKey, source.character.identityKey]);
+      assert.equal(project.needs[0].sourceIdentityKey, source.character.identityKey, "selected source remains separate from the requirement's original source intent");
+      assert.match(project.workOrders[0].instructions, /does not establish ownership, account membership, recipient access, binding, transferability, or a valid route/);
+      assert.equal(project.reservations.length, 0, "manual provisioning plan changes neither reservations nor observed inventory");
+    }
+    const provisionedContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    const provisionedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    for (const projectId of [provisioningA.stableId, provisioningB.stableId]) {
+      const restProject = provisioned.projects.find((entry) => entry.stableId === projectId);
+      assert.equal(provisionedContext.planning.projects.find((entry) => entry.stableId === projectId).workOrderCounts.PLANNED, 1);
+      assert.deepEqual(provisionedMcp.structuredContent.projects.find((entry) => entry.stableId === projectId).workOrders, restProject.workOrders);
+    }
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();
