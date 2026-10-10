@@ -67,7 +67,10 @@ test("portfolio fulfillment review orders prerequisite evidence first and preser
     const packageView = portfolio.packages[0]!;
     assert.deepEqual(packageView.steps.map((step) => [step.projectId, step.needId]), [[prerequisite.stableId, "shared"], [dependent.stableId, "shared"]], "the DAG is ordered prerequisite first even when the dependent project has higher priority");
     assert.equal(packageView.steps[0]?.reviewState, "OBSERVED_NEED_MET");
+    assert.equal(packageView.steps[0]?.prerequisiteGate.state, "NO_PREREQUISITES");
     assert.equal(packageView.steps[1]?.reviewState, "WORK_ORDER_REVIEW");
+    assert.equal(packageView.steps[1]?.prerequisiteGate.state, "CURRENT_OBSERVED_EVIDENCE_MET");
+    assert.deepEqual(packageView.steps[1]?.prerequisiteGate.blockers, []);
     assert.equal(packageView.steps[1]?.projectReservationIntentQuantity, 1, "this project's recorded reservation intent remains explicit");
     assert.equal(packageView.steps[1]?.reservationAssessment?.activeQuantity, 3, "shared source/resource assessment includes the overlapping commitment from the other project");
     assert.equal(packageView.steps[1]?.reservationAssessment?.state, "WITHIN_OBSERVED_SUPPLY");
@@ -80,6 +83,8 @@ test("portfolio fulfillment review orders prerequisite evidence first and preser
     const dangling = projects.map((entry) => entry.stableId === dependent.stableId ? { ...entry, workOrders: entry.workOrders.map((order) => ({ ...order, portfolioPrerequisites: [{ projectId: "deleted-project", needId: "missing-need" }] })) } : entry);
     const missing = buildErpPortfolioFulfillmentReview(dangling, "classic-era").packages[0]!.steps.find((step) => step.projectId === "deleted-project");
     assert.equal(missing?.reviewState, "MISSING_NEED");
+    const dependentOnMissing = buildErpPortfolioFulfillmentReview(dangling, "classic-era").packages[0]!.steps.find((step) => step.projectId === dependent.stableId && step.needId === "shared");
+    assert.equal(dependentOnMissing?.prerequisiteGate.state, "MISSING_PREREQUISITE");
     assert.equal(missing?.requiredQuantity, undefined, "a dangling evidence link is UNKNOWN, not a fabricated zero requirement");
     assert.equal(missing?.projectReservationIntentQuantity, undefined, "a missing need does not claim zero project reservations");
     assert.equal(missing?.reservationAssessment, undefined, "a missing need does not claim zero source-scope commitments");

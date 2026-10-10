@@ -1309,6 +1309,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual(portfolioPackage.steps.map((step) => step.needId), ["mycobloom_need", "briar_need"], "portfolio view puts the evidence prerequisite before dependent work");
     assert.equal(portfolioPackage.steps[0].reviewState, "WORK_ORDER_REVIEW");
     assert.equal(portfolioPackage.steps[1].reviewState, "WORK_ORDER_REVIEW");
+    assert.equal(portfolioPackage.steps[1].prerequisiteGate.state, "PREREQUISITE_EVIDENCE_REVIEW", "fresh but short observed supply does not satisfy the dependent step's evidence gate");
+    assert.equal(portfolioPackage.steps[1].prerequisiteGate.blockers[0].evidenceState, "SHORTFALL_OBSERVED");
     const portfolioPanel = page.getByTestId("erp-portfolio-fulfillment");
     assert.match(await portfolioPanel.innerText(), /Portfolio fulfillment packages/);
     assert.match(await portfolioPanel.innerText(), /prerequisites the player linked/);
@@ -1334,7 +1336,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.ok(context.planning.projects.some((project) => project.title === secondRead.title && project.revision === secondRead.revision));
     assert.ok(context.planning.projects.some((project) => project.title === thirdRead.title && project.revision === thirdRead.revision));
     assert.equal(context.planning.projects.find((project) => project.stableId === secondRead.stableId).workOrderReadinessStates.WAITING_FOR_PORTFOLIO_PREREQUISITE, 1);
-    assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, truncated: false });
+    assert.deepEqual(context.planning.portfolioFulfillment.retail, { packageCount: 1, stepCount: 2, stepsNeedingReview: 2, stepsWithPrerequisiteReview: 1, truncated: false });
     mcpClient = new Client({ name: "wowsync-cross-project-plan-browser", version: "0.1.0" });
     await mcpClient.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(process.cwd(), "packages/mcp/src/index.ts")], cwd: process.cwd(), env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" }));
     const mcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
@@ -1359,9 +1361,22 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(contextFirst.reservationReviewStates.EXCEEDS_OBSERVED_SUPPLY, 2);
     const changedMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(changedMcp.structuredContent.portfolioFulfillment, afterObservation.portfolioFulfillment, "portfolio readiness is recomputed from the same later observation for REST and MCP");
+    const afterShortfallPackage = afterObservation.portfolioFulfillment.packages.find((entry) => entry.stableId === portfolioPackage.stableId);
+    assert.equal(afterShortfallPackage.steps[1].prerequisiteGate.state, "PREREQUISITE_EVIDENCE_REVIEW", "a newer shortfall keeps the downstream evidence gate open");
     const changedMcpFirst = changedMcp.structuredContent.projects.find((project) => project.stableId === first.stableId);
     assert.deepEqual(changedMcpFirst.reservationReview, afterFirst.reservationReview, "MCP and REST agree after the resource observation changes");
     assert.deepEqual(changedMcpFirst.workOrders.map((order) => order.status), afterFirst.workOrders.map((order) => order.status));
+    store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now + 40, bags: observedSection([row(ITEM_ID, 5, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now + 40), bank: observedSection([], now + 40) }));
+    await page.reload();
+    const afterRecovery = await read();
+    const recoveredPackage = afterRecovery.portfolioFulfillment.packages.find((entry) => entry.stableId === portfolioPackage.stableId);
+    assert.equal(recoveredPackage.steps[1].prerequisiteGate.state, "CURRENT_OBSERVED_EVIDENCE_MET", "a later fresh observation can satisfy the declared evidence gate");
+    assert.deepEqual(recoveredPackage.steps[1].prerequisiteGate.blockers, []);
+    const recoveredContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
+    assert.equal(recoveredContext.planning.portfolioFulfillment.retail.stepsWithPrerequisiteReview, 0);
+    const recoveredMcp = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
+    assert.deepEqual(recoveredMcp.structuredContent.portfolioFulfillment, afterRecovery.portfolioFulfillment, "the satisfied gate stays consistent across REST and MCP after a later export");
+    assert.equal(recoveredMcp.structuredContent.portfolioFulfillment.packages[0].steps[1].prerequisiteGate.state, "CURRENT_OBSERVED_EVIDENCE_MET");
     assert.deepEqual(pageErrors, []);
   } finally {
     if (mcpClient) await mcpClient.close();
