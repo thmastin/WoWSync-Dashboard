@@ -113,7 +113,7 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
     if (project.status !== "ACTIVE" || need.kind !== "RECIPE" || !character || need.sourceOwnerKey || !character.startsWith(`${project.version}::`) || activeDuplicate) return;
     clearPrefilledManualSupply(); setEditing(project.stableId); setPrefilledNeedId(need.stableId); setOrderKind("CRAFT"); setOrderTitle(`Review craft plan: ${need.label}`);
     setOrderInstructions(`Player-controlled craft planning for exact recipe ${need.resourceKey}. The linked evidence checks recorded recipe knowledge only; this does not establish profession skill, unlocks, reagents, craftability, output, or completion. Add separately observed material needs and verify all game requirements manually. No craft action is executed.`);
-    setAssigned(character); setOrderSource(""); setOrderDestination(need.destinationIdentityKey ?? ""); setOrderNeedIds([need.stableId]); setOrderDependencyIds([]); setNeedKind("ITEM_REF"); setResourceKey(""); setNeedLabel(""); setQuantity("1"); setSource(character); setDestination("");
+    setAssigned(character); setOrderSource(""); setOrderDestination(need.destinationIdentityKey ?? ""); setOrderNeedIds([need.stableId]); setOrderDependencyIds([]); setNeedKind("ITEM_REF"); setResourceKey(""); setNeedLabel(""); setQuantity("1"); setSource(character); setDestination(character);
   }
   async function addSourceInvestigation(project: import("@wowsync-dashboard/core").ErpProjectView, need: ErpResourceNeed, candidate: ErpResourceSourceCandidate) {
     if (!need.destinationIdentityKey) return;

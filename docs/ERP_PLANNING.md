@@ -120,3 +120,7 @@ An active project RECIPE need with an explicit same-version character source can
 ## Phase 36: linked declared craft inputs and reservations
 
 The recipe-to-manual-craft review now opens an adjacent material requirement form scoped to an exact ITEM_REF and the explicitly selected same-version crafter. Players enter each material, quantity, and source themselves; each need can be linked explicitly into the CRAFT work order, then reserved only within the observed unreserved supply. Recipe evidence never generates reagents or proves craftability. This reuses existing resource need, readiness, reservation, and work-order projections; it adds no parallel crafting model. See [ERP_CHECKPOINT_20261009_PHASE36.md](ERP_CHECKPOINT_20261009_PHASE36.md).
+
+## Phase 37: declared craft-material procurement review
+
+Materials created from a recipe-linked craft review explicitly name the selected same-version crafter as both source and intended recipient. Existing recent/complete shortfall and reservation guards can then prefill a manual purchase plan for that exact need and same character as buyer. The player still sets a ceiling; quote, gold, stock, route, affordability, and purchase execution remain separately evidenced or UNKNOWN. Reservations do not erase the shortfall. No recipe inputs are inferred and no action is executed. Synthetic browser acceptance covers craft need → observed shortfall → bounded reservation → PLANNED purchase work order. See [ERP_CHECKPOINT_20261009_PHASE37.md](ERP_CHECKPOINT_20261009_PHASE37.md).

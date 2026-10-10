@@ -259,9 +259,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(await materialNeedForm.getByLabel("Source character or shared owner").inputValue(), fixtureSourceKeys[0], "material source is explicitly preselected to the crafter");
     await materialNeedForm.getByLabel("Resource key").fill(`item:${ITEM_ID}::::::::80`);
     await materialNeedForm.getByLabel("Label").fill("Player-declared craft material");
-    await materialNeedForm.getByLabel("Quantity").fill("2");
+    await materialNeedForm.getByLabel("Quantity").fill("45");
     await materialNeedForm.getByRole("button", { name: "Add requirement" }).click();
-    const materialNeedId = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter").needs.find((entry) => entry.label === "Player-declared craft material").stableId);
+    const { materialNeedId, materialNeedRecord } = await page.evaluate(async () => { const project = (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"); const need = project.needs.find((entry) => entry.label === "Player-declared craft material"); return { materialNeedId: need.stableId, materialNeedRecord: need }; });
+    assert.equal(materialNeedRecord.destinationIdentityKey, fixtureSourceKeys[0], "craft material is intended for its assigned crafter");
     await prefilledCraftForm.getByLabel("Linked resource needs").selectOption([recipeNeedId, materialNeedId]);
     await prefilledCraftForm.getByRole("button", { name: "Add work order" }).click();
     await recipeNeed.getByText("An active CRAFT review is already linked to this recipe need.").waitFor();
@@ -269,7 +270,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     const craftOrder = craftAssessment.workOrders.find((entry) => entry.kind === "CRAFT" && entry.resourceNeedIds.includes(recipeNeedId));
     assert.deepEqual(craftOrder.resourceNeedIds, [recipeNeedId, materialNeedId]);
     let linkedMaterial = craftAssessment.workOrderReadiness.find((entry) => entry.workOrderId === craftOrder.stableId).linkedNeeds.find((entry) => entry.needId === materialNeedId);
-    assert.equal(linkedMaterial.state, "COVERED_BY_OBSERVED", "material coverage comes from the selected crafter's synthetic observation");
+    assert.equal(linkedMaterial.state, "SHORTFALL_OBSERVED", "the declared quantity exceeds the selected crafter's complete synthetic inventory observation");
     assert.equal(linkedMaterial.reservationState, "UNRESERVED");
     const materialNeed = projectCard.locator(".erp-need-list li").filter({ hasText: "Player-declared craft material" });
     page.once("dialog", (dialog) => dialog.accept("2"));
@@ -279,6 +280,20 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     linkedMaterial = reservedCraftAssessment.workOrderReadiness.find((entry) => entry.workOrderId === craftOrder.stableId).linkedNeeds.find((entry) => entry.needId === materialNeedId);
     assert.equal(linkedMaterial.reservationState, "WITHIN_OBSERVED_SUPPLY");
     assert.equal(linkedMaterial.activeReservationQuantity, 2);
+    assert.equal(linkedMaterial.state, "SHORTFALL_OBSERVED", "reserving available material does not erase the observed project shortfall");
+    await materialNeed.getByRole("button", { name: "Plan manual purchase step" }).click();
+    const purchasePrefill = projectCard.locator("form.erp-inline-form").last();
+    assert.equal(await purchasePrefill.getByLabel("Action type").inputValue(), "PURCHASE");
+    assert.equal(await purchasePrefill.getByLabel("Assigned character").inputValue(), fixtureSourceKeys[0]);
+    assert.equal(await purchasePrefill.getByLabel("Item target need").inputValue(), materialNeedId);
+    await purchasePrefill.getByLabel("Spending ceiling (copper)").fill("2500");
+    await purchasePrefill.getByRole("button", { name: "Add work order" }).click();
+    const procurementAssessment = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Provision the crafter"));
+    const materialProcurementOrder = procurementAssessment.workOrders.find((entry) => entry.kind === "PURCHASE" && entry.resourceNeedIds.includes(materialNeedId));
+    assert.equal(materialProcurementOrder.assignedIdentityKey, fixtureSourceKeys[0]);
+    assert.equal(materialProcurementOrder.procurementPlan.targetNeedId, materialNeedId);
+    assert.equal(materialProcurementOrder.procurementPlan.spendingCeilingCopper, 2500);
+    assert.equal(materialProcurementOrder.status, "PLANNED", "procurement remains a manual plan with no purchase execution");
 
     await materialNeedForm.getByRole("button", { name: "Close" }).click();
     await projectCard.getByRole("button", { name: "Add requirement / work order" }).click();
@@ -457,7 +472,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     assert.equal(persistedPurchase.procurementPlan.playerQuote, undefined, "blank price input cannot create a zero-copper player quote");
     quoteAnswers.push("80", "5", "Town vendor checked by player");
     await purchaseOrder.getByRole("button", { name: "Record checked quote…" }).click();
-    await page.waitForFunction(() => document.querySelector(".erp-procurement-review")?.textContent?.includes("Town vendor checked by player"));
+    await purchaseOrder.locator(".erp-procurement-review").filter({ hasText: "Town vendor checked by player" }).waitFor();
     const purchaseText = await purchaseOrder.innerText();
     assert.match(purchaseText, /Purchase review \(not a recommendation\)/);
     assert.match(purchaseText, /OBSERVED ITEM GAP/);
