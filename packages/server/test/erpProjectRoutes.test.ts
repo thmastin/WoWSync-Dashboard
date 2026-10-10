@@ -117,7 +117,7 @@ test("REST and AccountContext expose an explicit procurement review without asse
     assert.deepEqual([assessment.marketAvailability, assessment.quotedPrice, assessment.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
     assert.match(assessment.reason, /not a purchase recommendation or action/);
     const account = await call("GET", "/api/account-context");
-    assert.equal(account.body.schemaVersion, "18");
+    assert.equal(account.body.schemaVersion, "19");
     const summary = account.body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
     assert.deepEqual(summary.procurementReviewStates, { OBSERVED_ITEM_GAP: 1 });
     assert.deepEqual(summary.procurementQuoteStates, { PLAYER_REPORTED_WITHIN_CEILING: 1 });
@@ -128,6 +128,26 @@ test("REST and AccountContext expose an explicit procurement review without asse
     const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
     assert.deepEqual(listed.workOrderReadiness[0].procurementAssessment, assessment);
     assert.deepEqual(listed.workOrderProgress[0].procurementObservationReview, procurementProgress.procurementObservationReview, "REST returns the same paired gold review after read-back");
+  });
+});
+
+test("manual sale reconciliation pairs explicit seller item and gold evidence without confirming a sale", async () => {
+  await withServer(async (call, store) => {
+    const generatedAt = Math.floor(Date.now() / 1000) + 1;
+    const capture = (at: number, quantity: number, copper: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Sale Pair", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: copper }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: "item:159", name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
+    const seller = store.importSnapshot(capture(generatedAt, 4, 500));
+    store.importSnapshot(capture(generatedAt + 1, 2, 700));
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Review a manual sale", needs: [{ stableId: "sale_target", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: seller.character.identityKey, destinationIdentityKey: seller.character.identityKey }], workOrders: [{ stableId: "sale_order", kind: "SELL_MANUALLY", status: "IN_PROGRESS", title: "Sell manually if appropriate", assignedIdentityKey: seller.character.identityKey, resourceNeedIds: ["sale_target"], dependsOn: [] }] });
+    assert.equal(created.status, 201);
+    const progress = created.body.project.workOrderProgress[0];
+    const review = progress.sellObservationReviews[0];
+    assert.deepEqual([review.sellerIdentityKey, review.state, review.itemState, review.interpretation], [seller.character.identityKey, "GOLD_INCREASED", "ITEM_CHANGED", "CAUSE_UNKNOWN"]);
+    assert.deepEqual([review.goldComparison.previousQuantity, review.goldComparison.currentQuantity], [500, 700]);
+    assert.equal(progress.completionRecorded, false);
+    const listed = (await call("GET", "/api/versions/classic-era/erp/projects")).body.projects[0];
+    assert.deepEqual(listed.workOrderProgress[0].sellObservationReviews, [review], "REST read-after-write preserves the core sale review");
+    const context = (await call("GET", "/api/account-context")).body.planning.projects.find((entry: any) => entry.stableId === created.body.project.stableId);
+    assert.deepEqual(context.sellObservationStates, { GOLD_INCREASED: 1 }, "AccountContext summarizes the same read-only sale state");
   });
 });
 
@@ -261,7 +281,7 @@ test("manual supply readiness is summarized by AccountContext from the REST plan
     assert.equal(created.body.project.workOrderReadiness[0].state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
     assert.deepEqual(created.body.project.workOrderReadiness[0].actionTargetNeedIds, ["stone"]);
     const context = await call("GET", "/api/account-context");
-    assert.equal(context.body.schemaVersion, "18");
+    assert.equal(context.body.schemaVersion, "19");
     assert.deepEqual(context.body.planning.projects[0].workOrderReadinessStates, { MANUAL_SUPPLY_STEP_RECOMMENDED: 1 }, "AccountContext carries the count for the exact core/REST readiness state");
     assert.deepEqual(context.body.planning.resourceCommitments["classic-era"], { lineCount: 1, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0, truncated: false });
   });

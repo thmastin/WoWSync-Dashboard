@@ -171,6 +171,39 @@ test("CRAFT input freshness keeps a future-dated prior section from being masked
   } finally { store.close(); }
 });
 
+test("SELL_MANUALLY pairs same-seller item and gold evidence without attributing a sale", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5200 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } }));
+    const need = { stableId: "sale_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [{ stableId: "manual_sale", kind: "SELL_MANUALLY", status: "IN_PROGRESS", title: "Review manual sale", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey }] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_101).workOrderProgress[0]!;
+    const review = progress.sellObservationReviews?.[0];
+    assert.equal(review?.sellerIdentityKey, identityKey);
+    assert.equal(review?.state, "GOLD_INCREASED");
+    assert.equal(review?.itemState, "ITEM_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.goldComparison && [review.goldComparison.previousQuantity, review.goldComparison.currentQuantity, review.goldComparison.delta], [5000, 5200, 200]);
+    assert.equal(review?.itemComparisons.find((entry) => entry.section === "bags")?.delta, -2);
+    assert.equal(progress.completionRecorded, false);
+    assert.match(review?.reason ?? "", /do not establish a sale, buyer, amount received for this item, or cause/);
+
+    const differentSource: ErpProject = { ...plan, needs: [{ ...need, sourceIdentityKey: "classic-era::other realm::another" }] };
+    const unsupported = evaluateErpProject(differentSource, (key) => store.listSnapshots(key), [differentSource], 1_700_000_101).workOrderProgress[0]?.sellObservationReviews?.[0];
+    assert.equal(unsupported?.state, "UNKNOWN");
+    assert.deepEqual(unsupported?.itemComparisons, []);
+
+    const incomplete = seedStore({ generatedAt: 1_700_000_000, character: { name: "Partial Seller", realm: "Realm B", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 100 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } });
+    try {
+      incomplete.store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Partial Seller", realm: "Realm B", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 200 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+      const partialNeed = { ...need, sourceIdentityKey: incomplete.identityKey, destinationIdentityKey: incomplete.identityKey };
+      const partialPlan: ErpProject = { ...project(incomplete.identityKey), needs: [partialNeed], reservations: [], workOrders: [{ stableId: "partial_sale", kind: "SELL_MANUALLY", status: "PLANNED", title: "Review incomplete sale evidence", resourceNeedIds: [partialNeed.stableId], dependsOn: [], assignedIdentityKey: incomplete.identityKey }] };
+      const partial = evaluateErpProject(partialPlan, (key) => incomplete.store.listSnapshots(key), [partialPlan], 1_700_000_101).workOrderProgress[0]?.sellObservationReviews?.[0];
+      assert.equal(partial?.itemState, "UNKNOWN", "a bank section missing on either side prevents claiming a whole character item change");
+    } finally { incomplete.store.close(); }
+  } finally { store.close(); }
+});
+
 test("procurement ceiling is a limit, not a gold resource requirement or reservation", () => {
   const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 300 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } });
   try {

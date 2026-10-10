@@ -808,6 +808,7 @@ export interface ErpWorkOrderProgress {
   readonly provisioningObservationReviews?: readonly ErpTransferObservationReview[];
   readonly retrievalObservationReviews?: readonly ErpRetrievalObservationReview[];
   readonly procurementObservationReview?: ErpProcurementObservationReview;
+  readonly sellObservationReviews?: readonly ErpSellObservationReview[];
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
   readonly craftInputObservationReviews?: readonly ErpCraftInputObservationReview[];
   readonly reason: string;
@@ -821,6 +822,21 @@ export interface ErpCraftInputObservationReview {
   readonly freshness: Freshness;
   readonly previousFreshness?: Freshness;
   readonly comparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly reason: string;
+}
+
+export interface ErpSellObservationReview {
+  readonly sellerIdentityKey?: string;
+  readonly needId: string;
+  readonly resourceKey: string;
+  readonly state: "GOLD_DECREASED" | "GOLD_INCREASED" | "GOLD_UNCHANGED" | "UNKNOWN";
+  readonly itemState: "ITEM_CHANGED" | "ITEM_UNCHANGED" | "UNKNOWN";
+  readonly freshness: Freshness;
+  readonly previousFreshness?: Freshness;
+  readonly goldPreviousFreshness?: Freshness;
+  readonly goldComparison?: ResourceObservationChange["comparisons"][number];
+  readonly itemComparisons: readonly ResourceObservationChange["comparisons"][number][];
+  readonly interpretation: "CAUSE_UNKNOWN";
   readonly reason: string;
 }
 
@@ -1119,6 +1135,36 @@ function craftInputObservationReviews(project: ErpProject, order: ErpWorkOrder, 
   });
 }
 
+function sellObservationReviews(project: ErpProject, order: ErpWorkOrder, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], now: number): ErpSellObservationReview[] {
+  if (order.kind !== "SELL_MANUALLY") return [];
+  return order.resourceNeedIds.flatMap<ErpSellObservationReview>((needId) => {
+    const need = project.needs.find((entry) => entry.stableId === needId);
+    if (!need || (need.kind !== "ITEM_ID" && need.kind !== "ITEM_REF")) return [];
+    const sellerIdentityKey = order.assignedIdentityKey;
+    const unknown = (reason: string): ErpSellObservationReview => ({ ...(sellerIdentityKey ? { sellerIdentityKey } : {}), needId, resourceKey: need.resourceKey, state: "UNKNOWN", itemState: "UNKNOWN", freshness: "unknown", itemComparisons: [], interpretation: "CAUSE_UNKNOWN", reason });
+    if (!sellerIdentityKey) return [unknown("No seller character is assigned. Select the character whose item and gold observations should be reviewed.")];
+    if (!sellerIdentityKey.startsWith(`${project.version}::`)) return [unknown("The assigned seller does not match the project version; no cross-version item or gold evidence is used.")];
+    if (need.sourceOwnerKey || need.sourceIdentityKey !== sellerIdentityKey || (need.destinationIdentityKey && need.destinationIdentityKey !== sellerIdentityKey)) return [unknown("The item need does not name the assigned same-version seller as its source. Shared storage or another character cannot be treated as the seller's item.")];
+    const itemEvidence = assessErpNeed(need, snapshotsFor(sellerIdentityKey), now, undefined, project.version);
+    const itemComparisons = itemEvidence.observationChange?.comparisons ?? [];
+    const priorItemFreshness = itemComparisons.map((entry) => evidenceFreshness(entry.previousObservedAt, now));
+    const previousFreshness: Freshness | undefined = priorItemFreshness.length ? priorItemFreshness.includes("unknown") ? "unknown" : priorItemFreshness.includes("stale") ? "stale" : "recent" : undefined;
+    const rawItemState = itemEvidence.observationChange?.state === "CHANGED" ? "ITEM_CHANGED" as const : itemEvidence.observationChange?.state === "UNCHANGED" ? "ITEM_UNCHANGED" as const : "UNKNOWN" as const;
+    const itemState = itemEvidence.freshness === "unknown" || previousFreshness === "unknown" || itemEvidence.unresolvedSections.length > 0 || itemEvidence.unknownQuantityRowCount > 0 ? "UNKNOWN" as const : rawItemState;
+    const goldNeed: ErpResourceNeed = { stableId: `sell-progress-gold:${order.stableId}`, kind: "GOLD_COPPER", resourceKey: "copper", label: "Seller gold observation", requiredQuantity: 1, sourceIdentityKey: sellerIdentityKey };
+    const goldEvidence = assessErpNeed(goldNeed, snapshotsFor(sellerIdentityKey), now, undefined, project.version);
+    const goldComparison = goldEvidence.observationChange?.comparisons.find((entry) => entry.section === "character gold");
+    const goldPreviousFreshness = goldComparison ? evidenceFreshness(goldComparison.previousObservedAt, now) : undefined;
+    const state: ErpSellObservationReview["state"] = !goldComparison || goldEvidence.freshness === "unknown" || goldPreviousFreshness === "unknown" ? "UNKNOWN" : goldComparison.delta < 0 ? "GOLD_DECREASED" : goldComparison.delta > 0 ? "GOLD_INCREASED" : "GOLD_UNCHANGED";
+    const freshnessValues: Freshness[] = [itemEvidence.freshness, goldEvidence.freshness, ...(previousFreshness ? [previousFreshness] : []), ...(goldPreviousFreshness ? [goldPreviousFreshness] : [])];
+    const freshness: Freshness = freshnessValues.includes("unknown") ? "unknown" : freshnessValues.includes("stale") ? "stale" : "recent";
+    const reason = state === "UNKNOWN" || itemState === "UNKNOWN"
+      ? `Item and gold evidence are assessed separately; ${itemEvidence.reason} ${goldEvidence.reason} A missing, stale, or future-dated side remains UNKNOWN.`
+      : `The assigned seller's ${itemState === "ITEM_CHANGED" ? "item quantity changed" : "item quantity did not change"}; gold ${state === "GOLD_DECREASED" ? "decreased" : state === "GOLD_INCREASED" ? "increased" : "was unchanged"}. These separate observations do not establish a sale, buyer, amount received for this item, or cause.`;
+    return [{ sellerIdentityKey, needId, resourceKey: need.resourceKey, state, itemState, freshness, ...(previousFreshness ? { previousFreshness } : {}), ...(goldPreviousFreshness ? { goldPreviousFreshness } : {}), ...(goldComparison ? { goldComparison } : {}), itemComparisons, interpretation: "CAUSE_UNKNOWN", reason }];
+  });
+}
+
 function applyReservationAssessment(need: ErpResourceNeed, evidence: ErpNeedEvidence, allProjects: readonly ErpProject[], version: WowVersion): ErpNeedEvidence {
   const scope = sourceScope(need);
   if (!scope) return { ...evidence, reservationAssessment: { state: "UNKNOWN", activeQuantity: 0, reason: "No explicit source character or shared-storage owner was selected; roster co-location does not prove ownership or access." } };
@@ -1398,7 +1444,8 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const procurementReview = procurementObservationReview(project, order, snapshotsFor, now);
     const plannedOutputAssessment = assessPlannedCraftOutput(project, order, snapshotsFor, now);
     const craftInputs = craftInputObservationReviews(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), reason };
+    const saleReviews = sellObservationReviews(project, order, snapshotsFor, now);
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(saleReviews.length ? { sellObservationReviews: saleReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

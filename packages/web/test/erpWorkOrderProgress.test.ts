@@ -23,3 +23,13 @@ test("project progress explains player completion without attributing observed i
   assert.match(conflict, /Completion note conflicts with a linked shortfall/);
   assert.match(renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, {})), /Progress reconciliation is unknown/);
 });
+
+test("manual sale presentation separates item and gold observations and keeps sale causality unknown", () => {
+  const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { ...progress, sellObservationReviews: [{ sellerIdentityKey: "classic-era::realm a::crafter", needId: "sale_item", resourceKey: "item:159:variant", state: "GOLD_INCREASED", itemState: "ITEM_CHANGED", freshness: "recent", previousFreshness: "recent", goldComparison: { section: "character gold", previousQuantity: 500, currentQuantity: 700, delta: 200, previousObservedAt: 100, currentObservedAt: 200 }, itemComparisons: [{ section: "bags", previousQuantity: 4, currentQuantity: 2, delta: -2, previousObservedAt: 100, currentObservedAt: 200 }], interpretation: "CAUSE_UNKNOWN", reason: "Item and gold changed independently; no sale is established." }] } }));
+  assert.match(html, /Manual sale observations \(cause unknown\)/);
+  assert.match(html, /item:159:variant/);
+  assert.match(html, /GOLD INCREASED/);
+  assert.match(html, /500 → 700 copper/);
+  assert.match(html, /bags: 4 → 2/);
+  assert.match(html, /Neither change proves a sale/);
+});
