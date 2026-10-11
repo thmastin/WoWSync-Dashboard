@@ -229,21 +229,32 @@ function mergeRecipeDomain(previous: CapturedCharacterDomain | undefined, curren
   const observedAt = current.observedAt;
   const merged: Obj[] = oldRows.map((old) => {
     const fresh = byID.get(scopeKey(old));
-    if (!fresh) return { ...old, evidence: "LAST_SEEN", lastSeenAt: observedAt };
+    if (!fresh) return {
+      ...old,
+      evidence: "LAST_SEEN",
+      lastSeenAt: observedAt,
+      recipes: Array.isArray(old.recipes) ? old.recipes.filter(object).map((recipe) => ({ ...recipe, evidence: "LAST_SEEN", lastSeenAt: observedAt })) : old.recipes,
+    };
     byID.delete(scopeKey(old));
     const freshRecipes = new Map((Array.isArray(fresh.recipes) ? fresh.recipes.filter(object) : []).map((r) => [r.recipeID as number, r]));
     const recipes: Obj[] = (Array.isArray(old.recipes) ? old.recipes.filter(object) : []).map((prior) => {
       const item = freshRecipes.get(prior.recipeID as number);
       if (!item) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
       freshRecipes.delete(prior.recipeID as number);
+      const currentUnknownCandidate = fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && item.learnedState !== "OBSERVED_TRUE" && item.learnedState !== "OBSERVED_FALSE";
       const explicitlyRefreshed = fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE");
-      // UNKNOWN is still fresh candidate evidence when the open panel returned
-      // the recipe but the client could not resolve its learned state.
-      if (fresh.evidence === "OBSERVED" && item.evidence === "UNKNOWN") return item;
+      // GearExport marks an enumerated recipe OBSERVED even when its learned
+      // state cannot be resolved. Preserve that current candidate as UNKNOWN;
+      // it must not be mistaken for an old recipe merely because an earlier
+      // snapshot contained the same ID.
+      if (currentUnknownCandidate || fresh.evidence === "OBSERVED" && item.evidence === "UNKNOWN") return { ...item, evidence: "UNKNOWN" };
       if (!explicitlyRefreshed) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
       return item;
     });
-    for (const item of freshRecipes.values()) recipes.push(fresh.evidence === "OBSERVED" && (item.evidence === "UNKNOWN" || item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE")) ? item : { ...item, evidence: "LAST_SEEN" });
+    for (const item of freshRecipes.values()) {
+      const currentUnknownCandidate = fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && item.learnedState !== "OBSERVED_TRUE" && item.learnedState !== "OBSERVED_FALSE";
+      recipes.push(currentUnknownCandidate ? { ...item, evidence: "UNKNOWN" } : fresh.evidence === "OBSERVED" && (item.evidence === "UNKNOWN" || item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE")) ? item : { ...item, evidence: "LAST_SEEN" });
+    }
     return { ...fresh, recipes };
   });
   merged.push(...byID.values());

@@ -265,15 +265,19 @@ test("fresh Forever UNKNOWN recipe candidates stay UNKNOWN across a snapshot mer
   current.professionRecipes.observedAt = ts;
   current.professionRecipes.data.professions[0].observedAt = ts;
   current.professionRecipes.data.professions[0].recipes = [
-    { recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "LAST_SEEN", skillLineAssociationState: "OBSERVED", skillLineIDs: [164] },
-    { recipeID: 2661, learnedState: "UNKNOWN", evidence: "UNKNOWN", skillLineAssociationState: "OBSERVED", skillLineIDs: [164], schematicState: "UNKNOWN" },
+    // This is the exact GearExport candidate shape: current enumeration is
+    // OBSERVED, while learned state is unresolved. Even a prior known copy
+    // must not turn this current UNKNOWN into historical LAST_SEEN evidence.
+    { recipeID: 2660, learnedState: "UNKNOWN", evidence: "OBSERVED", skillLineAssociationState: "OBSERVED", skillLineIDs: [164], schematicState: "UNKNOWN" },
+    { recipeID: 2661, learnedState: "UNKNOWN", evidence: "OBSERVED", skillLineAssociationState: "OBSERVED", skillLineIDs: [164], schematicState: "UNKNOWN" },
   ];
   const olderState = normalizeCharacterStateSidecar(prior, "forever")!;
   const currentState = normalizeCharacterStateSidecar(current, "forever")!;
   const merged = mergeCharacterState(olderState, currentState)!;
   const recipes = (merged.professionRecipes!.data!.professions as any[])[0].recipes;
-  assert.equal(recipes.find((row: any) => row.recipeID === 2660).evidence, "LAST_SEEN", "old known recipe remains historical when carried forward");
-  assert.equal(recipes.find((row: any) => row.recipeID === 2661).evidence, "UNKNOWN", "freshly enumerated unknown candidate is not mislabeled historical");
+  assert.equal(recipes.find((row: any) => row.recipeID === 2660).evidence, "UNKNOWN", "current unknown candidate overrides an older known observation without claiming it is learned");
+  assert.equal(recipes.find((row: any) => row.recipeID === 2660).learnedState, "UNKNOWN");
+  assert.equal(recipes.find((row: any) => row.recipeID === 2661).evidence, "UNKNOWN", "newly enumerated unknown candidate is not mislabeled historical");
 });
 
 test("profession-scoped recipe merges preserve Engineering through Alchemy and keep failed/empty evidence LAST_SEEN", () => {
@@ -287,6 +291,7 @@ test("profession-scoped recipe merges preserve Engineering through Alchemy and k
   const scopes = switched.professionRecipes!.data!.professions as any[];
   assert.equal(scopes.length, 2);
   assert.equal(scopes.find((row) => row.skillLineID === 2910).evidence, "LAST_SEEN");
+  assert.ok(scopes.find((row) => row.skillLineID === 2910).recipes.every((recipe: any) => recipe.evidence === "LAST_SEEN"), "a missing profession scope makes every nested recipe historical too");
   assert.equal(scopes.find((row) => row.skillLineID === 2906).recipes.find((r: any) => r.recipeID === 1233130).learned, true);
   const empty = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([]) }, "retail");
   const retained = mergeCharacterState(switched, empty)!.professionRecipes!.data!.professions as any[];
