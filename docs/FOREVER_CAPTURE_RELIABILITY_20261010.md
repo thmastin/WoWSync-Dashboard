@@ -25,10 +25,13 @@ This implementation extends the existing Forever observation/read-model pipeline
 | Equipment slot/name | Numeric slot and optional slot label -> Forever canonical presentation map -> UI and observation views | All 19 labels tested; other versions retain their existing labels. No equipability inferred. |
 | Item ID/link/name | Text item reference + structured observation -> item identity/name provenance -> UI/REST/AccountContext/MCP | Preserves ID and exact variant when present. Name is UNKNOWN without client evidence. ID-only name lookups have no fabricated variant. |
 | Item-level/stats/durability/enchantments | Existing raw collector/structured observation | Raw fields can be partial. No stat or empty-slot conclusion becomes an upgrade or recommendation. |
+| Durability/enchantments | No complete authoritative Forever fields added | Not captured as current facts; UNKNOWN. |
 | Bags/free slots | Existing v1 inventory + Forever structured sections | Section completeness/freshness retained; names may be UNKNOWN on client cache miss. |
 | Bank | Open-visit bank section + structured container rows -> observation view | Known scanned rows and known empty scan stay distinct from closed/unobserved bank. No SavedVariables “empty bank” is synthesized. |
 | Professions and skills | Added GetProfessions/GetProfessionInfo observations plus existing parser | Learned profession name/rank/max may be captured; observed absence only applies to a complete section. Live 70338 verification pending. |
 | Spellbook/profession abilities | Added indices from GetProfessions to C_SpellBook traversal | Visible IDs/names retained where returned; ranks, trainer learnability, and complete recipe catalog remain unsupported/UNKNOWN. |
+| Known recipes/smelting | No verified recipe enumeration or conversion collector enabled | UNKNOWN. Spellbook observations do not establish learned recipe coverage, ore-to-bar ratio, skill requirement, or craftability. |
+| Hearthstone/home location | No verified source field in the active collector | Not collected; UNKNOWN, with no inference from item ownership or a prior inn visit. |
 | Trainer services/requirements | Raw evidence section preserved through importer/read model display | Service tuple semantics intentionally not interpreted; profession trainer frame capture must be live-verified. |
 | REST, AccountContext, MCP | Existing shared character and Forever observation projections | Same core observation is reused. Existing parity suites pass; no parallel identity model or DB migration was added. |
 
