@@ -249,6 +249,15 @@ test("Forever recipe sidecar accepts partial enumeration counts with retained an
   assert.equal(scopes.length, 2);
   assert.equal(scopes.find((row) => row.skillLineID === 186).recipes[0].evidence, "LAST_SEEN");
   assert.equal(scopes.find((row) => row.skillLineID === 164).recipes.length, 2);
+  const impossibleRootCount = structuredClone(sidecar);
+  impossibleRootCount.professionRecipes.data.coverage.returnedRecipeCount = 0;
+  assert.equal(normalizeCharacterStateSidecar(impossibleRootCount, "forever"), undefined, "raw root count cannot be smaller than current candidate rows");
+  const impossibleScopeCount = structuredClone(sidecar);
+  impossibleScopeCount.professionRecipes.data.professions[1].coverage.returnedRecipeCount = 0;
+  assert.equal(normalizeCharacterStateSidecar(impossibleScopeCount, "forever"), undefined, "raw profession count cannot be smaller than its current candidate rows");
+  const staleScopeWithFreshRecipe = structuredClone(sidecar);
+  staleScopeWithFreshRecipe.professionRecipes.data.professions[0].recipes[0].evidence = "OBSERVED";
+  assert.equal(normalizeCharacterStateSidecar(staleScopeWithFreshRecipe, "forever"), undefined, "a LAST_SEEN profession cannot contain a current recipe row");
 });
 
 test("fresh Forever UNKNOWN recipe candidates stay UNKNOWN across a snapshot merge", () => {
@@ -263,7 +272,9 @@ test("fresh Forever UNKNOWN recipe candidates stay UNKNOWN across a snapshot mer
   } });
   const current: any = structuredClone(prior);
   current.professionRecipes.observedAt = ts;
+  current.professionRecipes.data.coverage.returnedRecipeCount = 2;
   current.professionRecipes.data.professions[0].observedAt = ts;
+  current.professionRecipes.data.professions[0].coverage.returnedRecipeCount = 2;
   current.professionRecipes.data.professions[0].recipes = [
     // This is the exact GearExport candidate shape: current enumeration is
     // OBSERVED, while learned state is unresolved. Even a prior known copy

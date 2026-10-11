@@ -62,6 +62,7 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
   if (data.formatVersion !== 1 || data.ownerScope !== "CHARACTER" || !Array.isArray(data.professions) || data.professions.length === 0 || !object(data.coverage) || data.coverage.state !== "PARTIAL" || data.coverage.candidateCompleteness !== "UNKNOWN" || !Number.isSafeInteger(data.coverage.returnedRecipeCount) || (data.coverage.returnedRecipeCount as number) < 0) return undefined;
   const professionScopes = new Set<string>();
   const allRecipeIDs = new Set<number>();
+  let currentCandidateCount = 0;
   for (const profession of data.professions) {
     // returnedRecipeCount describes the client's candidate enumeration, not
     // the number of rows stored here. GearExport deliberately retains missing
@@ -74,6 +75,7 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
     if (professionScopes.has(scopeKey)) return undefined;
     professionScopes.add(scopeKey);
     const recipeIDs = new Set<number>();
+    let scopeCandidateCount = 0;
     for (const recipe of profession.recipes) {
       if (!object(recipe) || !positiveID(recipe.recipeID)) return undefined;
       if (recipeIDs.has(recipe.recipeID) || allRecipeIDs.has(recipe.recipeID)) return undefined;
@@ -83,6 +85,8 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
       if (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE" && recipe.learnedState !== "UNKNOWN" && recipe.learnedState !== "NIL_RESULT") return undefined;
       if (recipe.learnedState === "OBSERVED_TRUE" && recipe.learned !== true || recipe.learnedState === "OBSERVED_FALSE" && recipe.learned !== false || (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned !== undefined) return undefined;
       if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN" && recipe.evidence !== "UNKNOWN") return undefined;
+      if (profession.evidence === "LAST_SEEN" && recipe.evidence !== "LAST_SEEN") return undefined;
+      if (profession.evidence === "OBSERVED" && recipe.evidence !== "LAST_SEEN") scopeCandidateCount++;
       if (recipe.skillLineAssociationState !== "OBSERVED" && recipe.skillLineAssociationState !== "UNKNOWN" || recipe.skillLineIDs !== undefined && !Array.isArray(recipe.skillLineIDs)) return undefined;
       if (Array.isArray(recipe.skillLineIDs) && !recipe.skillLineIDs.every(positiveID)) return undefined;
       if (recipe.schematicState !== undefined && recipe.schematicState !== "OBSERVED" && recipe.schematicState !== "UNKNOWN") return undefined;
@@ -117,7 +121,10 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
         }
       }
     }
+    if (scopeCandidateCount > (profession.coverage.returnedRecipeCount as number)) return undefined;
+    currentCandidateCount += scopeCandidateCount;
   }
+  if (currentCandidateCount > (data.coverage.returnedRecipeCount as number)) return undefined;
   // As above, this is the latest API enumeration count. The data array can
   // additionally contain retained LAST_SEEN rows from earlier captures.
   const professionRows = data.professions as Obj[];
