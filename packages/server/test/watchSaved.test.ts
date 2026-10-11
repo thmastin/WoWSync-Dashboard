@@ -213,13 +213,17 @@ test("identical content re-flushed is NOT posted again (every WoW save rewrites 
   await h.settle();
   h.fs.set(FILE, savedVariables([VIREK, record("Ciao", 5)])); // another character saved, but its export is older
   await h.settle();
-  assert.equal(h.calls.length, 1, "no re-POST for an unrelated flush");
-  assert.match(all(h.out), /Same export as the one already sent: nothing to do/);
+  assert.equal(h.calls.length, 2, "a new character record is imported even when its export is older than another character's");
+  assert.match(JSON.parse(h.calls[1].body!).text, /^Name: Ciao$/m);
+  h.fs.set(FILE, savedVariables([VIREK, record("Ciao", 5)]) + "\r\n");
+  await h.settle();
+  assert.equal(h.calls.length, 2, "unchanged per-character exports are not re-posted");
+  assert.match(all(h.out), /Saved character exports are unchanged/);
   const later = record("Virek", 1_790_040_000);
   h.fs.set(FILE, savedVariables([later]));
   await h.settle();
-  assert.equal(h.calls.length, 2);
-  assert.equal(JSON.parse(h.calls[1].body!).text, later.text);
+  assert.equal(h.calls.length, 3);
+  assert.equal(JSON.parse(h.calls[2].body!).text, later.text);
 });
 
 test("a changed structured sidecar is attached even when WoW's saved text export is unchanged", async () => {
@@ -255,19 +259,68 @@ test("a currency read without that character's text export is reported instead o
   assert.match(all(h.out), /Structured read for Other · Cairne has no saved text export to attach/);
 });
 
-test("only the newest export in the file is sent, and an older one never displaces a newer one", async () => {
-  const h = harness(VIREK_SV, ok());
+test("every character's newest export is sent; a later character cannot mask another character's update", async () => {
+  const h = harness(undefined, ok());
   await h.w.tick();
-  const newest = record("Ciao", 1_790_050_000);
-  h.fs.set(FILE, savedVariables([record("Virek", 1_790_010_000), newest, record("Bromrik", 1_790_020_000)]));
+  const ciao = record("Ciao", 1_790_050_000);
+  const bromrik = record("Bromrik", 1_790_050_000);
+  h.fs.set(FILE, savedVariables([record("Virek", 1_790_010_000), ciao, bromrik]));
+  await h.settle();
+  const sentName = (index: number) => JSON.parse(h.calls[index].body!).text.match(/^Name: (.+)$/m)?.[1];
+  assert.deepEqual(h.calls.map((_, index) => sentName(index)), ["Virek", "Bromrik", "Ciao"], "each saved character is imported in deterministic timestamp order");
+
+  // Virek's new export is older than Ciao's existing export, but newer than Virek's own acknowledged export.
+  h.fs.set(FILE, savedVariables([record("Virek", 1_790_040_000), ciao, bromrik]));
+  await h.settle();
+  assert.equal(h.calls.length, 4);
+  assert.equal(sentName(3), "Virek", "per-character freshness prevents another character from masking this update");
+
+  h.fs.set(FILE, savedVariables([record("Virek", 1_790_030_000), ciao, bromrik]));
+  await h.settle();
+  assert.equal(h.calls.length, 4, "an older export for the same character is not sent");
+  assert.match(all(h.out), /Older Virek export .* is behind its acknowledged export/);
+});
+
+test("same name and realm records collapse to their newest export, while another realm stays distinct", async () => {
+  const h = harness(undefined, ok());
+  await h.w.tick();
+  const oldHallo = record("Hallo", 1_790_010_000, { guid: "Player-OLD", spec: { realm: "Classic Beta PvP 2" } });
+  const newHallo = record("Hallo", 1_790_020_000, { guid: "Player-NEW", spec: { realm: "Classic Beta PvP 2" } });
+  const otherRealm = record("Hallo", 1_790_030_000, { guid: "Player-OTHER", spec: { realm: "Classic Beta PvE" } });
+  h.fs.set(FILE, savedVariables([oldHallo, newHallo, otherRealm]));
+  await h.settle();
+  const sent = h.calls.map((call) => JSON.parse(call.body!).text);
+  assert.equal(sent.length, 2);
+  assert.match(sent[0], /^Generated: 1790020000$/m);
+  assert.match(sent[0], /^Realm: Classic Beta PvP 2$/m);
+  assert.match(sent[1], /^Realm: Classic Beta PvE$/m);
+});
+
+test("same-identity same-time conflicts are withheld without blocking other characters", async () => {
+  const h = harness(undefined, ok());
+  await h.w.tick();
+  const first = record("Collision", 1_790_010_000, { guid: "Player-CONFLICT-A" });
+  const conflicting = { ...first, guid: "Player-CONFLICT-B", text: first.text!.replace("MoneyCopper: ?", "MoneyCopper: 1") };
+  const valid = record("Good", 1_790_020_000);
+  h.fs.set(FILE, savedVariables([first, conflicting, valid]));
   await h.settle();
   assert.equal(h.calls.length, 1);
-  assert.equal(JSON.parse(h.calls[0].body!).text, newest.text, "the newest of three characters");
-  // The file later holds only something older than what was already sent (e.g. the newest character's record is gone).
-  h.fs.set(FILE, savedVariables([record("Virek", 1_790_010_000)]));
+  assert.match(JSON.parse(h.calls[0].body!).text, /^Name: Good$/m);
+  assert.match(all(h.err), /Collision .*conflicting records have the same character identity and generation time/);
+});
+
+test("an invalid character export does not prevent consistent characters in the same file from importing", async () => {
+  const h = harness(undefined, ok());
+  await h.w.tick();
+  const invalidBase = record("Unsupported", 1_790_050_000);
+  const invalid = { ...invalidBase, text: invalidBase.text!.replace("Faction: ?", "Race: Human\nFaction: ?") };
+  const valid = record("Valid", 1_790_040_000);
+  h.fs.set(FILE, savedVariables([invalid, valid]));
   await h.settle();
-  assert.equal(h.calls.length, 1, "an older export is not sent after a newer one");
-  assert.match(all(h.out), /Older than the export already sent/);
+  assert.equal(h.calls.length, 1);
+  assert.match(JSON.parse(h.calls[0].body!).text, /^Name: Valid$/m);
+  assert.match(all(h.err), /Unsupported .*Dashboard would reject this export/);
+  assert.match(all(h.out), /Valid .*export generated/);
 });
 
 test("selectNewestExport: none when no record has text; refuses equal times with different text; equal text is fine", () => {
@@ -278,7 +331,7 @@ test("selectNewestExport: none when no record has text; refuses equal times with
   assert.equal(selectNewestExport([rec("A", 5, "x"), rec("B", 5, "x")])!.text, "x");
 });
 
-test("a file with no saved export, or an export the Dashboard would reject or that disagrees with its record, sends nothing", async () => {
+test("a file with no saved export or only inconsistent exports sends nothing", async () => {
   const h = harness(VIREK_SV);
   await h.w.tick();
   h.fs.set(FILE, savedVariables([{ guid: "Player-1-FRESH", name: "Fresh", realm: "Cairne" }]));
@@ -290,9 +343,6 @@ test("a file with no saved export, or an export the Dashboard would reject or th
   h.fs.set(FILE, savedVariables([{ ...record("Virek", 100), generatedAt: 999 }]));
   await h.settle();
   assert.match(all(h.err), /WoW saved generatedAt 999 but the export text says Generated: 100/);
-  h.fs.set(FILE, savedVariables([record("Ciao", 7), { ...record("Virek", 7), text: exportFor("Virek", 7, { level: 60 }) }]));
-  await h.settle();
-  assert.match(all(h.err), /refusing to guess which is newest/);
   assert.equal(h.calls.length, 0);
 });
 
@@ -311,13 +361,14 @@ test("malicious SavedVariables content is refused as not-data, never executed", 
   delete g.__watchPwned;
 });
 
-test("what it reports is what it knows: when WoW last wrote the file and when the newest export was generated, never 'synced at'", async () => {
+test("what it reports is what it knows: SavedVariables mtime and each export timestamp, never 'synced at'", async () => {
   const h = harness(VIREK_SV, ok());
   await h.w.tick();
   h.fs.set(FILE, VIREK_SV + " ");
   await h.settle();
   const text = all(h.out);
-  assert.match(text, /SavedVariables last written \d{4}-\d\d-\d\dT[\d:]+Z; newest export in it: Virek · Cairne, generated 2026-09-21T20:32:19Z/);
+  assert.match(text, /SavedVariables last written .*checking 1 saved character export\(s\)/);
+  assert.match(text, /Virek .*export generated 2026-09-21T20:32:19Z/);
   assert.doesNotMatch(text, /synced/i);
   assert.doesNotMatch(text, /Player-/, "a character GUID is never printed");
 });
@@ -439,13 +490,14 @@ function runDeps(fs: WatchFs, fetchImpl?: (call: Call) => Response | Promise<Res
 }
 const run = (argv: string[], d: ReturnType<typeof runDeps>) => runWatchSaved(argv, d.deps, new AbortController().signal);
 
-test("--once imports the newest saved export after the file has been stable, then exits 0", async () => {
+test("--once imports every saved character export after the file has been stable, then exits 0", async () => {
   const file = realFile(savedVariables([record("Bromrik", 1_790_010_000), VIREK]));
   const d = runDeps(nodeFs, ok());
   assert.equal(await run(["--file", file, "--once"], d), 0);
-  assert.equal(d.calls.length, 1);
-  assert.equal(JSON.parse(d.calls[0].body!).text, VIREK.text);
-  assert.match(all(d.out), /importing the newest saved export once/);
+  assert.equal(d.calls.length, 2);
+  const names = d.calls.map((call) => JSON.parse(call.body!).text.match(/^Name: (.+)$/m)?.[1]);
+  assert.deepEqual(names, ["Bromrik", "Virek"]);
+  assert.match(all(d.out), /checking all saved character exports once/);
   assert.match(all(d.out), /Result: imported as a new snapshot/);
 });
 
@@ -518,7 +570,7 @@ test("several accounts or products are ALL watched (each file independent); one 
   assert.match(all(one.out), /Watching .*GearExport\.lua/);
 });
 
-test("persistent service waits for new product/account files and catches up each latest export", async () => {
+test("persistent service waits for new product/account files and catches up each latest-per-character export", async () => {
   const wow = join(root, `service-wow-${counter++}`);
   const retail = join(wow, "_retail_", "WTF", "Account", "A1", "SavedVariables", "GearExport.lua");
   const era = join(wow, "_classic_era_", "WTF", "Account", "A2", "SavedVariables", "GearExport.lua");
@@ -760,7 +812,7 @@ test("discoverWatchTargets returns every GearExport.lua under an install root", 
   assert.deepEqual(found.map((f) => f.path).sort(), files.sort());
 });
 
-test("two product files change independently: each POSTs its own export (lastSent is per-file)", async () => {
+test("two product files change independently: each watcher keeps its own per-character cursor", async () => {
   const FILE_A = "/wow/_retail_/WTF/Account/A1/SavedVariables/GearExport.lua";
   const FILE_B = "/wow/_anniversary_/WTF/Account/A1/SavedVariables/GearExport.lua";
   const fs = new FakeFs();

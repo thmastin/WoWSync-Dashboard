@@ -37,6 +37,30 @@ test("Forever 70338 surname metadata is preserved only for the verified build pr
   assert.throws(() => parseWowSyncExport(unknownBuild), /70291 or 70338 profile/);
 });
 
+test("Forever Race line is consumed for build 70338 without changing the older parser's data contract", () => {
+  const parsed = parseWowSyncExport(buildWowSyncExport({ generatedAt: 1_791_690_603, character: {
+    name: "Hallo", realm: "Classic Beta PvP 2", class: "Hunter", level: 12, race: "Dwarf", faction: "Alliance",
+    moneyCopper: 1598, xp: 9018, xpMax: 10100,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }));
+  assert.equal(parsed.character.name, "Hallo");
+  assert.equal(parsed.character.faction, "Alliance", "the Race line must not shift following fields");
+  assert.equal(parsed.character.moneyCopper, 1598);
+  assert.equal(parsed.character.xp, 9018);
+  assert.equal(parsed.character.xpMax, 10100);
+  assert.equal("race" in parsed.character, false, "Race presentation remains in its separate release");
+
+  const unknownBuild = buildWowSyncExport({ character: {
+    name: "Future", race: "Dwarf", realm: "TestRealm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }).replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
+  assert.throws(() => parseWowSyncExport(unknownBuild), /Race is only accepted for the verified Forever/);
+
+  const retailRace = buildWowSyncExport({ character: {
+    name: "Retail", race: "Human", clientFamily: "Retail", clientVersion: "12.0.0", clientBuild: "70000", interface: "120000",
+  } });
+  assert.throws(() => parseWowSyncExport(retailRace), /Race is only accepted for the verified Forever/);
+});
+
 test("parses all eight sections present and labeled correctly", () => {
   const raw = buildWowSyncExport();
   const snapshot = parseWowSyncExport(raw);

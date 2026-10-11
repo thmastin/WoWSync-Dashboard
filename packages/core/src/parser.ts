@@ -171,6 +171,11 @@ function parseCharacter(lines: string[]): CharacterSection {
   const realm = fieldValue(get("Realm: "));
   const cls = fieldValue(get("Class: "));
   const level = fieldNumber(get("Level: "));
+  // Forever build 70338 added Race between Level and Faction. This
+  // compatibility branch consumes the line so older DEV releases can ingest
+  // the rest of the export; race is intentionally not exposed by this parser
+  // revision. The separate Race presentation release remains independent.
+  const raceLine = get("Race: ", false);
   const faction = fieldValue(get("Faction: "));
   const moneyCopper = fieldNumber(get("MoneyCopper: "));
   // PlayedSeconds/LevelPlayedSeconds were added to the schema after v1's
@@ -198,6 +203,10 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
+  const verifiedForeverProfile = clientFamily === "Forever" && clientVersion === "1.60.1" && ["70291", "70338"].includes(clientBuild ?? "") && iface === "16001";
+  if (raceLine !== undefined && !verifiedForeverProfile) {
+    fail("Race is only accepted for the verified Forever 1.60.1 build 70291 or 70338 profile");
+  }
   if (surname !== undefined && (clientFamily !== "Forever" || clientVersion !== "1.60.1" || !["70291", "70338"].includes(clientBuild ?? "") || iface !== "16001")) {
     fail("Surname is only supported for the verified Forever 1.60.1 build 70291 or 70338 profile");
   }

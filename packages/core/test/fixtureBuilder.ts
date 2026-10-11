@@ -99,6 +99,7 @@ export interface FixtureOptions {
     realm?: string;
     class?: string;
     level?: number;
+    race?: string;
     faction?: string;
     moneyCopper?: number;
     playedSeconds?: number;
@@ -231,6 +232,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("Realm", c.realm ?? "TestRealm"));
       out.push(field("Class", c.class ?? "Warrior"));
       out.push(field("Level", c.level ?? 1));
+      if (c.race !== undefined) out.push(field("Race", c.race));
       out.push(field("Faction", c.faction ?? "Horde"));
       out.push(field("MoneyCopper", c.moneyCopper));
       out.push(field("PlayedSeconds", c.playedSeconds));

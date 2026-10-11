@@ -1,5 +1,5 @@
-// The foreground watcher (ROADMAP #8, slice 1): notice that WoW has saved GearExport's SavedVariables file, and send the
-// newest persisted export through the Dashboard's normal `POST /api/import`. Design and rationale:
+// The foreground watcher (ROADMAP #8, slice 1) detects stable SavedVariables writes and sends each character's newest
+// persisted export through the same bridge code `import:saved` uses. Design and rationale:
 // docs/DESKTOP_COMPANION_FEASIBILITY.md. It is the developer bridge (importSaved.ts) run by a loop, and nothing more:
 //
 //  - It has NO importer of its own. Reading the file (`parseSavedExports`), describing/validating the text (`describeExport`,
@@ -50,8 +50,8 @@ export const RETRY_MAX_MS = 60_000;
 // --- selecting what to send ---------------------------------------------------------------------------
 
 /**
- * The single export to send: the NEWEST `latestExport` (by `generatedAt`) across every saved character, or undefined when no
- * record has one. Two records generated at the same time with different text are refused rather than guessed between.
+ * Select one globally newest record only for callers that explicitly need a single export. The watcher
+ * imports each canonical character's newest record independently and does not use this helper.
  */
 export function selectNewestExport(records: readonly SavedExport[]): SavedExport | undefined {
   const withText = records.filter((r) => r.text !== undefined);
@@ -84,11 +84,11 @@ export interface WatchConfig {
   file: string;
   /** The Dashboard's origin (already checked to be loopback). */
   origin: string;
-  /** `--once`: one catch-up import of the newest saved export, then finish. Otherwise only changes after start are acted on. */
+  /** `--once`: catch up every character export currently saved in each file, then finish. */
   once: boolean;
   pollMs: number;
   quietMs: number;
-  /** Import the latest persisted export when a persistent service attaches to a file. */
+  /** Import each latest-per-character persisted export when a persistent service attaches to a file. */
   initialImport?: boolean;
 }
 
@@ -143,7 +143,11 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
   let readFailures = 0;
   let sendFailures = 0;
   let retryAt = 0;
-  let lastSent: Sent | undefined; // in memory only: a restart re-sends once and the server no-ops
+  // SavedVariables contains the latest export for several characters. Keep
+  // an acknowledgement cursor per canonical character identity so a newer
+  // export for another character cannot hide this character's update.
+  // A process restart replays current records once; snapshot imports are idempotent.
+  const lastSentByIdentity = new Map<string, Sent>();
   let finished = false;
   let exitCode = 0;
 
@@ -178,73 +182,111 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
     }
 
     let records: SavedExport[];
-    let chosen: SavedExport | undefined;
     try {
       records = parseSavedExports(source, config.file);
-      chosen = selectNewestExport(records);
     } catch (e) {
       if (e instanceof BridgeError) return stop(e.message);
       throw e;
     }
-    if (chosen === undefined) {
+    const withText = records.filter((record) => record.text !== undefined);
+    if (withText.length === 0) {
       out("The file has no saved export (no latestExport.text on any character): nothing to send. Run /wowsync, then /reload or log out.");
       return finish(1);
     }
 
-    const text = chosen.text!;
-    const structuredSha256 = sidecarPayloadHash({ currencies: chosen.currencies, characterState: chosen.characterState, equipmentObservation: chosen.equipmentObservation });
-    const summary = describeExport(text);
-    const problems = consistencyProblems(chosen, summary, { character: summary.name ?? chosen.name ?? "" });
-    if (problems.length > 0) return stop(`Not sent: the newest saved export is not consistent.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
-
-    const generatedAt = summary.generatedAt ?? chosen.generatedAt ?? 0;
     const product = watchTargetLabel(config.file);
-    deps.status?.({ type: "export", at: new Date().toISOString(), file: config.file, product, character: summary.name, realm: summary.realm, version: summary.version });
-    // What is actually known: when WoW last wrote the file, and when the newest export in it was generated. Not "no export since".
-    out(`SavedVariables last written ${iso(Math.floor(mtimeMs / 1000))}; newest export in it: ${summary.name ?? "?"} · ${summary.realm ?? "?"}, generated ${iso(generatedAt)}.`);
-    if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256 && lastSent.structuredSha256 === structuredSha256) {
-      out("  Same export as the one already sent: nothing to do.");
-      return finish(0);
-    }
-    if (lastSent !== undefined && generatedAt < lastSent.generatedAt) {
-      out(`  Older than the export already sent (${iso(lastSent.generatedAt)}): not sent.`);
-      return finish(0);
-    }
-
-    if (lastSent !== undefined && lastSent.generatedAt === generatedAt && lastSent.sha256 === summary.sha256) {
-      out("  Same text with changed structured SavedVariables state: attaching the newer sidecar observations.");
-    }
-    const stranded = records.filter((record) => record !== chosen && (record.currencies !== undefined || record.characterState !== undefined) && record.text === undefined);
+    const stranded = records.filter((record) => record.text === undefined && (record.currencies !== undefined || record.characterState !== undefined));
     for (const record of stranded) {
       out(`  Structured read for ${record.name ?? "?"} · ${record.realm ?? "?"} has no saved text export to attach to; run /wowsync on that character, then /reload or log out.`);
     }
-    out(`  Sending ${summary.bytes} text bytes plus structured SavedVariables state (SHA-256 ${summary.sha256}) to ${deps.captureTransport ? `${config.origin}/api/captures` : importEndpoint(config.origin)} ...`);
-    try {
-      if (deps.captureTransport) {
-        const capture = await deps.captureTransport.send(text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
-        deps.status?.({ type: "acknowledgement", at: new Date().toISOString(), file: config.file, product, captureId: capture.captureId, character: summary.name, realm: summary.realm, version: summary.version });
-        out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
-        lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
-        sendFailures = 0;
-        return finish(0);
+
+    const invalid: string[] = [];
+    const byIdentity = new Map<string, { record: SavedExport; text: string; summary: ReturnType<typeof describeExport>; structuredSha256: string; generatedAt: number; identityKey: string }>();
+    const conflictingIdentities = new Set<string>();
+    for (const record of withText) {
+      const text = record.text!;
+      const summary = describeExport(text);
+      const problems = consistencyProblems(record, summary, { character: summary.name ?? record.name ?? "" });
+      if (problems.length > 0) {
+        invalid.push(`${record.name ?? "?"} · ${record.realm ?? "?"}: ${problems.join("; ")}`);
+        continue;
       }
-      const result = await postImport(deps, config.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation);
-      for (const line of describeImportResult(result, summary.sha256)) out(`  ${line}`);
-      lastSent = { generatedAt, sha256: summary.sha256, structuredSha256 };
-      sendFailures = 0;
-      return finish(0);
-    } catch (e) {
-      if (e instanceof ImportPostError && e.failure === "unreachable" && !config.once) {
-        // The file is the source of truth, so nothing is lost: retry with capped backoff until the Dashboard is back.
-        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** sendFailures++);
-        retryAt = now + delay;
-        deps.status?.({ type: "error", at: new Date().toISOString(), message: e.message });
-        err(`${e.message}\n  Will retry in ${Math.round(delay / 1000)}s.`);
-        return;
+      const identityKey = summary.identityKey ?? `${summary.version ?? "unknown"}::${record.realm ?? "?"}::${record.name ?? "?"}`;
+      const structuredSha256 = sidecarPayloadHash({ currencies: record.currencies, characterState: record.characterState, equipmentObservation: record.equipmentObservation });
+      const generatedAt = summary.generatedAt ?? record.generatedAt ?? 0;
+      if (conflictingIdentities.has(identityKey)) continue;
+      const existing = byIdentity.get(identityKey);
+      if (existing && generatedAt === existing.generatedAt) {
+        if (summary.sha256 !== existing.summary.sha256 || structuredSha256 !== existing.structuredSha256) {
+          invalid.push(`${record.name ?? "?"} - ${record.realm ?? "?"}: conflicting records have the same character identity and generation time.`);
+          byIdentity.delete(identityKey);
+          conflictingIdentities.add(identityKey);
+        }
+        continue;
       }
-      if (e instanceof BridgeError) return stop(e.message); // the Dashboard answered and refused: the same text would be refused again
-      throw e;
+      if (existing && generatedAt < existing.generatedAt) continue;
+      byIdentity.set(identityKey, { record, text, summary, structuredSha256, generatedAt, identityKey });
     }
+
+    const pendingExports: Array<{ record: SavedExport; text: string; summary: ReturnType<typeof describeExport>; structuredSha256: string; generatedAt: number; identityKey: string; previous?: Sent }> = [];
+    for (const item of byIdentity.values()) {
+      const previous = lastSentByIdentity.get(item.identityKey);
+      if (previous && previous.generatedAt === item.generatedAt && previous.sha256 === item.summary.sha256 && previous.structuredSha256 === item.structuredSha256) continue;
+      if (previous && item.generatedAt < previous.generatedAt) {
+        out(`  Older ${item.record.name ?? "?"} export (${iso(item.generatedAt)}) is behind its acknowledged export (${iso(previous.generatedAt)}); not sent.`);
+        continue;
+      }
+      pendingExports.push({ ...item, previous });
+    }
+
+    if (invalid.length > 0) {
+      const message = `Some saved exports were not sent because they are inconsistent:\n${invalid.map((item) => `  - ${item}`).join("\n")}`;
+      deps.status?.({ type: "error", at: new Date().toISOString(), message });
+      err(message);
+    }
+    pendingExports.sort((a, b) => a.generatedAt - b.generatedAt || a.identityKey.localeCompare(b.identityKey));
+    if (pendingExports.length === 0) {
+      if (invalid.length === withText.length) return stop("No saved character export passed consistency validation; nothing was sent.");
+      out("Saved character exports are unchanged; nothing to send.");
+      return finish(invalid.length > 0 ? 1 : 0);
+    }
+    out(`SavedVariables last written ${iso(Math.floor(mtimeMs / 1000))}; checking ${withText.length} saved character export(s).`);
+
+    for (const item of pendingExports) {
+      const { record, text, summary, structuredSha256, generatedAt, identityKey, previous } = item;
+      const { sha256: exportSha } = summary;
+      const fields = { file: config.file, product, character: summary.name, realm: summary.realm, version: summary.version };
+      deps.status?.({ type: "export", at: new Date().toISOString(), ...fields });
+      out(`  ${summary.name ?? "?"} · ${summary.realm ?? "?"}: export generated ${iso(generatedAt)}.`);
+      if (previous && previous.generatedAt === generatedAt && previous.sha256 === exportSha) {
+        out("  Same text with changed structured SavedVariables state: attaching the newer sidecar observations.");
+      }
+      out(`  Sending ${summary.bytes} text bytes plus structured SavedVariables state (SHA-256 ${exportSha}) to ${deps.captureTransport ? `${config.origin}/api/captures` : importEndpoint(config.origin)} ...`);
+      try {
+        if (deps.captureTransport) {
+          const capture = await deps.captureTransport.send(text, record.currencies, record.characterState, record.equipmentObservation);
+          deps.status?.({ type: "acknowledgement", at: new Date().toISOString(), ...fields, captureId: capture.captureId });
+          out(`  Receiver acknowledged capture ${capture.captureId} for ${capture.target}; durable outbox copy removed.`);
+        } else {
+          const result = await postImport(deps, config.origin, text, record.currencies, record.characterState, record.equipmentObservation);
+          for (const line of describeImportResult(result, exportSha)) out(`  ${line}`);
+        }
+        lastSentByIdentity.set(identityKey, { generatedAt, sha256: exportSha, structuredSha256 });
+        sendFailures = 0;
+      } catch (e) {
+        if (e instanceof ImportPostError && e.failure === "unreachable" && !config.once) {
+          // The source file remains authoritative; retry the unacknowledged character exports with capped backoff.
+          const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** sendFailures++);
+          retryAt = now + delay;
+          deps.status?.({ type: "error", at: new Date().toISOString(), message: e.message });
+          err(`${e.message}\n  Will retry in ${Math.round(delay / 1000)}s.`);
+          return;
+        }
+        if (e instanceof BridgeError) return stop(e.message); // The receiver refused this export; retry only after source change/restart.
+        throw e;
+      }
+    }
+    return finish(invalid.length > 0 ? 1 : 0);
   }
 
   return {
@@ -279,10 +321,10 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
         if (config.once) {
           if (next === undefined) return stop("The SavedVariables file cannot be read.");
           pending = true;
-          out("Waiting for the file to be stable, then importing the newest saved export once.");
+          out("Waiting for the file to be stable, then checking all saved character exports once.");
         } else if (config.initialImport && next !== undefined) {
           pending = true;
-          out("Persistent capture attached to this SavedVariables file; checking its latest persisted export.");
+          out("Persistent capture attached to this SavedVariables file; checking all latest-per-character exports.");
         }
       } else if (next !== signature) {
         signature = next;
@@ -312,7 +354,7 @@ export function createWatcher(config: WatchConfig, deps: WatchDeps): Watcher {
 
 export const USAGE = `Usage: npm run watch:saved -- [options]
 
-Watches one or more GearExport SavedVariables files and, when WoW saves them, sends each file's newest saved export to the running Dashboard
+Watches one or more GearExport SavedVariables files and, when WoW saves them, sends each changed character export to the running Dashboard
 through the normal POST /api/import. Foreground; stop it with Ctrl+C. Read-only: it never writes to SavedVariables or WoW,
 and cannot make WoW save.
 
@@ -327,8 +369,8 @@ WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /w
   --url <url>            Receiver URL (default: from PORT / WOWSYNC_HOST, else http://127.0.0.1:4173).
   --capture-target <id>  Send to the authenticated capture receiver (for example DEV); requires token and spool directory.
   --spool-dir <path>     Absolute durable outbox path (or WOWSYNC_CAPTURE_SPOOL_DIR).
-  --service              Persistent mode: discover new files and catch up the latest saved export after startup.
-  --once                 Import the newest saved export from each watched file now, then exit (a catch-up). Without it, each file's
+  --service              Persistent mode: discover new files and catch up each character's latest saved export after startup.
+  --once                 Import changed saved character exports from each watched file now, then exit (a catch-up). Without it, each file's
                          state at startup is ignored and only later saves are imported.
   --help                 This text.
 
@@ -430,7 +472,7 @@ export async function runWatchSaved(argv: readonly string[], deps: RunDeps, sign
     deps.out(`${captureTarget ? `Capture receiver (${captureTarget})` : "Dashboard"}:  ${captureTarget ? `${target.origin}/api/captures` : importEndpoint(target.origin)}`);
     deps.out(`Polling every ${pollMs / 1000}s; a change is read once the file has been unchanged for ${quietMs / 1000}s.`);
     if (!options.once && !options.service) {
-      deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. Each file's current contents are ignored (use --once to import the newest saved export now).");
+      deps.out("WoW saves SavedVariables at /reload, logout or exit, not at /wowsync: an export arrives then. Each file's current contents are ignored (use --once to import saved character exports now).");
     }
 
     const watchers = new Map<string, Watcher>();
