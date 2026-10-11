@@ -48,6 +48,15 @@ Where a link points at another repository, the path is given relative to that re
 
 Work happening now.
 
+- [x] **Forever co-pilot data foundation Phase 1 audit and MCP recipe-contract repair.** The full
+  Retail/Forever capability and gameplay-question inventory is in
+  [`FOREVER_COPILOT_CAPABILITY_AUDIT.md`](FOREVER_COPILOT_CAPABILITY_AUDIT.md). The accepted Rordin
+  build 70338 recipe evidence remains fixed; `get_character_professions` now clearly advertises its
+  Forever support, partial candidate coverage, and evidence limits. Source/tests only; not deployed.
+- [ ] **Next capture proposal: Forever quest/objective observations.** Version-correct API availability,
+  exact quest-log semantics, hydration and safe capture must be established first. This requires
+  explicit GearExport authorization; no addon change is authorized by the current mission.
+
 - [x] **Forever completion pass (GearExport): complete.** GearExport branch
   `feature/retail-bank-support-implementation`, commit
   `791cb9d33d9b979441550858a6708c61a4d4dcdd` (`feat: complete live-validated Forever support`).

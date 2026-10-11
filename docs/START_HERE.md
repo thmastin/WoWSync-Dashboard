@@ -4,6 +4,8 @@ This is the fixed onboarding entry point for WoWSync Dashboard and Azeroth ERP. 
 it routes you to the right document for whatever you're trying to do.
 
 For the Retail gear-allocation capability, start with [`RETAIL_GEAR_ALLOCATION.md`](RETAIL_GEAR_ALLOCATION.md).
+For a version-by-version view of co-pilot data coverage and next investments, see
+[`FOREVER_COPILOT_CAPABILITY_AUDIT.md`](FOREVER_COPILOT_CAPABILITY_AUDIT.md).
 
 ## What WoWSync is, in plain language
 

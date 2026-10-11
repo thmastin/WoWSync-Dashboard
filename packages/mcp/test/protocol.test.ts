@@ -199,6 +199,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
+    const professionsTool = tools.find((tool) => tool.name === "get_character_professions")!;
+    assert.match(professionsTool.description ?? "", /Retail learned-state observations and Forever 1\.60\.1 build 70338 recipe observations are supported/);
+    assert.match(professionsTool.description ?? "", /not a complete recipe catalogue/);
+    assert.match(professionsTool.description ?? "", /Never apply Retail gameplay semantics to Forever/);
+    assert.doesNotMatch(professionsTool.description ?? "", /Retail-only|only.*Retail/i);
     assert.equal(toolNames.includes("update_erp_project_plan"), false, "player-authored writes remain absent from the default read-only profile");
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));

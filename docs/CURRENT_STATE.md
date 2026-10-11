@@ -1,5 +1,24 @@
 # Current WoWSync ERP state — Operations platform source checkpoint (2026-10-11)
 
+## Co-pilot data foundation audit (2026-10-11)
+
+The accepted Forever recipe milestone remains the fixed baseline: DEV is at `2d8dc391715576e88adc27923d7d357d09127950`,
+and a connected read of Rordin Longbraid returns real snapshot 178 / generation 1791754559,
+Mining 3/75, Blacksmithing 1/75, and five observed learned Blacksmithing recipe rows. The new
+[`FOREVER_COPILOT_CAPABILITY_AUDIT.md`](FOREVER_COPILOT_CAPABILITY_AUDIT.md) records the Retail / Forever
+matrix, limits, gameplay question readiness, priorities, and the read-only GearExport proposal.
+This mission's first Dashboard-only batch makes the registered `get_character_professions` MCP
+description explicit about Forever 70338 evidence, partial coverage, and separate provenance; a
+protocol regression tests the published descriptor. `npm test` passes (Core 868, MCP 9, Server 274
+passed / 1 skipped, Web 317), typecheck and web production build pass, and all 24 synthetic browser
+acceptances pass. A focused independent audit review found no material issues; its one wording note
+was addressed. No schema change or deployment occurred. The connected MCP metadata currently
+advertises an older Retail-only description; this source fix will require an approved Dashboard DEV
+deployment before the external schema refreshes. No canonical truth checkout was available on this
+Omarchy host; this committed Dashboard checkpoint is the durable project record until it can be
+synchronized. Next capability priority is quest/objective evidence, which requires explicit GearExport
+authorization before addon changes. No Rordin project or recipe data was modified.
+
 The active ERP development branch is `feature/forever-gear-observation`; implementation commit `ea4e445af975cbdbd9f0e2549d55e22f04146129` is followed by documentation-only checkpoint commits. Fresh Operations conversations can start with bounded, explicit-version `get_erp_operations_context`, then inspect one project with `get_erp_project`; both expose evidence and freshness without merging versions. Opt-in loopback MCP writes now require idempotency and rationale for generic project creation, persist rationale in existing event JSON, support revision-checked plan/status edits, and mark every persistent write for host confirmation. No SQLite/schema migration was added. Full validation passed: Core 862, MCP 9, Server 272 + 2 Windows skips, Web 316, typecheck/build, and 24/24 synthetic browser acceptances. Focused independent review found no code blocker, while confirming host confirmation hints are advisory and no server approval token exists. DEV remains `43a94ef820d4000e1de99ef2824f09979e6b405a`; deployment preparation was unavailable on this Windows host (`wowsync-dev-deploy` missing, no WSL distribution). The Secure MCP Tunnel remains read-only and untouched. See `ERP_OPERATIONS_PLATFORM_20261011.md`.
 
 ## Historical checkpoints
