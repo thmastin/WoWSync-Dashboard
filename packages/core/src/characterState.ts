@@ -237,10 +237,13 @@ function mergeRecipeDomain(previous: CapturedCharacterDomain | undefined, curren
       if (!item) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
       freshRecipes.delete(prior.recipeID as number);
       const explicitlyRefreshed = fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE");
+      // UNKNOWN is still fresh candidate evidence when the open panel returned
+      // the recipe but the client could not resolve its learned state.
+      if (fresh.evidence === "OBSERVED" && item.evidence === "UNKNOWN") return item;
       if (!explicitlyRefreshed) return { ...prior, evidence: "LAST_SEEN", lastSeenAt: observedAt };
       return item;
     });
-    for (const item of freshRecipes.values()) recipes.push(fresh.evidence === "OBSERVED" && item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE") ? item : { ...item, evidence: "LAST_SEEN" });
+    for (const item of freshRecipes.values()) recipes.push(fresh.evidence === "OBSERVED" && (item.evidence === "UNKNOWN" || item.evidence === "OBSERVED" && (item.learnedState === "OBSERVED_TRUE" || item.learnedState === "OBSERVED_FALSE")) ? item : { ...item, evidence: "LAST_SEEN" });
     return { ...fresh, recipes };
   });
   merged.push(...byID.values());

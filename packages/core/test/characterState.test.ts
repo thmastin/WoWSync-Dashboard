@@ -251,6 +251,31 @@ test("Forever recipe sidecar accepts partial enumeration counts with retained an
   assert.equal(scopes.find((row) => row.skillLineID === 164).recipes.length, 2);
 });
 
+test("fresh Forever UNKNOWN recipe candidates stay UNKNOWN across a snapshot merge", () => {
+  const prior = structuredClone({ formatVersion: 1, clientFamily: "Forever", professionRecipes: {
+    observedAt: ts - 10, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER",
+      coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+      professions: [{ baseSkillLineID: 164, skillLineID: 164, parentProfessionID: 164, professionName: "Blacksmithing", name: "Blacksmithing", evidence: "OBSERVED", observedAt: ts - 10,
+        client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+        coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+        recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", skillLineAssociationState: "OBSERVED", skillLineIDs: [164] }] }],
+    },
+  } });
+  const current: any = structuredClone(prior);
+  current.professionRecipes.observedAt = ts;
+  current.professionRecipes.data.professions[0].observedAt = ts;
+  current.professionRecipes.data.professions[0].recipes = [
+    { recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "LAST_SEEN", skillLineAssociationState: "OBSERVED", skillLineIDs: [164] },
+    { recipeID: 2661, learnedState: "UNKNOWN", evidence: "UNKNOWN", skillLineAssociationState: "OBSERVED", skillLineIDs: [164], schematicState: "UNKNOWN" },
+  ];
+  const olderState = normalizeCharacterStateSidecar(prior, "forever")!;
+  const currentState = normalizeCharacterStateSidecar(current, "forever")!;
+  const merged = mergeCharacterState(olderState, currentState)!;
+  const recipes = (merged.professionRecipes!.data!.professions as any[])[0].recipes;
+  assert.equal(recipes.find((row: any) => row.recipeID === 2660).evidence, "LAST_SEEN", "old known recipe remains historical when carried forward");
+  assert.equal(recipes.find((row: any) => row.recipeID === 2661).evidence, "UNKNOWN", "freshly enumerated unknown candidate is not mislabeled historical");
+});
+
 test("profession-scoped recipe merges preserve Engineering through Alchemy and keep failed/empty evidence LAST_SEEN", () => {
   const engineering = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
     recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]], [1291687, false, "OBSERVED_FALSE", []]]),
