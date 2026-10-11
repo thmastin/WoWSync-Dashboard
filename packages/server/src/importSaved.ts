@@ -315,6 +315,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const name = luaGet(identity, "name");
     const realm = luaGet(identity, "realm");
     const sections = luaGet(record, "sections");
+    const captureProfile = luaGet(record, "captureProfile");
     const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
     const equipment = luaGet(sections, "equipment");
@@ -325,10 +326,11 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const professionRecipes = luaGet(sections, "professionRecipes");
     const characterReputation = luaGet(sections, "reputation");
     const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
+    const isForeverState = typeof captureProfile === "string" && captureProfile.startsWith("Forever:1.60.1:");
     const characterState = (combat instanceof Map || professionSpecializations instanceof Map || professionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
       ? {
           formatVersion: 1,
-          clientFamily: "Retail",
+          clientFamily: isForeverState ? "Forever" : "Retail",
           ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
           ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
           ...(professionRecipes instanceof Map ? { professionRecipes: luaToPlain(professionRecipes) } : {}),
@@ -339,7 +341,6 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
         }
       : undefined;
     const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
-    const captureProfile = luaGet(record, "captureProfile");
     const foreverGearObservation = typeof text === "string" && typeof captureProfile === "string" && ["Forever:1.60.1:70291:16001", "Forever:1.60.1:70338:16001"].includes(captureProfile) && isSupportedForeverExportText(text)
       ? {
           clientProfile: captureProfile,

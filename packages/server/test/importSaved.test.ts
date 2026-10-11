@@ -571,8 +571,18 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
   const generatedAt = 1_791_500_000;
   const guid = "Player-1-HALLO";
   const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const professionRecipes = toLua({ observedAt: generatedAt, completeness: "partial", data: {
+    formatVersion: 1, ownerScope: "CHARACTER",
+    coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+    professions: [{ baseSkillLineID: 164, skillLineID: 164, parentProfessionID: 164, professionName: "Blacksmithing", name: "Blacksmithing", skill: 1, maxSkill: 75, evidence: "OBSERVED", observedAt: generatedAt,
+      client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70291, interface: 16001 },
+      coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+      recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", skillLineID: 164, skillLineIDs: [164], skillLineAssociationState: "OBSERVED", schematicState: "OBSERVED", name: "Copper Chain Belt", outputItemID: 2857, outputQuantityMin: 1, outputQuantityMax: 1, reagentSlots: [{ slotIndex: 1, quantityRequired: 2, required: true, requiredSkillRank: 1, reagents: [{ itemID: 2835 }] }] }],
+    }],
+  } });
   const file = svFile(savedVariables([{
     guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
+    professionRecipes,
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
     forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
@@ -600,6 +610,10 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.capturedAt, generatedAt + 6);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.state, "OBSERVED_OPEN_WINDOW");
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.lastObserved.calls[0].api, "GetTrainerServiceInfo");
+    const recipes = snapshot.parsed.characterState?.professionRecipes?.data?.professions as any[];
+    assert.equal(recipes[0].recipes[0].recipeID, 2660, "Forever recipe sidecar survives the real SavedVariables bridge");
+    assert.equal(recipes[0].recipes[0].outputItemID, 2857);
+    assert.deepEqual(recipes[0].recipes[0].reagentSlots[0].reagents, [{ itemID: 2835 }]);
   });
 });
 

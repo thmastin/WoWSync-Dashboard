@@ -47,6 +47,7 @@ export interface CharacterQuery { version: VersionOrUnknown; name: string; realm
 export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
 export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
 export interface CharacterTrainerQuery extends CharacterSnapshotQuery { category?: string; query?: string; status?: "known" | "available" | "unavailable" | "other"; offset?: number; limit?: number }
+export interface CharacterRecipeQuery extends CharacterQuery { profession?: string; recipeID?: number; offset?: number; limit?: number }
 export interface AccountChangesQuery { version: VersionOrUnknown; realm?: string; offset?: number; limit?: number }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -202,6 +203,7 @@ export interface CharacterStorageQuery extends CharacterQuery { storage: Storage
 export interface CharacterStorageContents {
   storage: StorageLocation;
   sectionState: ReadState;
+  completeness?: string;
   itemsKnownEmpty: boolean;
   items?: InventorySection["items"];
   containers?: InventorySection["containers"];
@@ -1389,7 +1391,7 @@ export class DashboardReadModel {
       const recipeKnowledge = query.version === "retail"
         ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "No successful Retail profession recipe observation has been imported." }, completeness: "unknown" as const }
         : query.version === "forever"
-          ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "The current Forever GearExport collector captures profession skill and spell observations but does not capture a recipe catalogue. No recipe rows therefore means not observed, not unlearned. Warcraft Wiki documents these recipe APIs for Forever 1.60.1; GetAllRecipeIDs can return an empty table if that profession panel has not yet been opened, so empty is not proof of no learned recipes. Their results are not present in this character export." }, completeness: "unknown" as const }
+          ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "No successful Forever profession recipe observation has been imported. An absent recipe row is UNKNOWN, not unlearned; the character's own profession panel must be opened before capture." }, completeness: "unknown" as const }
           : undefined;
       const state = value.status.state === "UNKNOWN" && (captured || recipeKnowledge) ? statusToReadState(captured?.status.state ?? recipeKnowledge!.status.state) : statusToReadState(value.status.state);
       const data = { ...value, ...(captured ? { specialization: captured } : {}), ...(recipeKnowledge ? { recipeKnowledge } : {}) } as ProfessionsSection;
@@ -1625,6 +1627,7 @@ export class DashboardReadModel {
       const value: CharacterStorageContents = {
         storage: query.storage,
         sectionState: state,
+        ...(section.status.completeness ? { completeness: section.status.completeness } : {}),
         itemsKnownEmpty: section.itemsKnownEmpty,
         ...(state === "UNKNOWN" ? {} : { items, containers: section.containers, ...(section.freeSlots !== undefined ? { freeSlots: section.freeSlots } : {}), ...(section.totalSlots !== undefined ? { totalSlots: section.totalSlots } : {}) }),
         metadata: items.map((item) => metadataFor(item.itemRef, metadata)),

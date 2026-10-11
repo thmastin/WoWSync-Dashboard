@@ -121,6 +121,25 @@ test("compatible Retail snapshots derive only observed spec, node-rank, standing
   } finally { store.close(); }
 });
 
+test("Forever recipe learned-state transitions are snapshot evidence, never inferred crafts", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const capture = (at: number, learned: boolean) => {
+      const recipe = { recipeID: 2660, learned, learnedState: learned ? "OBSERVED_TRUE" : "OBSERVED_FALSE", recipeInfoResult: "API_MISSING", skillLineAssociationState: "OBSERVED", skillLineIDs: [164], evidence: "OBSERVED", observedAt: at };
+      const profession = { baseSkillLineID: 164, skillLineID: 164, parentProfessionID: 164, professionName: "Blacksmithing", name: "Blacksmithing", evidence: "OBSERVED", observedAt: at,
+        client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+        coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 }, recipes: [recipe] };
+      const characterState = { formatVersion: 1, clientFamily: "Forever", professionRecipes: { observedAt: at, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 }, professions: [profession] } } };
+      return store.importSnapshot(buildWowSyncExport({ generatedAt: at, character: { name: "Rordin", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } }), { characterState });
+    };
+    capture(ts - 5, false);
+    const next = capture(ts, true);
+    const recipeChange = next.diff?.characterStateChanges.find((change) => change.domain === "profession-recipe-learned");
+    assert.deepEqual(recipeChange && [recipeChange.identity.recipeID, recipeChange.from, recipeChange.to], [2660, "OBSERVED_FALSE", "OBSERVED_TRUE"]);
+    assert.equal(next.diff?.characterStateChanges.some((change) => (change.domain as string).includes("craft")), false, "learned recipe transition does not claim a craft");
+  } finally { store.close(); }
+});
+
 test("duplicate imports may attach a structured observation, and later missing state is LAST_SEEN", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
@@ -159,6 +178,39 @@ test("Retail recipe sidecar preserves explicit learned values, unknowns, IDs, an
   assert.equal(state?.professionRecipes?.completeness, "partial");
   assert.equal(normalizeCharacterStateSidecar(sidecar, "classic-era"), undefined);
   assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Classic" }, "retail"), undefined);
+});
+
+test("Forever recipe sidecar preserves client/build provenance, output and reagent slots, and rejects cross-family evidence", () => {
+  const recipe = {
+    recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED",
+    skillLineID: 164, skillLineAssociationState: "OBSERVED", skillLineIDs: [164],
+    schematicState: "OBSERVED", name: "Copper Chain Belt", outputItemID: 2857,
+    outputQuantityMin: 1, outputQuantityMax: 1,
+    reagentSlots: [{ slotIndex: 1, quantityRequired: 2, required: true, requiredSkillRank: 1, reagents: [{ itemID: 2835 }] }],
+  };
+  const scope = {
+    baseSkillLineID: 164, skillLineID: 164, parentProfessionID: 164, professionName: "Blacksmithing", name: "Blacksmithing",
+    evidence: "OBSERVED", observedAt: ts, skill: 1, maxSkill: 75,
+    client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+    coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+    recipes: [recipe],
+  };
+  const section = { observedAt: ts, completeness: "partial", data: { formatVersion: 1,
+    ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 }, professions: [scope] } };
+  const sidecar = { formatVersion: 1, clientFamily: "Forever", professionRecipes: section };
+  const normalized = normalizeCharacterStateSidecar(sidecar, "forever");
+  const row = (normalized?.professionRecipes?.data?.professions as any[])[0].recipes[0];
+  assert.equal(row.recipeID, 2660);
+  assert.equal(row.outputItemID, 2857);
+  assert.deepEqual(row.reagentSlots[0].reagents, [{ itemID: 2835 }]);
+  assert.equal(normalizeCharacterStateSidecar(sidecar, "retail"), undefined, "Forever sidecar cannot cross into Retail");
+  assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Retail" }, "forever"), undefined);
+  const wrongClient = structuredClone(sidecar);
+  (wrongClient.professionRecipes.data.professions[0] as any).client.clientVersion = "1.60.0";
+  assert.equal(normalizeCharacterStateSidecar(wrongClient, "forever"), undefined, "wrong Forever client version is rejected");
+  const duplicate = structuredClone(sidecar);
+  (duplicate.professionRecipes.data.professions[0] as any).recipes.push({ ...recipe });
+  assert.equal(normalizeCharacterStateSidecar(duplicate, "forever"), undefined, "duplicate recipe identity is ambiguous and rejected");
 });
 
 test("profession-scoped recipe merges preserve Engineering through Alchemy and keep failed/empty evidence LAST_SEEN", () => {
@@ -234,9 +286,9 @@ test("Forever profession reads expose the recipe capture gap without treating mi
     assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Mining")?.skill, 3);
     assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Blacksmithing")?.skill, 1);
     assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.status.state, "UNKNOWN");
-    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /does not capture a recipe catalogue/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /No successful Forever profession recipe observation/i);
     assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /not unlearned/i);
-    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /panel has not yet been opened/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /profession panel must be opened before capture/i);
     const facts = store.buildAccountFacts("forever", ts).professions.byCharacter[0];
     assert.equal(facts?.recipeKnowledge?.status, "UNKNOWN");
     assert.match(facts?.recipeKnowledge?.reason ?? "", /but not recipe records/i);

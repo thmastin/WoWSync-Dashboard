@@ -4,7 +4,7 @@ type Obj = Record<string, unknown>;
 const object = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const positiveID = (value: unknown): value is number => finite(value) && Number.isInteger(value) && value > 0;
-const LIST_FIELDS = new Set(["professions", "recipes", "skillLineIDs", "tiers", "trees", "nodes", "currencies", "factions", "majorFactions", "committedEntryIDs"]);
+const LIST_FIELDS = new Set(["professions", "recipes", "skillLineIDs", "reagentSlots", "reagents", "tiers", "trees", "nodes", "currencies", "factions", "majorFactions", "committedEntryIDs"]);
 
 /** WoW writes empty Lua tables as `{}`; normalize only known list fields, and only when empty. */
 function normalizeEmptyLists(value: unknown): unknown {
@@ -56,22 +56,65 @@ function normalizeSection(raw: unknown, domain: "combat" | "professions" | "repu
   };
 }
 
-function normalizeRecipeSection(raw: unknown): CapturedCharacterDomain | undefined {
+function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"): CapturedCharacterDomain | undefined {
   if (!object(raw) || raw.completeness !== "partial" || !object(raw.data) || !finite(raw.observedAt)) return undefined;
   const data = normalizeEmptyLists(raw.data) as Obj;
-  if (data.formatVersion !== 1 || data.ownerScope !== "CHARACTER" || !Array.isArray(data.professions) || data.professions.length === 0 || !object(data.coverage) || data.coverage.state !== "PARTIAL" || data.coverage.candidateCompleteness !== "UNKNOWN") return undefined;
+  if (data.formatVersion !== 1 || data.ownerScope !== "CHARACTER" || !Array.isArray(data.professions) || data.professions.length === 0 || !object(data.coverage) || data.coverage.state !== "PARTIAL" || data.coverage.candidateCompleteness !== "UNKNOWN" || !Number.isSafeInteger(data.coverage.returnedRecipeCount) || (data.coverage.returnedRecipeCount as number) < 0) return undefined;
+  const professionScopes = new Set<string>();
+  const allRecipeIDs = new Set<number>();
+  let totalRecipeRows = 0;
   for (const profession of data.professions) {
-    if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== "Retail" || typeof profession.client.clientVersion !== "string" || !positiveID(profession.client.clientBuild) || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || profession.coverage.returnedRecipeCount !== profession.recipes.length) return undefined;
+    if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== clientFamily || typeof profession.client.clientVersion !== "string" || clientFamily === "Forever" && profession.client.clientVersion !== "1.60.1" || !positiveID(profession.client.clientBuild) || clientFamily === "Forever" && profession.client.interface !== 16001 || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || profession.coverage.returnedRecipeCount !== profession.recipes.length) return undefined;
+    const scopeKey = `${profession.baseSkillLineID}:${profession.skillLineID}`;
+    if (professionScopes.has(scopeKey)) return undefined;
+    professionScopes.add(scopeKey);
+    const recipeIDs = new Set<number>();
     for (const recipe of profession.recipes) {
       if (!object(recipe) || !positiveID(recipe.recipeID)) return undefined;
+      if (recipeIDs.has(recipe.recipeID) || allRecipeIDs.has(recipe.recipeID)) return undefined;
+      recipeIDs.add(recipe.recipeID);
+      allRecipeIDs.add(recipe.recipeID);
+      totalRecipeRows++;
       if (recipe.learned !== true && recipe.learned !== false && recipe.learned !== undefined) return undefined;
       if (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE" && recipe.learnedState !== "UNKNOWN" && recipe.learnedState !== "NIL_RESULT") return undefined;
       if (recipe.learnedState === "OBSERVED_TRUE" && recipe.learned !== true || recipe.learnedState === "OBSERVED_FALSE" && recipe.learned !== false || (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned !== undefined) return undefined;
       if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN") return undefined;
       if (recipe.skillLineAssociationState !== "OBSERVED" && recipe.skillLineAssociationState !== "UNKNOWN" || recipe.skillLineIDs !== undefined && !Array.isArray(recipe.skillLineIDs)) return undefined;
       if (Array.isArray(recipe.skillLineIDs) && !recipe.skillLineIDs.every(positiveID)) return undefined;
+      if (recipe.schematicState !== undefined && recipe.schematicState !== "OBSERVED" && recipe.schematicState !== "UNKNOWN") return undefined;
+      if (recipe.outputItemID !== undefined && !positiveID(recipe.outputItemID)) return undefined;
+      if (recipe.outputItemInfo !== undefined) {
+        const info = recipe.outputItemInfo;
+        if (!object(info) || (info.state !== "OBSERVED" && info.state !== "UNKNOWN") || typeof info.source !== "string" || info.source !== "C_Item.GetItemInfoInstant") return undefined;
+        if (info.state === "OBSERVED" && (!positiveID(recipe.outputItemID) || info.itemID !== recipe.outputItemID) || info.itemID !== undefined && !positiveID(info.itemID)) return undefined;
+        if (info.itemType !== undefined && typeof info.itemType !== "string" || info.itemSubType !== undefined && typeof info.itemSubType !== "string" || info.equipLocation !== undefined && typeof info.equipLocation !== "string") return undefined;
+        if (info.classID !== undefined && !positiveID(info.classID) || info.subclassID !== undefined && (!finite(info.subclassID) || !Number.isInteger(info.subclassID) || info.subclassID < 0)) return undefined;
+      }
+      if (recipe.outputQuantityMin !== undefined && (!finite(recipe.outputQuantityMin) || !Number.isInteger(recipe.outputQuantityMin) || recipe.outputQuantityMin < 0)) return undefined;
+      if (recipe.outputQuantityMax !== undefined && (!finite(recipe.outputQuantityMax) || !Number.isInteger(recipe.outputQuantityMax) || recipe.outputQuantityMax < 0)) return undefined;
+      if (recipe.outputQuantityMin !== undefined && recipe.outputQuantityMax !== undefined && recipe.outputQuantityMin > recipe.outputQuantityMax) return undefined;
+      if (recipe.reagentSlots !== undefined) {
+        if (!Array.isArray(recipe.reagentSlots)) return undefined;
+        const slotIndexes = new Set<number>();
+        for (const slot of recipe.reagentSlots) {
+          if (!object(slot) || !positiveID(slot.slotIndex) || !finite(slot.quantityRequired) || !Number.isInteger(slot.quantityRequired) || slot.quantityRequired < 0 || !Array.isArray(slot.reagents)) return undefined;
+          if (slotIndexes.has(slot.slotIndex)) return undefined;
+          slotIndexes.add(slot.slotIndex);
+          if (slot.required !== false && slot.quantityRequired > 0 && slot.reagents.length === 0) return undefined;
+          if (slot.required !== undefined && typeof slot.required !== "boolean") return undefined;
+          if (slot.requiredSkillRank !== undefined && (!finite(slot.requiredSkillRank) || !Number.isInteger(slot.requiredSkillRank) || slot.requiredSkillRank < 0)) return undefined;
+          const choices = new Set<string>();
+          for (const reagent of slot.reagents) {
+            if (!object(reagent) || reagent.itemID !== undefined && !positiveID(reagent.itemID) || reagent.currencyID !== undefined && !positiveID(reagent.currencyID) || (reagent.itemID === undefined) === (reagent.currencyID === undefined)) return undefined;
+            const choice = reagent.itemID === undefined ? `currency:${reagent.currencyID}` : `item:${reagent.itemID}`;
+            if (choices.has(choice)) return undefined;
+            choices.add(choice);
+          }
+        }
+      }
     }
   }
+  if (data.coverage.returnedRecipeCount !== totalRecipeRows) return undefined;
   const professionRows = data.professions as Obj[];
   const state = professionRows.some((row) => row.evidence === "OBSERVED") ? "OBSERVED" : professionRows.length > 0 && professionRows.every((row) => row.evidence === "LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
   return { status: { state, completeness: "partial", observedAt: raw.observedAt }, formatVersion: 1, observedAt: raw.observedAt, completeness: "partial", data: data as Record<string, unknown> };
@@ -79,16 +122,17 @@ function normalizeRecipeSection(raw: unknown): CapturedCharacterDomain | undefin
 
 /** Validate the Retail-only SavedVariables sidecar and keep each domain separate. Invalid/missing data stays UNKNOWN. */
 export function normalizeCharacterStateSidecar(input: unknown, version: VersionOrUnknown): CapturedCharacterState | undefined {
-  if (version !== "retail" || !object(input) || input.formatVersion !== 1) return undefined;
+  if ((version !== "retail" && version !== "forever") || !object(input) || input.formatVersion !== 1) return undefined;
   const clientFamily = input.clientFamily;
-  if (clientFamily !== "Retail") return undefined;
+  const expectedFamily = version === "retail" ? "Retail" : "Forever";
+  if (clientFamily !== expectedFamily) return undefined;
   const reputationInput = object(input.reputation) ? input.reputation : undefined;
-  const state: CapturedCharacterState = { formatVersion: 1, clientFamily: "Retail" };
-  const combat = normalizeSection(input.combatSpecialization, "combat");
-  const professions = normalizeSection(input.professionSpecializations, "professions");
-  const professionRecipes = normalizeRecipeSection(input.professionRecipes);
-  const characterRep = normalizeSection(reputationInput?.character, "reputation");
-  const accountRep = normalizeSection(reputationInput?.account, "reputation");
+  const state: CapturedCharacterState = { formatVersion: 1, clientFamily: expectedFamily };
+  const combat = version === "retail" ? normalizeSection(input.combatSpecialization, "combat") : undefined;
+  const professions = version === "retail" ? normalizeSection(input.professionSpecializations, "professions") : undefined;
+  const professionRecipes = normalizeRecipeSection(input.professionRecipes, expectedFamily);
+  const characterRep = version === "retail" ? normalizeSection(reputationInput?.character, "reputation") : undefined;
+  const accountRep = version === "retail" ? normalizeSection(reputationInput?.account, "reputation") : undefined;
   if (combat) state.combatSpecialization = combat;
   if (professions) state.professionSpecializations = professions;
   if (professionRecipes) state.professionRecipes = professionRecipes;

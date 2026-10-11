@@ -875,7 +875,7 @@ test("Retail recipe plans preserve LAST_SEEN history and never borrow recipe evi
     assert.equal(view.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
     const unsupported = assessErpNeed({ ...retailNeed, sourceIdentityKey: classic.identityKey }, classic.store.listSnapshots(classic.identityKey), 1_700_000_020, undefined, "classic-era");
     assert.equal(unsupported.state, "UNSUPPORTED_EVIDENCE");
-    assert.match(unsupported.reason, /supported only for Retail/);
+    assert.match(unsupported.reason, /not supported for classic-era/);
   } finally { historical.store.close(); classic.store.close(); }
 });
 
@@ -1385,6 +1385,38 @@ test("Forever profession observations resolve assigned project goals without sil
     assert.equal(alreadyCompleted.professionGoalStateReview?.state, "CURRENTLY_MET");
     assert.equal(alreadyCompleted.professionGoalStateReview?.proposalReadiness, "NO_STATUS_SUGGESTION", "terminal work orders do not receive duplicate completion suggestions");
     assert.equal(alreadyCompleted.professionGoalStateReview?.suggestedStatus, undefined);
+  } finally { store.close(); }
+});
+
+test("Forever ERP recipe needs use only exact current learned evidence and remain UNKNOWN for absent or stale candidates", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const observedAt = 1_800_000_000;
+  try {
+    const identityKey = "forever::classic beta pvp 2::rordin";
+    const recipeState = (learned: boolean, evidence = "OBSERVED") => ({
+      formatVersion: 1, clientFamily: "Forever",
+      professionRecipes: { observedAt, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER",
+        coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+        professions: [{ baseSkillLineID: 164, skillLineID: 164, parentProfessionID: 164, name: "Blacksmithing", professionName: "Blacksmithing", skill: 1, maxSkill: 75, evidence,
+          observedAt, client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+          coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+          recipes: [{ recipeID: 2660, learned, learnedState: learned ? "OBSERVED_TRUE" : "OBSERVED_FALSE", evidence, skillLineID: 164, skillLineIDs: [164], skillLineAssociationState: "OBSERVED", schematicState: "OBSERVED", name: "Copper Chain Belt", outputItemID: 2857, outputQuantityMin: 1, outputQuantityMax: 1, reagentSlots: [{ slotIndex: 1, quantityRequired: 2, required: true, requiredSkillRank: 1, reagents: [{ itemID: 2835 }] }] }],
+        }] } },
+    });
+    store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt, character: { name: "Rordin", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } }), { characterState: recipeState(true) });
+    const need: ErpProject["needs"][number] = { stableId: "belt-recipe", kind: "RECIPE", resourceKey: "2660", label: "Copper Chain Belt recipe", requiredQuantity: 1, sourceIdentityKey: identityKey };
+    const result = assessErpNeed(need, store.listSnapshots(identityKey), observedAt + 10, undefined, "forever");
+    assert.equal(result.state, "COVERED_BY_OBSERVED");
+    assert.equal(result.sourceIdentityKey, identityKey);
+    assert.match(result.reason, /Forever structured recipe observation/);
+    assert.equal(result.freshness, "recent");
+
+    const noRecipe = assessErpNeed({ ...need, resourceKey: "99999" }, store.listSnapshots(identityKey), observedAt + 10, undefined, "forever");
+    assert.equal(noRecipe.state, "UNKNOWN", "candidate enumeration is partial and absence is not unlearned");
+    assert.match(noRecipe.reason, /absence does not mean unlearned/);
+    store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt + 1, character: { name: "Rordin", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } }));
+    const stale = assessErpNeed(need, store.listSnapshots(identityKey), observedAt + 10, undefined, "forever");
+    assert.equal(stale.state, "POTENTIAL_COVERAGE_LAST_SEEN");
   } finally { store.close(); }
 });
 

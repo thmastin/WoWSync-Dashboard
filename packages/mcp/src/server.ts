@@ -423,10 +423,116 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async (query) => textResult(readModel.getForeverGearAllocation(query)));
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
-    description: "Returns profession skills and applicable specialization/recipe sidecars for one explicit-version character. Retail recipe observations are partial and LAST_SEEN is labeled. Forever currently reports recipeKnowledge UNKNOWN with the capture limitation: the installed Forever collector does not serialize recipe catalogue results, so missing recipes do not mean unlearned. Observed profession skill or spellbook entries do not establish recipe knowledge or craftability.",
+    description: "Returns profession skills and applicable specialization/recipe sidecars for one explicit-version character. Forever recipe data is only available after a successful scan of that character's own open profession panel; candidate enumeration is partial, and missing rows do not mean unlearned. Recipe knowledge does not establish craftability.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterProfessions(query)));
+  server.registerTool("get_character_profession_recipes", {
+    title: "Get observed profession recipes",
+    description: "Returns bounded recipe records from one explicit-version character's captured profession sidecar, including learned-state evidence, output identity/quantity, and exact reagent slots wherever the client exposed them. UNKNOWN and LAST_SEEN are preserved; candidate enumeration is not an exhaustive catalogue. Recipe knowledge, trainer availability, skill, inventory, and craftability are separate facts.",
+    inputSchema: z.object({ version: z.enum(["retail", "forever"]), name: nameSchema, realm: realmSchema,
+      profession: z.string().trim().min(1).max(80).optional(), recipeID: z.number().int().positive().optional(),
+      offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(50).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, name, realm, profession, recipeID, offset, limit }) => {
+    const result = readModel.getCharacterProfessions({ version, name, realm });
+    if (result.status !== "FOUND") return textResult(result);
+    const knowledge = result.value.data?.recipeKnowledge;
+    const raw = knowledge?.data as Record<string, unknown> | undefined;
+    const rows = Array.isArray(raw?.professions) ? raw.professions.filter((row): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row)) : [];
+    const normalizedProfession = profession?.trim().toLocaleLowerCase();
+    const selected = rows.filter((row) => !normalizedProfession || String(row.name ?? row.professionName ?? "").toLocaleLowerCase() === normalizedProfession);
+    const matches = selected.flatMap((row) => {
+      const recipes = Array.isArray(row.recipes) ? row.recipes.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry)) : [];
+      return recipes.filter((recipe) => recipeID === undefined || recipe.recipeID === recipeID).map((recipe) => ({
+        profession: row.name ?? row.professionName,
+        baseSkillLineID: row.baseSkillLineID,
+        skillLineID: row.skillLineID,
+        professionSkill: row.skill,
+        professionMaxSkill: row.maxSkill,
+        evidence: recipe.evidence ?? row.evidence ?? knowledge?.status.state,
+        recipe,
+      }));
+    }).sort((a, b) => Number((a.recipe as Record<string, unknown>).recipeID) - Number((b.recipe as Record<string, unknown>).recipeID));
+    const pageOffset = offset ?? 0;
+    const pageLimit = limit ?? 25;
+    const items = matches.slice(pageOffset, pageOffset + pageLimit);
+    return textResult({ version, identity: { name, realm, identityKey: result.value.provenance.identityKey },
+      recipeKnowledge: { state: knowledge?.status.state ?? "UNKNOWN", completeness: knowledge?.completeness ?? "unknown",
+        observedAt: knowledge?.observedAt ?? knowledge?.status.observedAt,
+        reason: knowledge?.status.reason, source: result.value.provenance.source,
+        candidateCompleteness: raw?.coverage && typeof raw.coverage === "object" ? (raw.coverage as Record<string, unknown>).candidateCompleteness ?? "UNKNOWN" : "UNKNOWN" },
+      recipes: items, offset: pageOffset, limit: pageLimit, totalCount: matches.length, truncated: pageOffset + items.length < matches.length,
+      interpretation: "CAPTURED_RECIPE_EVIDENCE_ONLY; no inference of craftability, material access, exhaustive recipe knowledge, or completion" });
+  });
+  server.registerTool("review_forever_recipe_materials", {
+    title: "Review one Forever recipe and personal materials",
+    description: "Joins one exact character's Forever learned-recipe observation with that same character's observed bags and equipment. Reagent alternatives remain alternatives; only bag-held quantities are counted. Bank contents are not treated as carried or accessible. Missing, stale, partial, and unknown evidence remain explicit. This is planning evidence, not proof a recipe is currently craftable or an equipment upgrade.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, recipeID: z.number().int().positive() }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, name, realm, recipeID }) => {
+    const query = { version, name, realm };
+    const professionResult = readModel.getCharacterProfessions(query);
+    if (professionResult.status !== "FOUND") return textResult(professionResult);
+    const knowledge = professionResult.value.data?.recipeKnowledge;
+    const section = knowledge?.data as Record<string, unknown> | undefined;
+    const professions = Array.isArray(section?.professions) ? section.professions.filter((row): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row)) : [];
+    const matches = professions.flatMap((profession) => (Array.isArray(profession.recipes) ? profession.recipes : [])
+      .filter((recipe): recipe is Record<string, unknown> => !!recipe && typeof recipe === "object" && !Array.isArray(recipe) && recipe.recipeID === recipeID)
+      .map((recipe) => ({ profession, recipe })));
+    if (matches.length !== 1) return textResult({ version, identityKey: professionResult.value.provenance.identityKey, recipeID,
+      recipeState: matches.length ? "AMBIGUOUS" : "UNKNOWN", recipeKnowledgeState: knowledge?.status.state ?? "UNKNOWN",
+      reason: matches.length ? "Duplicate recipe IDs across profession scopes are ambiguous." : "No exact candidate row was observed; partial recipe enumeration does not establish that the character lacks this recipe.",
+      materials: "UNKNOWN", equipmentComparison: "UNKNOWN" });
+    const { profession, recipe } = matches[0];
+    const recipeObservedAt = typeof recipe.observedAt === "number" ? recipe.observedAt : typeof profession.observedAt === "number" ? profession.observedAt : knowledge?.observedAt;
+    const recipeAge = typeof recipeObservedAt === "number" ? Math.floor(Date.now() / 1000) - recipeObservedAt : undefined;
+    const recipeFreshness = recipeAge === undefined || recipeAge < -300 ? "unknown" : recipeAge <= 3 * 86400 ? "recent" : "stale";
+    const observedLearned = recipeFreshness === "recent" && knowledge?.status.state === "OBSERVED" && profession.evidence === "OBSERVED" && recipe.evidence === "OBSERVED" && recipe.learnedState === "OBSERVED_TRUE";
+    const observationResult = readModel.getForeverGearObservation(query);
+    const observation = observationResult.status === "FOUND" ? observationResult.value.data : undefined;
+    const bags = observation?.carried;
+    const bagsAreComplete = observationResult.status === "FOUND" && bags?.state === "OBSERVED" && bags.completeness === "complete" && bags.freshness === "recent";
+    const itemCounts = new Map<number, { quantity: number; unknownQuantityRows: number }>();
+    let unresolvedBagRows = 0;
+    for (const item of bags?.items ?? []) {
+      const itemID = typeof item.itemID === "number" && Number.isSafeInteger(item.itemID) && item.itemID > 0 ? item.itemID : undefined;
+      if (!itemID) { unresolvedBagRows++; continue; }
+      const prior = itemCounts.get(itemID) ?? { quantity: 0, unknownQuantityRows: 0 };
+      if (typeof item.quantity === "number" && Number.isSafeInteger(item.quantity) && item.quantity >= 0) prior.quantity += item.quantity;
+      else { prior.unknownQuantityRows += 1; unresolvedBagRows++; }
+      itemCounts.set(itemID, prior);
+    }
+    const reagentSlots = Array.isArray(recipe.reagentSlots) ? recipe.reagentSlots.filter((slot): slot is Record<string, unknown> => !!slot && typeof slot === "object" && !Array.isArray(slot)) : undefined;
+    const materials = observedLearned && recipe.schematicState === "OBSERVED" && reagentSlots
+      ? reagentSlots.map((slot) => {
+          const choices = Array.isArray(slot.reagents) ? slot.reagents.filter((choice): choice is Record<string, unknown> => !!choice && typeof choice === "object" && !Array.isArray(choice)) : [];
+          const itemChoices = choices.filter((choice) => typeof choice.itemID === "number").map((choice) => {
+            const count = itemCounts.get(choice.itemID as number);
+            return { itemID: choice.itemID, observedBagQuantity: count?.quantity ?? 0,
+              quantityKnown: bagsAreComplete && unresolvedBagRows === 0 && (count?.unknownQuantityRows ?? 0) === 0,
+              ...(slot.required === false ? {} : { requiredQuantity: slot.quantityRequired }),
+              state: slot.required === false ? "OPTIONAL_SLOT" : slot.required !== true ? "REQUIRED_FLAG_UNKNOWN" : observationResult.status !== "FOUND" || bags?.state === "UNKNOWN" ? "UNKNOWN" : (bagsAreComplete && unresolvedBagRows === 0 && (count?.unknownQuantityRows ?? 0) === 0 ? (count?.quantity ?? 0) >= Number(slot.quantityRequired) ? "COVERED_BY_OBSERVED_BAGS" : "SHORTFALL_OBSERVED_BAGS" : "LOWER_BOUND_OR_PARTIAL") };
+          });
+          return { slotIndex: slot.slotIndex, required: slot.required ?? "UNKNOWN", requiredQuantity: slot.required === true ? slot.quantityRequired : "UNKNOWN",
+            requiredSkillRank: slot.requiredSkillRank ?? "UNKNOWN", choices: itemChoices,
+            currencyChoices: choices.filter((choice) => typeof choice.currencyID === "number").map((choice) => ({ currencyID: choice.currencyID, state: "UNKNOWN" })),
+            interpretation: slot.required === false ? "OPTIONAL_SLOT" : slot.required !== true ? "REQUIRED_FLAG_UNKNOWN" : itemChoices.length > 1 ? "ALTERNATIVE_CHOICES; do not sum alternatives" : "EXACT_OBSERVED_SLOT" };
+        }) : "UNKNOWN";
+    const equipment = observation?.equipment;
+    const outputInfo = recipe.outputItemInfo && typeof recipe.outputItemInfo === "object" ? recipe.outputItemInfo as Record<string, unknown> : undefined;
+    const equipmentOutputState = outputInfo?.state === "OBSERVED" && typeof outputInfo.equipLocation === "string"
+      ? outputInfo.equipLocation === "" ? "OBSERVED_NON_EQUIPMENT" : "OBSERVED_EQUIPMENT_CANDIDATE"
+      : "UNKNOWN";
+    return textResult({ version, identity: { name, realm, identityKey: professionResult.value.provenance.identityKey },
+      recipe: { recipeID, profession: profession.name ?? profession.professionName, professionSkill: profession.skill ?? "UNKNOWN", professionMaxSkill: profession.maxSkill ?? "UNKNOWN", learnedState: recipe.learnedState, evidence: recipe.evidence, freshness: recipeFreshness,
+        observedAt: recipeObservedAt,
+        output: { itemID: recipe.outputItemID ?? "UNKNOWN", quantityMin: recipe.outputQuantityMin ?? "UNKNOWN", quantityMax: recipe.outputQuantityMax ?? "UNKNOWN", itemInfo: outputInfo ?? "UNKNOWN", classification: equipmentOutputState } },
+      materials, bags: observation ? { state: bags?.state ?? "UNKNOWN", completeness: bags?.completeness ?? "UNKNOWN", observedAt: bags?.observedAt, freshness: bags?.freshness ?? "unknown", source: bags?.source ?? "UNKNOWN" } : { state: "UNKNOWN", reason: "No personal bag observation is available." },
+      equipment: equipment ? { state: equipment.state, observedAt: equipment.observedAt, items: equipment.items } : { state: "UNKNOWN" },
+      assessment: observedLearned && equipmentOutputState === "OBSERVED_EQUIPMENT_CANDIDATE" ? "POTENTIAL_EQUIPMENT_OUTPUT; upgrade eligibility and comparative stats remain UNKNOWN" : "RECIPE KNOWLEDGE IS NOT CRAFTABILITY OR COMPLETION",
+      boundaries: ["Only this character's bags are counted.", "Bank data, other characters, transfers, and accessibility are not assumed.", "A material quantity or skill increase does not prove a specific craft.", "No project state is changed; an approved project edit remains a separate proposal/approval/commit." ] });
+  });
   server.registerTool("get_character_currencies", {
     title: "Get latest-known character currencies",
     description: "Returns at most 100 structured currency records for one explicit-version character. Missing capture remains UNKNOWN, never zero.",

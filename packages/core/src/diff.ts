@@ -47,7 +47,7 @@ export interface TrainerUnlock {
 }
 
 export interface CharacterStateChange {
-  domain: "combat-specialization" | "profession-node-rank" | "reputation-standing" | "major-faction-renown";
+  domain: "combat-specialization" | "profession-node-rank" | "profession-recipe-learned" | "reputation-standing" | "major-faction-renown";
   identity: Record<string, number | string>;
   from?: number | string;
   to?: number | string;
@@ -219,8 +219,31 @@ function flattenProfessionNodes(state: ParsedSnapshot["characterState"]): Map<st
 }
 
 function diffCharacterState(from: ParsedSnapshot["characterState"], to: ParsedSnapshot["characterState"]): CharacterStateChange[] {
-  if (!from || !to || from.clientFamily !== "Retail" || to.clientFamily !== "Retail") return [];
+  if (!from || !to || from.clientFamily !== to.clientFamily || (from.clientFamily !== "Retail" && from.clientFamily !== "Forever")) return [];
   const changes: CharacterStateChange[] = [];
+  const recipesObserved = from.professionRecipes?.status.state === "OBSERVED" && to.professionRecipes?.status.state === "OBSERVED";
+  const recipeRows = (state: ParsedSnapshot["characterState"]) => {
+    const data = state?.professionRecipes?.data;
+    const professions = isRecord(data) && Array.isArray(data.professions) ? data.professions : [];
+    const rows = new Map<string, { identity: Record<string, number | string>; learned: string }>();
+    for (const profession of professions) {
+      if (!isRecord(profession) || profession.evidence !== "OBSERVED" || !Array.isArray(profession.recipes)) continue;
+      for (const recipe of profession.recipes) {
+        if (!isRecord(recipe) || recipe.evidence !== "OBSERVED" || (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE") || typeof profession.baseSkillLineID !== "number" || typeof profession.skillLineID !== "number" || typeof recipe.recipeID !== "number") continue;
+        const identity = { baseSkillLineID: profession.baseSkillLineID, skillLineID: profession.skillLineID, recipeID: recipe.recipeID };
+        rows.set(`${identity.baseSkillLineID}:${identity.skillLineID}:${identity.recipeID}`, { identity, learned: recipe.learnedState });
+      }
+    }
+    return rows;
+  };
+  if (recipesObserved) {
+    const before = recipeRows(from); const after = recipeRows(to);
+    for (const [key, oldRow] of before) {
+      const newRow = after.get(key);
+      if (newRow && oldRow.learned !== newRow.learned) changes.push({ domain: "profession-recipe-learned", identity: oldRow.identity, from: oldRow.learned, to: newRow.learned, evidence: "DERIVED" });
+    }
+  }
+  if (from.clientFamily !== "Retail" || to.clientFamily !== "Retail") return changes;
   const combatObserved = from.combatSpecialization?.status.state === "OBSERVED" && to.combatSpecialization?.status.state === "OBSERVED";
   const a = combatObserved ? from.combatSpecialization?.data?.activeSpec : undefined;
   const b = combatObserved ? to.combatSpecialization?.data?.activeSpec : undefined;

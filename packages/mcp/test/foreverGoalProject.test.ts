@@ -127,7 +127,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     const professionRead = await client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" } });
     const professionData = professionRead.structuredContent as { value?: { data?: { recipeKnowledge?: { status: { state: string; reason?: string } } } } };
     assert.equal(professionData.value?.data?.recipeKnowledge?.status.state, "UNKNOWN");
-    assert.match(professionData.value?.data?.recipeKnowledge?.status.reason ?? "", /panel has not yet been opened/i);
+    assert.match(professionData.value?.data?.recipeKnowledge?.status.reason ?? "", /profession panel must be opened before capture/i);
   } finally {
     await client.close();
     await new Promise<void>((resolve) => api.close(() => resolve()));

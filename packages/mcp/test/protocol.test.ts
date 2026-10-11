@@ -19,12 +19,23 @@ import { assertForeverAllocationContract } from "../../core/test/foreverAllocati
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
 const now = 1_790_793_200;
+const foreverObservedAt = Math.floor(Date.now() / 1000);
 const recipeState = { formatVersion: 1, clientFamily: "Retail", professionRecipes: { observedAt: now, completeness: "partial", data: {
   formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
   professions: [{ baseSkillLineID: 202, parentProfessionID: 202, professionID: 2910, skillLineID: 2910, professionName: "Midnight Engineering", expansionName: "Midnight", evidence: "OBSERVED", observedAt: now,
     client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 },
     coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
     recipes: [{ recipeID: 1229853, learned: true, learnedState: "OBSERVED_TRUE", recipeInfoResult: "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", skillLineIDs: [2910], evidence: "OBSERVED", observedAt: now }],
+  }],
+} } };
+const foreverRecipeState = { formatVersion: 1, clientFamily: "Forever", professionRecipes: { observedAt: foreverObservedAt, completeness: "partial", data: {
+  formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+  professions: [{ baseSkillLineID: 164, parentProfessionID: 164, professionName: "Blacksmithing", name: "Blacksmithing", skillLineID: 164, evidence: "OBSERVED", observedAt: foreverObservedAt, skill: 1, maxSkill: 75,
+    client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+    coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", enumeration: "OBSERVED", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+    recipes: [{ recipeID: 2660, name: "Rough Sharpening Stone", learned: true, learnedState: "OBSERVED_TRUE", recipeInfoResult: "API_MISSING", spellKnownResult: "OBSERVED_VALUE", schematicState: "OBSERVED", outputItemID: 2862, outputQuantityMin: 1, outputQuantityMax: 1,
+      outputItemInfo: { state: "OBSERVED", source: "C_Item.GetItemInfoInstant", itemID: 2862, itemType: "Armor", itemSubType: "Miscellaneous", equipLocation: "INVTYPE_WRIST", classID: 4, subclassID: 0 },
+      reagentSlots: [{ slotIndex: 1, quantityRequired: 1, required: true, requiredSkillRank: 1, reagents: [{ itemID: 2835 }] }], skillLineAssociationState: "OBSERVED", skillLineIDs: [164], evidence: "OBSERVED", observedAt: foreverObservedAt }],
   }],
 } } };
 
@@ -49,12 +60,11 @@ function retailItemQuantity(name: string, realm: string, quantity: number, gener
   return buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933" }, bags: { containers: [{ id: 0, capacity: 20, items: quantity ? [{ itemRef: `item:${itemID}`, name: "Observed Bag Item", qty: quantity }] : [] }] }, bank: { containers: [] } });
 }
 
-function forever(name: string, realm: string, surname?: string, surnameSource?: string) {
-  const generatedAt = now - 15;
+function forever(name: string, realm: string, surname?: string, surnameSource?: string, generatedAt = now - 15) {
   const text = buildWowSyncExport({ generatedAt, character: { name, surname, surnameSource, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
   const itemString = "item:901:0:0:0:0:0:0:0:123:0:0:0";
   const factValue = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
-  return { text, sidecar: { clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: generatedAt + 1, completeness: "complete", data: { slots: { "16": { itemID: 900, itemString: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" } } } }, bags: { observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 901, itemString, name: "Observed Forever Variant", count: 2 } } }] } }, bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "Not visited", data: {} }, itemMetadata: {}, itemEvidence: { observedAt: generatedAt + 3, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt + 2, state: "complete" } }, items: [{ itemID: 901, itemString, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [901, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: factValue(value) })) }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: factValue(true) }] } }] } } } };
+  return { text, sidecar: { clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: `Player-1-${name.toUpperCase()}`, equipment: { observedAt: generatedAt + 1, completeness: "complete", data: { slots: { "16": { itemID: 900, itemString: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" } } } }, bags: { observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 901, itemString, name: "Observed Forever Variant", count: 2 }, "2": { itemID: 2835, itemString: "item:2835:0:0:0:0:0:0:0", name: "Rough Stone", count: 2 } } }] } }, bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "Not visited", data: {} }, itemMetadata: {}, itemEvidence: { observedAt: generatedAt + 3, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt + 2, state: "complete" } }, items: [{ itemID: 901, itemString, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [901, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: factValue(value) })) }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: factValue(true) }] } }] } } } };
 }
 
 function structured<T>(result: { isError?: boolean; structuredContent?: unknown }): T {
@@ -93,7 +103,12 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
     const observedForever = forever("Hallo", "Forever Realm", "Emberstone", "UnitName[2]+GetUnitName suffix");
-    writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar });
+    writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar, characterState: foreverRecipeState });
+    const freshForever = forever("Smith", "Forever Realm", undefined, undefined, Math.floor(Date.now() / 1000) - 15);
+    writer.importSnapshot(freshForever.text, { foreverGearObservation: freshForever.sidecar, characterState: foreverRecipeState });
+    const noPersonalReagent = forever("Nope", "Forever Realm", undefined, undefined, Math.floor(Date.now() / 1000) - 15);
+    delete (noPersonalReagent.sidecar.bags.data.containers[0].slots as any)["2"];
+    writer.importSnapshot(noPersonalReagent.text, { foreverGearObservation: noPersonalReagent.sidecar, characterState: foreverRecipeState });
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
@@ -168,6 +183,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_currencies",
       "get_character_equipment",
       "get_character_history",
+      "get_character_profession_recipes",
       "get_character_professions",
       "get_character_spells",
       "get_character_state",
@@ -193,6 +209,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "review_forever_recipe_materials",
       "search_items",
       "search_research",
     ]);
@@ -332,7 +349,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 10, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
-    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
+    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"], ["Nope", undefined, undefined], ["Smith", undefined, undefined]]);
     const foreverSummary = structured<{ status: string; value?: { data?: { name: string; surname?: string; surnameSource?: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
     assert.equal(foreverSummary.value?.data?.name, "Hallo");
     assert.equal(foreverSummary.value?.data?.surname, "Emberstone");
@@ -539,6 +556,18 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const professionRecipeRead = professions.value as { data?: { recipeKnowledge?: { status: { state: string }; data: { professions: Array<{ recipes: Array<{ recipeID: number; learnedState: string }> }> } } } };
     assert.equal(professionRecipeRead.data?.recipeKnowledge?.status.state, "LAST_SEEN", "the newer export lacked recipe data; previous proof remains historical");
     assert.deepEqual(professionRecipeRead.data?.recipeKnowledge?.data.professions[0].recipes.map((recipe) => [recipe.recipeID, recipe.learnedState]), [[1229853, "OBSERVED_TRUE"]]);
+    const foreverRecipeRead = structured<{ recipeKnowledge: { state: string; candidateCompleteness: string }; recipes: Array<{ profession: string; recipe: { recipeID: number; learnedState: string; outputItemID: number; reagentSlots: Array<{ quantityRequired: number; reagents: Array<{ itemID: number }> }> } }> }>(await client.callTool({ name: "get_character_profession_recipes", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm", profession: "Blacksmithing" } }));
+    assert.equal(foreverRecipeRead.recipeKnowledge.state, "OBSERVED");
+    assert.equal(foreverRecipeRead.recipeKnowledge.candidateCompleteness, "UNKNOWN");
+    assert.deepEqual(foreverRecipeRead.recipes.map((entry) => [entry.profession, entry.recipe.recipeID, entry.recipe.learnedState, entry.recipe.outputItemID, entry.recipe.reagentSlots[0]?.quantityRequired, entry.recipe.reagentSlots[0]?.reagents[0]?.itemID]), [["Blacksmithing", 2660, "OBSERVED_TRUE", 2862, 1, 2835]]);
+    const materialReview = structured<{ recipe: { learnedState: string; output: { classification: string } }; materials: Array<{ choices: Array<{ itemID: number; observedBagQuantity: number; state: string }> }>; assessment: string }>(await client.callTool({ name: "review_forever_recipe_materials", arguments: { version: "forever", name: "Smith", realm: "Forever Realm", recipeID: 2660 } }));
+    assert.equal(materialReview.recipe.learnedState, "OBSERVED_TRUE");
+    assert.equal(materialReview.recipe.output.classification, "OBSERVED_EQUIPMENT_CANDIDATE");
+    assert.deepEqual(materialReview.materials[0]?.choices.map((choice) => [choice.itemID, choice.observedBagQuantity, choice.state]), [[2835, 2, "COVERED_BY_OBSERVED_BAGS"]]);
+    assert.match(materialReview.assessment, /upgrade eligibility and comparative stats remain UNKNOWN/);
+    const otherCharacterMaterialReview = structured<{ materials: Array<{ choices: Array<{ itemID: number; observedBagQuantity: number; state: string }> }>; boundaries: string[] }>(await client.callTool({ name: "review_forever_recipe_materials", arguments: { version: "forever", name: "Nope", realm: "Forever Realm", recipeID: 2660 } }));
+    assert.deepEqual(otherCharacterMaterialReview.materials[0]?.choices.map((choice) => [choice.itemID, choice.observedBagQuantity, choice.state]), [[2835, 0, "SHORTFALL_OBSERVED_BAGS"]], "another Forever character's bags do not satisfy the selected character's material need");
+    assert.ok(otherCharacterMaterialReview.boundaries.some((boundary) => /other characters.*not assumed/i.test(boundary)));
 
     const ambiguity = structured<{ status: string; candidates?: Array<{ realm: string }> }>(await client.callTool({ name: "get_character_summary", arguments: { version: "retail", name: "Virek" } }));
     assert.equal(ambiguity.status, "AMBIGUOUS");
@@ -798,6 +827,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_currencies",
       "get_character_equipment",
       "get_character_history",
+      "get_character_profession_recipes",
       "get_character_professions",
       "get_character_spells",
       "get_character_state",
@@ -823,6 +853,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "review_forever_recipe_materials",
       "search_items",
       "search_research",
     ]);

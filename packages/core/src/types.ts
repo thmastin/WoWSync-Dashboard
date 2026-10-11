@@ -276,7 +276,7 @@ export interface CapturedCharacterDomain<T = Record<string, unknown>> {
 
 export interface CapturedCharacterState {
   formatVersion: 1;
-  clientFamily: "Retail";
+  clientFamily: "Retail" | "Forever";
   combatSpecialization?: CapturedCharacterDomain;
   professionSpecializations?: CapturedCharacterDomain;
   /** Retail profession recipe learned-state observations. Candidate coverage is intentionally partial/unknown. */
