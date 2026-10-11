@@ -127,7 +127,7 @@ export default function CharactersRoster({
                     <span className={`freshness-badge freshness-${c.freshness}`} title={freshnessGlossary(c.freshness)}>{freshnessLabel(c.freshness)}</span>
                   </td>
                   <td>{c.realm}</td>
-                  <td>{c.class ?? "—"}</td>
+                  <td>{c.class ?? "—"}{c.race ? ` · ${c.race}` : ""}</td>
                   <td>{c.level ?? "—"}</td>
                   <td>{formatCopper(c.goldCopper)}</td>
                   <td>{c.bankStatus === "UNKNOWN" ? <span className="bank-chip">bank ?</span> : "seen"}</td>

@@ -6,13 +6,13 @@ import CharactersRoster from "../src/components/CharactersRoster.tsx";
 import type { AppRoute } from "../src/routing.ts";
 import type { CharacterFacts } from "../src/types.ts";
 
-function render(name: string, surname?: string) {
+function render(name: string, surname?: string, race?: string) {
   const route = {
     view: "characters", q: "", classFilter: "", age: "", sort: "name", bankMissing: false,
   } as AppRoute;
   const character = {
     identityKey: "forever::classic beta pvp 2::rordin", name, ...(surname ? { surname } : {}),
-    realm: "Classic Beta PvP 2", class: "Warrior", level: 3, snapshotCount: 1, freshness: "recent",
+    realm: "Classic Beta PvP 2", class: "Warrior", ...(race ? { race } : {}), level: 3, snapshotCount: 1, freshness: "recent",
     bankStatus: "UNKNOWN", professionsObservationStatus: "UNKNOWN", bagsStatus: "UNKNOWN",
   } as CharacterFacts;
   return renderToStaticMarkup(createElement(CharactersRoster, {
@@ -24,4 +24,10 @@ test("Forever roster displays an observed surname and keeps surname-free charact
   assert.match(render("Rordin", "Longbraid"), />Rordin Longbraid</);
   assert.match(render("Hallo"), />Hallo</);
   assert.doesNotMatch(render("Hallo"), /Hallo\s+undefined/);
+});
+
+test("Forever roster displays observed race beside class without changing identity", () => {
+  const markup = render("Rordin", "Longbraid", "Dwarf");
+  assert.match(markup, />Warrior · Dwarf</);
+  assert.match(markup, />Rordin Longbraid</);
 });

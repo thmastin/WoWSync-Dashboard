@@ -105,6 +105,7 @@ export interface CharacterTrainerCategoryContext {
 export interface CharacterContext {
   identityKey: string;
   name: string;
+  race?: string;
   realm: string;
   /** Chronological, oldest first. */
   snapshotHistory: SnapshotHistoryEntry[];
@@ -212,7 +213,7 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
         }))
     : [];
 
-  return { identityKey, name, realm, snapshotHistory, transitions, trainer };
+  return { identityKey, name, ...(latest?.parsed.character.race ? { race: latest.parsed.character.race } : {}), realm, snapshotHistory, transitions, trainer };
 }
 
 export function buildAccountContext(input: AccountContextInput): AccountContext {

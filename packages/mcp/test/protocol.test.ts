@@ -75,6 +75,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
+    writer.importSnapshot(buildWowSyncExport({
+      character: { name: "Rordin", surname: "Longbraid", surnameSource: "UnitName return", race: "Dwarf", realm: "Classic Beta PvP 2", class: "Warrior", level: 3, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" },
+    }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
     // Azeroth ERP Vertical Slice 1: one ACTIVE demand so get_item_allocation has something to resolve.
@@ -133,7 +136,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
-    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
+    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
 
     const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string; identityKey: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
     assert.equal(candidateRead.provenance.state, "DERIVED");
@@ -207,6 +210,15 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(summary.status, "FOUND");
     assert.equal(summary.value?.provenance.state, "OBSERVED");
     assert.equal(summary.value?.provenance.version, "retail");
+
+    const foreverCharacters = structured<{ characters: Array<{ name: string; race?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
+    assert.deepEqual(foreverCharacters.characters.map(({ name, race, realm }) => ({ name, race, realm })), [{ name: "Rordin", race: "Dwarf", realm: "Classic Beta PvP 2" }]);
+    const foreverSummary = structured<{ status: string; value?: { data?: { name: string; surname?: string; race?: string; identityKey: string }; provenance: { version: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" } }));
+    assert.equal(foreverSummary.status, "FOUND");
+    assert.equal(foreverSummary.value?.data?.surname, "Longbraid");
+    assert.equal(foreverSummary.value?.data?.race, "Dwarf");
+    assert.match(foreverSummary.value?.data?.identityKey ?? "", /^forever::/);
+    assert.equal(foreverSummary.value?.provenance.version, "forever");
 
     const currentState = structured<{ status: string; value?: { data?: { identity: { version: string }; bank: { state: string; provenance: { warning?: string } }; bags: { state: string }; professions: { state: string; entries?: unknown[] }; currencies: { state: string } } } }>(await client.callTool({ name: "get_character_state", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
     assert.equal(currentState.status, "FOUND");

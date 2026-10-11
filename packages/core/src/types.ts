@@ -26,6 +26,8 @@ export interface CharacterSection {
   name?: string;
   surname?: string;
   surnameSource?: string;
+  /** Observed only from the explicit Forever 70291/70338 identity field. */
+  race?: string;
   realm?: string;
   class?: string;
   level?: number;

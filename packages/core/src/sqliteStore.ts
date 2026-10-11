@@ -1356,6 +1356,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       name: row.name,
       ...(latestCharacter?.surname ? { surname: latestCharacter.surname } : {}),
       ...(latestCharacter?.surnameSource ? { surnameSource: latestCharacter.surnameSource } : {}),
+      ...(latestCharacter?.race ? { race: latestCharacter.race } : {}),
       ...(latestCharacter?.clientFamily ? { clientFamily: latestCharacter.clientFamily } : {}),
       ...(latestCharacter?.clientVersion ? { clientVersion: latestCharacter.clientVersion } : {}),
       ...(latestCharacter?.clientBuild ? { clientBuild: latestCharacter.clientBuild } : {}),

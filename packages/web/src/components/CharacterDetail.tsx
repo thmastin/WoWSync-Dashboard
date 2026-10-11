@@ -107,7 +107,7 @@ export default function CharacterDetail({
       <div className="detail-header">
         <h1>{character.name}</h1>
         <div className="detail-subline">
-          {header.className} · Level {header.level} · {header.realm}
+          {header.className}{snapshot?.parsed.character.race ? ` · ${snapshot.parsed.character.race}` : ""} · Level {header.level} · {header.realm}
           {header.faction ? ` · ${header.faction}` : ""}
         </div>
         <div className="detail-subline muted small">

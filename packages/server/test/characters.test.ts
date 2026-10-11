@@ -112,7 +112,7 @@ test("[SYNTHETIC] Forever 70338 surname export appears accurately in roster REST
   await withApp(async (api) => {
     const text = buildWowSyncExport({ generatedAt: 1_791_683_475, character: {
       name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
-      realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+      realm: "Classic Beta PvP 2", class: "Warrior", level: 3, race: "Dwarf",
       clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
     } });
     const imported = await api.importText(text);
@@ -127,6 +127,7 @@ test("[SYNTHETIC] Forever 70338 surname export appears accurately in roster REST
     assert.equal(character.surnameSource, "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]");
     assert.equal(character.realm, "Classic Beta PvP 2");
     assert.equal(character.class, "Warrior");
+    assert.equal(character.race, "Dwarf");
     assert.equal(character.latestLevel, 3);
     assert.equal(character.clientFamily, "Forever");
     assert.equal(character.clientVersion, "1.60.1");
@@ -137,7 +138,11 @@ test("[SYNTHETIC] Forever 70338 surname export appears accurately in roster REST
 
     const { body: factsBody } = await api.get("/api/versions/forever/account-facts");
     assert.equal(factsBody.facts.characters[0].surname, "Longbraid");
+    assert.equal(factsBody.facts.characters[0].race, "Dwarf");
     assert.equal(factsBody.facts.characters[0].goldCopper, undefined);
+
+    const { body: contextBody } = await api.get("/api/account-context");
+    assert.equal(contextBody.versions.forever.characters[0].race, "Dwarf");
 
     await api.importText(text);
     const { body: repeated } = await api.get("/api/versions/forever/characters");

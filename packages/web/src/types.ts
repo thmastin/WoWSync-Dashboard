@@ -22,6 +22,7 @@ export interface StoredCharacterSummary {
   name: string;
   surname?: string;
   surnameSource?: string;
+  race?: string;
   clientFamily?: string;
   clientVersion?: string;
   clientBuild?: string;
@@ -125,9 +126,12 @@ export interface ParsedSnapshot {
   character: {
     status: SectionStatus;
     name?: string;
+    surname?: string;
+    surnameSource?: string;
     realm?: string;
     class?: string;
     level?: number;
+    race?: string;
     faction?: string;
     moneyCopper?: number;
     playedSeconds?: number;
@@ -279,6 +283,7 @@ export interface CharacterFacts {
   name: string;
   surname?: string;
   surnameSource?: string;
+  race?: string;
   realm: string;
   class?: string;
   faction?: string;

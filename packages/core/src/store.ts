@@ -18,6 +18,7 @@ export interface StoredCharacterSummary {
   name: string;
   surname?: string;
   surnameSource?: string;
+  race?: string;
   clientFamily?: string;
   clientVersion?: string;
   clientBuild?: string;

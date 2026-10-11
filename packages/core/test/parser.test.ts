@@ -18,12 +18,13 @@ test("parses a valid, fully-populated WOWSYNC v1 export", () => {
 test("Forever 70338 surname metadata is preserved only for the verified build profile", () => {
   const rordin = parseWowSyncExport(buildWowSyncExport({ generatedAt: 1_791_683_475, character: {
     name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
-    realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    realm: "Classic Beta PvP 2", class: "Warrior", level: 3, race: "Dwarf",
     clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
   } }));
   assert.equal(rordin.character.name, "Rordin");
   assert.equal(rordin.character.surname, "Longbraid");
   assert.equal(rordin.character.surnameSource, "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]");
+  assert.equal(rordin.character.race, "Dwarf");
   assert.equal(rordin.character.clientBuild, "70338");
 
   const legacy = parseWowSyncExport(buildWowSyncExport({ character: {
@@ -35,6 +36,16 @@ test("Forever 70338 surname metadata is preserved only for the verified build pr
     name: "Future", surname: "Profile", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
   } }).replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
   assert.throws(() => parseWowSyncExport(unknownBuild), /70291 or 70338 profile/);
+});
+
+test("Race is rejected outside the exact Forever 1.60.1 build/interface allowlist", () => {
+  const retailWithRace = buildWowSyncExport({ character: { name: "Virek", race: "Human", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933" } })
+    .replace("Level: 1", `Level: 1\nRace: Human`);
+  assert.throws(() => parseWowSyncExport(retailWithRace), /Race is only supported for the verified Forever/);
+  const futureForever = buildWowSyncExport({ character: { name: "Future", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } })
+    .replace("Level: 1", `Level: 1\nRace: Dwarf`)
+    .replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
+  assert.throws(() => parseWowSyncExport(futureForever), /Race is only supported for the verified Forever/);
 });
 
 test("parses all eight sections present and labeled correctly", () => {
