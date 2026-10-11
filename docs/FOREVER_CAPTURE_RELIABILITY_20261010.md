@@ -27,6 +27,7 @@ This implementation extends the existing Forever observation/read-model pipeline
 | Item-level/stats/durability/enchantments | Existing raw collector/structured observation | Raw fields can be partial. No stat or empty-slot conclusion becomes an upgrade or recommendation. |
 | Durability/enchantments | No complete authoritative Forever fields added | Not captured as current facts; UNKNOWN. |
 | Bags/free slots | Existing v1 inventory + Forever structured sections | Section completeness/freshness retained; names may be UNKNOWN on client cache miss. |
+| Binding/transfer traits | Existing carried/bank binding observations and raw item API evidence | Provenance is preserved; bindType meaning and cross-character transfer route stay UNKNOWN. |
 | Bank | Open-visit bank section + structured container rows -> observation view | Known scanned rows and known empty scan stay distinct from closed/unobserved bank. No SavedVariables “empty bank” is synthesized. |
 | Professions and skills | Added GetProfessions/GetProfessionInfo observations plus existing parser | Learned profession name/rank/max may be captured; observed absence only applies to a complete section. Live 70338 verification pending. |
 | Spellbook/profession abilities | Added indices from GetProfessions to C_SpellBook traversal | Visible IDs/names retained where returned; ranks, trainer learnability, and complete recipe catalog remain unsupported/UNKNOWN. |
