@@ -203,6 +203,13 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
   assert.equal(row.recipeID, 2660);
   assert.equal(row.outputItemID, 2857);
   assert.deepEqual(row.reagentSlots[0].reagents, [{ itemID: 2835 }]);
+  const unknownRecipe = structuredClone(sidecar);
+  const unknown = unknownRecipe.professionRecipes.data.professions[0].recipes[0] as any;
+  delete unknown.learned;
+  unknown.learnedState = "UNKNOWN";
+  unknown.evidence = "UNKNOWN";
+  unknown.schematicState = "UNKNOWN";
+  assert.ok(normalizeCharacterStateSidecar(unknownRecipe, "forever"), "fresh candidate identity remains usable when learned/schematic evidence is UNKNOWN");
   assert.equal(normalizeCharacterStateSidecar(sidecar, "retail"), undefined, "Forever sidecar cannot cross into Retail");
   assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Retail" }, "forever"), undefined);
   const wrongClient = structuredClone(sidecar);

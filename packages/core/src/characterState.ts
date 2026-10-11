@@ -82,7 +82,7 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
       if (recipe.learned !== true && recipe.learned !== false && recipe.learned !== undefined) return undefined;
       if (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE" && recipe.learnedState !== "UNKNOWN" && recipe.learnedState !== "NIL_RESULT") return undefined;
       if (recipe.learnedState === "OBSERVED_TRUE" && recipe.learned !== true || recipe.learnedState === "OBSERVED_FALSE" && recipe.learned !== false || (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned !== undefined) return undefined;
-      if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN") return undefined;
+      if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN" && recipe.evidence !== "UNKNOWN") return undefined;
       if (recipe.skillLineAssociationState !== "OBSERVED" && recipe.skillLineAssociationState !== "UNKNOWN" || recipe.skillLineIDs !== undefined && !Array.isArray(recipe.skillLineIDs)) return undefined;
       if (Array.isArray(recipe.skillLineIDs) && !recipe.skillLineIDs.every(positiveID)) return undefined;
       if (recipe.schematicState !== undefined && recipe.schematicState !== "OBSERVED" && recipe.schematicState !== "UNKNOWN") return undefined;
