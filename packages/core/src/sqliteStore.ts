@@ -1348,11 +1348,18 @@ export class SqliteSnapshotStore implements SnapshotStore {
     if (!row) return undefined;
     const latest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterId);
     const count = one<{ n: number }>(this.stmts.snapshotCountForCharacter, characterId)!.n;
+    const latestCharacter = latest ? toStoredSnapshot(latest).parsed.character : undefined;
     return {
       id: row.id,
       version: row.version as VersionOrUnknown,
       realm: row.realm,
       name: row.name,
+      ...(latestCharacter?.surname ? { surname: latestCharacter.surname } : {}),
+      ...(latestCharacter?.surnameSource ? { surnameSource: latestCharacter.surnameSource } : {}),
+      ...(latestCharacter?.clientFamily ? { clientFamily: latestCharacter.clientFamily } : {}),
+      ...(latestCharacter?.clientVersion ? { clientVersion: latestCharacter.clientVersion } : {}),
+      ...(latestCharacter?.clientBuild ? { clientBuild: latestCharacter.clientBuild } : {}),
+      ...(latestCharacter?.interface ? { interface: latestCharacter.interface } : {}),
       identityKey: row.identity_key,
       class: row.class ?? undefined,
       faction: row.faction ?? undefined,

@@ -24,6 +24,8 @@ export interface SectionStatus {
 export interface CharacterSection {
   status: SectionStatus;
   name?: string;
+  surname?: string;
+  surnameSource?: string;
   realm?: string;
   class?: string;
   level?: number;

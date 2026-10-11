@@ -16,7 +16,7 @@ export default function CharactersGrid({
       {characters.map((c) => (
         <div key={c.identityKey} className="character-card" onClick={() => onOpenCharacter(c.identityKey)}>
           <div className="character-card-top">
-            <div className="character-card-name">{c.name}</div>
+            <div className="character-card-name">{[c.name, c.surname].filter(Boolean).join(" ")}</div>
             <span className={`freshness-badge freshness-${c.freshness}`}>{freshnessLabel(c.freshness)}</span>
           </div>
           <div className="character-card-sub muted">

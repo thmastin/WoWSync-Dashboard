@@ -122,7 +122,7 @@ export default function CharactersRoster({
                         onOpenCharacter(c.identityKey);
                       }}
                     >
-                      {c.name}
+                      {[c.name, c.surname].filter(Boolean).join(" ")}
                     </a>{" "}
                     <span className={`freshness-badge freshness-${c.freshness}`} title={freshnessGlossary(c.freshness)}>{freshnessLabel(c.freshness)}</span>
                   </td>

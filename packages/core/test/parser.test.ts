@@ -15,6 +15,28 @@ test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   assert.equal(snapshot.character.status.state, "OBSERVED");
 });
 
+test("Forever 70338 surname metadata is preserved only for the verified build profile", () => {
+  const rordin = parseWowSyncExport(buildWowSyncExport({ generatedAt: 1_791_683_475, character: {
+    name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
+    realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }));
+  assert.equal(rordin.character.name, "Rordin");
+  assert.equal(rordin.character.surname, "Longbraid");
+  assert.equal(rordin.character.surnameSource, "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]");
+  assert.equal(rordin.character.clientBuild, "70338");
+
+  const legacy = parseWowSyncExport(buildWowSyncExport({ character: {
+    name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+  } }));
+  assert.equal(legacy.character.surname, undefined, "legacy surname-free exports remain valid");
+
+  const unknownBuild = buildWowSyncExport({ character: {
+    name: "Future", surname: "Profile", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }).replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
+  assert.throws(() => parseWowSyncExport(unknownBuild), /70291 or 70338 profile/);
+});
+
 test("parses all eight sections present and labeled correctly", () => {
   const raw = buildWowSyncExport();
   const snapshot = parseWowSyncExport(raw);

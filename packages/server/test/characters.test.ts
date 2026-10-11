@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { createApp } from "../src/app.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
@@ -42,6 +43,14 @@ async function withApp(run: (api: Api) => Promise<void>) {
       });
       return { status: res.status, body: await res.json() };
     },
+    async importText(text) {
+      const res = await fetch(base + "/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      return { status: res.status, body: await res.json() };
+    },
     async del(identityKey, body, rawBody) {
       const res = await fetch(`${base}/api/characters/${encodeURIComponent(identityKey)}`, {
         method: "DELETE",
@@ -70,6 +79,7 @@ interface Api {
   base: string;
   get(path: string): Promise<{ status: number; body: any }>;
   import(file: string): Promise<{ status: number; body: any }>;
+  importText(text: string): Promise<{ status: number; body: any }>;
   del(identityKey: string, body?: unknown, rawBody?: string): Promise<{ status: number; body: Record<string, any> }>;
 }
 
@@ -95,6 +105,44 @@ test("[REAL] a Forever export imports through POST /api/import as a Forever char
     assert.equal(r.body.result.character.version, "forever");
     assert.equal(r.body.result.character.identityKey, HALLO);
     assert.equal(r.body.result.character.latestMoneyCopper, 291);
+  });
+});
+
+test("[SYNTHETIC] Forever 70338 surname export appears accurately in roster REST and is idempotent", async () => {
+  await withApp(async (api) => {
+    const text = buildWowSyncExport({ generatedAt: 1_791_683_475, character: {
+      name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
+      realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+      clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+    } });
+    const imported = await api.importText(text);
+    assert.equal(imported.status, 200);
+
+    const { body: rosterBody } = await api.get("/api/versions/forever/characters");
+    assert.equal(rosterBody.characters.length, 1);
+    const character = rosterBody.characters[0];
+    assert.equal(character.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(character.name, "Rordin");
+    assert.equal(character.surname, "Longbraid");
+    assert.equal(character.surnameSource, "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]");
+    assert.equal(character.realm, "Classic Beta PvP 2");
+    assert.equal(character.class, "Warrior");
+    assert.equal(character.latestLevel, 3);
+    assert.equal(character.clientFamily, "Forever");
+    assert.equal(character.clientVersion, "1.60.1");
+    assert.equal(character.clientBuild, "70338");
+    assert.equal(character.interface, "16001");
+    assert.equal(character.latestMoneyCopper, undefined, "unobserved gold stays unknown");
+    assert.equal(character.snapshotCount, 1);
+
+    const { body: factsBody } = await api.get("/api/versions/forever/account-facts");
+    assert.equal(factsBody.facts.characters[0].surname, "Longbraid");
+    assert.equal(factsBody.facts.characters[0].goldCopper, undefined);
+
+    await api.importText(text);
+    const { body: repeated } = await api.get("/api/versions/forever/characters");
+    assert.equal(repeated.characters.length, 1);
+    assert.equal(repeated.characters[0].snapshotCount, 1, "a repeat scan must not duplicate the capture");
   });
 });
 
