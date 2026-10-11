@@ -225,6 +225,25 @@ test("known-by-account includes explicit learned=true only and the professions r
   } finally { store.close(); }
 });
 
+test("Forever profession reads expose the recipe capture gap without treating missing recipe rows as unlearned", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: ts, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] } }));
+    const read = new DashboardReadModel(store, () => ts + 1).getCharacterProfessions({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
+    assert.equal(read.status, "FOUND");
+    assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Mining")?.skill, 3);
+    assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Blacksmithing")?.skill, 1);
+    assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.status.state, "UNKNOWN");
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /does not capture a recipe catalogue/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /not unlearned/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /panel has not yet been opened/i);
+    const facts = store.buildAccountFacts("forever", ts).professions.byCharacter[0];
+    assert.equal(facts?.recipeKnowledge?.status, "UNKNOWN");
+    assert.match(facts?.recipeKnowledge?.reason ?? "", /but not recipe records/i);
+    assert.equal(store.buildAccountFacts("retail", ts).professions.byCharacter.length, 0, "Forever observation does not leak into Retail facts");
+  } finally { store.close(); }
+});
+
 test("A27 characterState merge and LAST_SEEN carry-forward are identical whether or not equipment observations ride along", () => {
   const combat = (specID: number) => ({ formatVersion: 1, clientFamily: "Retail", combatSpecialization: domain({ activeSpec: { specID, classID: 3 } }) });
   const run = (withObservation: boolean) => {

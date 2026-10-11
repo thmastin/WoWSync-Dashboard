@@ -1336,6 +1336,58 @@ test("work-order progress separates player completion, observed state, changed e
   } finally { store.close(); }
 });
 
+test("Forever profession observations resolve assigned project goals without silently completing tasks", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const observedAt = 1_800_000_000;
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({
+      generatedAt: observedAt,
+      character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" },
+      professions: { observedAt, entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] },
+      bank: { unknown: true },
+    }));
+    const identityKey = imported.character.identityKey;
+    const needs: ErpProject["needs"] = [
+      { stableId: "mining_profession", kind: "PROFESSION", resourceKey: "Mining", label: "Mining skill at least 1", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "blacksmithing_profession", kind: "PROFESSION", resourceKey: "Blacksmithing", label: "Blacksmithing skill at least 1", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "recipe_unknown", kind: "RECIPE", resourceKey: "unknown-recipe", label: "Exact Forever recipe", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "ore_unknown", kind: "ITEM_ID", resourceKey: "2770", label: "Copper Ore", requiredQuantity: 1, destinationIdentityKey: identityKey },
+    ];
+    const plan: ErpProject = {
+      stableId: "rordin-profession-evidence", version: "forever", title: "Rordin skills", status: "ACTIVE", priority: 3,
+      createdAt: observedAt, updatedAt: observedAt, revision: 2, needs, reservations: [],
+      workOrders: [
+        { stableId: "review", kind: "INVESTIGATE", status: "IN_PROGRESS", title: "Review latest evidence", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey },
+        { stableId: "mine", kind: "OTHER", status: "PLANNED", title: "Learn Mining", resourceNeedIds: ["mining_profession"], dependsOn: ["review"], assignedIdentityKey: identityKey },
+        { stableId: "smith", kind: "OTHER", status: "PLANNED", title: "Learn Blacksmithing", resourceNeedIds: ["blacksmithing_profession"], dependsOn: ["review"], assignedIdentityKey: identityKey },
+      ],
+    };
+    const evaluation = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], observedAt + 30);
+    assert.deepEqual(evaluation.needEvidence.slice(0, 2).map((entry) => [entry.state, entry.observedQuantity, entry.sourceIdentityKey]), [
+      ["COVERED_BY_OBSERVED", 3, identityKey], ["COVERED_BY_OBSERVED", 1, identityKey],
+    ], "profession needs use the explicitly intended character when legacy plans omit sourceIdentityKey");
+    assert.equal(evaluation.needEvidence.find((entry) => entry.needId === "ore_unknown")?.state, "UNKNOWN", "destination identity never scopes inventory ownership");
+    assert.equal(evaluation.needEvidence.find((entry) => entry.needId === "recipe_unknown")?.state, "UNKNOWN", "observed profession skills do not imply recipe knowledge");
+    const mining = evaluation.workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(mining.professionGoalStateReview?.state, "CURRENTLY_MET");
+    assert.equal(mining.professionGoalStateReview?.proposalReadiness, "REVIEW_DEPENDENCIES_FIRST");
+    assert.equal(mining.professionGoalStateReview?.suggestedStatus, undefined);
+    assert.equal(mining.recordedStatus, "PLANNED", "evidence projection cannot mutate persisted status");
+    assert.equal(mining.professionGoalStateReview?.requiresDashboardApproval, true);
+    assert.match(mining.professionGoalStateReview?.reason ?? "", /does not establish when or how the professions were learned/);
+    assert.equal(plan.workOrders.find((order) => order.stableId === "mine")?.status, "PLANNED");
+
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], observedAt + 4 * 86400).workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(stale.professionGoalStateReview?.state, "UNKNOWN");
+    assert.equal(stale.professionGoalStateReview?.suggestedStatus, undefined, "stale skill evidence cannot propose completion");
+    const alreadyCompletedPlan = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "mine" ? { ...order, status: "COMPLETED" as const } : order) };
+    const alreadyCompleted = evaluateErpProject(alreadyCompletedPlan, (key) => store.listSnapshots(key), [alreadyCompletedPlan], observedAt + 30).workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(alreadyCompleted.professionGoalStateReview?.state, "CURRENTLY_MET");
+    assert.equal(alreadyCompleted.professionGoalStateReview?.proposalReadiness, "NO_STATUS_SUGGESTION", "terminal work orders do not receive duplicate completion suggestions");
+    assert.equal(alreadyCompleted.professionGoalStateReview?.suggestedStatus, undefined);
+  } finally { store.close(); }
+});
+
 test("transfer reconciliation compares explicitly planned source and destination changes without claiming causality", () => {
   const store = new SqliteSnapshotStore(":memory:");
   const baseAt = 1_700_100_000;

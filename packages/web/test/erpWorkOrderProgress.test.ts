@@ -24,6 +24,19 @@ test("project progress explains player completion without attributing observed i
   assert.match(renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, {})), /Progress reconciliation is unknown/);
 });
 
+test("observed profession goals are presented as approval-gated suggestions, never automatic completion", () => {
+  const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { characterName: () => "Rordin Longbraid", progress: { ...progress,
+    workOrderId: "learn_blacksmithing", recordedStatus: "PLANNED", completionRecorded: false,
+    reconciliation: "CURRENT_LINKED_NEEDS_MET", reason: "Recent profession observations meet this work order's linked skill requirements for Rordin.",
+    professionGoalStateReview: { state: "CURRENTLY_MET", identityKey: "forever::classic beta pvp 2::rordin", needIds: ["blacksmithing_profession"], observedAt: 1_791_742_215, proposalReadiness: "REVIEW_DEPENDENCIES_FIRST", unresolvedDependencyIds: ["review_evidence"], requiresDashboardApproval: true, reason: "Current skill is observed; when or how it was learned is not established." },
+  } }));
+  assert.match(html, /Current profession evidence/);
+  assert.match(html, /Recent observations meet the linked profession skill requirement/);
+  assert.match(html, /review the prerequisite work order/);
+  assert.match(html, /when or how it was learned is not established/);
+  assert.doesNotMatch(html, /Suggested status for player review/);
+});
+
 test("manual sale presentation separates item and gold observations and keeps sale causality unknown", () => {
   const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { progress: { ...progress, sellObservationReviews: [{ sellerIdentityKey: "classic-era::realm a::crafter", needId: "sale_item", resourceKey: "item:159:variant", state: "GOLD_INCREASED", itemState: "ITEM_CHANGED", freshness: "recent", previousFreshness: "recent", goldComparison: { section: "character gold", previousQuantity: 500, currentQuantity: 700, delta: 200, previousObservedAt: 100, currentObservedAt: 200 }, itemComparisons: [{ section: "bags", previousQuantity: 4, currentQuantity: 2, delta: -2, previousObservedAt: 100, currentObservedAt: 200 }], interpretation: "CAUSE_UNKNOWN", reason: "Item and gold changed independently; no sale is established." }] } }));
   assert.match(html, /Manual sale observations \(cause unknown\)/);

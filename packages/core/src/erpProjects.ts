@@ -654,7 +654,10 @@ function assessSharedStorageNeed(need: ErpResourceNeed, shared: SharedStoragePro
 
 /** Compare explicit project needs to one explicitly selected character's latest evidence only. */
 export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredSnapshot[], now: number, currencies?: AccountCurrencies, version?: WowVersion): ErpNeedEvidence {
-  const sourceIdentityKey = need.sourceIdentityKey;
+  // A profession requirement is a capability of its intended character. Older
+  // goal-created plans recorded destinationIdentityKey but not sourceIdentityKey;
+  // use that explicit target only for profession evidence, never for inventory.
+  const sourceIdentityKey = need.sourceIdentityKey ?? (need.kind === "PROFESSION" ? need.destinationIdentityKey : undefined);
   const missing = (reason: string, unresolvedSections: string[] = []): ErpNeedEvidence => ({ needId: need.stableId, state: need.kind === "ITEM_ID" || need.kind === "ITEM_REF" || need.kind === "GOLD_COPPER" || need.kind === "CURRENCY" || need.kind === "PROFESSION" || need.kind === "RECIPE" ? "UNKNOWN" : "UNSUPPORTED_EVIDENCE", ...(sourceIdentityKey ? { sourceIdentityKey } : {}), requiredQuantity: need.requiredQuantity, freshness: "unknown", sourceSections: [], unresolvedSections, unknownQuantityRowCount: 0, reason });
   if (!sourceIdentityKey) return missing("No explicit source character was selected; roster co-location does not prove account ownership.");
   if (need.kind === "CURRENCY") {
@@ -1129,6 +1132,18 @@ export interface ErpWorkOrderProgress {
   readonly plannedOutputAssessment?: ErpPlannedOutputAssessment;
   readonly craftInputObservationReviews?: readonly ErpCraftInputObservationReview[];
   readonly gatherObservationReviews?: readonly ErpGatherObservationReview[];
+  /** Current observed profession goal state that Operations may turn into an exact Dashboard-approved plan proposal. It never changes work-order status. */
+  readonly professionGoalStateReview?: {
+    readonly state: "CURRENTLY_MET" | "CURRENTLY_UNMET" | "UNKNOWN";
+    readonly identityKey: string;
+    readonly needIds: readonly string[];
+    readonly observedAt?: number;
+    readonly suggestedStatus?: "COMPLETED";
+    readonly proposalReadiness: "READY_FOR_DASHBOARD_PROPOSAL" | "REVIEW_DEPENDENCIES_FIRST" | "NO_STATUS_SUGGESTION";
+    readonly unresolvedDependencyIds: readonly string[];
+    readonly requiresDashboardApproval: true;
+    readonly reason: string;
+  };
   readonly reason: string;
 }
 
@@ -1668,9 +1683,13 @@ function resourceSourceScreens(project: ErpProject, snapshotsFor: (identityKey: 
 /** Read-time projection; recorded plans never mutate or claim observed inventory. */
 export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityKey: string) => readonly StoredSnapshot[], allProjects: readonly ErpProject[], now = Math.floor(Date.now() / 1000), currencies?: AccountCurrencies, sharedStorage?: SharedStorageProjection, candidateSources: readonly StoredCharacterSummary[] = [], sharedJournal?: SharedJournal, currencyForSnapshot?: (identityKey: string, snapshotId: number) => CharacterCurrencies | undefined): Omit<ErpProjectView, "history" | "historyEventCount" | "historyTruncated"> {
   const needEvidence = project.needs.map((need) => {
-    const snapshots = !need.sourceOwnerKey && need.sourceIdentityKey ? snapshotsFor(need.sourceIdentityKey) : [];
+    // Profession needs describe a character capability, not transferable stock.
+    // Goal-created plans identify their intended character as destination; use
+    // that exact identity for profession evidence only.
+    const evidenceIdentityKey = need.sourceIdentityKey ?? (need.kind === "PROFESSION" ? need.destinationIdentityKey : undefined);
+    const snapshots = !need.sourceOwnerKey && evidenceIdentityKey ? snapshotsFor(evidenceIdentityKey) : [];
     const assessed = need.sourceOwnerKey ? assessSharedStorageNeed(need, sharedStorage, now) : assessErpNeed(need, snapshots, now, currencies, project.version);
-    const raw = (need.sourceIdentityKey || need.sourceOwnerKey) ? { ...assessed, observationHistory: needObservationHistory(need, snapshots, project.version, need.sourceIdentityKey ? (identityKey, snapshotId) => currencyForSnapshot?.(identityKey, snapshotId) : undefined, sharedJournal), observationHistoryTruncated: need.sourceOwnerKey ? ownerObservationHistoryFromJournal(sharedJournal ?? { entries: new Map() }, need.sourceOwnerKey).length > ERP_NEED_OBSERVATION_HISTORY_LIMIT : snapshots.length > ERP_NEED_OBSERVATION_HISTORY_LIMIT } : assessed;
+    const raw = (evidenceIdentityKey || need.sourceOwnerKey) ? { ...assessed, observationHistory: needObservationHistory(need, snapshots, project.version, evidenceIdentityKey ? (identityKey, snapshotId) => currencyForSnapshot?.(identityKey, snapshotId) : undefined, sharedJournal), observationHistoryTruncated: need.sourceOwnerKey ? ownerObservationHistoryFromJournal(sharedJournal ?? { entries: new Map() }, need.sourceOwnerKey).length > ERP_NEED_OBSERVATION_HISTORY_LIMIT : snapshots.length > ERP_NEED_OBSERVATION_HISTORY_LIMIT } : assessed;
     return applyReservationAssessment(need, raw, allProjects, project.version);
   });
   const needEvidenceById = new Map(needEvidence.map((evidence) => [evidence.needId, evidence]));
@@ -1858,12 +1877,43 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     else if (observationChange === "CHANGED") reconciliation = "OBSERVATION_CHANGED_CAUSE_UNKNOWN";
     else if (linkedNeedState === "ALL_CURRENTLY_MET") reconciliation = "CURRENT_LINKED_NEEDS_MET";
     else reconciliation = "INSUFFICIENT_EVIDENCE";
+    const professionNeeds = order.resourceNeedIds.flatMap((needId) => {
+      const need = project.needs.find((candidate) => candidate.stableId === needId);
+      const evidence = linked.find((candidate) => candidate.needId === needId);
+      return need?.kind === "PROFESSION" && evidence ? [{ need, evidence }] : [];
+    });
+    const professionGoalStateReview: ErpWorkOrderProgress["professionGoalStateReview"] =
+      professionNeeds.length > 0 && professionNeeds.length === order.resourceNeedIds.length && order.assignedIdentityKey &&
+      professionNeeds.every(({ need }) => need.destinationIdentityKey === order.assignedIdentityKey)
+        ? (() => {
+          const unresolvedDependencyIds = order.dependsOn.filter((dependencyId) => project.workOrders.find((candidate) => candidate.stableId === dependencyId)?.status !== "COMPLETED");
+          const recent = professionNeeds.every(({ evidence }) => evidence.freshness === "recent" && evidence.state !== "UNKNOWN" && evidence.state !== "UNSUPPORTED_EVIDENCE");
+          const currentlyMet = recent && professionNeeds.every(({ evidence }) => evidence.state === "COVERED_BY_OBSERVED");
+          const currentlyUnmet = recent && professionNeeds.some(({ evidence }) => evidence.state === "SHORTFALL_OBSERVED");
+          const state = currentlyMet ? "CURRENTLY_MET" as const : currentlyUnmet ? "CURRENTLY_UNMET" as const : "UNKNOWN" as const;
+          const taskCanBeProposedComplete = order.status !== "COMPLETED" && order.status !== "CANCELLED";
+          const observedAt = professionNeeds.map(({ evidence }) => evidence.observedAt).filter((value): value is number => value !== undefined).sort((a, b) => a - b)[0];
+          return {
+            state, identityKey: order.assignedIdentityKey!, needIds: professionNeeds.map(({ need }) => need.stableId),
+            ...(observedAt !== undefined ? { observedAt } : {}),
+            ...(state === "CURRENTLY_MET" && taskCanBeProposedComplete && unresolvedDependencyIds.length === 0 ? { suggestedStatus: "COMPLETED" as const } : {}),
+            proposalReadiness: state !== "CURRENTLY_MET" || !taskCanBeProposedComplete ? "NO_STATUS_SUGGESTION" as const : unresolvedDependencyIds.length ? "REVIEW_DEPENDENCIES_FIRST" as const : "READY_FOR_DASHBOARD_PROPOSAL" as const,
+            unresolvedDependencyIds, requiresDashboardApproval: true as const,
+            reason: state === "CURRENTLY_MET"
+              ? `Recent Forever profession observations meet the linked skill requirements for ${order.assignedIdentityKey}. This confirms the current recorded skill only; it does not establish when or how the professions were learned. Work-order status remains ${order.status} until a player-approved Dashboard change is made${unresolvedDependencyIds.length ? `; review prerequisite work orders first: ${unresolvedDependencyIds.join(", ")}` : "."}`
+              : state === "CURRENTLY_UNMET"
+                ? `Recent Forever profession evidence does not meet every linked skill threshold for ${order.assignedIdentityKey}. Keep the task open and review the exact profession evidence; no gameplay action is inferred.`
+                : `Current profession evidence is incomplete, stale, or unknown for ${order.assignedIdentityKey}; no completion status is suggested.`,
+          };
+        })() : undefined;
     const reason = reconciliation === "PLAYER_RECORDED_COMPLETE"
       ? "The player marked this work order complete in the saved plan. Linked resource evidence is reported separately and does not verify which action occurred."
       : reconciliation === "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL"
         ? `The player marked this work order complete, but current linked needs still show a shortfall: ${shortfallNeedIds.join(", ")}. Review these records; this does not prove the task failed or identify the cause.`
         : reconciliation === "CURRENT_LINKED_NEEDS_MET"
-          ? `Current linked resource requirements are covered by recent observations: ${coveredNeedIds.join(", ")}. This establishes current resource state only, not completion or the action that produced it.`
+          ? professionGoalStateReview?.state === "CURRENTLY_MET"
+            ? `Recent profession observations meet this work order's linked skill requirements for ${professionGoalStateReview.identityKey}. This confirms current skill only, not when or how it was learned; the saved work-order status remains ${order.status} pending explicit Dashboard approval.`
+            : `Current linked resource requirements are covered by recent observations: ${coveredNeedIds.join(", ")}. This establishes current resource state only, not completion or the action that produced it.`
           : reconciliation === "CURRENT_LINKED_NEEDS_UNMET"
             ? `Recent linked observations show resource shortfalls: ${shortfallNeedIds.join(", ")}. Review the plan; no missing or unobserved quantity is treated as zero.`
             : reconciliation === "MIXED_LINKED_EVIDENCE"
@@ -1883,7 +1933,7 @@ export function evaluateErpProject(project: ErpProject, snapshotsFor: (identityK
     const craftInputs = craftInputObservationReviews(project, order, snapshotsFor, now);
     const gatherReviews = gatherObservationReviews(project, order, snapshotsFor, now);
     const saleReviews = sellObservationReviews(project, order, snapshotsFor, now);
-    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(saleReviews.length ? { sellObservationReviews: saleReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), ...(gatherReviews.length ? { gatherObservationReviews: gatherReviews } : {}), reason };
+    return { workOrderId: order.stableId, recordedStatus: order.status, completionRecorded: order.status === "COMPLETED", linkedNeedState, observationChange, reconciliation, coveredNeedIds, shortfallNeedIds, unresolvedNeedIds, allocationConflictNeedIds, changedNeedIds, ...(professionGoalStateReview ? { professionGoalStateReview } : {}), ...(transferReviews.length ? { transferObservationReviews: transferReviews } : {}), ...(provisioningReviews.length ? { provisioningObservationReviews: provisioningReviews } : {}), ...(retrievalReviews.length ? { retrievalObservationReviews: retrievalReviews } : {}), ...(procurementReview ? { procurementObservationReview: procurementReview } : {}), ...(saleReviews.length ? { sellObservationReviews: saleReviews } : {}), ...(plannedOutputAssessment ? { plannedOutputAssessment } : {}), ...(craftInputs.length ? { craftInputObservationReviews: craftInputs } : {}), ...(gatherReviews.length ? { gatherObservationReviews: gatherReviews } : {}), reason };
   });
   const reservationReview: Array<ErpProjectView["reservationReview"][number]> = [];
   for (const reservation of project.reservations.filter((r) => r.status === "ACTIVE")) {

@@ -202,7 +202,7 @@ export interface CharacterProfessions {
   /** Structured Retail tree/node investment; separate from profession skill/ownership. */
   specialization?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
   /** Retail recipe facts retained per character; never implies catalogue completeness. */
-  recipeKnowledge?: { status: SectionState; completeness: string; observedAt?: number; data?: Record<string, unknown> };
+  recipeKnowledge?: { status: SectionState; completeness: string; observedAt?: number; reason?: string; data?: Record<string, unknown> };
 }
 
 /**
@@ -662,8 +662,10 @@ function buildProfessionsByCharacter(
         status: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.status.state,
         completeness: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.completeness,
         observedAt: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.observedAt,
+        reason: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.status.reason,
         data: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.data,
-      } } : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } } : {}),
+      } } : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } }
+        : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "The current Forever GearExport collector records profession skills and spells but not recipe records. Missing rows are not evidence that recipes are unlearned; the version-tagged client API results are not captured in this export. GetAllRecipeIDs may be empty until that profession panel has been opened." } } : {}),
     };
   });
 }
