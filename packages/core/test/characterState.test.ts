@@ -267,6 +267,24 @@ test("Forever 70338 recipe evidence reaches professions and AccountFacts without
   } finally { store.close(); }
 });
 
+test("an observed Forever recipe panel does not promote UNKNOWN profession-skill provenance", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const generatedAt = ts;
+    const recipeObservedAt = generatedAt - 5;
+    const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 1, uniqueCandidateCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, evidence: "OBSERVED", observedAt: recipeObservedAt, recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: recipeObservedAt }] }] };
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { unknown: true } }), { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Rordin", realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: "Player-4613-016F932B", professionRecipes: { capture: 59, revision: 2, changedAt: recipeObservedAt, observedAt: recipeObservedAt, source: "client", completeness: "partial", data: recipeData } } });
+    const read = new DashboardReadModel(store, () => generatedAt + 1).getCharacterProfessions({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    assert.equal(read.value.provenance.state, "UNKNOWN", "recipe-panel observation is not evidence of profession-skill state");
+    assert.equal(read.value.provenance.observedAt, undefined, "recipe timestamp is not reused as the profession-skill timestamp");
+    assert.equal(read.value.data?.status.state, "UNKNOWN");
+    assert.equal(read.value.data?.recipeKnowledge?.status.state, "OBSERVED", "recipe evidence remains available as its own section");
+    assert.equal(read.value.data?.recipeKnowledge?.observedAt, recipeObservedAt);
+  } finally { store.close(); }
+});
+
 test("A27 characterState merge and LAST_SEEN carry-forward are identical whether or not equipment observations ride along", () => {
   const combat = (specID: number) => ({ formatVersion: 1, clientFamily: "Retail", combatSpecialization: domain({ activeSpec: { specID, classID: 3 } }) });
   const run = (withObservation: boolean) => {

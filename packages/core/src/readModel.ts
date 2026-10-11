@@ -1393,9 +1393,16 @@ export class DashboardReadModel {
         : query.version === "forever"
           ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "This Forever snapshot contains no structured profession recipe section. Missing rows do not mean unlearned, and the candidate list is not a complete recipe catalogue." }, completeness: "unknown" as const }
           : undefined;
-      const state = value.status.state === "UNKNOWN" && (captured || recipeKnowledge) ? statusToReadState(captured?.status.state ?? recipeKnowledge!.status.state) : statusToReadState(value.status.state);
+      // Recipe knowledge is a separate evidence section. A recipe-panel capture
+      // must not upgrade profession-skill provenance or its timestamp.
+      const state = value.status.state === "UNKNOWN" && captured
+        ? statusToReadState(captured.status.state)
+        : statusToReadState(value.status.state);
       const data = { ...value, ...(captured ? { specialization: captured } : {}), ...(recipeKnowledge ? { recipeKnowledge } : {}) } as ProfessionsSection;
-      return { ...(state === "UNKNOWN" ? {} : { data }), provenance: { state, version: query.version, identityKey: character.identityKey, observedAt: value.status.state !== "UNKNOWN" ? value.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt : recipes?.observedAt ?? captured?.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "WOWSYNC v1 professions plus structured specialization and recipe sidecars", ...(state === "UNKNOWN" ? { reason: value.status.reason ?? "This section was not captured." } : {}), ...(state === "LAST_SEEN" ? { warning: "This section is historical and not a current observation." } : {}) } };
+      const observedAt = value.status.state !== "UNKNOWN"
+        ? value.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt
+        : captured?.observedAt;
+      return { ...(state === "UNKNOWN" && !recipeKnowledge ? {} : { data }), provenance: { state, version: query.version, identityKey: character.identityKey, ...(observedAt !== undefined ? { observedAt } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "WOWSYNC v1 professions plus structured specialization and recipe sidecars", ...(state === "UNKNOWN" ? { reason: value.status.reason ?? "Profession skills were not captured in this snapshot; recipe knowledge is reported separately." } : {}), ...(state === "LAST_SEEN" ? { warning: "This section is historical and not a current observation." } : {}) } };
     });
   }
 
