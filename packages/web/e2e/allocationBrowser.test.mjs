@@ -154,6 +154,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create a project resource need and manual w
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const createForm = page.locator("form.erp-create-form");
     await createForm.getByLabel("Project title").fill("Provision the crafter");
@@ -604,6 +605,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] assigned gatherer progress shows only fresh
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const changedNeeds = page.locator(".erp-observation-change-queue");
     const changeText = await changedNeeds.innerText();
     assert.match(changeText, /Rough Stone/);
@@ -661,6 +663,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] confirmed same-character shortfall prefills
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const projectCard = page.locator(".erp-project-card").filter({ hasText: "Supply the repair" });
     await projectCard.waitFor();
     const need = projectCard.locator(".erp-need-list li").filter({ hasText: "Rough Stone" });
@@ -764,6 +767,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] retrieval review shows paired personal bank
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const projectCard = page.locator(".erp-project-card").filter({ hasText: "Review personal bank retrieval" });
     await projectCard.waitFor();
     const workOrder = projectCard.locator(".erp-work-order-list li").filter({ hasText: "Check personal storage observations" });
@@ -825,6 +829,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] plan a same-character personal-bank retriev
     const errors = []; page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const fresh = page.locator(".erp-project-card").filter({ hasText: "Review fresh bank supply" }); await fresh.waitFor();
     await page.getByTestId(`erp-fulfillment-pathways-${freshProject.stableId}-fresh_bank_need`).getByRole("button", { name: "Plan manual review from review personal bank retrieval", exact: true }).click();
     const groupedPlanner = page.getByTestId("erp-cross-project-plan");
@@ -927,6 +932,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] stale observed stock cannot enable a new re
     page.setDefaultTimeout(5_000);
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const need = page.locator(".erp-need-list li").filter({ hasText: "Stale Mycobloom" });
     await need.getByText(/stale freshness/).waitFor();
     assert.equal(await need.getByRole("button", { name: "Reserve" }).isDisabled(), true,
@@ -968,6 +974,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] a partial source scan allows reservation re
     const page = await browser.newPage(); page.setDefaultTimeout(5_000);
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const card = page.locator(".erp-project-card").filter({ hasText: "Review a partial reservation" });
     const restBefore = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     const projectBefore = restBefore.projects.find((entry) => entry.title === "Review a partial reservation");
@@ -1036,6 +1043,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] competing reservations block observed prere
     const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const read = async () => page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     let rest = await read();
     const portfolio = rest.portfolioFulfillment.packages[0];
@@ -1110,6 +1118,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] group multiple assessed requirements into o
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const project = page.locator(".erp-project-card").filter({ hasText: "Prepare a multi-input repair" });
     await project.getByRole("button", { name: "Create one grouped investigation" }).click();
     const planner = project.getByRole("region", { name: "Multi-need fulfillment planner for Prepare a multi-input repair" });
@@ -1175,6 +1184,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] compose different manual work types and dep
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const project = page.locator(".erp-project-card").filter({ hasText: "Prepare multi-step provisioning" });
     await project.getByRole("button", { name: "Compose fulfillment work orders" }).click();
     const composer = project.getByRole("region", { name: "Multi-need work-order composer for Prepare multi-step provisioning" });
@@ -1236,6 +1246,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] create requirements, compose fulfillment, a
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const createForm = page.locator("form.erp-create-form");
     await createForm.getByLabel("Project title").fill("Repair kit for the workshop");
     await createForm.getByLabel("Objective").fill("Record explicit item and recipe needs and plan manual fulfillment.");
@@ -1347,6 +1358,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] changed observations create a linked, non-c
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const queue = page.getByRole("region", { name: "Changed resource observations" });
     await queue.getByText("Mycobloom").waitFor();
     await queue.getByText("Briarthorn").waitFor();
@@ -1430,6 +1442,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const composer = page.getByTestId("erp-cross-project-plan"); await composer.waitFor();
     const portfolioQueue = page.getByTestId("erp-portfolio-next-actions");
@@ -1659,6 +1672,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual(mcpProjectsById.get(secondRead.stableId).workOrderReadiness[0].portfolioPrerequisites, secondRead.workOrderReadiness[0].portfolioPrerequisites, "MCP and REST expose the same prerequisite evidence state");
     store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now + 20, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now + 20), bank: observedSection([], now + 20) }));
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const afterObservation = await read();
     const afterFirst = afterObservation.projects.find((project) => project.stableId === first.stableId);
     assert.equal(afterFirst.needEvidence.find((entry) => entry.needId === "mycobloom_need").observedQuantity, 1);
@@ -1677,6 +1691,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.deepEqual(changedMcpFirst.workOrders.map((order) => order.status), afterFirst.workOrders.map((order) => order.status));
     store.importSnapshot(renderExport({ name: "Fulfillment Planner", realm: "Cairne", generated: now + 40, bags: observedSection([row(ITEM_ID, 6, { name: "Mycobloom" }), row(ITEM_ID + 1, 1, { name: "Briarthorn" })], now + 40), bank: observedSection([], now + 40) }));
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const afterRecovery = await read();
     const recoveredPackage = afterRecovery.portfolioFulfillment.packages.find((entry) => entry.stableId === portfolioPackage.stableId);
     assert.equal(recoveredPackage.steps[1].prerequisiteGate.state, "CURRENT_OBSERVED_EVIDENCE_MET", "a later fresh observation can satisfy the declared evidence gate");
@@ -1690,6 +1705,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const investigationA = store.createErpProject({ version: "retail", title: "Review lead for first provision", needs: [{ stableId: "lead_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom for first crafter", requiredQuantity: 2, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     const investigationB = store.createErpProject({ version: "retail", title: "Review lead for second provision", needs: [{ stableId: "lead_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Mycobloom for second crafter", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const currentReview = await read();
     const currentSourceGroup = currentReview.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     const currentLead = currentSourceGroup.alternativeLocations.find((location) => location.sourceIdentityKey === observedLead.character.identityKey);
@@ -1730,6 +1746,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     const provisioningA = store.createErpProject({ version: "retail", title: "Provision first crafter", needs: [{ stableId: "provision_need_a", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for first crafter", requiredQuantity: 2, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     const provisioningB = store.createErpProject({ version: "retail", title: "Provision second crafter", needs: [{ stableId: "provision_need_b", kind: "ITEM_REF", resourceKey: fullRef(ITEM_ID), label: "Exact Mycobloom for second crafter", requiredQuantity: 1, sourceIdentityKey: source.character.identityKey, destinationIdentityKey: source.character.identityKey }] });
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const provisioningReview = await read();
     const provisioningGroup = provisioningReview.sourceFulfillment.sources.find((entry) => entry.sourceIdentityKey === source.character.identityKey && entry.resourceKey === fullRef(ITEM_ID));
     const observedItemLead = provisioningGroup.alternativeLocations.find((location) => location.sourceIdentityKey === observedLead.character.identityKey);
@@ -1752,6 +1769,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] one stale-safe planning session atomically 
     assert.equal(observedLeadWithPlans.selectedProvisioningPlanCount, 3, "source review shows every open player-authored use beside the matching observed lead");
     assert.deepEqual(observedLeadWithPlans.selectedProvisioningPlans.map((entry) => [entry.projectId, entry.needId, entry.workOrderStatus]).sort((left, right) => left[0].localeCompare(right[0])), [[first.stableId, "mycobloom_need", "PLANNED"], [provisioningA.stableId, "provision_need_a", "PLANNED"], [provisioningB.stableId, "provision_need_b", "PLANNED"]].sort((left, right) => left[0].localeCompare(right[0])));
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const refreshedLeadUi = page.getByTestId(`erp-source-fulfillment-${encodeURIComponent(provisioningGroup.stableId)}`).locator("li").filter({ hasText: "Possible Source Lead" }).first();
     const refreshedLeadText = await refreshedLeadUi.innerText();
     assert.match(refreshedLeadText, /open player-authored provisioning plan uses select this character as source/, `the visible source lead should show matching saved provisioning plans: ${refreshedLeadText}`);
@@ -1797,6 +1815,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] ambiguous location leads remain unselected 
     const page = await browser.newPage(); page.setDefaultTimeout(5_000);
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const pathway = page.getByTestId(`erp-fulfillment-pathways-${project.stableId}-ambiguous_need`);
     await pathway.getByRole("button", { name: "Plan manual review from investigate other character location", exact: true }).click();
@@ -1833,6 +1852,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] manage manual work-order lifecycle from the
     const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const queue = page.getByRole("region", { name: "Work order review queue" });
     const task = queue.getByTestId(`erp-queue-order-${project.stableId}-manual-gather`);
     await task.waitFor();
@@ -1912,6 +1932,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output
     const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const portfolio = page.getByTestId("erp-portfolio-fulfillment");
     const restBefore = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     const packageBefore = restBefore.portfolioFulfillment.packages.find((entry) => entry.steps.some((step) => step.needId === "craft_output"));
@@ -1962,6 +1983,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output
     const importResult = await page.evaluate(async (text) => fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }).then((response) => response.json()), after);
     assert.equal(importResult.result.character.identityKey, character, "the later export is attached to the same verified source identity");
     await page.reload(); await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     current = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()).projects.find((entry) => entry.title === "Multi-need field provisioning"));
     const retrieved = current.workOrderProgress.find((entry) => entry.workOrderId === retrievalOrder.stableId);
     assert.equal(retrieved.retrievalObservationReviews[0].state, "BAGS_AND_BANK_CHANGED");
@@ -2043,6 +2065,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const page = await browser.newPage(); page.setDefaultTimeout(5_000); const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const panel = page.getByTestId("erp-procurement-budget-review");
     const line = panel.getByTestId(`erp-procurement-budget-${project.stableId}-budget`);
     await line.waitFor();
@@ -2064,7 +2087,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     const importResponse = await page.evaluate(async (text) => fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) }).then((response) => response.json()), laterExport);
     assert.equal(importResponse.result.character.identityKey, buyer, "the later synthetic observation resolves to the same explicit buyer identity");
     await page.reload();
+
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+
+    await page.locator(".erp-advanced-planning > summary").click();
     const buyerPanel = page.getByTestId("erp-procurement-buyer-review");
     const buyerLine = buyerPanel.getByTestId(`erp-procurement-buyer-${encodeURIComponent(buyer)}`);
     await buyerLine.waitFor();
@@ -2224,6 +2250,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const queue = page.getByTestId("erp-portfolio-next-actions");
     for (const label of ["Mycobloom", "Briarthorn"]) {
       const review = queue.locator("article").filter({ hasText: label }).first();
@@ -2284,6 +2311,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     const restoredAt = changedAt + 1;
     store.importSnapshot(renderExport({ name: "Queue Plan Fixture", realm: "Cairne", generated: restoredAt, bags: observedSection([row(ITEM_ID, 1, { name: "Mycobloom" }), row(ITEM_ID + 1, 4, { name: "Briarthorn" })], restoredAt), bank: observedSection([], restoredAt) }));
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const afterObservation = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     batch = afterObservation.portfolioFulfillment.savedPlanningBatches[0];
     assert.equal(batch.state, "NEWER_OBSERVATION_REVIEW");
@@ -2317,6 +2345,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
       assert.equal(result.status, 200, "the player can close obsolete manual work while retaining its saved batch history");
     }
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     assert.match(await page.getByTestId("erp-saved-planning-batches").innerText(), /NEWER OBSERVATION REVIEW/);
     const intervalPanel = page.getByTestId(`erp-history-interval-${encodeURIComponent(batch.stableId)}-${encodeURIComponent("queue_myco")}`);
     await intervalPanel.waitFor();
@@ -2333,6 +2362,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     const beforeDirectSave = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     assert.ok(beforeDirectSave.projects.filter((project) => [first.stableId, second.stableId].includes(project.stableId)).every((project) => project.workOrders.length === 1 && project.workOrders[0]?.status === "CANCELLED"), "opening the portfolio follow-up draft does not write plans or change work status");
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const historyHref = `#${erpSavedNeedHistoryAnchorId(first.stableId, "queue_myco")}`;
     assert.ok(await queuePanel.locator(`a[href="${historyHref}"]`).count() > 0, "portfolio attention navigates directly to the matching requirement history");
     assert.equal(await savedNeedHistory.getByRole("link", { name: "Open this requirement to reconcile its observed interval" }).getAttribute("href"), `#${erpNeedAnchorId(first.stableId, "queue_myco")}`);
@@ -2382,6 +2412,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
       assert.equal(result.status, 200, "the player explicitly closes the current branch before requesting another manual instruction");
     }
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     const followUpHasNewerObservation = followUpBatch.steps.find((step) => step.needId === "queue_myco")?.evidenceReview !== "NO_NEWER_OBSERVATION";
     assert.equal(await page.getByTestId(`erp-history-review-${encodeURIComponent(followUpBatch.stableId)}-queue_myco`).count(), followUpHasNewerObservation ? 1 : 0, "the UI gates follow-up review on the same strict post-generation evidence state returned by REST");
     if (!followUpHasNewerObservation) assert.match(await page.getByTestId(`erp-history-review-blocked-${encodeURIComponent(followUpBatch.stableId)}-queue_myco`).innerText(), /No newer observation is available/);
@@ -2420,6 +2451,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     assert.equal(identityEdit.status, 200, "a player may edit the requirement while saved evidence records the resulting conflict");
     const afterIdentityConflict = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     await page.reload();
+    await page.locator(".erp-advanced-planning > summary").click();
     assert.equal(await page.getByTestId(`erp-history-review-${encodeURIComponent(batch.stableId)}-queue_myco`).count(), 0, "a generation with changed requirement identity cannot seed another plan");
     assert.match(await page.getByTestId(`erp-history-review-blocked-${encodeURIComponent(batch.stableId)}-queue_myco`).innerText(), /conflicting saved context/);
     assert.ok(afterIdentityConflict.portfolioFulfillment.savedPlanningBatches.every((entry) => entry.state === "CONFLICTING_BATCH_CONTEXT"), "the changed requirement identity is a conflict for both frozen batch baselines");
@@ -2473,6 +2505,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] frozen fulfillment package catches combined
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const planner = page.getByTestId("erp-cross-project-plan");
     for (const label of ["Herbs for first project task", "Herbs for second project task"]) {
       await planner.locator(".erp-cross-project-choice").filter({ hasText: label }).getByRole("checkbox").check();
@@ -2533,6 +2566,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] selected source leads are compared with com
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     const planner = page.getByTestId("erp-cross-project-plan");
     for (const label of ["Herbs for first recipe", "Herbs for second recipe"]) {
       await planner.locator(".erp-cross-project-choice").filter({ hasText: label }).getByRole("checkbox").check();

@@ -40,6 +40,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] replan competing reservations and refresh d
     const pageErrors = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${address.port}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
     const panel = page.getByTestId("erp-reservation-replan"); await panel.waitFor();
     const initialCommitments = await page.evaluate(async () => await (await fetch("/api/versions/retail/erp/projects")).json());

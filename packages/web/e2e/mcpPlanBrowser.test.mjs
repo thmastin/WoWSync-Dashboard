@@ -42,6 +42,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
 
     await page.goto(`${baseUrl}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+    await page.locator('.erp-advanced-planning > summary').click();
     await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
 
     const createdResult = await mcpClient.callTool({ name: "create_erp_project", arguments: {
@@ -98,7 +99,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
 
     await page.reload();
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
-    await page.getByRole("heading", { name: "MCP-authored provisioning plan", exact: true }).waitFor();
+    await page.locator('.erp-advanced-planning > summary').click();
+    await page.getByTestId("erp-player-project-detail").getByRole("heading", { name: "MCP-authored provisioning plan", exact: true }).waitFor();
     const card = page.locator(".erp-project-card").filter({ hasText: "MCP-authored provisioning plan" });
     assert.match(await card.innerText(), /PAUSED/);
     assert.match(await card.innerText(), /Rough Stone/);
