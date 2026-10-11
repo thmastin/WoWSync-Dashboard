@@ -415,6 +415,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverGearObservation(query)));
+  server.registerTool("get_forever_character_quests", {
+    title: "Get Forever active quests and objectives",
+    description: "Returns read-only quest and objective observations for one explicit Forever character. Active quests, objective progress, completion, turn-in readiness, completed history, tracking, and waypoint context remain separately evidenced; partial/stale/unavailable data stays explicit. A quest disappearing from the active log does not prove completion. Never applies Retail rules or takes gameplay actions.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getForeverQuestObservation(query)));
   server.registerTool("get_forever_gear_allocation", {
     title: "Evaluate observed Forever gear candidates",
     description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",

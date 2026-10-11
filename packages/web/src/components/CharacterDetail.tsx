@@ -211,6 +211,7 @@ export default function CharacterDetail({
           { id: "detail-trainers", label: "Trainers" },
           { id: "detail-snapshots", label: "Snapshots" },
         );
+        if (character.version === "forever") detailTocLinks.splice(detailTocLinks.length - 1, 0, { id: "detail-forever-quests", label: "Quests" });
         return (
         <>
         <DetailToc links={detailTocLinks} />
@@ -372,6 +373,34 @@ export default function CharacterDetail({
               {foreverObservation?.trainerEvidence && (foreverObservation.trainerEvidence as { lastObserved?: unknown }).lastObserved ? <details><summary>Raw trainer observation</summary><pre>{JSON.stringify((foreverObservation.trainerEvidence as { lastObserved?: unknown }).lastObserved, null, 2)}</pre></details> : null}
               </>}
               </>}
+            </section>
+          )}
+
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-quests">
+              <h3>Forever quests and objectives</h3>
+              {!foreverObservation ? <p>Quest observation unavailable for this client profile.</p> : (() => {
+                const quests = foreverObservation.quests;
+                return <>
+                  <p className="muted small">{quests.state} · {quests.completeness} coverage · {quests.observedAt ? `observed ${formatAbsoluteTime(quests.observedAt)} (${quests.freshness})` : "observation time UNKNOWN"} · {quests.source}</p>
+                  {quests.reason && <p>{quests.reason}</p>}
+                  {quests.activeState === "UNKNOWN" ? <p>Active quest log: UNKNOWN. Unavailable quest data is not an empty log.</p>
+                    : quests.activeState === "LAST_SEEN" ? <p>Showing LAST_SEEN quest observations; the most recent refresh did not succeed.</p>
+                    : quests.active?.length ? quests.active.map((quest) => <article className="allocation-row" key={`quest-${quest.questID}`}>
+                      <strong>{quest.title ?? `Quest ${quest.questID}`} <span className="muted small">(ID {quest.questID})</span></strong>
+                      <p className="muted small">Quest title {quest.titleState} · log row {quest.logIndex ?? "UNKNOWN"} · level {quest.level ?? "UNKNOWN"} · Complete: {quest.completionState === "OBSERVED" ? `OBSERVED (${quest.isComplete ? "yes" : "no"})` : "UNKNOWN"} · Turn-in readiness: {quest.turnInReadinessState === "OBSERVED" ? `OBSERVED (${quest.readyForTurnIn ? "yes" : "no"})` : "UNKNOWN"}</p>
+                      {(quest.isTask !== undefined || quest.isBounty !== undefined || quest.isStory !== undefined || quest.isAutoComplete !== undefined || quest.suggestedGroup !== undefined || quest.frequency !== undefined || quest.campaignID !== undefined) && <p className="muted small">Observed quest metadata: {[quest.isTask !== undefined ? `task ${quest.isTask ? "yes" : "no"}` : undefined, quest.isBounty !== undefined ? `bounty ${quest.isBounty ? "yes" : "no"}` : undefined, quest.isStory !== undefined ? `story ${quest.isStory ? "yes" : "no"}` : undefined, quest.isAutoComplete !== undefined ? `auto-complete ${quest.isAutoComplete ? "yes" : "no"}` : undefined, quest.suggestedGroup !== undefined ? `suggested group ${quest.suggestedGroup}` : undefined, quest.frequency !== undefined ? `frequency ${quest.frequency}` : undefined, quest.campaignID !== undefined ? `campaign ${quest.campaignID}` : undefined].filter(Boolean).join(" · ")}</p>}
+                      {quest.objectiveState === "UNKNOWN" ? <p>Objectives: UNKNOWN; the client did not provide objective data.</p>
+                        : quest.objectives?.length ? quest.objectives.map((objective, index) => <p className="muted small" key={`${quest.questID}-objective-${index}`}>
+                          {objective.text ?? "Objective text UNKNOWN"} · Finished {objective.finishedState === "OBSERVED" ? `OBSERVED (${objective.finished ? "yes" : "no"})` : "UNKNOWN"} · Progress {objective.numFulfilledState === "OBSERVED" && objective.numRequiredState === "OBSERVED" ? `OBSERVED ${objective.numFulfilled}/${objective.numRequired}` : "UNKNOWN"}
+                        </p>) : <p className="muted small">No objectives returned in this observed quest record.</p>}
+                      {quest.waypointState === "OBSERVED" && quest.waypoint && <p className="muted small">Observed waypoint{quest.waypointText ? ` (${quest.waypointText})` : ""}: map {quest.waypoint.mapID}, {quest.waypoint.x.toFixed(3)}, {quest.waypoint.y.toFixed(3)}.</p>}
+                    </article>) : <p>Active quest log observed empty.</p>}
+                  <p className="muted small">Completed-quest history: {quests.completedHistory.state}{quests.completedHistory.returnedCount !== undefined ? ` · ${quests.completedHistory.returnedCount} IDs returned` : ""}{quests.completedHistory.truncated ? " · partial/truncated" : ""}. History is separate from the active quest log.</p>
+                  {quests.completedHistory.quests?.length ? <ul className="compact-list">{quests.completedHistory.quests.slice(0, 40).map((quest) => <li key={`completed-quest-${quest.questID}`}>{quest.titleState === "UNKNOWN" ? `Quest ${quest.questID}` : quest.title} <span className="muted small">· {quest.titleState} · ID {quest.questID}</span></li>)}</ul> : null}
+                  {quests.issues.length > 0 && <details><summary>Quest observation limitations</summary><ul>{quests.issues.slice(0, 20).map((issue, index) => <li key={`quest-issue-${index}`}>{issue}</li>)}</ul></details>}
+                </>;
+              })()}
             </section>
           )}
 

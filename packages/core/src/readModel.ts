@@ -20,6 +20,7 @@ import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
+import type { ForeverQuestObservation } from "./foreverQuests.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -990,6 +991,25 @@ export class DashboardReadModel {
       const observedAt = snapshot.parsed.foreverGearObservation?.generatedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
       return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: snapshot.parsed.foreverGearObservation ? "Forever 70291 WoWSyncDB structured sections plus WOWSYNC v1 export" : "WOWSYNC v1 export; structured WoWSyncDB section timestamps unavailable", reason: snapshot.parsed.foreverGearObservation ? undefined : "Structured Forever section sidecar was not available for this imported snapshot." } };
     });
+  }
+
+  getForeverQuestObservation(query: CharacterQuery): CharacterResolution<ReadValue<ForeverQuestObservation>> {
+    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Quest observations are isolated to Forever 1.60.1 build 70291 or 70338 / interface 16001." } } };
+    const resolved = this.getForeverGearObservation(query);
+    if (resolved.status !== "FOUND") return resolved;
+    const observation = resolved.value.data?.quests;
+    return { status: "FOUND", value: {
+      ...(observation ? { data: observation } : {}),
+      provenance: {
+        state: observation?.state ?? "UNKNOWN", version: "forever", identityKey: resolved.value.provenance.identityKey,
+        ...(observation?.observedAt !== undefined ? { observedAt: observation.observedAt } : {}),
+        ...(resolved.value.provenance.importedAt !== undefined ? { importedAt: resolved.value.provenance.importedAt } : {}),
+        ...(resolved.value.provenance.snapshotId !== undefined ? { snapshotId: resolved.value.provenance.snapshotId } : {}),
+        ...(observation ? { freshness: observation.freshness } : { freshness: "unknown" as const }),
+        source: "Forever C_QuestLog quest observation sidecar",
+        ...(observation?.reason ? { reason: observation.reason } : undefined),
+      },
+    } };
   }
 
   /**

@@ -349,6 +349,10 @@ export function fetchForeverGearAllocation(identityKey: string, signal?: AbortSi
   return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-gear-allocation`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
 }
 
+export function fetchForeverQuests(identityKey: string, signal?: AbortSignal) {
+  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-quests`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+}
+
 /** Every demand for a version, any status (the removed-target history and conflict lookups read this). */
 export function fetchDemands(version: VersionOrUnknown, signal?: AbortSignal) {
   return request<{ demands: ExplicitDemand[] }>(`/api/versions/${encodeURIComponent(version)}/demands`, undefined, { signal, validate: hasArray("demands") });

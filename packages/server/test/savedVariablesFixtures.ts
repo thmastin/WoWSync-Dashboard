@@ -15,6 +15,7 @@ export interface SavedRecord {
   /** Raw Lua for `sections.currencies`, used only by bridge tests. */
   currencies?: string;
   professionRecipes?: string;
+  quests?: string;
   /** Raw Lua for the canonical `sections.equipment` envelope (see equipmentLua). */
   equipment?: string;
   /** Raw Lua for GearExport's `latestExport.specEquipmentObservation` projection. */
@@ -37,6 +38,7 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     lines.push("},", '["sections"] = {');
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
     if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);
+    if (r.quests !== undefined) lines.push(`["quests"] = ${r.quests},`);
     if (r.equipment !== undefined) lines.push(`["equipment"] = ${r.equipment},`);
     if (r.bags !== undefined) lines.push(`["bags"] = ${r.bags},`);
     if (r.bank !== undefined) lines.push(`["bank"] = ${r.bank},`);

@@ -1,6 +1,7 @@
 import type { VersionOrUnknown } from "./types.ts";
 import { classifyFreshness } from "./freshness.ts";
 import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
+import { buildForeverQuestObservation } from "./foreverQuests.ts";
 
 export interface ForeverStructuredObservation {
   clientProfile: "Forever:1.60.1:70291:16001" | "Forever:1.60.1:70338:16001";
@@ -12,6 +13,7 @@ export interface ForeverStructuredObservation {
   equipment?: Record<string, unknown>;
   bags?: Record<string, unknown>;
   bank?: Record<string, unknown>;
+  quests?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
   itemEvidence?: Record<string, unknown>;
   professionRecipes?: { status: { state: "OBSERVED"; completeness: "partial"; observedAt: number }; completeness: "partial"; observedAt: number; data: Record<string, unknown> };
@@ -67,6 +69,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("equipment") ? { equipment: section("equipment") } : {}),
     ...(section("bags") ? { bags: section("bags") } : {}),
     ...(section("bank") ? { bank: section("bank") } : {}),
+    ...(section("quests") ? { quests: section("quests") } : {}),
     ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
     ...(validRecipes ? { professionRecipes: {
       status: { state: "OBSERVED" as const, completeness: "partial" as const, observedAt: recipeSection!.observedAt as number },
@@ -271,7 +274,7 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
     conflict = true;
   }
   if (incoming.sourceCharacterGuidConflict || existing.sourceCharacterGuidConflict) value.sourceCharacterGuidConflict = true;
-  for (const key of ["equipment", "bags", "bank"] as const) {
+  for (const key of ["equipment", "bags", "bank", "quests"] as const) {
     const before = existing[key]; const next = incoming[key];
     if (!next) continue;
     if (!before) { value[key] = next; updated = true; continue; }
@@ -472,6 +475,7 @@ export function buildForeverGearObservation(input: {
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: useStructuredBank ? structuredState(structured?.bank) : bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), source: useStructuredBank ? "Forever WoWSyncDB character bank tabs" : "WOWSYNC v1 character bank", items: bankItems, reason: bank.status.state === "UNKNOWN" && !useStructuredBank ? "Bank contents were not observed; unavailable is not empty." : undefined },
+    quests: buildForeverQuestObservation({ section: structured?.quests, profile: structured?.clientProfile ?? "UNKNOWN", identity: { identityKey: identity.identityKey, name: identity.name, realm: identity.realm }, now: input.now }),
     trainerEvidence: evidenceData?.trainerEvidence ?? { state: "UNKNOWN", reason: "The Forever trainer window has not been observed with raw service data." },
     metadataSource: structured?.itemMetadata ? "Forever WoWSyncDB itemMetadata" : "UNKNOWN",
   };

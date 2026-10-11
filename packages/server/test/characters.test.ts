@@ -156,14 +156,21 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
     assert.equal(rest.body.value.data.evaluationCandidates.items[0].eligibility, "UNKNOWN");
     assert.equal(rest.body.value.data.evaluationCandidates.items[0].upgradeStatus, "UNKNOWN");
     assert.equal(rest.body.value.data.bank.state, "UNKNOWN");
+    const questRest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests`);
+    assert.equal(questRest.status, 200);
+    assert.equal(questRest.body.value.data.active[0].questID, 800);
+    assert.equal(questRest.body.value.data.active[0].turnInReadinessState, "UNKNOWN");
+    assert.equal(questRest.body.value.data.completedHistory.quests[0].title, "Prior Quest");
     const context = await api.get("/api/account-context");
     const accountView = context.body.versions.forever.characters.find((character: any) => character.identityKey === key).foreverGearObservation;
     assert.deepEqual(accountView.value, rest.body.value, "AccountContext reuses the REST read model result");
+    assert.deepEqual(accountView.value.data.quests.active, questRest.body.value.data.active, "AccountContext and quest REST use the same projection");
     assert.equal(context.body.versions.retail.characters.some((character: any) => character.identityKey === key), false);
   }, (store) => store.importSnapshot(text, { foreverGearObservation: {
     clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
     equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
     bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 1777, itemString, count: 1, name: "Observed item" } } }] } },
+    quests: { observedAt: generatedAt, completeness: "partial", data: { formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: generatedAt, activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, active: [{ questID: 800, title: "Evidence Quest", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }], completedHistory: { state: "PARTIAL", questIDs: [799], quests: [{ questID: 799, title: "Prior Quest", titleState: "OBSERVED" }], returnedCount: 1 }, issues: ["objective data unavailable"] } },
     itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 1777, itemString,
       itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [1777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
       isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },

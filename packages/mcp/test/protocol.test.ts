@@ -93,6 +93,13 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
     const observedForever = forever("Hallo", "Forever Realm", "Emberstone", "UnitName[2]+GetUnitName suffix");
+    const questObservedAt = Math.floor(Date.now() / 1000) - 4;
+    Object.assign(observedForever.sidecar, { quests: { observedAt: questObservedAt, completeness: "partial", data: {
+      formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: questObservedAt,
+      activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 },
+      active: [{ questID: 445, title: "MCP Quest", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }],
+      completedHistory: { state: "OBSERVED", questIDs: [444], quests: [{ questID: 444, title: "Old MCP Quest", titleState: "OBSERVED" }], returnedCount: 1 }, issues: ["objective data unavailable"],
+    } } });
     writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar });
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
@@ -179,6 +186,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_erp_operations_context",
       "get_erp_project",
       "get_erp_projects",
+      "get_forever_character_quests",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",
@@ -351,6 +359,14 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(foreverView.value?.data?.unknowns.eligibility, "UNKNOWN");
     assert.equal(foreverView.value?.data?.unknowns.transferability, "UNKNOWN");
     assert.equal(foreverView.value?.data?.bank.state, "UNKNOWN");
+    const foreverQuests = structured<{ status: string; value?: { data?: { activeState: string; active?: Array<{ questID: number; completionState: string; turnInReadinessState: string }>; completedHistory: { questIDs?: number[]; quests?: Array<{ title?: string }> }; completeness: string } } }>(await client.callTool({ name: "get_forever_character_quests", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverQuests.status, "FOUND");
+    assert.equal(foreverQuests.value?.data?.activeState, "OBSERVED");
+    assert.deepEqual(foreverQuests.value?.data?.active?.map((quest) => [quest.questID, quest.completionState, quest.turnInReadinessState]), [[445, "OBSERVED", "UNKNOWN"]]);
+    assert.deepEqual(foreverQuests.value?.data?.completedHistory.questIDs, [444]);
+    assert.equal(foreverQuests.value?.data?.completedHistory.quests?.[0]?.title, "Old MCP Quest");
+    assert.equal(foreverQuests.value?.data?.completeness, "partial");
+    assert.equal((await client.callTool({ name: "get_forever_character_quests", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "the Forever quest reader requires its explicit version");
     assert.equal(foreverView.value?.provenance.freshness, "stale");
     const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; allocationPlan?: Array<{ disposition: string; item: { itemRef?: string }; recipient: { identityKey: string }; evidence: { transferability: string } }>; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
     assert.equal(foreverAllocation.status, "FOUND");
@@ -809,6 +825,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_erp_operations_context",
       "get_erp_project",
       "get_erp_projects",
+      "get_forever_character_quests",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",

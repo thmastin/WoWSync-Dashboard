@@ -575,6 +575,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
+    quests: toLua({ observedAt: generatedAt + 7, completeness: "partial", data: { formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: generatedAt + 7, activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, active: [{ questID: 1234, title: "A Captured Quest", titleState: "OBSERVED", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }], completedHistory: { state: "UNKNOWN", questIDs: [] }, issues: ["ReadyForTurnIn unknown"] } }),
     forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
       capturedAt: generatedAt + 6,
       trainer: { state: "OBSERVED_OPEN_WINDOW", provenance: "IN_GAME_RUNTIME_CONTEXT", lastObserved: { state: "OBSERVED_OPEN_WINDOW", observedAt: generatedAt + 6, calls: [{ api: "GetTrainerServiceInfo", state: "OBSERVED_RAW" }] } },
@@ -593,6 +594,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
     assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
     assert.equal(snapshot.parsed.foreverGearObservation?.itemEvidence?.observedAt, generatedAt + 3);
+    assert.equal(snapshot.parsed.foreverGearObservation?.quests?.observedAt, generatedAt + 7);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.items[0]?.itemString, "item:124:0:7");
     assert.deepEqual((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLines, [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }]);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLinesObservedAt, generatedAt + 4, "skill evidence keeps its own count-call timestamp, not item-fact time");
@@ -600,6 +602,10 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.capturedAt, generatedAt + 6);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.state, "OBSERVED_OPEN_WINDOW");
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.lastObserved.calls[0].api, "GetTrainerServiceInfo");
+    const questObservation = snapshot.parsed.foreverGearObservation?.quests?.data as any;
+    assert.equal(questObservation.active[0].questID, 1234);
+    assert.equal(questObservation.active[0].readyForTurnIn, undefined, "nil turn-in readiness remains absent, not false");
+    assert.equal(questObservation.completedHistory.state, "UNKNOWN");
   });
 });
 
