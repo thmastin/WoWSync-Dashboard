@@ -157,6 +157,8 @@ export interface ErpProjectDraft {
   version: WowVersion;
   /** Optional retry key for an identical create request. Persisted as a deterministic project ID, never as user-visible game evidence. */
   idempotencyKey?: string;
+  /** Optional player-authored reason recorded in the append-only creation event. */
+  rationale?: string;
   title: string;
   objective?: string;
   status?: ErpProjectStatus;
@@ -175,6 +177,8 @@ export interface ErpProjectEvent {
   readonly occurredAt: number;
   readonly kind: "CREATED" | "UPDATED" | "STATUS_CHANGED";
   readonly changedFields: readonly string[];
+  /** Player-authored planning rationale; this is not observed game evidence. */
+  readonly rationale?: string;
   /** Player-recorded task status edits. This is intent history, never game-action evidence. */
   readonly workOrderStatusChanges?: readonly {
     readonly workOrderId: string;

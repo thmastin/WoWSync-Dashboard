@@ -42,21 +42,31 @@ test("opt-in MCP planning writes reuse REST validation and persist one atomic, v
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;
-    for (const name of ["create_erp_project", "plan_erp_work_order_batch", "update_erp_project_plan", "replan_erp_reservations"]) {
+    for (const name of ["create_erp_project", "plan_erp_work_order_batch", "update_erp_project_plan", "set_erp_project_status", "replan_erp_reservations"]) {
       const tool = tools.find((entry) => entry.name === name);
       assert.ok(tool, `${name} is exposed only in the explicitly configured planning-write mode`);
       assert.equal(tool.annotations?.readOnlyHint, false);
-      assert.equal(tool.annotations?.destructiveHint, name === "replan_erp_reservations" || name === "update_erp_project_plan", "reservation reductions and whole-plan edits are flagged for MCP client confirmation");
+      assert.equal(tool.annotations?.destructiveHint, true, "every persistent planning write is marked for MCP client confirmation");
     }
 
     const created = await client.callTool({ name: "create_erp_project", arguments: {
-      version: "classic-era", title: "Plan first craft", priority: 4,
+      version: "classic-era", idempotencyKey: "ops-chat-2026-10-11-first-craft", rationale: "Player requested a first craft plan.", title: "Plan first craft", priority: 4,
       needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: character.identityKey }],
     } });
     assert.equal(created.isError, undefined);
     const project = (created.structuredContent as { project: { stableId: string; version: string; revision: number; needs: Array<{ stableId: string }> } }).project;
     assert.equal(project.version, "classic-era");
     assert.equal(project.needs[0]?.stableId, "stone");
+
+    const retryCreate = await client.callTool({ name: "create_erp_project", arguments: {
+      version: "classic-era", idempotencyKey: "ops-chat-2026-10-11-first-craft", rationale: "Retry after an uncertain response.", title: "Plan first craft", priority: 4,
+      needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: character.identityKey }],
+    } });
+    assert.equal((retryCreate.structuredContent as { project: { stableId: string } }).project.stableId, project.stableId, "the same create key recovers the existing project without duplication");
+    const reusedKey = await client.callTool({ name: "create_erp_project", arguments: {
+      version: "classic-era", idempotencyKey: "ops-chat-2026-10-11-first-craft", rationale: "Incorrect changed retry.", title: "Different plan", priority: 4,
+    } });
+    assert.equal(reusedKey.isError, true, "an idempotency key cannot silently name a different plan");
 
     const readStore = new SqliteSnapshotReadStore(databasePath);
     let reviewedProject;
@@ -82,13 +92,41 @@ test("opt-in MCP planning writes reuse REST validation and persist one atomic, v
     finally { afterSaveStore.close(); }
     assert.ok(currentProject);
     const updated = await client.callTool({ name: "update_erp_project_plan", arguments: {
-      version: "classic-era", projectId: project.stableId, expectedRevision: project.revision + 1,
+      version: "classic-era", projectId: project.stableId, expectedRevision: project.revision + 1, rationale: "Player approved marking the gathering step in progress.",
       project: {
         ...currentProject,
         workOrders: currentProject.workOrders.map((order) => ({ ...order, status: "IN_PROGRESS" })),
       },
     } });
     assert.equal(updated.isError, undefined, JSON.stringify(updated.structuredContent));
+
+    const paused = await client.callTool({ name: "set_erp_project_status", arguments: {
+      version: "classic-era", projectId: project.stableId, expectedRevision: project.revision + 2, status: "PAUSED", rationale: "Player paused while waiting on the next session.",
+    } });
+    assert.equal(paused.isError, undefined);
+    const staleStatus = await client.callTool({ name: "set_erp_project_status", arguments: {
+      version: "classic-era", projectId: project.stableId, expectedRevision: project.revision + 2, status: "ACTIVE", rationale: "Stale client must not overwrite the pause.",
+    } });
+    assert.equal(staleStatus.isError, true, "project status edits reject a stale revision");
+    const completionWithoutEvidence = await client.callTool({ name: "set_erp_project_status", arguments: {
+      version: "classic-era", projectId: project.stableId, expectedRevision: project.revision + 3, status: "COMPLETED", rationale: "Completion without a player note must not pass validation.",
+    } });
+    assert.equal(completionWithoutEvidence.isError, true, "closing a project requires a player-entered completion note");
+
+    const focused = await client.callTool({ name: "get_erp_project", arguments: { version: "classic-era", projectId: project.stableId } });
+    const focusedProject = (focused.structuredContent as { project: { stableId: string; revision: number; status: string; history: Array<{ rationale?: string }> } }).project;
+    assert.deepEqual([focusedProject.stableId, focusedProject.revision, focusedProject.status], [project.stableId, project.revision + 3, "PAUSED"]);
+    assert.equal(focusedProject.history[0]?.rationale, "Player paused while waiting on the next session.", "latest rationale is available to a new Operations chat");
+    const missingInOtherVersion = await client.callTool({ name: "get_erp_project", arguments: { version: "forever", projectId: project.stableId } });
+    assert.equal(missingInOtherVersion.isError, true, "focused project lookup cannot cross version buckets");
+
+    const context = await client.callTool({ name: "get_erp_operations_context", arguments: { version: "classic-era" } });
+    const contextValue = context.structuredContent as { version: string; characters: Array<{ identityKey: string }>; projects: Array<{ stableId: string; revision: number }>; accountEvidence: { data?: { version: string } } };
+    assert.equal(contextValue.version, "classic-era");
+    assert.equal(contextValue.accountEvidence.data?.version, "classic-era");
+    assert.ok(contextValue.characters.some((entry) => entry.identityKey === character.identityKey));
+    const contextProject = contextValue.projects.find((entry) => entry.stableId === project.stableId);
+    assert.equal(contextProject?.revision, project.revision + 3, "fresh-chat bootstrap recovers the persistent project revision");
 
     const reduced = await client.callTool({ name: "replan_erp_reservations", arguments: {
       version: "classic-era", projects: [{ projectId: reservedProject.stableId, expectedRevision: reservedProject.revision, reservations: [{ stableId: "stone_hold", quantity: 1, status: "ACTIVE" }] }],
@@ -108,10 +146,11 @@ test("opt-in MCP planning writes reuse REST validation and persist one atomic, v
     const restResponse = await fetch(`http://127.0.0.1:${port}/api/versions/classic-era/erp/projects`);
     const restBody = await restResponse.json() as { projects: Array<{ stableId: string; revision: number; workOrders: Array<{ stableId: string; status: string }> }> };
     const persisted = restBody.projects.find((entry) => entry.stableId === project.stableId);
-    assert.equal(persisted?.revision, project.revision + 2);
+    assert.equal(persisted?.revision, project.revision + 3);
     assert.equal(persisted?.workOrders.length, 1, "the rejected stale attempt creates no partial or duplicate order");
     assert.equal(persisted?.workOrders[0]?.stableId, savedProject?.workOrders[0]?.stableId);
     assert.equal(persisted?.workOrders[0]?.status, "IN_PROGRESS", "the plan update records player-declared progress without claiming a game outcome");
+    assert.equal(apiStore.listErpProjectHistory(project.stableId)[0]?.rationale, "Player paused while waiting on the next session.");
     assert.deepEqual(apiStore.getErpProject(reservedProject.stableId)?.reservations.map(({ stableId, quantity, status }) => [stableId, quantity, status]), [["stone_hold", 1, "ACTIVE"]], "reservation replan only reduces existing intent");
     const accountContext = await fetch(`http://127.0.0.1:${port}/api/account-context`).then((response) => response.json()) as { planning: { projects: Array<{ stableId: string; workOrderCounts: Record<string, number> }> } };
     const accountProject = accountContext.planning.projects.find((entry) => entry.stableId === project.stableId);

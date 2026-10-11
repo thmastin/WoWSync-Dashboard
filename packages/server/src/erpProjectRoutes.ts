@@ -21,13 +21,20 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const body = req.body ?? {};
     try {
       if (Array.isArray(body.workOrders) && body.workOrders.some((order: unknown) => Boolean(order && typeof order === "object" && "planningBatch" in order))) return res.status(400).json({ error: "Planning batch identity and evidence baselines are assigned only when the server atomically confirms a grouped plan.", code: "PLANNING_BATCH_SERVER_CREATED" });
-      const project = store.createErpProject({ version, idempotencyKey: body.idempotencyKey, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
+      const project = store.createErpProject({ version, idempotencyKey: body.idempotencyKey, rationale: body.rationale, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
       res.status(201).json({ project: new DashboardReadModel(store).getErpProjects({ version }).find((entry) => entry.stableId === project.stableId) });
     } catch (err) {
       if (err instanceof ErpProjectConflictError) return res.status(409).json({ error: err.message, code: err.code });
       if (err instanceof ErpProjectValidationError || err instanceof TypeError) return res.status(400).json({ error: err.message, code: err instanceof ErpProjectValidationError ? err.code : "INVALID_PROJECT" });
       throw err;
     }
+  });
+  app.get("/api/versions/:version/erp/projects/:stableId", (req, res) => {
+    const { version, stableId } = req.params;
+    if (!isVersion(version)) return res.status(400).json({ error: "A supported explicit version is required.", code: "INVALID_VERSION" });
+    const project = new DashboardReadModel(store).getErpProjects({ version }).find((entry) => entry.stableId === stableId);
+    if (!project) return res.status(404).json({ error: "Project not found in this version.", code: "PROJECT_NOT_FOUND" });
+    res.json({ version, project });
   });
   app.post("/api/versions/:version/erp/work-order-batches", (req, res) => {
     const { version } = req.params;
@@ -278,7 +285,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
         title: submitted.title, objective: submitted.objective, status: submitted.status, completionNote: submitted.completionNote, priority: submitted.priority,
         needs: submitted.needs, reservations: submitted.reservations, workOrders: submitted.workOrders,
       };
-      const project = store.updateErpProject(next, body.expectedRevision);
+      const project = store.updateErpProject(next, body.expectedRevision, false, body.rationale);
       if (!project) return res.status(404).json({ error: "Project not found.", code: "PROJECT_NOT_FOUND" });
       res.json({ project: read(version).find((entry) => entry.stableId === stableId) });
     } catch (err) {
@@ -293,7 +300,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const existing = store.getErpProject(stableId);
     if (!existing || existing.version !== version) return res.status(404).json({ error: "Project not found in this version.", code: "PROJECT_NOT_FOUND" });
     try {
-      const project = store.setErpProjectStatus(stableId, req.body?.status, req.body?.expectedRevision);
+      const project = store.setErpProjectStatus(stableId, req.body?.status, req.body?.expectedRevision, { completionNote: req.body?.completionNote, rationale: req.body?.rationale });
       if (!project) return res.status(404).json({ error: "Project not found.", code: "PROJECT_NOT_FOUND" });
       res.json({ project: read(version).find((entry) => entry.stableId === stableId) });
     } catch (err) {

@@ -38,7 +38,10 @@ const realmSchema = z.string().trim().min(1).max(64);
 const limitSchema = z.number().int().min(1);
 const documentClassSchema = z.enum(["VERSIONED_RESEARCH", "OPERATIONAL_TRUTH"]);
 const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveHint: false } as const;
-const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: false } as const;
+// Persistent project, work-order, and reservation edits require the MCP host to
+// treat each call as a user-confirmed write. Annotations are client hints; the
+// loopback-only opt-in remains the server-side exposure boundary.
+const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 const planReplacementAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 const reservationWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 
@@ -101,7 +104,7 @@ function resolvePlanningApiBaseUrl(value: string | undefined): URL | undefined {
   return new URL(url.origin);
 }
 
-async function forwardPlanningRequest(baseUrl: URL, method: "POST" | "PUT", route: string, body: unknown) {
+async function forwardPlanningRequest(baseUrl: URL, method: "POST" | "PUT" | "PATCH", route: string, body: unknown) {
   const encoded = JSON.stringify(body);
   if (Buffer.byteLength(encoded, "utf8") > 64_000) return safeFailure("PLANNING_REQUEST_TOO_LARGE", "The planning request exceeds the 64 KB MCP limit.");
   try {
@@ -201,6 +204,61 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     return textResult({ version, projects: projects.slice(0, resolvedLimit), returnedCount: Math.min(projects.length, resolvedLimit), totalCount: projects.length, truncated: projects.length > resolvedLimit, resourceCommitments: buildErpResourceCommitmentSummary(projects), observationChanges, fulfillmentTriage, portfolioFulfillment, sourceFulfillment, portfolioNextActions, procurementBudgetReview, procurementBuyerReview });
   });
 
+  server.registerTool("get_erp_operations_context", {
+    title: "Recover version-scoped WoWSync project context",
+    description: "A compact startup read for a fresh Operations conversation. Returns one explicitly selected WoW version, its known character roster and observation timestamps, current project revisions and priorities, project requirements/evidence summaries, work-order dependencies/readiness, recent saved decision rationale, shared commitments, and a bounded next-action queue. It does not merge versions or infer ownership, access, or task completion. Use get_erp_project for one complete project before proposing an edit; all changes require explicit user approval and the current revision.",
+    inputSchema: z.object({ version: versionSchema, projectLimit: z.number().int().min(1).max(20).optional(), entriesPerProject: z.number().int().min(1).max(20).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, projectLimit, entriesPerProject }) => {
+    const maxProjects = projectLimit ?? 10;
+    const maxEntries = entriesPerProject ?? 20;
+    const allCharacters = readModel.listCharacters({ version });
+    const allProjects = readModel.getErpProjects({ version });
+    const nextActions = buildErpPortfolioNextActionReview(allProjects, version);
+    return textResult({
+      version,
+      accountEvidence: readModel.getAccountOverview({ version }),
+      characters: allCharacters.slice(0, 100).map((character) => ({
+        identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm,
+        ...(character.class ? { class: character.class } : {}), ...(character.latestLevel !== undefined ? { level: character.latestLevel } : {}),
+        ...(character.latestGeneratedAt !== undefined ? { lastExportGeneratedAt: character.latestGeneratedAt } : {}),
+        ...(character.latestImportedAt !== undefined ? { lastImportedAt: character.latestImportedAt } : {}), snapshotCount: character.snapshotCount,
+      })),
+      characterCount: allCharacters.length, charactersTruncated: allCharacters.length > 100,
+      projects: allProjects.slice(0, maxProjects).map((project) => ({
+        stableId: project.stableId, version: project.version, title: project.title, status: project.status, priority: project.priority,
+        revision: project.revision, createdAt: project.createdAt, updatedAt: project.updatedAt,
+        ...(project.objective ? { objective: project.objective } : {}),
+        requirements: project.needs.slice(0, maxEntries).map((need) => {
+          const evidence = project.needEvidence.find((entry) => entry.needId === need.stableId);
+          return { ...need, evidence: evidence ? { state: evidence.state, freshness: evidence.freshness, observedAt: evidence.observedAt, reason: evidence.reason } : { state: "UNKNOWN", freshness: "unknown", reason: "No current evidence assessment is available." } };
+        }), requirementCount: project.needs.length,
+        workOrders: project.workOrders.slice(0, maxEntries).map((order) => {
+          const readiness = project.workOrderReadiness.find((entry) => entry.workOrderId === order.stableId);
+          const progress = project.workOrderProgress.find((entry) => entry.workOrderId === order.stableId);
+          return { ...order, ...(readiness ? { readiness: { state: readiness.state, reason: readiness.reason } } : {}), ...(progress ? { recordedProgress: { recordedStatus: progress.recordedStatus, reconciliation: progress.reconciliation, reason: progress.reason } } : {}) };
+        }), workOrderCount: project.workOrders.length,
+        reservations: project.reservations.slice(0, maxEntries), reservationCount: project.reservations.length,
+        recentDecisions: project.history.slice(0, 5), historyEventCount: project.historyEventCount, historyTruncated: project.historyTruncated,
+        fulfillment: project.fulfillment,
+      })),
+      projectCount: allProjects.length, projectsTruncated: allProjects.length > maxProjects,
+      resourceCommitments: buildErpResourceCommitmentSummary(allProjects),
+      nextActions: { ...nextActions, items: nextActions.items.slice(0, 10), returnedCount: Math.min(nextActions.totalCount, 10), truncated: nextActions.truncated || nextActions.totalCount > 10 },
+      interpretation: "VERSION_SCOPED_OBSERVATIONS_AND_PLAYER_AUTHORED_PLANS; not execution, ownership, access, or completion proof",
+    });
+  });
+
+  server.registerTool("get_erp_project", {
+    title: "Inspect one version-scoped WoWSync project",
+    description: "Returns one current project, including objective, exact revision, requirements and provenance-aware evidence, reservations, work orders, dependencies, readiness, reconciliation, and append-only decision history. A missing ID in the requested version is not searched in another version.",
+    inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120) }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, projectId }) => {
+    const project = readModel.getErpProjects({ version }).find((entry) => entry.stableId === projectId);
+    return project ? textResult({ version, project }) : safeFailure("PROJECT_NOT_FOUND", `Project ${projectId} was not found in ${version}.`);
+  });
+
   if (planningApiBaseUrl) {
     const boundedRecord = z.record(z.string().max(80), z.unknown());
     server.registerTool("create_erp_project_from_goal", {
@@ -212,7 +270,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const plan = buildRordinForeverGoalProject(goal, store);
       if ("error" in plan) return safeFailure("GOAL_NOT_SUPPORTED", plan.error);
       const saved = await forwardPlanningRequest(planningApiBaseUrl, "POST", "/api/versions/forever/erp/projects", {
-        idempotencyKey: plan.idempotencyKey, title: plan.title, objective: plan.objective, priority: plan.priority, needs: plan.needs, workOrders: plan.workOrders,
+        idempotencyKey: plan.idempotencyKey, rationale: `User-stated goal: ${goal.trim()}`, title: plan.title, objective: plan.objective, priority: plan.priority, needs: plan.needs, workOrders: plan.workOrders,
       });
       if ("isError" in saved && saved.isError) return saved;
       return textResult({ goal, target: plan.target, project: saved.structuredContent, resourceDiscovery: plan.resourceDiscovery, recipeEvidence: plan.recipeEvidence,
@@ -220,31 +278,41 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     });
     server.registerTool("create_erp_project", {
       title: "Create a WoWSync ERP project plan",
-      description: "Creates a version-scoped player planning record through the local Dashboard REST API. Requires explicit version, title, need identities, and quantities. This records intent only: it does not reserve observed supply, execute game actions, or establish possession. REST revalidates the project and character identities.",
-      inputSchema: z.object({ version: versionSchema, title: z.string().trim().min(1).max(160), objective: z.string().max(2_000).optional(), priority: z.number().int().min(1).max(5).optional(), needs: z.array(boundedRecord).max(20).optional() }).strict(),
+      description: "Creates a version-scoped player planning record through the local Dashboard REST API. Requires explicit version, title, and a stable idempotencyKey generated once per intended creation and reused on retries; reusing a key with a different plan is rejected. Provide a concise rationale for fresh-conversation recovery. This records intent only: it does not reserve observed supply, execute game actions, or establish possession. Obtain explicit user confirmation before invoking; REST revalidates the project and character identities.",
+      inputSchema: z.object({ version: versionSchema, idempotencyKey: z.string().trim().min(1).max(256), rationale: z.string().trim().min(1).max(2_000), title: z.string().trim().min(1).max(160), objective: z.string().max(2_000).optional(), priority: z.number().int().min(1).max(5).optional(), needs: z.array(boundedRecord).max(20).optional() }).strict(),
       annotations: planningWriteAnnotations,
-    }, async ({ version, title, objective, priority, needs }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/projects`, { title, ...(objective !== undefined ? { objective } : {}), ...(priority !== undefined ? { priority } : {}), ...(needs !== undefined ? { needs } : {}) }));
+    }, async ({ version, idempotencyKey, rationale, title, objective, priority, needs }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/projects`, { idempotencyKey, rationale, title, ...(objective !== undefined ? { objective } : {}), ...(priority !== undefined ? { priority } : {}), ...(needs !== undefined ? { needs } : {}) }));
 
     server.registerTool("plan_erp_work_order_batch", {
       title: "Save a reviewed WoWSync ERP work plan",
-      description: "Atomically saves bounded player-authored manual work orders for 1–10 projects through the Dashboard REST validation path. Each task must include the current reviewed need evidence and expected project revision. Stale evidence, existing open work, invalid dependencies, or any conflict rejects the plan without partial writes. It never performs the planned actions in game.",
+      description: "Atomically saves bounded player-authored manual work orders for 1–10 projects through the Dashboard REST validation path. Each task must include the current reviewed need evidence and expected project revision. Obtain explicit user confirmation before invoking. Stale evidence, existing open work, invalid dependencies, or any conflict rejects the plan without partial writes. It never performs the planned actions in game.",
       inputSchema: z.object({ version: versionSchema, updates: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), tasks: z.array(boundedRecord).min(1).max(20) }).strict()).min(1).max(10) }).strict(),
       annotations: planningWriteAnnotations,
     }, async ({ version, updates }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`, { updates }));
 
     server.registerTool("update_erp_project_plan", {
       title: "Update a WoWSync ERP plan",
-      description: "Saves an explicitly versioned, revision-checked player edit to one complete project plan through Dashboard REST. This can update needs, work-order notes/statuses, or project status and records player intent; status is not proof the corresponding game action happened. The server preserves saved-batch history, checks reservation increases against exact current evidence, validates character/version identity, and rejects stale revisions.",
-      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), project: boundedRecord }).strict(),
+      description: "Saves an explicitly versioned, revision-checked player edit to one complete project plan through Dashboard REST. This can update objectives, priorities, needs, work-order assignments/dependencies/statuses, or project status. Include a concise rationale for the append-only decision history. Status is player intent, not proof a game action happened. The server preserves saved-batch history, checks reservation increases against exact current evidence, validates character/version identity, and rejects stale revisions. Obtain explicit user confirmation before invoking.",
+      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), rationale: z.string().trim().min(1).max(2_000), project: boundedRecord }).strict(),
       annotations: planReplacementAnnotations,
-    }, async ({ version, projectId, expectedRevision, project }) => {
+    }, async ({ version, projectId, expectedRevision, rationale, project }) => {
       if (project.stableId !== projectId || project.version !== version) return safeFailure("PROJECT_IDENTITY_MISMATCH", "The submitted project must retain the exact stable ID and explicit game version in the request.");
-      return forwardPlanningRequest(planningApiBaseUrl, "PUT", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}`, { expectedRevision, project });
+      return forwardPlanningRequest(planningApiBaseUrl, "PUT", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}`, { expectedRevision, rationale, project });
     });
+
+    server.registerTool("set_erp_project_status", {
+      title: "Pause, resume, or close a WoWSync ERP project",
+      description: "Changes one project's planning status using the exact revision you reviewed. Completing requires a player-entered outcome note; it records user-declared project closure, not verified game completion. Include rationale for history and obtain explicit user confirmation before invoking. A stale revision is rejected; refresh the project before retrying.",
+      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), status: z.enum(["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"]), rationale: z.string().trim().min(1).max(2_000), completionNote: z.string().trim().min(1).max(2_000).optional() }).strict().superRefine((input, context) => {
+        if (input.status === "COMPLETED" && !input.completionNote) context.addIssue({ code: "custom", path: ["completionNote"], message: "A player-entered completion note is required." });
+        if (input.status !== "COMPLETED" && input.completionNote !== undefined) context.addIssue({ code: "custom", path: ["completionNote"], message: "completionNote is accepted only when recording player-declared completion." });
+      }),
+      annotations: planReplacementAnnotations,
+    }, async ({ version, projectId, expectedRevision, status, rationale, completionNote }) => forwardPlanningRequest(planningApiBaseUrl, "PATCH", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}/status`, { expectedRevision, status, rationale, ...(completionNote ? { completionNote } : {}) }));
 
     server.registerTool("replan_erp_reservations", {
       title: "Apply a reviewed ERP reservation reduction",
-      description: "Atomically applies an explicitly reviewed reservation list through the local Dashboard REST endpoint. The server only permits reduction or release of existing reservation intent and checks project revisions; it cannot add supply, move resources, or execute game actions.",
+      description: "Atomically applies an explicitly reviewed reservation list through the local Dashboard REST endpoint. Obtain explicit user confirmation before invoking. The server only permits reduction or release of existing reservation intent and checks project revisions; it cannot add supply, move resources, or execute game actions.",
       inputSchema: z.object({ version: versionSchema, projects: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), reservations: z.array(boundedRecord).max(100) }).strict()).min(1).max(10) }).strict(),
       annotations: reservationWriteAnnotations,
     }, async ({ version, projects }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/reservation-replans`, { projects }));

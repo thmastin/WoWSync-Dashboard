@@ -71,6 +71,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-"));
   const databasePath = path.join(temporaryDirectory, "fixture.sqlite");
   const writer = new SqliteSnapshotStore(databasePath);
+  let operationsContextProjectId = "";
   try {
     writer.importSnapshot(retail("Virek", "Cairne", true, 100, true, now - 20, 89), {
       currencies: {
@@ -114,6 +115,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok(transferSource);
     assert.ok(transferDestination);
     writer.createErpProject({ version: "retail", title: "Currency reservation protocol fixture", needs: [{ stableId: "currency_4", kind: "CURRENCY", resourceKey: "4", label: "Currency 4", requiredQuantity: 4, sourceIdentityKey: currencyCharacter.identityKey }] });
+    const operationsContextProject = writer.createErpProject({ version: "retail", title: "Fresh chat context fixture", rationale: "Carry the planning decision into a new Operations conversation.", objective: "Review one current project.", workOrders: [{ stableId: "context_review", kind: "INVESTIGATE", status: "PLANNED", title: "Review the current project", instructions: "Check current version-scoped evidence.", resourceNeedIds: [], dependsOn: [] }] });
+    operationsContextProjectId = operationsContextProject.stableId;
     writer.createErpProject({ version: "retail", title: "Same-version source screen protocol fixture", needs: [{ stableId: "source_need", kind: "ITEM_REF", resourceKey: "item:777", label: "Observed Bag Item", requiredQuantity: 1, destinationIdentityKey: otherRealmCharacter.identityKey }, { stableId: "recipe_check", kind: "RECIPE", resourceKey: "1229853", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: currencyCharacter.identityKey }, { stableId: "craft_input_check", kind: "ITEM_REF", resourceKey: "item:159", label: "Observed craft input", requiredQuantity: 1, sourceIdentityKey: currencyCharacter.identityKey }], workOrders: [{ stableId: "craft_check", kind: "CRAFT", status: "PLANNED", title: "Craft on assigned character", resourceNeedIds: ["recipe_check"], dependsOn: [], assignedIdentityKey: otherRealmCharacter.identityKey, destinationIdentityKey: currencyCharacter.identityKey, outputObservationIdentityKey: otherRealmCharacter.identityKey, plannedOutput: { kind: "ITEM_ID", resourceKey: "777", label: "Observed Bag Item", quantity: 1 } }, { stableId: "unspecified_craft", kind: "CRAFT", status: "PLANNED", title: "Craft without recorded prerequisites", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: otherRealmCharacter.identityKey }, { stableId: "craft_input_check_order", kind: "CRAFT", status: "PLANNED", title: "Review crafter inputs", resourceNeedIds: ["craft_input_check"], dependsOn: [], assignedIdentityKey: currencyCharacter.identityKey }] });
     const procurementObservedAt = Math.floor(Date.now() / 1000);
     writer.importSnapshot(buildWowSyncExport({ generatedAt: procurementObservedAt, character: { name: "Procurement Buyer", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", moneyCopper: 500 }, bags: { containers: [{ id: 0, capacity: 20, items: [{ itemRef: "item:12345", name: "Procurement Fixture Item", qty: 2 }] }] }, bank: { containers: [] } }));
@@ -171,6 +174,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_erp_operations_context",
+      "get_erp_project",
       "get_erp_projects",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
@@ -192,9 +197,22 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
+    assert.equal(toolNames.includes("update_erp_project_plan"), false, "player-authored writes remain absent from the default read-only profile");
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
     assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
+    const operationsContext = structured<{ version: string; characters: Array<{ identityKey: string }>; projects: Array<{ stableId: string; revision: number; workOrders: Array<{ stableId: string }> }>; accountEvidence: { data: { version: string } } }>(await client.callTool({ name: "get_erp_operations_context", arguments: { version: "retail", projectLimit: 20 } }));
+    assert.equal(operationsContext.version, "retail");
+    assert.equal(operationsContext.accountEvidence.data.version, "retail");
+    assert.ok(operationsContext.characters.some((entry) => entry.identityKey === "retail::cairne::virek"));
+    const contextPlan = operationsContext.projects.find((entry) => entry.stableId === operationsContextProjectId);
+    assert.equal(contextPlan?.revision, 1);
+    assert.equal(contextPlan?.workOrders[0]?.stableId, "context_review");
+    const focusedProject = structured<{ version: string; project: { stableId: string; history: Array<{ rationale?: string }> } }>(await client.callTool({ name: "get_erp_project", arguments: { version: "retail", projectId: operationsContextProjectId } }));
+    assert.equal(focusedProject.project.stableId, operationsContextProjectId);
+    assert.equal(focusedProject.project.history[0]?.rationale, "Carry the planning decision into a new Operations conversation.");
+    const crossVersionProject = await client.callTool({ name: "get_erp_project", arguments: { version: "forever", projectId: operationsContextProjectId } });
+    assert.equal(crossVersionProject.isError, true, "read tools keep project lookup inside the caller's explicit version");
     const emptyErpProjects = structured<{ version: string; projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: unknown[]; totalCount: number; returnedCount: number; truncated: boolean }; observationChanges: { items: unknown[]; totalCount: number; returnedCount: number; affectedProjectCount: number; truncated: boolean }; fulfillmentTriage: { version: string; items: unknown[]; totalCount: number; returnedCount: number; affectedProjectCount: number; counts: Record<string, number>; truncated: boolean; interpretation: string }; portfolioFulfillment: { version: string; packages: unknown[]; totalPackageCount: number; returnedPackageCount: number; savedPlanningBatches: unknown[]; totalSavedPlanningBatchCount: number; returnedSavedPlanningBatchCount: number; savedPlanningBatchesTruncated: boolean; savedNeedHistories: unknown[]; totalSavedNeedHistoryCount: number; returnedSavedNeedHistoryCount: number; savedNeedHistoriesTruncated: boolean; totalStepCount: number; stepsNeedingReview: number; stepsWithPrerequisiteReview: number; truncated: boolean; interpretation: string }; portfolioNextActions: { version: string; items: unknown[]; totalCount: number; returnedCount: number; counts: Record<string, number>; sourceReviewTruncated: boolean; triageTruncated: boolean; savedHistoryReviewTruncated: boolean; truncated: boolean; interpretation: string }; sourceFulfillment: { version: string; sources: unknown[]; totalSourceCount: number; returnedSourceCount: number; totalNeedCount: number; needsReviewCount: number; nextReviewCounts: Record<string, number>; groupsWithAlternativeLocations: number; alternativeLocationCount: number; groupsWithIncompleteSourceScan: number; openProvisioningPlanCount: number; truncated: boolean; interpretation: string } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
     assert.deepEqual(emptyErpProjects, { version: "forever", projects: [], returnedCount: 0, totalCount: 0, truncated: false, resourceCommitments: { items: [], totalCount: 0, returnedCount: 0, truncated: false, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0 }, observationChanges: { items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, truncated: false }, fulfillmentTriage: { version: "forever", items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, counts: { CHANGED_OBSERVATION: 0, UNWORKED_REQUIREMENT: 0, RESERVATION_REVIEW: 0, OPEN_WORK_ORDER: 0 }, truncated: false, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" }, portfolioFulfillment: { version: "forever", packages: [], totalPackageCount: 0, returnedPackageCount: 0, savedPlanningBatches: [], totalSavedPlanningBatchCount: 0, returnedSavedPlanningBatchCount: 0, savedPlanningBatchesTruncated: false, savedNeedHistories: [], totalSavedNeedHistoryCount: 0, returnedSavedNeedHistoryCount: 0, savedNeedHistoriesTruncated: false, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" }, sourceFulfillment: { version: "forever", sources: [], totalSourceCount: 0, returnedSourceCount: 0, totalNeedCount: 0, needsReviewCount: 0, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0 }, groupsWithAlternativeLocations: 0, alternativeLocationCount: 0, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 0, truncated: false, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" }, portfolioNextActions: { version: "forever", items: [], totalCount: 0, returnedCount: 0, counts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, REVIEW_MANUAL_WORK: 0, PLAN_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0, REVIEW_UNSCOPED_ITEM: 0 }, sourceReviewTruncated: false, triageTruncated: false, savedHistoryReviewTruncated: false, truncated: false, interpretation: "DETERMINISTIC_PLAYER_REVIEW_QUEUE_ONLY" }, procurementBudgetReview: { version: "forever", lines: [], totalLineCount: 0, returnedLineCount: 0, linesOverPlannedBudget: 0, truncated: false }, procurementBuyerReview: { version: "forever", buyers: [], totalBuyerCount: 0, returnedBuyerCount: 0, unresolvedBuyerOrderCount: 0, truncated: false } }, "MCP exposes planning and shared core fulfillment reviews through the bounded read-only contract");
     assert.deepEqual((emptyErpProjects as unknown as { procurementBudgetReview: unknown }).procurementBudgetReview, { version: "forever", lines: [], totalLineCount: 0, returnedLineCount: 0, linesOverPlannedBudget: 0, truncated: false }, "MCP returns an empty version-isolated budget review rather than omitting the contract");
@@ -309,7 +327,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.resourceKey === "item:2318::::::::85:253:::::::::" && line.sourceScope === "SHARED_OWNER" && line.sourceOwnerKey === "retail::warband::local"));
     assert.equal(retailErpProjects.truncated, false);
     const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
-    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 9, true], "MCP callers can bound ERP project results without losing the total count");
+    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 10, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
     assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
@@ -784,6 +802,8 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_erp_operations_context",
+      "get_erp_project",
       "get_erp_projects",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",

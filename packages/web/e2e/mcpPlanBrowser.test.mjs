@@ -39,6 +39,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     const updateTool = tools.find((tool) => tool.name === "update_erp_project_plan");
     assert.equal(updateTool?.annotations?.readOnlyHint, false);
     assert.equal(updateTool?.annotations?.destructiveHint, true, "host clients receive a confirmation hint for full-plan replacement");
+    assert.equal(tools.find((tool) => tool.name === "create_erp_project")?.annotations?.destructiveHint, true, "host clients receive a confirmation hint before persistent creation");
+    assert.equal(tools.find((tool) => tool.name === "plan_erp_work_order_batch")?.annotations?.destructiveHint, true, "host clients receive a confirmation hint before saving work orders");
 
     await page.goto(`${baseUrl}/#/retail/overview`);
     await page.getByRole("button", { name: "Projects & Work Orders" }).click();
@@ -47,6 +49,8 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
 
     const createdResult = await mcpClient.callTool({ name: "create_erp_project", arguments: {
       version: "retail",
+      idempotencyKey: "browser-acceptance-mcp-provisioning-plan",
+      rationale: "Player approved a new resource review project.",
       title: "MCP-authored provisioning plan",
       objective: "Record an observed-material requirement for player review.",
       priority: 4,
@@ -57,6 +61,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     } });
     assert.equal(createdResult.isError, undefined, JSON.stringify(createdResult.structuredContent));
     const createdProject = createdResult.structuredContent.project;
+    assert.equal(createdProject.history[0]?.rationale, "Player approved a new resource review project.");
 
     let rest = await fetch(`${baseUrl}/api/versions/retail/erp/projects`).then((response) => response.json());
     let project = rest.projects.find((entry) => entry.stableId === createdProject.stableId);
@@ -81,9 +86,9 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     assert.equal(project.workOrders.length, 2, "the review-checked MCP batch saves both multi-need manual steps atomically");
     assert.deepEqual(project.workOrders.map((order) => order.status), ["PLANNED", "PLANNED"]);
 
-    const updatedResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, project: { ...project, status: "PAUSED" } } });
+    const updatedResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, rationale: "Player paused the project pending a review.", project: { ...project, status: "PAUSED" } } });
     assert.equal(updatedResult.isError, undefined, JSON.stringify(updatedResult.structuredContent));
-    const staleResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, project: { ...project, status: "COMPLETED" } } });
+    const staleResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, rationale: "This stale edit must be rejected.", project: { ...project, status: "COMPLETED" } } });
     assert.equal(staleResult.isError, true, "stale replacement is refused rather than overwriting the newer plan");
 
     rest = await fetch(`${baseUrl}/api/versions/retail/erp/projects`).then((response) => response.json());
@@ -94,6 +99,10 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     assert.equal(context.planning.projects.find((entry) => entry.stableId === project.stableId)?.status, "PAUSED");
     mcpRead = await mcpClient.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 20 } });
     assert.deepEqual(mcpRead.structuredContent.projects.find((entry) => entry.stableId === project.stableId), project);
+    const operationContext = await mcpClient.callTool({ name: "get_erp_operations_context", arguments: { version: "retail" } });
+    assert.equal(operationContext.structuredContent.projects.find((entry) => entry.stableId === project.stableId)?.revision, project.revision);
+    const focusedProject = await mcpClient.callTool({ name: "get_erp_project", arguments: { version: "retail", projectId: project.stableId } });
+    assert.equal(focusedProject.structuredContent.project.history[0]?.rationale, "Player paused the project pending a review.");
     const forever = await fetch(`${baseUrl}/api/versions/forever/erp/projects`).then((response) => response.json());
     assert.equal(forever.projects.some((entry) => entry.stableId === project.stableId), false, "the plan remains isolated in its explicitly selected version");
 

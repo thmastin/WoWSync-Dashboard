@@ -29,7 +29,8 @@ test("project REST persists explicit plans and returns evidence from the shared 
     const generatedAt = Math.floor(Date.now() / 1000);
     store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Mira", realm: "PvP 2", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 10000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159", name: "Rough Stone", qty: 3 }] }] }, bank: { unknown: true } }));
     const character = store.listCharacters("classic-era")[0]!;
-    const created = await call("POST", "/api/versions/classic-era/erp/projects", { title: "Prepare first craft", priority: 4, needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey }], reservations: [{ stableId: "reserve", needId: "stone", sourceIdentityKey: character.identityKey, quantity: 2, status: "ACTIVE", createdAt: 1700000000, updatedAt: 1700000000 }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "PLANNED", title: "Gather one more", resourceNeedIds: ["stone"], dependsOn: [] }] });
+    const draft = { idempotencyKey: "operations-chat:first-craft:001", rationale: "Player asked to plan the first craft.", title: "Prepare first craft", priority: 4, needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: "item:159", label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: character.identityKey }], reservations: [{ stableId: "reserve", needId: "stone", sourceIdentityKey: character.identityKey, quantity: 2, status: "ACTIVE", createdAt: 1700000000, updatedAt: 1700000000 }], workOrders: [{ stableId: "gather", kind: "GATHER", status: "PLANNED", title: "Gather one more", resourceNeedIds: ["stone"], dependsOn: [] }] };
+    const created = await call("POST", "/api/versions/classic-era/erp/projects", draft);
     assert.equal(created.status, 201);
     assert.equal(created.body.project.needEvidence[0].state, "UNKNOWN", "unobserved bank prevents claiming a complete shortfall");
     assert.equal(created.body.project.needEvidence[0].observedQuantity, 3);
@@ -37,7 +38,15 @@ test("project REST persists explicit plans and returns evidence from the shared 
     assert.equal(created.body.project.workOrderProgress[0].recordedStatus, "PLANNED");
     assert.equal(created.body.project.workOrderProgress[0].linkedNeedState, "STALE_OR_UNKNOWN");
     assert.equal(created.body.project.workOrderProgress[0].reconciliation, "INSUFFICIENT_EVIDENCE");
-    assert.deepEqual(created.body.project.history.map((event: any) => [event.revision, event.kind]), [[1, "CREATED"]]);
+    assert.deepEqual(created.body.project.history.map((event: any) => [event.revision, event.kind, event.rationale]), [[1, "CREATED", "Player asked to plan the first craft."]]);
+    const duplicate = await call("POST", "/api/versions/classic-era/erp/projects", draft);
+    assert.equal(duplicate.status, 201);
+    assert.equal(duplicate.body.project.stableId, created.body.project.stableId, "an exact retry with the same idempotency key recovers the existing project");
+    assert.equal(store.listErpProjects("classic-era").length, 1, "retry does not create a duplicate project");
+    const focused = await call("GET", `/api/versions/classic-era/erp/projects/${created.body.project.stableId}`);
+    assert.equal(focused.status, 200);
+    assert.equal(focused.body.project.history[0].rationale, "Player asked to plan the first craft.");
+    assert.equal((await call("GET", `/api/versions/forever/erp/projects/${created.body.project.stableId}`)).status, 404, "project detail lookup is version-isolated");
     const listed = await call("GET", "/api/versions/classic-era/erp/projects");
     assert.equal(listed.body.projects[0].stableId, created.body.project.stableId);
     assert.equal(listed.body.resourceCommitments.totalCount, 1);

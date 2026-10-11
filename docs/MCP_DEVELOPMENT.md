@@ -93,19 +93,30 @@ MCP remains read-only unless the process environment explicitly sets
 `http://127.0.0.1:4173`. Only loopback IP literals `127.0.0.1` and `::1` are
 accepted; hostnames are rejected to avoid name-resolution ambiguity. Startup rejects non-HTTP, non-loopback, credentialed,
 or path-bearing values. Tool callers cannot select or change this destination.
-When enabled, `create_erp_project`, `plan_erp_work_order_batch`,
-`update_erp_project_plan`, and `replan_erp_reservations` call only the
-corresponding fixed version-scoped REST routes. The server validates the same
-project revisions and reviewed evidence
-used by the UI and rejects stale requests atomically. Reservation changes can
-only reduce or release existing intent. MCP annotations mark these as writes
-(`readOnlyHint=false`). Whole-plan replacement and reservation changes also
-set `destructiveHint=true`, so clients can apply their usual user review
-policy.
+When enabled, `create_erp_project_from_goal`, `create_erp_project`,
+`plan_erp_work_order_batch`, `update_erp_project_plan`,
+`set_erp_project_status`, and `replan_erp_reservations` call only fixed,
+version-scoped REST routes. The server validates the same project revisions
+and reviewed evidence used by the UI and rejects stale requests atomically.
+Creation requires a stable idempotency key; conflicting reuse is rejected.
+Project edits and status changes record a player-authored rationale in the
+existing append-only event JSON, without a schema migration. Reservation
+changes can only reduce or release existing intent. Persistent-write tools
+set `readOnlyHint=false` and `destructiveHint=true` to ask MCP clients to apply
+their user-confirmation policy. These annotations are client hints, not a
+server-side approval token or proof that a human confirmed the call.
 
-The active Secure MCP Tunnel profile is not enabled for writes by this code
-change. Do not set the environment variable there until its client-side tool
-approval behavior has been deliberately configured and tested. For local
+The read-only profile also provides `get_erp_operations_context` as a bounded,
+explicit-version startup read for fresh Operations conversations, and
+`get_erp_project` for focused revision/evidence/history retrieval. Neither
+searches or merges another version. Read context includes compact project
+summaries, character freshness, requirements, dependencies/readiness, recent
+saved rationales, commitments, and next actions; use focused project retrieval
+before preparing a whole-plan update.
+
+The active Secure MCP Tunnel profile remains read-only. Do not set the
+environment variable there until its client-side tool approval behavior has
+been deliberately configured and tested. For local
 integration testing, run the Dashboard on loopback and set the variable only
 on the MCP child process. If the Dashboard is unavailable, planning tools
 return `PLANNING_API_UNAVAILABLE`; retrieval tools continue using the configured

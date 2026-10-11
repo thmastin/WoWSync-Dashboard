@@ -44,6 +44,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     const createTool = tools.find((tool) => tool.name === "create_erp_project_from_goal");
     assert.ok(createTool, "the goal workflow is exposed only in explicitly enabled planning-write mode");
     assert.equal(createTool.annotations?.readOnlyHint, false);
+    assert.equal(createTool.annotations?.destructiveHint, true, "persistent goal creation is presented to the MCP host as a user-confirmed write");
     assert.equal(tools.some((tool) => tool.name === "create_erp_project_from_goal"), true);
 
     const first = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: RORDIN_PROFESSION_GOAL } });

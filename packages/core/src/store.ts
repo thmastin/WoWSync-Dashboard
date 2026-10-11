@@ -307,10 +307,10 @@ export interface SnapshotStore extends SnapshotReadStore {
   deactivateDemand(stableId: string): ExplicitDemand | undefined;
   createErpProject(input: ErpProjectDraft): ErpProject;
   /** Optimistic concurrency: returns undefined for a missing project and throws ErpProjectConflictError on stale revision. */
-  updateErpProject(project: ErpProject, expectedRevision: number): ErpProject | undefined;
+  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch?: boolean, rationale?: string): ErpProject | undefined;
   /** Atomically reduces/releases only existing same-version reservation intent across projects; this operation cannot increase or move a reservation. */
   replanErpReservationsAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly reservations: readonly ErpReservation[] }[]): ErpProject[] | undefined;
   /** Atomically appends player-authored PLANNED work orders to several ACTIVE same-version projects; no other project fields can be changed. */
   appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[]; readonly reservations?: readonly (ErpReservation | undefined)[] }[]): ErpProject[] | undefined;
-  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined;
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number, options?: { completionNote?: string; rationale?: string }): ErpProject | undefined;
 }

@@ -1628,10 +1628,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return row?.event_count ?? 0;
   }
 
-  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"], workOrderStatusChanges?: ErpProjectEvent["workOrderStatusChanges"]): void {
+  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"], workOrderStatusChanges?: ErpProjectEvent["workOrderStatusChanges"], rationale?: string): void {
     const event: ErpProjectEvent = {
       eventId: `project_event_${randomUUID()}`, projectId: project.stableId, version: project.version,
       revision: project.revision, occurredAt: project.updatedAt, kind, changedFields,
+      ...(rationale !== undefined && rationale.trim() ? { rationale: rationale.trim() } : {}),
       ...(workOrderStatusChanges !== undefined && workOrderStatusChanges.length > 0 ? { workOrderStatusChanges } : {}),
       ...(fromStatus !== undefined ? { fromStatus } : {}), toStatus: project.status,
     };
@@ -1647,6 +1648,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
   createErpProject(input: ErpProjectDraft): ErpProject {
     const now = Math.floor(Date.now() / 1000);
     if (input.idempotencyKey !== undefined && (typeof input.idempotencyKey !== "string" || input.idempotencyKey.trim().length < 1 || input.idempotencyKey.length > 256)) throw new TypeError("Project idempotency keys must contain 1–256 characters.");
+    if (input.rationale !== undefined && (typeof input.rationale !== "string" || input.rationale.trim().length < 1 || input.rationale.length > 2_000)) throw new TypeError("Project rationale must contain 1–2,000 characters when provided.");
     const project: ErpProject = {
       stableId: input.idempotencyKey === undefined ? `project_${randomUUID()}` : `project_goal_${createHash("sha256").update(input.idempotencyKey).digest("hex")}`,
       version: input.version, title: input.title.trim(),
@@ -1666,12 +1668,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
       validatePortfolioNeedDependencies([...this.listErpProjects(project.version), project]);
       this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
         .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
-      this.recordErpProjectEvent(project, "CREATED", ["project"]);
+      this.recordErpProjectEvent(project, "CREATED", ["project"], undefined, undefined, input.rationale);
       return project;
     });
   }
 
-  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch = false): ErpProject | undefined {
+  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch = false, rationale?: string): ErpProject | undefined {
+    if (rationale !== undefined && (typeof rationale !== "string" || rationale.trim().length < 1 || rationale.length > 2_000)) throw new TypeError("Project rationale must contain 1–2,000 characters when provided.");
     return this.inTransaction(() => {
       const existing = this.getErpProject(project.stableId);
       if (!existing) return undefined;
@@ -1744,7 +1747,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
         if (previous?.status === order.status) return [];
         return [{ workOrderId: order.stableId, title: order.title, ...(previous ? { fromStatus: previous.status } : {}), toStatus: order.status }];
       });
-      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined, workOrderStatusChanges);
+      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined, workOrderStatusChanges, rationale);
       return updated;
     });
   }
@@ -1892,10 +1895,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
     });
   }
 
-  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number): ErpProject | undefined {
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number, options: { completionNote?: string; rationale?: string } = {}): ErpProject | undefined {
     const project = this.getErpProject(stableId);
     if (!project) return undefined;
-    return this.updateErpProject({ ...project, status }, expectedRevision);
+    return this.updateErpProject({ ...project, status, ...(options.completionNote !== undefined ? { completionNote: options.completionNote } : {}) }, expectedRevision, false, options.rationale);
   }
 
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
