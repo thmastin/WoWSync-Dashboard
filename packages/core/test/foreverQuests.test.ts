@@ -75,6 +75,16 @@ test("partial malformed rows and missing readiness/objectives stay UNKNOWN witho
   assert.deepEqual(partial.completedHistory.questIDs, [301]);
 });
 
+test("blank objective descriptions remain partial rather than appearing as observed progress rows", () => {
+  const malformed = buildForeverQuestObservation({ section: section({
+    activeCompleteness: "partial",
+    active: [{ ...questData.active[0], objectiveState: "OBSERVED", objectives: [{ ...questData.active[0].objectives[0], text: "" }] }],
+  }), profile: "Forever:1.60.1:70338:16001", identity, now: NOW });
+  assert.equal(malformed.completeness, "partial");
+  assert.equal(malformed.active?.[0]?.objectiveState, "PARTIAL");
+  assert.equal(malformed.active?.[0]?.objectives?.[0]?.text, undefined);
+});
+
 test("unsupported profiles fail closed; old and failed refreshes remain LAST_SEEN", () => {
   const unsupported = buildForeverQuestObservation({ section: section(), profile: "Retail:12.0", identity, now: NOW });
   assert.equal(unsupported.state, "UNKNOWN");

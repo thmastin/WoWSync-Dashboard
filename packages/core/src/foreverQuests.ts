@@ -65,7 +65,7 @@ const MAX_COMPLETED = 500;
 const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const validID = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
 const validCounter = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const text = (value: unknown): value is string => typeof value === "string" && value.length <= 512;
+const text = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 512;
 
 function evidence(value: unknown, expected?: boolean): QuestEvidenceState {
   if (expected !== undefined) return typeof value === "boolean" ? "OBSERVED" : "UNKNOWN";
@@ -196,4 +196,4 @@ export function buildForeverQuestObservation(input: {
   return { version: "forever", identity: input.identity, source: "Forever C_QuestLog structured sidecar", state, completeness: partial ? "partial" : "complete", observedAt, freshness, activeState, ...(activeAvailable ? { active: staleActive } : {}), ...(activeCounts ? { activeCounts } : {}), completedHistory, issues, ...(reasonText ? { reason: reasonText } : {}) };
 }
 
-function validQuestArray(value: unknown): value is unknown[] { return Array.isArray(value) && value.length <= MAX_QUESTS; }
+\n
