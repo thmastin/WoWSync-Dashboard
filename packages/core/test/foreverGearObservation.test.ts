@@ -17,6 +17,24 @@ test("Forever structured sidecar is isolated by version, identity, profile, and 
   assert.equal(normalizeForeverStructuredObservation({ ...sidecar, clientProfile: "Retail" }, "forever", "Hero", "Hallo", 99), undefined);
 });
 
+test("Forever profession recipes accept only the validated 70338 partial catalogue shape", () => {
+  const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 1, uniqueCandidateCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, evidence: "OBSERVED", observedAt: 100, recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: 100, outputItemID: 2862, reagentSlots: [{ quantityRequired: 1, reagents: [{ itemID: 2835 }] }] }] }] };
+  const recipes = { observedAt: 100, capture: 59, revision: 2, source: "client", data: recipeData };
+  const current = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001" as const, professionRecipes: recipes };
+  const normalized = normalizeForeverStructuredObservation(current, "forever", "Hero", "Hallo", 99);
+  assert.equal(normalized?.professionRecipes?.status.state, "OBSERVED");
+  assert.equal((normalized?.professionRecipes?.data.professions as any[])[0].recipes[0].outputItemID, 2862);
+  const olderBuild = normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:1.60.1:70291:16001" }, "forever", "Hero", "Hallo", 99);
+  assert.equal(olderBuild?.professionRecipes, undefined, "a build without this validated collector schema cannot assert recipe evidence");
+  assert.ok(olderBuild?.equipment, "unsupported optional recipe evidence does not discard otherwise valid Forever observations");
+  assert.equal(normalizeForeverStructuredObservation(current, "retail", "Hero", "Hallo", 99), undefined, "Forever recipe evidence remains version-isolated");
+  const falselyComplete = normalizeForeverStructuredObservation({ ...current, professionRecipes: { ...recipes, data: { ...recipeData, coverage: { state: "COMPLETE", candidateCompleteness: "COMPLETE" } } } }, "forever", "Hero", "Hallo", 99);
+  assert.equal(falselyComplete?.professionRecipes, undefined, "unsupported complete-catalogue claims fail closed");
+  assert.ok(falselyComplete?.equipment, "invalid optional recipe data does not discard valid equipment evidence");
+  const contradictory = normalizeForeverStructuredObservation({ ...current, professionRecipes: { ...recipes, data: { ...recipeData, professions: [{ ...recipeData.professions[0], recipes: [{ recipeID: 2660, learned: false, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED" }] }] } } }, "forever", "Hero", "Hallo", 99);
+  assert.equal(contradictory?.professionRecipes, undefined, "contradictory boolean and learned-state pairs fail closed");
+});
+
 test("Forever observation preserves exact variants and keeps evaluation claims UNKNOWN", () => {
   const structured = normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 99);
   const view = buildForeverGearObservation({ identity, snapshotId: 1, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });

@@ -56,6 +56,28 @@ function sharedFixture(options: { owner?: "warband" | "guild"; live?: boolean; c
   return (owner.kind === "guild" ? { guilds: [view] } : { warband: view, guilds: [] }) as unknown as SharedStorageProjection;
 }
 
+test("Forever exact recipe rows can reconcile learned state without claiming craftability", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const at = Math.floor(Date.now() / 1000) - 30;
+  try {
+    const raw = buildWowSyncExport({ generatedAt: at, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+    const recipeRows = [
+      { recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: at, skillLineIDs: [2938] },
+      { recipeID: 2661, learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: at, skillLineIDs: [2938] },
+    ];
+    const imported = store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Rordin", realm: "Classic Beta PvP 2", generatedAt: at, professionRecipes: { observedAt: at, data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN" }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, name: "Blacksmithing", observedAt: at, evidence: "OBSERVED", recipes: recipeRows }] } } } });
+    const learned = assessErpNeed({ stableId: "learned_recipe", kind: "RECIPE", resourceKey: "2660", label: "Rough Sharpening Stone recipe", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "forever");
+    assert.equal(learned.state, "COVERED_BY_OBSERVED");
+    assert.match(learned.reason, /Forever structured recipe observation reports recipe 2660 as learned/);
+    assert.match(learned.reason, /does not establish current profession skill.*crafting is presently possible/);
+    const unknown = assessErpNeed({ stableId: "absent_recipe", kind: "RECIPE", resourceKey: "999999", label: "Missing candidate", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "forever");
+    assert.equal(unknown.state, "UNKNOWN", "an ID absent from an incomplete candidate list is not unlearned");
+    assert.match(unknown.reason, /absence does not mean unlearned/);
+    const retail = assessErpNeed({ stableId: "wrong_version", kind: "RECIPE", resourceKey: "2660", label: "Other client", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "retail");
+    assert.equal(retail.state, "UNKNOWN", "Forever recipe evidence must not become Retail evidence");
+  } finally { store.close(); }
+});
+
 test("changed-need portfolio review is version-scoped, bounded, and preserves snapshot comparison evidence", () => {
   const baseAt = Math.floor(Date.now() / 1000) - 1000;
   const { store, identityKey } = seedStore({ generatedAt: baseAt, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 1 }] }] }, bank: { containers: [] } });
@@ -875,7 +897,7 @@ test("Retail recipe plans preserve LAST_SEEN history and never borrow recipe evi
     assert.equal(view.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
     const unsupported = assessErpNeed({ ...retailNeed, sourceIdentityKey: classic.identityKey }, classic.store.listSnapshots(classic.identityKey), 1_700_000_020, undefined, "classic-era");
     assert.equal(unsupported.state, "UNSUPPORTED_EVIDENCE");
-    assert.match(unsupported.reason, /supported only for Retail/);
+    assert.match(unsupported.reason, /not supported for classic-era/);
   } finally { historical.store.close(); classic.store.close(); }
 });
 

@@ -24,7 +24,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
   const now = Math.floor(Date.now() / 1000);
   const seed = new SqliteSnapshotStore(databasePath);
   // Synthetic fixture values mirror the currently read-only DEV observations; they remain test data, not a live import.
-  const rordin = seed.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:117::::::::6:1491:::::::::", name: "Tough Jerky", qty: 13 }, { itemRef: "item:2589::::::::6:1491:::::::::", name: "Linen Cloth", qty: 17 }, { itemRef: "item:6948::::::::6:1491::75:::::::", name: "Hearthstone", qty: 1 }, { itemRef: "item:247840::::::::6:1491::11:::::::", name: "Mining for Dummies", qty: 1 }, { itemRef: "item:286355::::::::6:1491:::::::::", name: "Crate of Candles", qty: 1 }] }] }, bank: { unknown: true } })).character;
+  const rordin = seed.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:117::::::::6:1491:::::::::", name: "Tough Jerky", qty: 13 }, { itemRef: "item:2589::::::::6:1491:::::::::", name: "Linen Cloth", qty: 17 }, { itemRef: "item:6948::::::::6:1491::75:::::::", name: "Hearthstone", qty: 1 }, { itemRef: "item:247840::::::::6:1491::11:::::::", name: "Mining for Dummies", qty: 1 }, { itemRef: "item:286355::::::::6:1491:::::::::", name: "Crate of Candles", qty: 1 }] }] }, bank: { unknown: true } }), { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Rordin", realm: "Classic Beta PvP 2", generatedAt: now, sourceCharacterGuid: "Player-4613-016F932B", professionRecipes: { observedAt: now - 2, data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 2, uniqueCandidateCount: 2, learnedTrueCount: 1, learnedFalseCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, name: "Blacksmithing", professionName: "Blacksmithing", evidence: "OBSERVED", observedAt: now - 2, recipes: [{ recipeID: 2663, name: "Copper Bracers", learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: now - 2, outputItemID: 2853, reagentSlots: [{ quantityRequired: 2, reagents: [{ itemID: 2840 }] }] }, { recipeID: 2661, name: "Copper Chain Belt", learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: now - 2, outputItemID: 2851, reagentSlots: [{ quantityRequired: 6, reagents: [{ itemID: 2840 }] }] }] }] } } } }).character;
   const fizzwick = seed.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Fizzwick", realm: "Classic Beta PvP 2", class: "Mage", level: 4, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:6173::::::::4:1482::11:::::::", name: "Snow Boots", qty: 1 }, { itemRef: "item:7005::::::::4:1482::14:::::::", name: "Skinning Knife", qty: 1 }] }] }, bank: { unknown: true } })).character;
   const hallo = seed.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Hallo", realm: "Classic Beta PvP 2", class: "Hunter", level: 9, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2770::::::::9:1485::::::::", name: "Copper Ore", qty: 37 }, { itemRef: "item:2835::::::::9:1485::::::::", name: "Rough Stone", qty: 27 }, { itemRef: "item:2901::::::::9:1485::14:::::::", name: "Mining Pick", qty: 1 }] }] }, bank: { unknown: true } })).character;
   const otherRealm = seed.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "OtherRealm", realm: "Different Realm", class: "Warrior", level: 9, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2770:0:0:0:0:0:0:0", name: "Copper Ore", qty: 20 }] }] }, bank: { unknown: true } })).character;
@@ -52,13 +52,15 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
 
     const first = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: RORDIN_PROFESSION_GOAL } });
     assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
-    const response = first.structuredContent as { target: { identityKey: string; name: string; surname?: string }; proposal: { proposal: { proposalId: string; digest: string; status: string } }; resourceDiscovery: { accountMembership: string; sameRealmCharacterCount: number; otherRealmCharacterCount: number; leads: Array<{ character: { identityKey: string }; itemRef?: string; quantity?: number }>; characters: Array<{ identityKey: string; class?: string; professionState: string; professions: Array<{ name: string; skill?: number }> }> }; recipeEvidence: { state: string } };
+    const response = first.structuredContent as { target: { identityKey: string; name: string; surname?: string }; proposal: { proposal: { proposalId: string; digest: string; status: string } }; resourceDiscovery: { accountMembership: string; sameRealmCharacterCount: number; otherRealmCharacterCount: number; leads: Array<{ character: { identityKey: string }; itemRef?: string; quantity?: number }>; characters: Array<{ identityKey: string; class?: string; professionState: string; professions: Array<{ name: string; skill?: number }> }> }; recipeEvidence: { state: string; candidateCompleteness: string; knownRecipes: Array<{ recipeID: number; name?: string; outputItemID?: number }> } };
     assert.equal(response.target.identityKey, rordin.identityKey);
     assert.equal(response.target.name, "Rordin");
     assert.equal(response.target.surname, "Longbraid");
     assert.equal(response.proposal.proposal.status, "PENDING");
     assert.equal(apiStore.listErpProjects("forever").length, 0, "goal interpretation stages a proposal without mutating persistent project state");
-    assert.equal(response.recipeEvidence.state, "UNKNOWN");
+    assert.equal(response.recipeEvidence.state, "OBSERVED");
+    assert.equal(response.recipeEvidence.candidateCompleteness, "UNKNOWN");
+    assert.deepEqual(response.recipeEvidence.knownRecipes.map((recipe) => [recipe.recipeID, recipe.name, recipe.outputItemID]), [[2663, "Copper Bracers", 2853]]);
     assert.equal(response.resourceDiscovery.accountMembership, "UNKNOWN");
     assert.equal(response.resourceDiscovery.sameRealmCharacterCount, 3);
     assert.equal(response.resourceDiscovery.otherRealmCharacterCount, 1);
@@ -83,7 +85,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     ]);
     assert.deepEqual(project.reservations, [], "unverified quantities and other-character leads are not reserved");
     assert.equal(project.workOrders.length, 7);
-    assert.deepEqual(project.workOrders.find((order) => order.title.startsWith("Verify an exact Forever"))?.dependsOn, [], "recipe evidence investigation is not blocked by unrelated profession-learning work orders");
+    assert.deepEqual(project.workOrders.find((order) => order.title.startsWith("Review Forever Blacksmithing"))?.dependsOn, [], "recipe evidence investigation is not blocked by unrelated profession-learning work orders");
     assert.ok(project.workOrders.every((order) => order.assignedIdentityKey === rordin.identityKey));
     assert.ok(project.workOrders.find((order) => order.kind === "CRAFT")?.status === "WAITING_FOR_EVIDENCE");
     const second = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: `  ${RORDIN_PROFESSION_GOAL.replace(/\s+/g, " ")}  ` } });
@@ -125,9 +127,9 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     const otherVersion = await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } });
     assert.equal((otherVersion.structuredContent as { projects: unknown[] }).projects.length, 0);
     const professionRead = await client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" } });
-    const professionData = professionRead.structuredContent as { value?: { data?: { recipeKnowledge?: { status: { state: string; reason?: string } } } } };
-    assert.equal(professionData.value?.data?.recipeKnowledge?.status.state, "UNKNOWN");
-    assert.match(professionData.value?.data?.recipeKnowledge?.status.reason ?? "", /panel has not yet been opened/i);
+    const professionData = professionRead.structuredContent as { value?: { data?: { recipeKnowledge?: { status: { state: string; reason?: string }; data?: { professions?: any[] } } } } };
+    assert.equal(professionData.value?.data?.recipeKnowledge?.status.state, "OBSERVED");
+    assert.equal((professionData.value?.data?.recipeKnowledge?.data?.professions as any[])[0].recipes[0].reagentSlots[0].quantityRequired, 2);
   } finally {
     await client.close();
     await new Promise<void>((resolve) => api.close(() => resolve()));

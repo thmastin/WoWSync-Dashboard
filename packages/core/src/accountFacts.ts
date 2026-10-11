@@ -664,8 +664,11 @@ function buildProfessionsByCharacter(
         observedAt: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.observedAt,
         reason: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.status.reason,
         data: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.data,
-      } } : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } }
-        : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "The current Forever GearExport collector records profession skills and spells but not recipe records. Missing rows are not evidence that recipes are unlearned; the version-tagged client API results are not captured in this export. GetAllRecipeIDs may be empty until that profession panel has been opened." } } : {}),
+      } } : version === "forever" && latestParsed.get(c.identityKey)?.foreverGearObservation?.professionRecipes ? (() => {
+        const recipe = latestParsed.get(c.identityKey)!.foreverGearObservation!.professionRecipes!;
+        return { recipeKnowledge: { status: recipe.status.state, completeness: recipe.completeness, observedAt: recipe.observedAt, data: recipe.data } };
+      })() : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } }
+        : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "This Forever snapshot contains no structured profession recipe section. Missing rows are not evidence that recipes are unlearned." } } : {}),
     };
   });
 }
@@ -739,8 +742,9 @@ function buildProfessionFacts(
   const byCharacter = buildProfessionsByCharacter(characters, latestParsed, version);
   const coverage = buildProfessionCoverage(version, professionCatalogForVersion(version), byCharacter);
   const known = new Map<string, ProfessionFacts["knownRecipes"][number]>();
-  if (version === "retail") for (const character of characters) {
-    const state = latestParsed.get(character.identityKey)?.characterState?.professionRecipes;
+  if (version === "retail" || version === "forever") for (const character of characters) {
+    const parsed = latestParsed.get(character.identityKey);
+    const state = version === "retail" ? parsed?.characterState?.professionRecipes : parsed?.foreverGearObservation?.professionRecipes;
     const data = state?.data as Record<string, unknown> | undefined;
     const professions = Array.isArray(data?.professions) ? data!.professions as Record<string, unknown>[] : [];
     for (const profession of professions) for (const recipe of (Array.isArray(profession.recipes) ? profession.recipes : []) as Record<string, unknown>[]) {

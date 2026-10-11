@@ -14,6 +14,7 @@ export interface ForeverStructuredObservation {
   bank?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
   itemEvidence?: Record<string, unknown>;
+  professionRecipes?: { status: { state: "OBSERVED"; completeness: "partial"; observedAt: number }; completeness: "partial"; observedAt: number; data: Record<string, unknown> };
 }
 
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
@@ -34,6 +35,31 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     const s = raw as Record<string, unknown>;
     return typeof s.observedAt === "number" && Number.isFinite(s.observedAt) && s.data !== undefined ? s : undefined;
   };
+  const recipeSection = section("professionRecipes");
+  const recipeData = object(recipeSection?.data);
+  const recipeCoverage = object(recipeData?.coverage);
+  const recipeProfessions = Array.isArray(recipeData?.professions) ? recipeData.professions : undefined;
+  const validRecipes = recipeSection !== undefined
+    && v.clientProfile === "Forever:1.60.1:70338:16001"
+    && recipeData?.formatVersion === 1
+    && recipeData.ownerScope === "CHARACTER"
+    && recipeCoverage?.state === "PARTIAL"
+    && recipeCoverage.candidateCompleteness === "UNKNOWN"
+    && Array.isArray(recipeProfessions)
+    && recipeProfessions.length > 0
+    && recipeProfessions.every((rawProfession) => {
+      const profession = object(rawProfession);
+      if (!profession || !Number.isSafeInteger(profession.baseSkillLineID) || !Number.isSafeInteger(profession.skillLineID)
+        || (profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN")
+        || !Array.isArray(profession.recipes) || typeof profession.observedAt !== "number") return false;
+      return profession.recipes.every((rawRecipe) => {
+        const recipe = object(rawRecipe);
+        if (!recipe || !Number.isSafeInteger(recipe.recipeID) || (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN")) return false;
+        if (recipe.learnedState === "OBSERVED_TRUE") return recipe.learned === true && recipe.evidence === "OBSERVED";
+        if (recipe.learnedState === "OBSERVED_FALSE") return recipe.learned === false && recipe.evidence === "OBSERVED";
+        return (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned === undefined;
+      });
+    });
   return {
     clientProfile: v.clientProfile as ForeverStructuredObservation["clientProfile"], name: v.name, realm: v.realm, generatedAt: v.generatedAt as number,
     ...(typeof v.sourceCharacterGuid === "string" && v.sourceCharacterGuid.length > 0 ? { sourceCharacterGuid: v.sourceCharacterGuid } : {}),
@@ -42,6 +68,12 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("bags") ? { bags: section("bags") } : {}),
     ...(section("bank") ? { bank: section("bank") } : {}),
     ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
+    ...(validRecipes ? { professionRecipes: {
+      status: { state: "OBSERVED" as const, completeness: "partial" as const, observedAt: recipeSection!.observedAt as number },
+      completeness: "partial" as const,
+      observedAt: recipeSection!.observedAt as number,
+      data: recipeData!,
+    } } : {}),
     ...(v.itemMetadata && typeof v.itemMetadata === "object" && !Array.isArray(v.itemMetadata) ? { itemMetadata: v.itemMetadata as Record<string, unknown> } : {}),
   };
 }
@@ -253,6 +285,11 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
   if (nextFacts) {
     if (!beforeFacts || (nextFacts.observedAt as number) > (beforeFacts.observedAt as number)) { value.itemEvidence = nextFacts; updated = true; }
     else if ((nextFacts.observedAt as number) === (beforeFacts.observedAt as number) && JSON.stringify(stable(beforeFacts)) !== JSON.stringify(stable(nextFacts))) conflict = true;
+  }
+  const beforeRecipes = existing.professionRecipes; const nextRecipes = incoming.professionRecipes;
+  if (nextRecipes) {
+    if (!beforeRecipes || (nextRecipes.observedAt as number) > (beforeRecipes.observedAt as number)) { value.professionRecipes = nextRecipes; updated = true; }
+    else if ((nextRecipes.observedAt as number) === (beforeRecipes.observedAt as number) && JSON.stringify(stable(beforeRecipes)) !== JSON.stringify(stable(nextRecipes))) conflict = true;
   }
   return { value, outcome: updated ? "updated" : conflict ? "conflict" : "already-recorded" };
 }

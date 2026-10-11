@@ -319,19 +319,20 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const currencyObservedAt = luaGet(currencies, "observedAt");
     const equipment = luaGet(sections, "equipment");
     const foreverEvidence = luaGet(sections, "forever70291Evidence");
+    const professionRecipes = luaGet(sections, "professionRecipes");
+    const retailProfessionRecipes = typeof text === "string" && isRetailExportText(text) ? professionRecipes : undefined;
     const itemMetadata = luaGet(record, "itemMetadata");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
-    const professionRecipes = luaGet(sections, "professionRecipes");
     const characterReputation = luaGet(sections, "reputation");
     const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
-    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || professionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
+    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || retailProfessionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
       ? {
           formatVersion: 1,
           clientFamily: "Retail",
           ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
           ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
-          ...(professionRecipes instanceof Map ? { professionRecipes: luaToPlain(professionRecipes) } : {}),
+          ...(retailProfessionRecipes instanceof Map ? { professionRecipes: luaToPlain(retailProfessionRecipes) } : {}),
           ...((characterReputation instanceof Map || accountReputation instanceof Map) ? { reputation: {
             ...(characterReputation instanceof Map ? { character: luaToPlain(characterReputation) } : {}),
             ...(accountReputation instanceof Map ? { account: luaToPlain(accountReputation) } : {}),
@@ -347,6 +348,9 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           realm: typeof realm === "string" ? realm : "",
           generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
           ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
+          ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && typeof luaGet(professionRecipes, "changedAt") === "number"
+            ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") } }
+            : {}),
           ...Object.fromEntries(["equipment", "bags", "bank"].flatMap((key) => {
             const section = luaGet(sections, key);
             return isLuaTable(section) ? [[key, luaToPlain(section)]] : [];

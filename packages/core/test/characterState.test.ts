@@ -225,7 +225,7 @@ test("known-by-account includes explicit learned=true only and the professions r
   } finally { store.close(); }
 });
 
-test("Forever profession reads expose the recipe capture gap without treating missing recipe rows as unlearned", () => {
+test("Forever profession reads keep recipe knowledge UNKNOWN when the structured recipe section is absent", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(buildWowSyncExport({ generatedAt: ts, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] } }));
@@ -234,13 +234,36 @@ test("Forever profession reads expose the recipe capture gap without treating mi
     assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Mining")?.skill, 3);
     assert.equal(read.status === "FOUND" && read.value.data?.entries.find((entry) => entry.name === "Blacksmithing")?.skill, 1);
     assert.equal(read.status === "FOUND" && read.value.data?.recipeKnowledge?.status.state, "UNKNOWN");
-    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /does not capture a recipe catalogue/i);
-    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /not unlearned/i);
-    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /panel has not yet been opened/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /no structured profession recipe section/i);
+    assert.match(read.status === "FOUND" ? read.value.data?.recipeKnowledge?.status.reason ?? "" : "", /not mean unlearned/i);
     const facts = store.buildAccountFacts("forever", ts).professions.byCharacter[0];
     assert.equal(facts?.recipeKnowledge?.status, "UNKNOWN");
-    assert.match(facts?.recipeKnowledge?.reason ?? "", /but not recipe records/i);
+    assert.match(facts?.recipeKnowledge?.reason ?? "", /no structured profession recipe section/i);
     assert.equal(store.buildAccountFacts("retail", ts).professions.byCharacter.length, 0, "Forever observation does not leak into Retail facts");
+  } finally { store.close(); }
+});
+
+test("Forever 70338 recipe evidence reaches professions and AccountFacts without crossing versions", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const generatedAt = ts;
+    const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 2, uniqueCandidateCount: 2 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, name: "Blacksmithing", professionName: "Blacksmithing", evidence: "OBSERVED", observedAt: generatedAt - 5, recipes: [
+      { recipeID: 2660, name: "Rough Sharpening Stone", learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: generatedAt - 5, skillLineIDs: [2938], outputItemID: 2862, reagentSlots: [{ quantityRequired: 1, reagents: [{ itemID: 2835 }] }] },
+      { recipeID: 2661, name: "Copper Chain Belt", learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: generatedAt - 5, skillLineIDs: [2938], outputItemID: 2851, reagentSlots: [{ quantityRequired: 6, reagents: [{ itemID: 2840 }] }] },
+    ] }] };
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, professions: { entries: [{ name: "Blacksmithing", skill: 1, maxSkill: 75 }, { name: "Mining", skill: 3, maxSkill: 75 }] } }), { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Rordin", realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: "Player-4613-016F932B", professionRecipes: { capture: 59, revision: 2, changedAt: generatedAt - 5, observedAt: generatedAt - 5, source: "client", completeness: "partial", data: recipeData } } });
+    const read = new DashboardReadModel(store, () => generatedAt + 1).getCharacterProfessions({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    const recipe = read.value.data?.recipeKnowledge;
+    assert.equal(recipe?.status.state, "OBSERVED");
+    assert.equal(recipe?.completeness, "partial");
+    assert.equal(recipe?.observedAt, generatedAt - 5);
+    assert.equal((recipe?.data?.professions as any[])[0].recipes[1].reagentSlots[0].quantityRequired, 6);
+    const facts = store.buildAccountFacts("forever", generatedAt + 1).professions;
+    assert.deepEqual(facts.knownRecipes.map((row) => row.recipeID), [2660]);
+    assert.equal(facts.knownRecipes[0]?.characters[0]?.evidence, "OBSERVED");
+    assert.deepEqual(store.buildAccountFacts("retail", generatedAt + 1).professions.knownRecipes, []);
   } finally { store.close(); }
 });
 

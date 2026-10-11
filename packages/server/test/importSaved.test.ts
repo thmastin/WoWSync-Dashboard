@@ -603,6 +603,31 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
   });
 });
 
+test("END TO END: Forever 70338 profession recipe section is preserved through SavedVariables import", async () => {
+  const generatedAt = 1_791_755_559;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+  const professionRecipes = toLua({ capture: 59, revision: 2, changedAt: generatedAt - 56, source: "client", data: {
+    formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 2, uniqueCandidateCount: 2, filteredEnumerationUsed: false },
+    professions: [{ baseSkillLineID: 164, skillLineID: 2938, professionName: "Blacksmithing", name: "Blacksmithing", evidence: "OBSERVED", observedAt: generatedAt - 56,
+      recipes: [
+        { recipeID: 2660, name: "Rough Sharpening Stone", learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2862, reagentSlots: [{ slotIndex: 1, quantityRequired: 1, reagents: [{ itemID: 2835 }] }] },
+        { recipeID: 2661, name: "Copper Chain Belt", learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2851, reagentSlots: [{ slotIndex: 1, quantityRequired: 6, reagents: [{ itemID: 2840 }] }] },
+      ] }],
+  } });
+  const file = svFile(savedVariables([{ guid: "Player-1-RORDIN", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt, captureProfile: "Forever:1.60.1:70338:16001", professionRecipes }]));
+  await withServer(async (_base, store) => {
+    const result = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--file", file, "--url", _base], live(_base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin")[0];
+    const captured = snapshot.parsed.foreverGearObservation?.professionRecipes as any;
+    assert.equal(snapshot.parsed.characterState, undefined, "Forever recipe rows do not enter the Retail-only characterState sidecar");
+    assert.equal(captured.status.state, "OBSERVED");
+    assert.equal(captured.observedAt, generatedAt - 56);
+    assert.equal(captured.data.coverage.candidateCompleteness, "UNKNOWN");
+    assert.deepEqual(captured.data.professions[0].recipes.map((row: any) => [row.recipeID, row.learnedState, row.outputItemID, row.reagentSlots[0].quantityRequired]), [[2660, "OBSERVED_TRUE", 2862, 1], [2661, "OBSERVED_FALSE", 2851, 6]]);
+  });
+});
+
 test("END TO END: the SavedVariables bridge discovers a new Forever 70338 character with a surname", async () => {
   const generatedAt = 1_791_683_475;
   const text = buildWowSyncExport({ generatedAt, character: {

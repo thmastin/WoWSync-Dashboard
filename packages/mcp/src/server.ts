@@ -423,7 +423,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async (query) => textResult(readModel.getForeverGearAllocation(query)));
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
-    description: "Returns profession skills and applicable specialization/recipe sidecars for one explicit-version character. Retail recipe observations are partial and LAST_SEEN is labeled. Forever currently reports recipeKnowledge UNKNOWN with the capture limitation: the installed Forever collector does not serialize recipe catalogue results, so missing recipes do not mean unlearned. Observed profession skill or spellbook entries do not establish recipe knowledge or craftability.",
+    description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. Candidate recipe coverage is partial; absence does not mean unlearned, and historical evidence is labeled. Forever recipe rows are only accepted from the verified 1.60.1 build 70338 structured capture. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterProfessions(query)));

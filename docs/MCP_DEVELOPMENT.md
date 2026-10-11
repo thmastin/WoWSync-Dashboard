@@ -290,7 +290,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Item search | MCP PARITY | Bounded search over typed version-scoped read projections. |
 | Professions | MCP PARITY | Current bounded character profession state. |
 | Profession coverage | MCP PARITY | Derived by `AccountFacts` / provider-neutral coverage. |
-| Known profession recipes | PARTIAL MCP PARITY | Retail recipe learned-state observations (ingested since `ed730ba`; captured by GearExport as of `2e67d88`) via `get_character_professions` `recipeKnowledge`; candidate coverage is partial, absence never means unlearned. Recipe definitions (outputs/reagents) are not provided by this evidence. |
+| Known profession recipes | PARTIAL MCP PARITY | Retail recipe learned-state observations and Forever 1.60.1 build 70338 captured candidates are returned through `get_character_professions` `recipeKnowledge`. Forever rows can include exact recipe IDs, observed learned state, output item IDs, and reagent slots/quantities. Both catalogues remain partial; absence never means unlearned, and recipe evidence does not establish skill eligibility or present craftability. |
 | Trainer observations | MCP PARITY | `spells`/`trainer` snapshot sections; exact visit statuses and freshness retained. |
 | Known spells / spellbook | MCP PARITY | Captured spellbook section; capture coverage may be limited by client/spec. |
 | Character currencies | MCP PARITY | Structured currency list, per-character state and quantities. |

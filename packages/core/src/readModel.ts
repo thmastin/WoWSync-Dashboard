@@ -1385,11 +1385,13 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const value = snapshot.parsed.professions;
       const captured = snapshot.parsed.characterState?.professionSpecializations;
-      const recipes = snapshot.parsed.characterState?.professionRecipes;
+      const recipes = query.version === "forever"
+        ? snapshot.parsed.foreverGearObservation?.professionRecipes
+        : snapshot.parsed.characterState?.professionRecipes;
       const recipeKnowledge = query.version === "retail"
         ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "No successful Retail profession recipe observation has been imported." }, completeness: "unknown" as const }
         : query.version === "forever"
-          ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "The current Forever GearExport collector captures profession skill and spell observations but does not capture a recipe catalogue. No recipe rows therefore means not observed, not unlearned. Warcraft Wiki documents these recipe APIs for Forever 1.60.1; GetAllRecipeIDs can return an empty table if that profession panel has not yet been opened, so empty is not proof of no learned recipes. Their results are not present in this character export." }, completeness: "unknown" as const }
+          ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "This Forever snapshot contains no structured profession recipe section. Missing rows do not mean unlearned, and the candidate list is not a complete recipe catalogue." }, completeness: "unknown" as const }
           : undefined;
       const state = value.status.state === "UNKNOWN" && (captured || recipeKnowledge) ? statusToReadState(captured?.status.state ?? recipeKnowledge!.status.state) : statusToReadState(value.status.state);
       const data = { ...value, ...(captured ? { specialization: captured } : {}), ...(recipeKnowledge ? { recipeKnowledge } : {}) } as ProfessionsSection;
