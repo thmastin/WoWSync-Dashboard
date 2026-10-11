@@ -18,6 +18,7 @@ import {
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
+import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
 import { z } from "zod";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -202,6 +203,21 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
 
   if (planningApiBaseUrl) {
     const boundedRecord = z.record(z.string().max(80), z.unknown());
+    server.registerTool("create_erp_project_from_goal", {
+      title: "Create a Forever ERP project from a stated goal",
+      description: "Accepts the supported natural-language Rordin Longbraid Forever Mining/Blacksmithing/equipment goal, resolves Rordin from the Forever identity roster, scans same-realm observed bag/bank rows for bounded material leads, and creates one persistent project with linked profession requirements and dependent manual work orders. The tool writes player intent only; it never learns professions, gathers, transfers, buys, crafts, or equips. Exact Forever recipe/output/reagent evidence is currently UNKNOWN, so it does not invent a recipe, ore-to-bar ratio, material quantity, reservation, transfer route, or upgrade. MCP clients must obtain/retain explicit user confirmation before invoking this write tool.",
+      inputSchema: z.object({ goal: z.string().trim().min(1).max(1000) }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ goal }) => {
+      const plan = buildRordinForeverGoalProject(goal, store);
+      if ("error" in plan) return safeFailure("GOAL_NOT_SUPPORTED", plan.error);
+      const saved = await forwardPlanningRequest(planningApiBaseUrl, "POST", "/api/versions/forever/erp/projects", {
+        idempotencyKey: plan.idempotencyKey, title: plan.title, objective: plan.objective, priority: plan.priority, needs: plan.needs, workOrders: plan.workOrders,
+      });
+      if ("isError" in saved && saved.isError) return saved;
+      return textResult({ goal, target: plan.target, project: saved.structuredContent, resourceDiscovery: plan.resourceDiscovery, recipeEvidence: plan.recipeEvidence,
+        nextAction: "Review the two profession requirements and current evidence. Player actions remain manual. First verify a real Forever recipe, its exact production stages and quantities, and whether its output is a supported upgrade before adding reagent needs or proceeding to craft." });
+    });
     server.registerTool("create_erp_project", {
       title: "Create a WoWSync ERP project plan",
       description: "Creates a version-scoped player planning record through the local Dashboard REST API. Requires explicit version, title, need identities, and quantities. This records intent only: it does not reserve observed supply, execute game actions, or establish possession. REST revalidates the project and character identities.",

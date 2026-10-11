@@ -155,6 +155,8 @@ export interface ErpProject {
 
 export interface ErpProjectDraft {
   version: WowVersion;
+  /** Optional retry key for an identical create request. Persisted as a deterministic project ID, never as user-visible game evidence. */
+  idempotencyKey?: string;
   title: string;
   objective?: string;
   status?: ErpProjectStatus;

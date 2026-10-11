@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
 import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
@@ -1644,19 +1644,29 @@ export class SqliteSnapshotStore implements SnapshotStore {
 
   createErpProject(input: ErpProjectDraft): ErpProject {
     const now = Math.floor(Date.now() / 1000);
+    if (input.idempotencyKey !== undefined && (typeof input.idempotencyKey !== "string" || input.idempotencyKey.trim().length < 1 || input.idempotencyKey.length > 256)) throw new TypeError("Project idempotency keys must contain 1–256 characters.");
     const project: ErpProject = {
-      stableId: `project_${randomUUID()}`, version: input.version, title: input.title.trim(),
+      stableId: input.idempotencyKey === undefined ? `project_${randomUUID()}` : `project_goal_${createHash("sha256").update(input.idempotencyKey).digest("hex")}`,
+      version: input.version, title: input.title.trim(),
       ...(input.objective !== undefined ? { objective: input.objective.trim() } : {}), status: input.status ?? "ACTIVE", priority: input.priority ?? 3,
       createdAt: now, updatedAt: now, revision: 1, needs: input.needs ?? [], reservations: input.reservations ?? [], workOrders: input.workOrders ?? [],
     };
     validateErpProject(project, (key) => this.getCharacter(key)?.version === project.version);
-    this.inTransaction(() => {
+    const equivalentCreate = (existing: ErpProject) => existing.version === project.version && existing.title === project.title && existing.objective === project.objective && existing.status === project.status && existing.priority === project.priority && isDeepStrictEqual(existing.needs, project.needs) && isDeepStrictEqual(existing.reservations, project.reservations) && isDeepStrictEqual(existing.workOrders, project.workOrders);
+    return this.inTransaction(() => {
+      if (input.idempotencyKey !== undefined) {
+        const existing = this.getErpProject(project.stableId);
+        if (existing) {
+          if (!equivalentCreate(existing)) throw new ErpProjectConflictError("IDEMPOTENCY_KEY_REUSED", "This project creation key was already used for a different plan.");
+          return existing;
+        }
+      }
       validatePortfolioNeedDependencies([...this.listErpProjects(project.version), project]);
       this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
         .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
       this.recordErpProjectEvent(project, "CREATED", ["project"]);
+      return project;
     });
-    return project;
   }
 
   updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch = false): ErpProject | undefined {

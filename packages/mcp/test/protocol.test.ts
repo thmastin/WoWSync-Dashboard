@@ -154,6 +154,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   try {
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
       "analyze_retail_gear_candidate",
       "get_account_changes",

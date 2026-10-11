@@ -21,7 +21,7 @@ export function registerErpProjectRoutes(app: Express, store: SnapshotStore): vo
     const body = req.body ?? {};
     try {
       if (Array.isArray(body.workOrders) && body.workOrders.some((order: unknown) => Boolean(order && typeof order === "object" && "planningBatch" in order))) return res.status(400).json({ error: "Planning batch identity and evidence baselines are assigned only when the server atomically confirms a grouped plan.", code: "PLANNING_BATCH_SERVER_CREATED" });
-      const project = store.createErpProject({ version, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
+      const project = store.createErpProject({ version, idempotencyKey: body.idempotencyKey, title: body.title, objective: body.objective, priority: body.priority, status: body.status, needs: body.needs, reservations: body.reservations, workOrders: body.workOrders });
       res.status(201).json({ project: new DashboardReadModel(store).getErpProjects({ version }).find((entry) => entry.stableId === project.stableId) });
     } catch (err) {
       if (err instanceof ErpProjectConflictError) return res.status(409).json({ error: err.message, code: err.code });
