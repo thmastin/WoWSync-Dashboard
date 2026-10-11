@@ -98,6 +98,7 @@ export interface FixtureOptions {
     surnameSource?: string;
     realm?: string;
     class?: string;
+    race?: string;
     level?: number;
     faction?: string;
     moneyCopper?: number;
@@ -238,6 +239,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("Realm", c.realm ?? "TestRealm"));
       out.push(field("Class", c.class ?? "Warrior"));
       out.push(field("Level", c.level ?? 1));
+      if (c.clientFamily === "Forever" && c.clientVersion === "1.60.1" && ["70291", "70338"].includes(c.clientBuild ?? "") && c.interface === "16001") out.push(field("Race", c.race));
       out.push(field("Faction", c.faction ?? "Horde"));
       out.push(field("MoneyCopper", c.moneyCopper));
       out.push(field("PlayedSeconds", c.playedSeconds));
@@ -284,7 +286,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       const bySlot = new Map((e.slots ?? []).map((s) => [s.slot, s]));
       for (const [slot, defaultName] of ALL_EQUIP_SLOTS) {
         const item = bySlot.get(slot);
-        const label = `${slot}:${defaultName}`;
+        const label = `${slot}:${item?.slotName ?? defaultName}`;
         if (!item || item.empty) {
           out.push(row(label, "EMPTY"));
         } else {

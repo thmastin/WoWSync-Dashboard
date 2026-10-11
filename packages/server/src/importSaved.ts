@@ -258,10 +258,10 @@ function isRetailExportText(text: string): boolean {
   }
 }
 
-function isForever70291ExportText(text: string): boolean {
+function isSupportedForeverExportText(text: string): boolean {
   try {
     const character = parseWowSyncExport(text).character;
-    return detectVersion(character) === "forever" && character.clientVersion === "1.60.1" && character.clientBuild === "70291" && character.interface === "16001";
+    return detectVersion(character) === "forever" && character.clientVersion === "1.60.1" && ["70291", "70338"].includes(character.clientBuild ?? "") && character.interface === "16001";
   } catch {
     return false;
   }
@@ -340,7 +340,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       : undefined;
     const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
     const captureProfile = luaGet(record, "captureProfile");
-    const foreverGearObservation = typeof text === "string" && typeof captureProfile === "string" && captureProfile === "Forever:1.60.1:70291:16001" && isForever70291ExportText(text)
+    const foreverGearObservation = typeof text === "string" && typeof captureProfile === "string" && ["Forever:1.60.1:70291:16001", "Forever:1.60.1:70338:16001"].includes(captureProfile) && isSupportedForeverExportText(text)
       ? {
           clientProfile: captureProfile,
           name: typeof name === "string" ? name : "",
@@ -361,8 +361,9 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
             // timestamp may establish when these character-specific rows were observed.
             const skillLinesObservedAt = luaGet(skillLineCount, "observedAt");
             const specialization = luaGet(data, "specialization");
-            if (!isLuaTable(itemFacts)) return {};
-            const itemFactsData = luaToPlain(itemFacts) as Record<string, unknown>;
+            const trainerEvidence = luaGet(data, "trainer");
+            const capturedAt = luaGet(data, "capturedAt");
+            const itemFactsData = isLuaTable(itemFacts) ? luaToPlain(itemFacts) as Record<string, unknown> : {};
             // Keep the raw character skill/specialization observations beside the item facts because the
             // Forever allocation read model consumes them for each recipient. Preserve their own timestamp;
             // item-fact freshness must not silently refresh these character observations.
@@ -373,11 +374,13 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
               ...(isLuaTable(skillLineCount) ? { skillLineCount: luaToPlain(skillLineCount) } : {}),
               ...(typeof skillLineCoverage === "string" ? { skillLineCoverage } : {}),
               ...(isLuaTable(specialization) ? { specialization: luaToPlain(specialization) } : {}),
+              ...(typeof capturedAt === "number" ? { capturedAt } : {}),
+              ...(isLuaTable(trainerEvidence) ? { trainerEvidence: luaToPlain(trainerEvidence) } : {}),
             };
+            if (!isLuaTable(itemFacts) && !isLuaTable(trainerEvidence)) return {};
             return { itemEvidence: {
-              observedAt: luaGet(itemFacts, "observedAt"),
-              completeness: luaGet(itemFacts, "completeness"),
-              source: luaGet(itemFacts, "source"),
+              ...(isLuaTable(itemFacts) ? { observedAt: luaGet(itemFacts, "observedAt"), completeness: luaGet(itemFacts, "completeness"), source: luaGet(itemFacts, "source") }
+                : typeof capturedAt === "number" ? { observedAt: capturedAt, completeness: "partial", source: "Forever raw runtime evidence" } : {}),
               data: dataWithCharacterEvidence,
             } };
           })() : {}),

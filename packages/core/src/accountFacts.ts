@@ -45,6 +45,7 @@ export interface CharacterFacts {
   name: string;
   surname?: string;
   surnameSource?: string;
+  race?: string;
   realm: string;
   class?: string;
   faction?: string;
@@ -495,6 +496,7 @@ function buildCharacterFacts(
       name: c.name,
       ...(parsed?.character.surname ? { surname: parsed.character.surname } : {}),
       ...(parsed?.character.surnameSource ? { surnameSource: parsed.character.surnameSource } : {}),
+      ...(parsed?.character.race ? { race: parsed.character.race } : {}),
       realm: c.realm,
       class: c.class,
       faction: c.faction,

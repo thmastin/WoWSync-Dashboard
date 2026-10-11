@@ -28,6 +28,7 @@ export interface CharacterSection {
   surname?: string;
   /** API return tuple(s) supporting the surname candidate; semantics still need live build validation. */
   surnameSource?: string;
+  race?: string;
   realm?: string;
   class?: string;
   level?: number;
@@ -58,6 +59,8 @@ export interface EquipmentSlot {
   empty: boolean;
   itemRef?: string;
   name?: string;
+  /** Observed source for an item name; omitted on legacy WOWSYNC v1 exports. */
+  nameSource?: string;
   itemLevel?: string;
   requiredLevel?: string;
   effectiveStats?: string;

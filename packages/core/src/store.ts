@@ -22,6 +22,7 @@ export interface StoredCharacterSummary {
   surnameSource?: string;
   identityKey: string;
   class?: string;
+  race?: string;
   faction?: string;
   latestLevel?: number;
   latestMoneyCopper?: number;

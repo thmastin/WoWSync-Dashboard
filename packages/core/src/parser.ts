@@ -7,6 +7,7 @@
 // actionable error instead of silently producing wrong data.
 
 import { fieldNumber, fieldValue } from "./escape.ts";
+import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 import type {
   AccountBankSection,
   CharacterSection,
@@ -171,6 +172,7 @@ function parseCharacter(lines: string[]): CharacterSection {
   const realm = fieldValue(get("Realm: "));
   const cls = fieldValue(get("Class: "));
   const level = fieldNumber(get("Level: "));
+  const race = fieldValue(get("Race: ", false));
   const faction = fieldValue(get("Faction: "));
   const moneyCopper = fieldNumber(get("MoneyCopper: "));
   // PlayedSeconds/LevelPlayedSeconds were added to the schema after v1's
@@ -210,6 +212,7 @@ function parseCharacter(lines: string[]): CharacterSection {
     realm,
     class: cls,
     level,
+    race,
     faction,
     moneyCopper,
     playedSeconds,
@@ -851,11 +854,20 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     fail("[GEAR CANDIDATES] is only valid for a Retail export");
   }
 
+  const character = result.character!;
+  if (character.clientFamily === "Forever" && character.clientVersion === "1.60.1"
+    && (character.clientBuild === "70291" || character.clientBuild === "70338") && character.interface === "16001") {
+    for (const slot of result.equipment!.slots) {
+      const known = FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot];
+      if (known) slot.slotName = known;
+    }
+  }
+
   return {
     raw,
     generatedAt,
     formatLine,
-    character: result.character!,
+    character,
     location: result.location!,
     equipment: result.equipment!,
     bags: result.bags!,

@@ -1,8 +1,9 @@
 import type { VersionOrUnknown } from "./types.ts";
 import { classifyFreshness } from "./freshness.ts";
+import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 
 export interface ForeverStructuredObservation {
-  clientProfile: "Forever:1.60.1:70291:16001";
+  clientProfile: "Forever:1.60.1:70291:16001" | "Forever:1.60.1:70338:16001";
   name: string;
   realm: string;
   generatedAt: number;
@@ -18,12 +19,14 @@ export interface ForeverStructuredObservation {
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 type ForeverEquipmentLike = { status: { state: ForeverSectionState; observedAt?: number }; slots: Array<{ slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string; itemLevel?: string }> };
 type ForeverInventoryLike = { status: { state: ForeverSectionState; observedAt?: number }; items: Array<{ itemRef?: string; name?: string; qty?: number }> };
-type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; quantity?: number; bound?: boolean; bindingState?: string; provenance: ForeverSectionState };
+type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; nameSource?: string; nameResolution: "OBSERVED" | "UNKNOWN"; quantity?: number; bound?: boolean; bindingState?: string; provenance: ForeverSectionState };
+
+const FOREVER_PROFILES = ["Forever:1.60.1:70291:16001", "Forever:1.60.1:70338:16001"] as const;
 
 export function normalizeForeverStructuredObservation(value: unknown, version: VersionOrUnknown, name?: string, realm?: string, generatedAt?: number): ForeverStructuredObservation | undefined {
   if (version !== "forever" || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const v = value as Record<string, unknown>;
-  if (v.clientProfile !== "Forever:1.60.1:70291:16001" || typeof v.name !== "string" || typeof v.realm !== "string" || !Number.isSafeInteger(v.generatedAt)) return undefined;
+  if (!FOREVER_PROFILES.includes(v.clientProfile as typeof FOREVER_PROFILES[number]) || typeof v.name !== "string" || typeof v.realm !== "string" || !Number.isSafeInteger(v.generatedAt)) return undefined;
   if (name?.toLocaleLowerCase() !== v.name.toLocaleLowerCase() || realm?.toLocaleLowerCase() !== v.realm.toLocaleLowerCase() || generatedAt !== v.generatedAt) return undefined;
   const section = (key: string): Record<string, unknown> | undefined => {
     const raw = v[key];
@@ -32,7 +35,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     return typeof s.observedAt === "number" && Number.isFinite(s.observedAt) && s.data !== undefined ? s : undefined;
   };
   return {
-    clientProfile: "Forever:1.60.1:70291:16001", name: v.name, realm: v.realm, generatedAt: v.generatedAt as number,
+    clientProfile: v.clientProfile as ForeverStructuredObservation["clientProfile"], name: v.name, realm: v.realm, generatedAt: v.generatedAt as number,
     ...(typeof v.sourceCharacterGuid === "string" && v.sourceCharacterGuid.length > 0 ? { sourceCharacterGuid: v.sourceCharacterGuid } : {}),
     ...(v.sourceCharacterGuidConflict === true ? { sourceCharacterGuidConflict: true } : {}),
     ...(section("equipment") ? { equipment: section("equipment") } : {}),
@@ -62,7 +65,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 
 function structuredEquipment(section: Record<string, unknown> | undefined, fallback: ForeverEquipmentLike["slots"], provenance: string) {
   const rawSlots = object(section?.data)?.slots;
-  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: slot.slotName, itemID: undefined, itemRef: slot.itemRef, itemIdentity: slot.itemRef ? "OBSERVED" as const : "UNKNOWN" as const, name: slot.name, itemLevel: slot.itemLevel, provenance: slot.itemRef ? provenance : "UNKNOWN" as const }));
+  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot] ?? slot.slotName, itemID: undefined, itemRef: slot.itemRef, itemIdentity: slot.itemRef ? "OBSERVED" as const : "UNKNOWN" as const, name: slot.name, nameSource: slot.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: slot.name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: slot.itemLevel, provenance: slot.itemRef ? provenance : "UNKNOWN" as const }));
   return entries(rawSlots).flatMap(([key, value]) => {
     const item = object(value);
     if (!item) return [];
@@ -70,13 +73,14 @@ function structuredEquipment(section: Record<string, unknown> | undefined, fallb
     const itemID = typeof item.itemID === "number" ? item.itemID : undefined;
     const itemString = typeof item.itemString === "string" ? item.itemString : undefined;
     const identified = itemID !== undefined || itemString !== undefined;
-    return [{ slot, slotName: `Slot ${key}`, itemID, itemRef: itemString ?? (itemID === undefined ? undefined : `item:${itemID}`), itemIdentity: itemString ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name: typeof item.name === "string" ? item.name : undefined, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, provenance: identified ? provenance : "UNKNOWN" as const }];
+    const name = typeof item.name === "string" && item.name.length > 0 ? item.name : undefined;
+    return [{ slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot] ?? `Slot ${key}`, itemID, itemRef: itemString ?? (itemID === undefined ? undefined : `item:${itemID}`), itemIdentity: itemString ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? (typeof item.nameSource === "string" ? item.nameSource : "WOWSYNC_V1_OBSERVED_NAME") : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, provenance: identified ? provenance : "UNKNOWN" as const }];
   });
 }
 
 function structuredBags(section: Record<string, unknown> | undefined, fallback: ForeverInventoryLike["items"], provenance: ForeverSectionState): ForeverCarriedItem[] {
   const containers = object(section?.data)?.containers;
-  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, itemIdentity: item.itemRef ? "OBSERVED" : "UNKNOWN", name: item.name, quantity: item.qty, provenance }));
+  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, itemIdentity: item.itemRef ? "OBSERVED" : "UNKNOWN", name: item.name, nameSource: item.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: item.name ? "OBSERVED" : "UNKNOWN", quantity: item.qty, provenance }));
   return entries(containers).flatMap(([containerKey, containerValue]) => {
     const container = object(containerValue);
     if (!container) return [];
@@ -84,7 +88,8 @@ function structuredBags(section: Record<string, unknown> | undefined, fallback: 
       const item = object(itemValue);
       if (!item) return [];
       const itemID = typeof item.itemID === "number" ? item.itemID : undefined;
-      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name: typeof item.name === "string" ? item.name : undefined, quantity: typeof item.count === "number" ? item.count : undefined, ...(typeof item.bound === "boolean" ? { bound: item.bound } : {}), ...(typeof item.bindingState === "string" ? { bindingState: item.bindingState } : {}), provenance }];
+      const name = typeof item.name === "string" && item.name.length > 0 ? item.name : undefined;
+      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? "C_Container.GetContainerItemInfo" : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, quantity: typeof item.count === "number" ? item.count : undefined, ...(typeof item.bound === "boolean" ? { bound: item.bound } : {}), ...(typeof item.bindingState === "string" ? { bindingState: item.bindingState } : {}), provenance }];
     });
   });
 }
@@ -106,7 +111,7 @@ function tupleObservation(call: Record<string, unknown> | undefined, index: numb
   return object(row?.observation);
 }
 
-function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observedName: string | undefined, itemFactsObservedAt: number | undefined, statDeltaComparisons: unknown, statDeltaSourceCurrent: boolean, statDeltaPairContextCurrent: boolean, equippedItemRefs: Set<string>, now: number) {
+function itemApiEvidence(fact: Record<string, unknown>, clientProfile: ForeverStructuredObservation["clientProfile"] | undefined, itemRef: string, observedName: string | undefined, itemFactsObservedAt: number | undefined, statDeltaComparisons: unknown, statDeltaSourceCurrent: boolean, statDeltaPairContextCurrent: boolean, equippedItemRefs: Set<string>, now: number) {
   const info = object(fact.itemInfo);
   const instant = object(fact.itemInfoInstant);
   const stats = object(fact.itemStats);
@@ -123,14 +128,14 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
     && value(infoValue(12)) === value(instantValue(6))
     && value(infoValue(13)) === value(instantValue(7));
   const nameAgreement = typeof observedName !== "string" || name === observedName;
-  const tupleShapeObserved = info?.state === "OBSERVED_VALUE" && info?.returnCount === 18
+  const tupleShapeObserved = clientProfile === "Forever:1.60.1:70291:16001" && info?.state === "OBSERVED_VALUE" && info?.returnCount === 18
     && returnedVariantMatches && instantAgreement && nameAgreement;
   const field = (index: number, type: string, semantic: string) => {
     const row = infoValue(index);
     if (tupleShapeObserved && row?.state === "OBSERVED" && row.type === type) {
       return { state: "OBSERVED" as const, value: row.value, api: "C_Item.GetItemInfo", observedAt: info?.observedAt };
     }
-    return { state: "UNKNOWN" as const, reason: tupleShapeObserved ? `The validated ${semantic} return was absent or had an unexpected type.` : "GetItemInfo tuple, exact item variant, or cross-API corroboration did not match the validated Forever 70291 capture contract." };
+    return { state: "UNKNOWN" as const, reason: tupleShapeObserved ? `The validated ${semantic} return was absent or had an unexpected type.` : clientProfile === "Forever:1.60.1:70338:16001" ? "Raw API return is retained, but the build 70338 item-info contract has not been live-validated." : "GetItemInfo tuple, exact item variant, or cross-API corroboration did not match the validated Forever 70291 capture contract." };
   };
   const infoReturns = Array.isArray(info?.returns) ? info.returns : [];
   const statEntries = Array.isArray(statsTable?.entries) ? statsTable.entries : [];
@@ -186,6 +191,7 @@ function itemApiEvidence(fact: Record<string, unknown>, itemRef: string, observe
       interpretation: "RAW_ORDERED_PAIR_RESULT" as const }];
   });
   return {
+    clientProfile: clientProfile ?? "UNKNOWN",
     itemInfo: { state: info?.state ?? "UNKNOWN", api: info?.api ?? "UNKNOWN", returnCount: info?.returnCount ?? null, ...(typeof info?.observedAt === "number" ? { observedAt: info.observedAt } : {}), returns: infoReturns },
     playerEquipability: { api: equippable?.api ?? "UNKNOWN", state: equippable?.state ?? "UNKNOWN", itemString: object(equippable?.input)?.itemString ?? "UNKNOWN", ...(equippableValue?.state === "OBSERVED" && equippableValue.type === "boolean" ? { value: equippableValue.value } : {}), ...(typeof equippable?.observedAt === "number" ? { observedAt: equippable.observedAt, freshness: classifyFreshness(equippable.observedAt, now) } : {}), reason: "C_Item.IsEquippableItem is a point-in-time check for the currently logged-in player; it cannot be reused as another character's check." },
     playerCanUseItem,
@@ -258,7 +264,7 @@ export function buildForeverGearObservation(input: {
   importedAt: number;
   equipment: ForeverEquipmentLike;
   bags: ForeverInventoryLike;
-  bank: { status: { state: ForeverSectionState; observedAt?: number } };
+  bank: ForeverInventoryLike;
   structured?: ForeverStructuredObservation;
   now: number;
 }) {
@@ -270,12 +276,14 @@ export function buildForeverGearObservation(input: {
   const bankAt = sectionTime("bank", bank.status.observedAt);
   const useStructuredEquipment = usableRows(structured?.equipment, "slots");
   const useStructuredBags = usableRows(structured?.bags, "containers");
+  const useStructuredBank = usableRows(structured?.bank, "containers");
   const equipmentSource = useStructuredEquipment ? "Forever WoWSyncDB sections.equipment" : "WOWSYNC v1 equipment";
   const bagsSource = useStructuredBags ? "Forever WoWSyncDB sections.bags" : "WOWSYNC v1 bags";
   const equipmentState = useStructuredEquipment ? structuredState(structured?.equipment) : equipment.status.state;
   const bagsState = useStructuredBags ? structuredState(structured?.bags) : bags.status.state;
   const equipmentItems = structuredEquipment(useStructuredEquipment ? structured?.equipment : undefined, equipment.slots, equipmentState);
   const carriedItems = bagsState === "UNKNOWN" && !useStructuredBags ? undefined : structuredBags(useStructuredBags ? structured?.bags : undefined, bags.items, bagsState);
+  const bankItems = bank.status.state === "UNKNOWN" && !useStructuredBank ? undefined : structuredBags(useStructuredBank ? structured?.bank : undefined, bank.items, structuredState(structured?.bank));
   const evidence = object(structured?.itemEvidence);
   const evidenceData = object(evidence?.data);
   const statDeltaComparisons = evidenceData?.statDeltaComparisons;
@@ -304,8 +312,9 @@ export function buildForeverGearObservation(input: {
   const factsByRef = new Map(factRows.flatMap((row) => typeof row.itemString === "string" ? [[row.itemString, row] as const] : []));
   const observedCarried = carriedItems ?? [];
   const itemFactsAvailable = evidence !== undefined && evidenceData !== undefined;
+  const itemSemanticsValidated = structured?.clientProfile === "Forever:1.60.1:70291:16001";
   const carriedCovered = observedCarried.filter((item) => item.itemRef && factsByRef.has(item.itemRef)).length;
-  const itemFactCoverageComplete = itemFactsAvailable && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
+  const itemFactCoverageComplete = itemSemanticsValidated && itemFactsAvailable && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
     && observedCarried.every((item) => {
       if (!item.itemRef || item.itemIdentity !== "OBSERVED") return false;
       const fact = factsByRef.get(item.itemRef);
@@ -328,7 +337,7 @@ export function buildForeverGearObservation(input: {
         && equippableCall?.api === "C_Item.IsEquippableItem" && equippableCall.state === "OBSERVED_VALUE"
         && equippable?.state === "OBSERVED" && equippable.type === "boolean";
     });
-  const evaluationItems = observedCarried.flatMap((item) => {
+  const evaluationItems = itemSemanticsValidated ? observedCarried.flatMap((item) => {
     if (!item.itemRef || item.itemIdentity !== "OBSERVED") return [];
     const fact = factsByRef.get(item.itemRef);
     if (!fact) return [];
@@ -362,19 +371,20 @@ export function buildForeverGearObservation(input: {
       itemType: itemType?.state === "OBSERVED" && itemType.type === "string" ? itemType.value as string : undefined,
       itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
       equipLocation: equipLocation.value as string,
-      itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now),
+      itemApiEvidence: itemApiEvidence(fact, structured?.clientProfile, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now),
       evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
       ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
       provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
       eligibility: "UNKNOWN" as const, suitability: "UNKNOWN" as const,
       upgradeStatus: "UNKNOWN" as const, transferability: "UNKNOWN" as const,
       reason: "The client marked this item type equippable; this does not establish character eligibility, proficiency, suitability, upgrade value, or transferability." }];
-  });
+  }) : [];
   const candidateRefs = new Set(evaluationItems.flatMap((item) => item.itemRef ? [item.itemRef] : []));
   // Preserve rows that cannot be classified because exact-variant API
   // evidence is absent or malformed. Explicit non-equipment/projectile and
   // observed IsEquippableItem=false rows remain outside the gear plan.
   const unclassifiedItems = observedCarried.flatMap((item) => {
+    if (!itemSemanticsValidated) return [{ ...item, reason: "Forever 1.60.1 build 70338 API results are retained as raw observations; item classification semantics are not yet live-validated for this build." }];
     if (item.itemRef && candidateRefs.has(item.itemRef)) return [];
     if (!item.itemRef || item.itemIdentity !== "OBSERVED") return [{ ...item, reason: "An exact item variant and matching exact-variant Forever item API result were not captured for this carried row; its item identity and equipment class are UNKNOWN." }];
     const fact = factsByRef.get(item.itemRef);
@@ -419,12 +429,13 @@ export function buildForeverGearObservation(input: {
     snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems.map((item) => {
       const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
-      return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;
+      return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, structured?.clientProfile, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;
     }) },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
-    bank: { state: bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), reason: bank.status.state === "UNKNOWN" ? "Bank contents were not observed; unavailable is not empty." : undefined },
+    bank: { state: useStructuredBank ? structuredState(structured?.bank) : bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), source: useStructuredBank ? "Forever WoWSyncDB character bank tabs" : "WOWSYNC v1 character bank", items: bankItems, reason: bank.status.state === "UNKNOWN" && !useStructuredBank ? "Bank contents were not observed; unavailable is not empty." : undefined },
+    trainerEvidence: evidenceData?.trainerEvidence ?? { state: "UNKNOWN", reason: "The Forever trainer window has not been observed with raw service data." },
     metadataSource: structured?.itemMetadata ? "Forever WoWSyncDB itemMetadata" : "UNKNOWN",
   };
 }

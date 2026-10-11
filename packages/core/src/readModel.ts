@@ -63,6 +63,7 @@ function foreverItemField(evidence: unknown, name: string): { state?: unknown; v
 
 function foreverItemContractIsValidated(evidence: unknown): boolean {
   if (!evidence || typeof evidence !== "object") return false;
+  if ((evidence as { clientProfile?: unknown }).clientProfile !== "Forever:1.60.1:70291:16001") return false;
   const fields = (evidence as { validatedFields?: unknown }).validatedFields;
   return !!fields && typeof fields === "object" && (fields as { contractState?: unknown }).contractState === "OBSERVED";
 }
@@ -973,8 +974,8 @@ export class DashboardReadModel {
     return this.resolve(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
       const profile = snapshot.parsed.character;
-      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || profile.clientBuild !== "70291" || profile.interface !== "16001") {
-        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires the validated Forever 1.60.1 build 70291 / interface 16001 profile." } };
+      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || !["70291", "70338"].includes(profile.clientBuild ?? "") || profile.interface !== "16001") {
+        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001 profile." } };
       }
       const snapshots = this.store.listSnapshots(character.identityKey);
       const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
@@ -1009,7 +1010,7 @@ export class DashboardReadModel {
     conclusion: "LOCAL_REVIEW_CANDIDATE_AVAILABLE" | "INSUFFICIENT_EVIDENCE";
     reason: string;
   }>> {
-    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Forever allocation is isolated to Forever 1.60.1 build 70291 / interface 16001; no other version rules are applied." } } };
+    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Forever allocation is isolated to Forever 1.60.1 build 70291 or 70338 / interface 16001; no other version rules are applied." } } };
     const resolved = this.getForeverGearObservation(query);
     if (resolved.status !== "FOUND") return resolved;
     if (!resolved.value.data) return { status: "FOUND", value: { provenance: { ...resolved.value.provenance, state: "UNKNOWN", reason: resolved.value.provenance.reason ?? "The recipient has no safely resolved Forever 70291 observation; allocation cannot be evaluated." } } };

@@ -1421,6 +1421,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const count = one<{ n: number }>(this.stmts.snapshotCountForCharacter, characterId)!.n;
     const surname = latest ? toStoredSnapshot(latest).parsed.character.surname : undefined;
     const surnameSource = latest ? toStoredSnapshot(latest).parsed.character.surnameSource : undefined;
+    const race = latest ? toStoredSnapshot(latest).parsed.character.race : undefined;
     return {
       id: row.id,
       version: row.version as VersionOrUnknown,
@@ -1428,6 +1429,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       name: row.name,
       ...(surname ? { surname } : {}),
       ...(surnameSource ? { surnameSource } : {}),
+      ...(race ? { race } : {}),
       identityKey: row.identity_key,
       class: row.class ?? undefined,
       faction: row.faction ?? undefined,

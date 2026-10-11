@@ -577,6 +577,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
     forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
       capturedAt: generatedAt + 6,
+      trainer: { state: "OBSERVED_OPEN_WINDOW", provenance: "IN_GAME_RUNTIME_CONTEXT", lastObserved: { state: "OBSERVED_OPEN_WINDOW", observedAt: generatedAt + 6, calls: [{ api: "GetTrainerServiceInfo", state: "OBSERVED_RAW" }] } },
       skillLineCount: { observedAt: generatedAt + 4, state: "OBSERVED_VALUE" },
       skillLineCoverage: "OBSERVED_INDEXED_ROWS",
       skillLines: [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }],
@@ -596,6 +597,9 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.deepEqual((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLines, [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }]);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLinesObservedAt, generatedAt + 4, "skill evidence keeps its own count-call timestamp, not item-fact time");
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.specialization.capturedAt, generatedAt + 5);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.capturedAt, generatedAt + 6);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.state, "OBSERVED_OPEN_WINDOW");
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.lastObserved.calls[0].api, "GetTrainerServiceInfo");
   });
 });
 
@@ -736,6 +740,21 @@ test("Forever skill rows do not inherit a timestamp from unrelated fresh item ev
   const data = ((saved.foreverGearObservation as any)?.itemEvidence as any)?.data;
   assert.deepEqual(data.skillLines, [{ name: "Daggers", rank: 42, maxRank: 45 }]);
   assert.equal(data.skillLinesObservedAt, undefined, "sidecar and itemFacts times do not refresh skill evidence");
+});
+
+test("Forever trainer raw evidence survives SavedVariables parsing without item-fact rows", () => {
+  const generatedAt = 1_791_500_000;
+  const row = record("Hallo", generatedAt, { guid: "Player-1-HALLO" });
+  row.captureProfile = "Forever:1.60.1:70338:16001";
+  row.text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+  row.generatedAt = generatedAt;
+  const trainer = { state: "OBSERVED_OPEN_WINDOW", provenance: "IN_GAME_RUNTIME_CONTEXT", lastObserved: { state: "OBSERVED_OPEN_WINDOW", calls: [{ api: "GetTrainerServiceInfo", returnCount: 6, interpretation: "UNKNOWN" }] } };
+  row.forever70291Evidence = toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { capturedAt: generatedAt + 3, trainer } });
+  const [saved] = parseSavedExports(savedVariables([row]), "fixture");
+  const observation = saved.foreverGearObservation as any;
+  assert.equal(observation?.clientProfile, "Forever:1.60.1:70338:16001");
+  assert.equal(observation?.itemEvidence?.observedAt, generatedAt + 3, "raw section timestamp provides its own evidence envelope when itemFacts is absent");
+  assert.equal(observation?.itemEvidence?.data?.trainerEvidence.lastObserved.calls[0].returnCount, 6);
 });
 
 test("A41 the bridge never transports S.Attempt's lastAttemptAt / lastAttemptError", () => {

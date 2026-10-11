@@ -24,6 +24,7 @@ export interface StoredCharacterSummary {
   surnameSource?: string;
   identityKey: string;
   class?: string;
+  race?: string;
   faction?: string;
   latestLevel?: number;
   latestMoneyCopper?: number;
@@ -123,6 +124,7 @@ export interface ParsedSnapshot {
     name?: string;
     realm?: string;
     class?: string;
+    race?: string;
     level?: number;
     faction?: string;
     moneyCopper?: number;
@@ -158,7 +160,7 @@ export interface ParsedSnapshot {
     categories: TrainerCategory[];
   };
   foreverGearObservation?: {
-    clientProfile: "Forever:1.60.1:70291:16001";
+    clientProfile: "Forever:1.60.1:70291:16001" | "Forever:1.60.1:70338:16001";
     name: string;
     realm: string;
     generatedAt: number;
@@ -289,6 +291,7 @@ export interface CharacterFacts {
   surnameSource?: string;
   realm: string;
   class?: string;
+  race?: string;
   faction?: string;
   level?: number;
   xp?: number;

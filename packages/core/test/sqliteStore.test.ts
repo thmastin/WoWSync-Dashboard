@@ -38,15 +38,18 @@ test("Forever surname persists in snapshot and latest summaries without changing
   const store = freshStore();
   try {
     const firstText = buildWowSyncExport({ generatedAt: 1_700_000_000, character: {
-      name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+      name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", race: "Dwarf", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
     } });
     const first = store.importSnapshot(firstText);
     assert.equal(first.snapshot.parsed.character.surname, "Emberstone");
+    assert.equal(first.snapshot.parsed.character.race, "Dwarf");
     assert.equal(first.character.surname, "Emberstone");
     assert.equal(first.character.surnameSource, "UnitName[2]+GetUnitName suffix");
     assert.equal(first.character.identityKey, "forever::classic beta pvp 2::hallo");
     assert.equal(store.buildAccountFacts("forever", 1_700_000_001).characters[0]?.surname, "Emberstone");
     assert.equal(store.buildAccountContext(1_700_000_001).versions.forever.characters[0]?.surname, "Emberstone");
+    assert.equal(store.listCharacters("forever")[0]?.race, "Dwarf", "observed race reaches the roster API summary");
+    assert.equal(store.buildAccountContext(1_700_000_001).versions.forever.characters[0]?.race, "Dwarf", "race reaches AccountContext");
 
     const laterLegacy = buildWowSyncExport({ generatedAt: 1_700_000_010, character: {
       name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",

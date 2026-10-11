@@ -46,7 +46,7 @@ test("missing and stale structured observations remain explicit", () => {
 
 test("carried rows without exact item identifiers remain visible as UNKNOWN plan candidates", () => {
   const view = buildForeverGearObservation({ identity, snapshotId: 201, generatedAt: 99, importedAt: 102, equipment,
-    bags: { ...bags, items: [{ name: "Unidentified carried row", qty: 2 }] }, bank, now: 110 });
+    bags: { ...bags, items: [{ name: "Unidentified carried row", qty: 2 }] }, bank, structured: { ...sidecar, bags: undefined, equipment: undefined }, now: 110 });
   assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
   assert.equal(view.evaluationCandidates.unclassifiedItems[0]?.itemRef, undefined);
   assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /identity and equipment class are UNKNOWN/);
@@ -146,6 +146,38 @@ test("Forever item API evidence exposes potential candidates without claiming el
   pairs[0]!.input.equippedItemString = "item:123:not-equipped";
   const unmatchedView = buildForeverGearObservation({ identity, snapshotId: 7, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: unmatched, now: 110 });
   assert.deepEqual(unmatchedView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "pair results are withheld unless the exact equipped variant is observed");
+});
+
+test("build 70338 item API evidence remains raw until its semantics are live-validated", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001",
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "raw build 70338 calls", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 12, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
+  assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /build 70338.*raw observations/);
+  const equipped = (view.equipment.items[0] as { itemApiEvidence?: { clientProfile: string; validatedFields: { contractState: string } } } | undefined)?.itemApiEvidence;
+  assert.equal(equipped?.clientProfile, "Forever:1.60.1:70338:16001");
+  assert.equal(equipped?.validatedFields.contractState, "UNKNOWN");
+});
+
+test("open Forever bank contents retain item variants and empty scans remain distinct from inaccessible bank", () => {
+  const itemString = "item:321:2:4";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bank: { observedAt: 106, completeness: "complete", data: { containers: [{ id: 40, slots: { "1": { itemID: 321, itemString, count: 2, name: "Observed bar" } } }] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 13, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.bank.state, "OBSERVED");
+  assert.equal(view.bank.items?.[0]?.itemRef, itemString);
+  assert.equal(view.bank.items?.[0]?.quantity, 2);
+  assert.equal(view.bank.items?.[0]?.provenance, "OBSERVED");
+  const empty = buildForeverGearObservation({ identity, snapshotId: 14, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bank: { observedAt: 106, completeness: "complete", data: { containers: [] } } }, now: 110 });
+  assert.equal(empty.bank.state, "OBSERVED");
+  assert.deepEqual(empty.bank.items, []);
+  assert.equal(buildForeverGearObservation({ identity, snapshotId: 15, importedAt: 102, equipment, bags, bank, now: 110 }).bank.state, "UNKNOWN");
 });
 
 test("CanUseItem is preserved as base-ID/current-player evidence and never exact-variant proof", () => {
