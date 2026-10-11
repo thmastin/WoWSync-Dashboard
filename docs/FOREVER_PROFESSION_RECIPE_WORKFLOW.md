@@ -2,6 +2,8 @@
 
 Forever 1.60.1 recipe records are a version-scoped character-state sidecar attached to ordinary imported snapshots. They retain the snapshot, client build, observation time, per-profession/per-recipe OBSERVED or LAST_SEEN state, and explicitly partial candidate coverage. Invalid, cross-version, duplicate, incomplete, or unhydrated evidence is rejected or remains UNKNOWN; absence from Forever's candidate list never means unlearned. The database stores these records inside the existing snapshot JSON and does not need a schema migration.
 
+`coverage.returnedRecipeCount` describes the client enumeration for that observation. It is not the number of recipe rows stored in the snapshot: GearExport can retain disappeared recipes and other profession scopes as LAST_SEEN, and some enumerated candidates may not have enough association data to store as a recipe row. Consumers must preserve these counts separately from stored rows.
+
 ## Retail parity and Forever boundaries
 
 | Capability | Retail today | Forever today | Treatment |

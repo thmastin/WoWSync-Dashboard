@@ -62,9 +62,14 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
   if (data.formatVersion !== 1 || data.ownerScope !== "CHARACTER" || !Array.isArray(data.professions) || data.professions.length === 0 || !object(data.coverage) || data.coverage.state !== "PARTIAL" || data.coverage.candidateCompleteness !== "UNKNOWN" || !Number.isSafeInteger(data.coverage.returnedRecipeCount) || (data.coverage.returnedRecipeCount as number) < 0) return undefined;
   const professionScopes = new Set<string>();
   const allRecipeIDs = new Set<number>();
-  let totalRecipeRows = 0;
   for (const profession of data.professions) {
-    if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== clientFamily || typeof profession.client.clientVersion !== "string" || clientFamily === "Forever" && profession.client.clientVersion !== "1.60.1" || !positiveID(profession.client.clientBuild) || clientFamily === "Forever" && profession.client.interface !== 16001 || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || profession.coverage.returnedRecipeCount !== profession.recipes.length) return undefined;
+    // returnedRecipeCount describes the client's candidate enumeration, not
+    // the number of rows stored here. GearExport deliberately retains missing
+    // candidates and other profession scopes as LAST_SEEN, and unresolved
+    // candidates may not have a usable profession association. Those valid
+    // cases make the counts differ; validating the equality would reject the
+    // whole evidence section after a profession-panel switch.
+    if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== clientFamily || typeof profession.client.clientVersion !== "string" || clientFamily === "Forever" && profession.client.clientVersion !== "1.60.1" || !positiveID(profession.client.clientBuild) || clientFamily === "Forever" && profession.client.interface !== 16001 || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || !Number.isSafeInteger(profession.coverage.returnedRecipeCount) || (profession.coverage.returnedRecipeCount as number) < 0) return undefined;
     const scopeKey = `${profession.baseSkillLineID}:${profession.skillLineID}`;
     if (professionScopes.has(scopeKey)) return undefined;
     professionScopes.add(scopeKey);
@@ -74,7 +79,6 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
       if (recipeIDs.has(recipe.recipeID) || allRecipeIDs.has(recipe.recipeID)) return undefined;
       recipeIDs.add(recipe.recipeID);
       allRecipeIDs.add(recipe.recipeID);
-      totalRecipeRows++;
       if (recipe.learned !== true && recipe.learned !== false && recipe.learned !== undefined) return undefined;
       if (recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE" && recipe.learnedState !== "UNKNOWN" && recipe.learnedState !== "NIL_RESULT") return undefined;
       if (recipe.learnedState === "OBSERVED_TRUE" && recipe.learned !== true || recipe.learnedState === "OBSERVED_FALSE" && recipe.learned !== false || (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned !== undefined) return undefined;
@@ -114,7 +118,8 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
       }
     }
   }
-  if (data.coverage.returnedRecipeCount !== totalRecipeRows) return undefined;
+  // As above, this is the latest API enumeration count. The data array can
+  // additionally contain retained LAST_SEEN rows from earlier captures.
   const professionRows = data.professions as Obj[];
   const state = professionRows.some((row) => row.evidence === "OBSERVED") ? "OBSERVED" : professionRows.length > 0 && professionRows.every((row) => row.evidence === "LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
   return { status: { state, completeness: "partial", observedAt: raw.observedAt }, formatVersion: 1, observedAt: raw.observedAt, completeness: "partial", data: data as Record<string, unknown> };

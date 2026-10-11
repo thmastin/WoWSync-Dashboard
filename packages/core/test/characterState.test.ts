@@ -213,6 +213,37 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
   assert.equal(normalizeCharacterStateSidecar(duplicate, "forever"), undefined, "duplicate recipe identity is ambiguous and rejected");
 });
 
+test("Forever recipe sidecar accepts partial enumeration counts with retained and other-profession LAST_SEEN rows", () => {
+  const recipe = (recipeID: number, evidence: "OBSERVED" | "LAST_SEEN") => ({
+    recipeID, learned: true, learnedState: "OBSERVED_TRUE", evidence,
+    skillLineAssociationState: "OBSERVED", skillLineIDs: [164],
+  });
+  const profession = (skillLineID: number, professionName: string, recipes: ReturnType<typeof recipe>[], returnedRecipeCount: number, evidence: "OBSERVED" | "LAST_SEEN") => ({
+    baseSkillLineID: skillLineID, skillLineID, parentProfessionID: skillLineID, professionName, name: professionName,
+    evidence, observedAt: ts, client: { clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: 70338, interface: 16001 },
+    coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount }, recipes,
+  });
+  const sidecar = {
+    formatVersion: 1, clientFamily: "Forever",
+    professionRecipes: { observedAt: ts, completeness: "partial", data: {
+      formatVersion: 1, ownerScope: "CHARACTER",
+      coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: 1 },
+      // Mining was observed earlier. The latest Blacksmithing candidate list
+      // returned one item, while one disappeared candidate is retained.
+      professions: [
+        profession(186, "Mining", [recipe(2575, "LAST_SEEN")], 1, "LAST_SEEN"),
+        profession(164, "Blacksmithing", [recipe(2660, "LAST_SEEN"), recipe(2661, "OBSERVED")], 1, "OBSERVED"),
+      ],
+    } },
+  };
+  const normalized = normalizeCharacterStateSidecar(sidecar, "forever");
+  assert.ok(normalized, "API enumeration counts are not the stored row count after LAST_SEEN retention");
+  const scopes = normalized!.professionRecipes!.data!.professions as any[];
+  assert.equal(scopes.length, 2);
+  assert.equal(scopes.find((row) => row.skillLineID === 186).recipes[0].evidence, "LAST_SEEN");
+  assert.equal(scopes.find((row) => row.skillLineID === 164).recipes.length, 2);
+});
+
 test("profession-scoped recipe merges preserve Engineering through Alchemy and keep failed/empty evidence LAST_SEEN", () => {
   const engineering = normalizeCharacterStateSidecar({ formatVersion: 1, clientFamily: "Retail", professionRecipes: recipeDomain([
     recipeScope(202, 2910, [[1229853, true, "OBSERVED_TRUE", [2910]], [1291687, false, "OBSERVED_FALSE", []]]),
