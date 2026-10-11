@@ -11,6 +11,7 @@ import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
 import type { ErpProject, ErpProjectDraft, ErpProjectEvent, ErpReservation, ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
 import type { ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 
 export interface StoredCharacterSummary {
@@ -219,6 +220,8 @@ export interface SnapshotReadStore {
   listErpProjectHistory(stableId: string, limit?: number): ErpProjectEvent[];
   countErpProjectHistory(stableId: string): number;
   getErpProject(stableId: string): ErpProject | undefined;
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined;
+  listErpChangeProposals(version: WowVersion, includeTerminal?: boolean): ErpChangeProposal[];
   /**
    * The one ACTIVE demand for this exact (version, demand type, commodity) key, if any. Persistence and
    * the API both enforce at most one; this read method simply reflects that invariant.
@@ -229,6 +232,8 @@ export interface SnapshotReadStore {
 
 /** The normal Dashboard/import store: SnapshotReadStore plus explicit mutation APIs. */
 export interface SnapshotStore extends SnapshotReadStore {
+  createErpChangeProposal(proposal: ErpChangeProposal): ErpChangeProposal;
+  transitionErpChangeProposal(proposalId: string, version: WowVersion, from: ErpChangeProposalStatus, to: ErpChangeProposalStatus, patch?: Partial<Pick<ErpChangeProposal, "approvedAt" | "completedAt" | "result" | "outcome">>): ErpChangeProposal | undefined;
   /**
    * Imports one export. Idempotent: the same export twice is a no-op
    * (`isDuplicate`). Snapshots are ordered by observation time, so an older

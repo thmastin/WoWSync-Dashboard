@@ -93,18 +93,25 @@ MCP remains read-only unless the process environment explicitly sets
 `http://127.0.0.1:4173`. Only loopback IP literals `127.0.0.1` and `::1` are
 accepted; hostnames are rejected to avoid name-resolution ambiguity. Startup rejects non-HTTP, non-loopback, credentialed,
 or path-bearing values. Tool callers cannot select or change this destination.
-When enabled, `create_erp_project_from_goal`, `create_erp_project`,
-`plan_erp_work_order_batch`, `update_erp_project_plan`,
-`set_erp_project_status`, and `replan_erp_reservations` call only fixed,
-version-scoped REST routes. The server validates the same project revisions
-and reviewed evidence used by the UI and rejects stale requests atomically.
-Creation requires a stable idempotency key; conflicting reuse is rejected.
-Project edits and status changes record a player-authored rationale in the
-existing append-only event JSON, without a schema migration. Reservation
-changes can only reduce or release existing intent. Persistent-write tools
-set `readOnlyHint=false` and `destructiveHint=true` to ask MCP clients to apply
-their user-confirmation policy. These annotations are client hints, not a
-server-side approval token or proof that a human confirmed the call.
+When enabled, planning tools stage immutable, version-scoped proposals. They do
+not directly mutate a project. The proposal stores the exact payload, digest,
+target project identities/revisions, rationale, expiry, and state. A player
+must inspect that payload and explicitly approve or reject it in the Dashboard;
+the Dashboard approval route accepts only the stored digest and rechecks every
+project revision. MCP has no approval tool and cannot assert a caller-supplied
+`approved: true`. `commit_approved_erp_change` accepts only a proposal ID,
+version, and exact digest, then dispatches the frozen payload through the
+existing REST validation path. Commits are compare-and-set claimed and retries
+return the recorded result; indeterminate outcomes fail closed to avoid
+replaying a possibly completed mutation. Reservation changes retain the
+existing reduction/release-only behavior. The MCP annotations remain advisory
+client hints; the separate Dashboard action is the approval boundary.
+
+Read-only MCP profiles can list and inspect pending/approved proposals using
+`get_erp_change_proposals` and `get_erp_change_proposal`, so a fresh Operations
+conversation can recover an approval after losing chat context. Those tools do
+not approve or commit. The proposal registry adds one SQLite table and one
+index, so deployments require a reviewed additive schema plan and backup.
 
 The read-only profile also provides `get_erp_operations_context` as a bounded,
 explicit-version startup read for fresh Operations conversations, and
@@ -114,12 +121,15 @@ summaries, character freshness, requirements, dependencies/readiness, recent
 saved rationales, commitments, and next actions; use focused project retrieval
 before preparing a whole-plan update.
 
-The active Secure MCP Tunnel profile remains read-only. Do not set the
-environment variable there until its client-side tool approval behavior has
-been deliberately configured and tested. For local
-integration testing, run the Dashboard on loopback and set the variable only
-on the MCP child process. If the Dashboard is unavailable, planning tools
-return `PLANNING_API_UNAVAILABLE`; retrieval tools continue using the configured
+The active Secure MCP Tunnel profile remains read-only until the Dashboard
+proposal store has been deployed and the loopback planning endpoint is
+deliberately enabled for that MCP process. Tunnel enablement exposes proposal
+and commit tools, but still cannot approve: the player must approve the exact
+proposal through the trusted Dashboard browser path first. Do not weaken the
+tunnel allowlist or expose generic HTTP. For local integration testing, run the
+Dashboard on loopback and set the variable only on the MCP child process. If
+the Dashboard is unavailable, planning tools return
+`PLANNING_API_UNAVAILABLE`; retrieval tools continue using the configured
 read-only database. No generic HTTP proxy is exposed.
 
 The read-only SQLite path refuses missing or incompatible databases and never
@@ -158,9 +168,15 @@ imports may update the database.
 | `get_character_storage` | Retrieve bounded character-owned storage for one character. |
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
-| `create_erp_project` (opt-in) | Create a version-scoped project and explicit needs through Dashboard REST; no game action. |
-| `plan_erp_work_order_batch` (opt-in) | Atomically save reviewed manual work orders with REST revision/evidence checks. |
-| `replan_erp_reservations` (opt-in) | Atomically reduce or release existing reservation intent; cannot increase or move reservations. |
+| `get_erp_change_proposals` | Recover pending, approved, or in-progress proposals in one version; never approves or commits. |
+| `get_erp_change_proposal` | Read one exact proposal and its lifecycle state in one version. |
+| `create_erp_project_from_goal` (opt-in) | Build the supported Rordin Forever goal plan and stage it for exact Dashboard approval. |
+| `create_erp_project` (opt-in) | Stage a version-scoped project-creation proposal. |
+| `plan_erp_work_order_batch` (opt-in) | Stage a batch proposal; existing revision/evidence checks repeat on commit. |
+| `update_erp_project_plan` (opt-in) | Stage one exact-revision project edit for Dashboard approval. |
+| `set_erp_project_status` (opt-in) | Stage a status proposal; completion remains player-declared. |
+| `replan_erp_reservations` (opt-in) | Stage a reduction/release proposal; cannot increase or move reservations. |
+| `commit_approved_erp_change` (opt-in) | Commit only the exact digest approved in Dashboard; accepts no mutation payload. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. Slice 3 (shipped and live-validated): every result carries `confirmedItemStringIdentity`/`potentialItemStringIdentity` and `confirmedBinding`/`potentialBinding`; a `BASE_ITEM_AGGREGATION_UNPROVEN` result (confirmed item-string variants or a bare `item:<id>`) has no `allocated`/`confirmedDeficit`/`confirmedSurplus`; confirmed bound/binding-unknown rows withhold `SEND_HELLOMAGS`. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §24 and the live-validation record. |
 | `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. Slice 3 (shipped and live-validated): `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the REQUIRES_REVIEW group; unallocated entries add the four identity/binding facets (still evidence only), and `unallocatedItemStringIdentityCounts` covers the whole unallocated list. `itemNames` maps each base item ID on the returned demanded page to its name observed in account-owned evidence (presentation only; never inside an allocation result; no key when no name was observed). The Dashboard-only unallocated search `q` is not an MCP input (the strict schema rejects it). See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23–§25. |
 | `get_gear_candidate_evidence` | Return snapshot-scoped Retail candidate evidence. Use its identity key, snapshot ID, and one-based row ordinal to select a row. |
@@ -168,8 +184,10 @@ imports may update the database.
 
 This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
 as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total
-(it changes as tools are added, so it is stated there once rather than repeated here). All tools
-are marked read-only and closed-world. Every account-state query
+(it changes as tools are added, so it is stated there once rather than repeated here). Retrieval
+tools are read-only. Opt-in planning tools stage immutable proposals or commit only an exact
+Dashboard-approved proposal; no MCP tool approves or executes game actions. Tool annotations
+are advisory and are not the approval boundary. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
 lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently

@@ -32,9 +32,12 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
   seed.close();
 
   const apiStore = new SqliteSnapshotStore(databasePath);
-  const api = http.createServer(createApp(apiStore, 0, undefined, { allowedHosts: LOOPBACK_HOSTNAMES }));
-  await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
-  const port = (api.address() as AddressInfo).port;
+  const portReservation = http.createServer();
+  await new Promise<void>((resolve) => portReservation.listen(0, "127.0.0.1", resolve));
+  const port = (portReservation.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => portReservation.close(() => resolve()));
+  const api = http.createServer(createApp(apiStore, port, undefined, { selfOrigin: `http://127.0.0.1:${port}`, allowedHosts: LOOPBACK_HOSTNAMES }));
+  await new Promise<void>((resolve) => api.listen(port, "127.0.0.1", resolve));
   const client = new Client({ name: "wowsync-forever-goal-acceptance", version: "0.1.0" });
   const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: root,
     env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_MCP_PLANNING_API_URL: `http://127.0.0.1:${port}` }, stderr: "pipe" });
@@ -49,19 +52,12 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
 
     const first = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: RORDIN_PROFESSION_GOAL } });
     assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
-    const response = first.structuredContent as { target: { identityKey: string; name: string; surname?: string }; project: { project: { stableId: string; version: string; needs: Array<{ kind: string; resourceKey: string; destinationIdentityKey?: string }>; reservations: unknown[]; workOrders: Array<{ stableId: string; kind: string; status: string; assignedIdentityKey?: string; dependsOn: string[] }> } }; resourceDiscovery: { accountMembership: string; sameRealmCharacterCount: number; otherRealmCharacterCount: number; leads: Array<{ character: { identityKey: string }; itemRef?: string; quantity?: number }>; characters: Array<{ identityKey: string; class?: string; professionState: string; professions: Array<{ name: string }> }> }; recipeEvidence: { state: string } };
-    const project = response.project.project;
+    const response = first.structuredContent as { target: { identityKey: string; name: string; surname?: string }; proposal: { proposal: { proposalId: string; digest: string; status: string } }; resourceDiscovery: { accountMembership: string; sameRealmCharacterCount: number; otherRealmCharacterCount: number; leads: Array<{ character: { identityKey: string }; itemRef?: string; quantity?: number }>; characters: Array<{ identityKey: string; class?: string; professionState: string; professions: Array<{ name: string }> }> }; recipeEvidence: { state: string } };
     assert.equal(response.target.identityKey, rordin.identityKey);
     assert.equal(response.target.name, "Rordin");
     assert.equal(response.target.surname, "Longbraid");
-    assert.equal(project.version, "forever");
-    assert.deepEqual(project.needs.map((need) => [need.kind, need.resourceKey, need.destinationIdentityKey]), [
-      ["PROFESSION", "Mining", rordin.identityKey], ["PROFESSION", "Blacksmithing", rordin.identityKey],
-    ]);
-    assert.deepEqual(project.reservations, [], "unverified quantities and other-character leads are not reserved");
-    assert.equal(project.workOrders.length, 7);
-    assert.ok(project.workOrders.every((order) => order.assignedIdentityKey === rordin.identityKey));
-    assert.ok(project.workOrders.find((order) => order.kind === "CRAFT")?.status === "WAITING_FOR_EVIDENCE");
+    assert.equal(response.proposal.proposal.status, "PENDING");
+    assert.equal(apiStore.listErpProjects("forever").length, 0, "goal interpretation stages a proposal without mutating persistent project state");
     assert.equal(response.recipeEvidence.state, "UNKNOWN");
     assert.equal(response.resourceDiscovery.accountMembership, "UNKNOWN");
     assert.equal(response.resourceDiscovery.sameRealmCharacterCount, 3);
@@ -75,10 +71,24 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     const quotedGoal = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: `Do not create this yet; the request is “${RORDIN_PROFESSION_GOAL}”` } });
     assert.equal(quotedGoal.isError, true, "quoted goal text inside a negation must not create persistent intent");
 
+    const approved = await fetch(`http://127.0.0.1:${port}/api/versions/forever/erp/change-proposals/${response.proposal.proposal.proposalId}/approve`, { method: "POST", headers: { "content-type": "application/json", origin: `http://127.0.0.1:${port}` }, body: JSON.stringify({ digest: response.proposal.proposal.digest }) });
+    assert.equal(approved.status, 200, "the separate Dashboard approval applies only to this exact goal proposal");
+    const committed = await client.callTool({ name: "commit_approved_erp_change", arguments: { version: "forever", proposalId: response.proposal.proposal.proposalId, digest: response.proposal.proposal.digest } });
+    assert.equal(committed.isError, undefined, JSON.stringify(committed.structuredContent));
+    const committedProject = (committed.structuredContent as { result: { project: { stableId: string; version: string; needs: Array<{ kind: string; resourceKey: string; destinationIdentityKey?: string }>; reservations: unknown[]; workOrders: Array<{ stableId: string; kind: string; status: string; assignedIdentityKey?: string; dependsOn: string[] }> } } }).result.project;
+    const project = committedProject;
+    assert.equal(project.version, "forever");
+    assert.deepEqual(project.needs.map((need) => [need.kind, need.resourceKey, need.destinationIdentityKey]), [
+      ["PROFESSION", "Mining", rordin.identityKey], ["PROFESSION", "Blacksmithing", rordin.identityKey],
+    ]);
+    assert.deepEqual(project.reservations, [], "unverified quantities and other-character leads are not reserved");
+    assert.equal(project.workOrders.length, 7);
+    assert.ok(project.workOrders.every((order) => order.assignedIdentityKey === rordin.identityKey));
+    assert.ok(project.workOrders.find((order) => order.kind === "CRAFT")?.status === "WAITING_FOR_EVIDENCE");
     const second = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: `  ${RORDIN_PROFESSION_GOAL.replace(/\s+/g, " ")}  ` } });
-    assert.equal(second.isError, undefined, "the exact retry is accepted idempotently");
+    assert.equal(second.isError, undefined, "the exact retry recovers the idempotent proposal");
     const secondResponse = second.structuredContent as typeof response;
-    assert.equal(secondResponse.project.project.stableId, project.stableId);
+    assert.equal(secondResponse.proposal.proposal.proposalId, response.proposal.proposal.proposalId);
     const conflictingRetry = await fetch(`http://127.0.0.1:${port}/api/versions/forever/erp/projects`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
       idempotencyKey: `forever:rordin-longbraid:learn-mining:blacksmithing:first-useful-equipment-upgrade:v1:${rordin.identityKey}`,
       title: "Different plan must conflict", needs: [], workOrders: [],

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { McpServer, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
 import {
@@ -38,12 +39,9 @@ const realmSchema = z.string().trim().min(1).max(64);
 const limitSchema = z.number().int().min(1);
 const documentClassSchema = z.enum(["VERSIONED_RESEARCH", "OPERATIONAL_TRUTH"]);
 const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveHint: false } as const;
-// Persistent project, work-order, and reservation edits require the MCP host to
-// treat each call as a user-confirmed write. Annotations are client hints; the
-// loopback-only opt-in remains the server-side exposure boundary.
+// These tools only stage or commit mutations separately approved in Dashboard.
+// MCP host annotations remain advisory and are not the approval boundary.
 const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
-const planReplacementAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
-const reservationWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 
 export interface WoWSyncMcpConfiguration {
   /** Process configuration only. MCP callers cannot select databases. */
@@ -141,6 +139,15 @@ async function forwardPlanningRequest(baseUrl: URL, method: "POST" | "PUT" | "PA
     const message = error instanceof Error ? error.message : "Local Dashboard request failed.";
     return safeFailure("PLANNING_API_UNAVAILABLE", `Could not reach the configured loopback Dashboard planning API: ${message.slice(0, 500)}`);
   }
+}
+
+function uuidFromKey(value: string): string {
+  const hex = createHash("sha256").update(value).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+async function proposePlanningChange(baseUrl: URL, version: VersionOrUnknown, operation: string, mutation: Record<string, unknown>, rationale: string, proposalId: string = randomUUID()) {
+  return forwardPlanningRequest(baseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/change-proposals`, { proposalId, operation, mutation, rationale });
 }
 
 /** A thin MCP adapter: reads from a read-only snapshot store, with optional fixed loopback REST writes for player plan records. */
@@ -259,65 +266,88 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     return project ? textResult({ version, project }) : safeFailure("PROJECT_NOT_FOUND", `Project ${projectId} was not found in ${version}.`);
   });
 
+  server.registerTool("get_erp_change_proposals", {
+    title: "Recover pending WoWSync project changes",
+    description: "Lists bounded pending, approved, or in-progress project-change proposals from one explicit game version so an Operations conversation can recover a review across chat sessions. It never approves or commits a change.",
+    inputSchema: z.object({ version: versionSchema, limit: z.number().int().min(1).max(50).default(20) }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, limit }) => version === "unknown-version"
+    ? safeFailure("INVALID_VERSION", "Choose one supported, explicit WoW version to retrieve planning proposals.")
+    : textResult({ version, proposals: store.listErpChangeProposals(version).slice(0, limit), interpretation: "PROPOSALS_ARE_NOT_PROJECT_CHANGES; APPROVED means separately approved in Dashboard but not necessarily committed" }));
+
+  server.registerTool("get_erp_change_proposal", {
+    title: "Inspect one project-change proposal",
+    description: "Retrieves one immutable proposal, its exact digest, approval/commit state, and saved outcome within the requested version. A missing proposal in that version is not searched elsewhere. This is read-only.",
+    inputSchema: z.object({ version: versionSchema, proposalId: z.string().trim().min(1).max(120) }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ version, proposalId }) => {
+    const proposal = store.getErpChangeProposal(proposalId);
+    return proposal?.version === version ? textResult({ version, proposal }) : safeFailure("PROPOSAL_NOT_FOUND", `Proposal ${proposalId} was not found in ${version}.`);
+  });
+
   if (planningApiBaseUrl) {
     const boundedRecord = z.record(z.string().max(80), z.unknown());
     server.registerTool("create_erp_project_from_goal", {
-      title: "Create a Forever ERP project from a stated goal",
-      description: "Accepts the supported natural-language Rordin Longbraid Forever Mining/Blacksmithing/equipment goal, resolves Rordin from the Forever identity roster, scans same-realm observed bag/bank rows for bounded material leads, and creates one persistent project with linked profession requirements and dependent manual work orders. The tool writes player intent only; it never learns professions, gathers, transfers, buys, crafts, or equips. Exact Forever recipe/output/reagent evidence is currently UNKNOWN, so it does not invent a recipe, ore-to-bar ratio, material quantity, reservation, transfer route, or upgrade. MCP clients must obtain/retain explicit user confirmation before invoking this write tool.",
+      title: "Propose a Forever ERP project from a stated goal",
+      description: "Builds the supported Rordin Forever project from the stated goal and stages an immutable proposal. No project changes until the player reviews and approves the exact proposal in Dashboard. Recipes and transfer routes remain UNKNOWN.",
       inputSchema: z.object({ goal: z.string().trim().min(1).max(1000) }).strict(),
       annotations: planningWriteAnnotations,
     }, async ({ goal }) => {
       const plan = buildRordinForeverGoalProject(goal, store);
       if ("error" in plan) return safeFailure("GOAL_NOT_SUPPORTED", plan.error);
-      const saved = await forwardPlanningRequest(planningApiBaseUrl, "POST", "/api/versions/forever/erp/projects", {
-        idempotencyKey: plan.idempotencyKey, rationale: `User-stated goal: ${goal.trim()}`, title: plan.title, objective: plan.objective, priority: plan.priority, needs: plan.needs, workOrders: plan.workOrders,
-      });
-      if ("isError" in saved && saved.isError) return saved;
-      return textResult({ goal, target: plan.target, project: saved.structuredContent, resourceDiscovery: plan.resourceDiscovery, recipeEvidence: plan.recipeEvidence,
-        nextAction: "Review the two profession requirements and current evidence. Player actions remain manual. First verify a real Forever recipe, its exact production stages and quantities, and whether its output is a supported upgrade before adding reagent needs or proceeding to craft." });
+      const rationale = `User-stated goal: ${goal.trim()}`;
+      const proposed = await proposePlanningChange(planningApiBaseUrl, "forever", "CREATE_PROJECT", { idempotencyKey: plan.idempotencyKey, rationale, title: plan.title, objective: plan.objective, priority: plan.priority, needs: plan.needs, workOrders: plan.workOrders }, rationale, uuidFromKey(plan.idempotencyKey));
+      if ("isError" in proposed && proposed.isError) return proposed;
+      return textResult({ goal, target: plan.target, proposal: proposed.structuredContent, resourceDiscovery: plan.resourceDiscovery, recipeEvidence: plan.recipeEvidence, nextAction: "Open Forever > Projects & Work Orders, inspect and approve the exact proposal, then ask MCP to commit it. No project changes before approval." });
     });
     server.registerTool("create_erp_project", {
-      title: "Create a WoWSync ERP project plan",
-      description: "Creates a version-scoped player planning record through the local Dashboard REST API. Requires explicit version, title, and a stable idempotencyKey generated once per intended creation and reused on retries; reusing a key with a different plan is rejected. Provide a concise rationale for fresh-conversation recovery. This records intent only: it does not reserve observed supply, execute game actions, or establish possession. Obtain explicit user confirmation before invoking; REST revalidates the project and character identities.",
-      inputSchema: z.object({ version: versionSchema, idempotencyKey: z.string().trim().min(1).max(256), rationale: z.string().trim().min(1).max(2_000), title: z.string().trim().min(1).max(160), objective: z.string().max(2_000).optional(), priority: z.number().int().min(1).max(5).optional(), needs: z.array(boundedRecord).max(20).optional() }).strict(),
+      title: "Propose a WoWSync ERP project",
+      description: "Stages an immutable, version-scoped project creation proposal. Reuse proposalId only for retries of the exact same request. The player must approve the displayed proposal in Dashboard before commit_approved_erp_change can persist it.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().uuid(), idempotencyKey: z.string().trim().min(1).max(256), rationale: z.string().trim().min(1).max(2000), title: z.string().trim().min(1).max(160), objective: z.string().max(2000).optional(), priority: z.number().int().min(1).max(5).optional(), needs: z.array(boundedRecord).max(20).optional() }).strict(),
       annotations: planningWriteAnnotations,
-    }, async ({ version, idempotencyKey, rationale, title, objective, priority, needs }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/projects`, { idempotencyKey, rationale, title, ...(objective !== undefined ? { objective } : {}), ...(priority !== undefined ? { priority } : {}), ...(needs !== undefined ? { needs } : {}) }));
+    }, async ({ version, proposalId, idempotencyKey, rationale, title, objective, priority, needs }) => proposePlanningChange(planningApiBaseUrl, version, "CREATE_PROJECT", { idempotencyKey, rationale, title, ...(objective !== undefined ? { objective } : {}), ...(priority !== undefined ? { priority } : {}), ...(needs !== undefined ? { needs } : {}) }, rationale, proposalId));
 
     server.registerTool("plan_erp_work_order_batch", {
-      title: "Save a reviewed WoWSync ERP work plan",
-      description: "Atomically saves bounded player-authored manual work orders for 1–10 projects through the Dashboard REST validation path. Each task must include the current reviewed need evidence and expected project revision. Obtain explicit user confirmation before invoking. Stale evidence, existing open work, invalid dependencies, or any conflict rejects the plan without partial writes. It never performs the planned actions in game.",
-      inputSchema: z.object({ version: versionSchema, updates: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), tasks: z.array(boundedRecord).min(1).max(20) }).strict()).min(1).max(10) }).strict(),
+      title: "Propose a reviewed WoWSync work plan",
+      description: "Stages an immutable proposal for atomically adding bounded manual work orders. The player approves the exact payload in Dashboard; existing evidence and revision validation is repeated on commit. No in-game action is performed.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().uuid(), rationale: z.string().trim().min(1).max(2000), updates: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), tasks: z.array(boundedRecord).min(1).max(20) }).strict()).min(1).max(10) }).strict(),
       annotations: planningWriteAnnotations,
-    }, async ({ version, updates }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`, { updates }));
+    }, async ({ version, proposalId, rationale, updates }) => proposePlanningChange(planningApiBaseUrl, version, "APPEND_WORK_ORDER_BATCH", { updates }, rationale, proposalId));
 
     server.registerTool("update_erp_project_plan", {
-      title: "Update a WoWSync ERP plan",
-      description: "Saves an explicitly versioned, revision-checked player edit to one complete project plan through Dashboard REST. This can update objectives, priorities, needs, work-order assignments/dependencies/statuses, or project status. Include a concise rationale for the append-only decision history. Status is player intent, not proof a game action happened. The server preserves saved-batch history, checks reservation increases against exact current evidence, validates character/version identity, and rejects stale revisions. Obtain explicit user confirmation before invoking.",
-      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), rationale: z.string().trim().min(1).max(2_000), project: boundedRecord }).strict(),
-      annotations: planReplacementAnnotations,
-    }, async ({ version, projectId, expectedRevision, rationale, project }) => {
-      if (project.stableId !== projectId || project.version !== version) return safeFailure("PROJECT_IDENTITY_MISMATCH", "The submitted project must retain the exact stable ID and explicit game version in the request.");
-      return forwardPlanningRequest(planningApiBaseUrl, "PUT", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}`, { expectedRevision, rationale, project });
+      title: "Propose a WoWSync project edit",
+      description: "Stages an immutable, exact-revision proposal for one project edit. Dashboard approval is required. Existing REST validation rechecks project identity, reservations, evidence, and revision on commit.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().uuid(), projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), rationale: z.string().trim().min(1).max(2000), project: boundedRecord }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ version, proposalId, projectId, expectedRevision, rationale, project }) => {
+      if (project.stableId !== projectId || project.version !== version) return safeFailure("PROJECT_IDENTITY_MISMATCH", "The submitted project must retain its exact stable ID and explicit version.");
+      return proposePlanningChange(planningApiBaseUrl, version, "UPDATE_PROJECT_PLAN", { projectId, body: { expectedRevision, rationale, project } }, rationale, proposalId);
     });
 
     server.registerTool("set_erp_project_status", {
-      title: "Pause, resume, or close a WoWSync ERP project",
-      description: "Changes one project's planning status using the exact revision you reviewed. Completing requires a player-entered outcome note; it records user-declared project closure, not verified game completion. Include rationale for history and obtain explicit user confirmation before invoking. A stale revision is rejected; refresh the project before retrying.",
-      inputSchema: z.object({ version: versionSchema, projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), status: z.enum(["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"]), rationale: z.string().trim().min(1).max(2_000), completionNote: z.string().trim().min(1).max(2_000).optional() }).strict().superRefine((input, context) => {
+      title: "Propose a project status change",
+      description: "Stages a revision-checked status proposal. Completion requires a player-entered outcome note and records user-declared closure, not verified game completion. Approve in Dashboard before committing.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().uuid(), projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), status: z.enum(["ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"]), rationale: z.string().trim().min(1).max(2000), completionNote: z.string().trim().min(1).max(2000).optional() }).strict().superRefine((input, context) => {
         if (input.status === "COMPLETED" && !input.completionNote) context.addIssue({ code: "custom", path: ["completionNote"], message: "A player-entered completion note is required." });
-        if (input.status !== "COMPLETED" && input.completionNote !== undefined) context.addIssue({ code: "custom", path: ["completionNote"], message: "completionNote is accepted only when recording player-declared completion." });
+        if (input.status !== "COMPLETED" && input.completionNote !== undefined) context.addIssue({ code: "custom", path: ["completionNote"], message: "completionNote is accepted only for player-declared completion." });
       }),
-      annotations: planReplacementAnnotations,
-    }, async ({ version, projectId, expectedRevision, status, rationale, completionNote }) => forwardPlanningRequest(planningApiBaseUrl, "PATCH", `/api/versions/${encodeURIComponent(version)}/erp/projects/${encodeURIComponent(projectId)}/status`, { expectedRevision, status, rationale, ...(completionNote ? { completionNote } : {}) }));
+      annotations: planningWriteAnnotations,
+    }, async ({ version, proposalId, projectId, expectedRevision, status, rationale, completionNote }) => proposePlanningChange(planningApiBaseUrl, version, "SET_PROJECT_STATUS", { projectId, body: { expectedRevision, status, rationale, ...(completionNote ? { completionNote } : {}) } }, rationale, proposalId));
 
     server.registerTool("replan_erp_reservations", {
-      title: "Apply a reviewed ERP reservation reduction",
-      description: "Atomically applies an explicitly reviewed reservation list through the local Dashboard REST endpoint. Obtain explicit user confirmation before invoking. The server only permits reduction or release of existing reservation intent and checks project revisions; it cannot add supply, move resources, or execute game actions.",
-      inputSchema: z.object({ version: versionSchema, projects: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), reservations: z.array(boundedRecord).max(100) }).strict()).min(1).max(10) }).strict(),
-      annotations: reservationWriteAnnotations,
-    }, async ({ version, projects }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/reservation-replans`, { projects }));
-  }
+      title: "Propose a reservation reduction",
+      description: "Stages an exact-revision reservation reduction/release. Dashboard approval is required; the existing atomic validation is repeated on commit. This cannot add supply or move resources.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().uuid(), rationale: z.string().trim().min(1).max(2000), projects: z.array(z.object({ projectId: z.string().trim().min(1).max(120), expectedRevision: z.number().int().positive(), reservations: z.array(boundedRecord).max(100) }).strict()).min(1).max(10) }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ version, proposalId, rationale, projects }) => proposePlanningChange(planningApiBaseUrl, version, "REPLAN_RESERVATIONS", { projects }, rationale, proposalId));
 
+    server.registerTool("commit_approved_erp_change", {
+      title: "Commit a Dashboard-approved project change",
+      description: "Commits only the immutable proposal approved through the separate Dashboard UI. Requires its exact proposal ID, explicit version, and digest; accepts no replacement mutation. Retries return the same result, while stale, altered, expired, rejected, or unapproved requests fail closed.",
+      inputSchema: z.object({ version: versionSchema, proposalId: z.string().trim().min(1).max(120), digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+      annotations: planningWriteAnnotations,
+    }, async ({ version, proposalId, digest }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId.startsWith("proposal_") ? proposalId : `proposal_${proposalId}`)}/commit`, { digest }));
+  }
   const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
   server.registerTool("get_character_summary", {
     title: "Get a character summary",

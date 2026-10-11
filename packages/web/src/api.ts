@@ -393,6 +393,18 @@ export function fetchErpProjects(version: VersionOrUnknown, signal?: AbortSignal
   return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; resourceCommitments: ErpResourceCommitmentSummary; fulfillmentTriage: ErpFulfillmentTriage; portfolioFulfillment: ErpPortfolioFulfillmentReview; sourceFulfillment: ErpSourceFulfillmentReview; portfolioNextActions: ErpPortfolioNextActionReview; procurementBudgetReview: ErpProcurementBudgetPortfolioReview; procurementBuyerReview: ErpProcurementBuyerPortfolioReview }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) && isRecord(body.resourceCommitments) && isRecord(body.fulfillmentTriage) && isRecord(body.portfolioFulfillment) && isRecord(body.sourceFulfillment) && isRecord(body.portfolioNextActions) && isRecord(body.procurementBudgetReview) && isRecord(body.procurementBuyerReview) });
 }
 
+export function fetchErpChangeProposals(version: VersionOrUnknown, signal?: AbortSignal) {
+  return request<{ version: VersionOrUnknown; proposals: import("@wowsync-dashboard/core").ErpChangeProposal[] }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.proposals) });
+}
+
+export function approveErpChangeProposal(version: VersionOrUnknown, proposalId: string, digest: string) {
+  return request<{ proposal: import("@wowsync-dashboard/core").ErpChangeProposal; message: string }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId)}/approve`, { method: "POST", body: JSON.stringify({ digest }) }, { validate: hasObject("proposal") });
+}
+
+export function rejectErpChangeProposal(version: VersionOrUnknown, proposalId: string, digest: string) {
+  return request<{ proposal: import("@wowsync-dashboard/core").ErpChangeProposal; message: string }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId)}/reject`, { method: "POST", body: JSON.stringify({ digest }) }, { validate: hasObject("proposal") });
+}
+
 export interface ErpWorkOrderBatchTaskDraft {
   readonly needId: string;
   readonly reviewSnapshot: ErpNeedReviewSnapshot;

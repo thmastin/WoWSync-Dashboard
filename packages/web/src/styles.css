@@ -1450,6 +1450,13 @@ button.roster-name-link {
 
 /* Player-first project view: keep operational diagnostics available but quiet by default. */
 .erp-player-projects { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); gap: 22px; align-items: start; margin: 22px 0 28px; }
+.erp-change-approvals { margin: 18px 0 24px; padding: 18px; border: 1px solid var(--accent, #8f78ff); border-radius: 12px; background: color-mix(in srgb, var(--accent, #8f78ff) 7%, var(--panel, #151922)); }
+.erp-change-approval { margin: 14px 0; padding: 16px; border: 1px solid var(--border, #343b49); border-radius: 10px; background: var(--panel, #151922); }
+.erp-change-approval > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.erp-change-approval h3 { display: inline-block; margin: 0 0 0 10px; text-transform: capitalize; }
+.erp-change-approval pre { max-height: 360px; overflow: auto; padding: 12px; background: var(--surface, #0e1118); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.erp-approval-digest { font: 0.75rem ui-monospace, monospace; overflow-wrap: anywhere; color: var(--muted, #aab0bd); }
+.erp-change-approval-actions { display: flex; gap: 10px; }
 .erp-player-project-nav, .erp-player-project-detail { border: 1px solid #ffffff20; border-radius: 12px; background: #ffffff05; padding: 18px; }
 .erp-player-project-nav h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .erp-player-project-nav ul { display: grid; list-style: none; padding: 0; margin: 0; gap: 8px; }

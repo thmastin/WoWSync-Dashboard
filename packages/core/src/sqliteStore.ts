@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
 import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 
 function validatePortfolioNeedDependencies(projects: readonly ErpProject[]): void {
@@ -327,6 +328,16 @@ CREATE TABLE IF NOT EXISTS erp_project_events (
   UNIQUE(project_id, revision)
 );
 CREATE INDEX IF NOT EXISTS idx_erp_project_events_project_revision ON erp_project_events(project_id, revision DESC);
+-- Remote conversational planning requests are inert until an explicit Dashboard approval.
+CREATE TABLE IF NOT EXISTS erp_change_proposals (
+  proposal_id TEXT PRIMARY KEY,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  status TEXT NOT NULL CHECK (status IN ('PENDING','APPROVED','REJECTED','COMMITTING','COMMITTED','FAILED')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  proposal_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_erp_change_proposals_version_status ON erp_change_proposals(game_version, status, created_at DESC);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -581,6 +592,7 @@ const READ_ONLY_REQUIRED_TABLES = [
   "demands",
   "erp_projects",
   "erp_project_events",
+  "erp_change_proposals",
 ] as const;
 
 export class SqliteSnapshotStore implements SnapshotStore {
@@ -1645,6 +1657,43 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return row ? JSON.parse(row.project_json) as ErpProject : undefined;
   }
 
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined {
+    const row = one<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE proposal_id = ?"), proposalId);
+    return row ? JSON.parse(row.proposal_json) as ErpChangeProposal : undefined;
+  }
+
+  listErpChangeProposals(version: WowVersion, includeTerminal = false): ErpChangeProposal[] {
+    const rows = includeTerminal
+      ? many<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE game_version = ? ORDER BY created_at DESC, proposal_id"), version)
+      : many<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE game_version = ? AND status IN ('PENDING','APPROVED','COMMITTING') ORDER BY created_at DESC, proposal_id"), version);
+    return rows.map((row) => JSON.parse(row.proposal_json) as ErpChangeProposal);
+  }
+
+  createErpChangeProposal(proposal: ErpChangeProposal): ErpChangeProposal {
+    if (!/^proposal_[a-f0-9-]{36}$/.test(proposal.proposalId) || proposal.status !== "PENDING" || proposal.expiresAt <= proposal.createdAt || proposal.expiresAt - proposal.createdAt > 3600) throw new TypeError("Invalid ERP change proposal identity or expiry.");
+    return this.inTransaction(() => {
+      const existing = this.getErpChangeProposal(proposal.proposalId);
+      if (existing) {
+        if (existing.digest !== proposal.digest) throw new ErpProjectConflictError("PROPOSAL_ID_REUSED", "This proposal ID already identifies a different exact change.");
+        return existing;
+      }
+      this.db.prepare("INSERT INTO erp_change_proposals(proposal_id, game_version, status, created_at, expires_at, proposal_json) VALUES(?,?,?,?,?,?)")
+        .run(proposal.proposalId, proposal.version, proposal.status, proposal.createdAt, proposal.expiresAt, JSON.stringify(proposal));
+      return proposal;
+    });
+  }
+
+  transitionErpChangeProposal(proposalId: string, version: WowVersion, from: ErpChangeProposalStatus, to: ErpChangeProposalStatus, patch: Partial<Pick<ErpChangeProposal, "approvedAt" | "completedAt" | "result" | "outcome">> = {}): ErpChangeProposal | undefined {
+    return this.inTransaction(() => {
+      const current = this.getErpChangeProposal(proposalId);
+      if (!current || current.version !== version || current.status !== from) return undefined;
+      const next: ErpChangeProposal = { ...current, ...patch, status: to };
+      const result = this.db.prepare("UPDATE erp_change_proposals SET status = ?, proposal_json = ? WHERE proposal_id = ? AND game_version = ? AND status = ?")
+        .run(to, JSON.stringify(next), proposalId, version, from);
+      return Number(result.changes) === 1 ? next : undefined;
+    });
+  }
+
   createErpProject(input: ErpProjectDraft): ErpProject {
     const now = Math.floor(Date.now() / 1000);
     if (input.idempotencyKey !== undefined && (typeof input.idempotencyKey !== "string" || input.idempotencyKey.trim().length < 1 || input.idempotencyKey.length > 256)) throw new TypeError("Project idempotency keys must contain 1–256 characters.");
@@ -1999,6 +2048,12 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   }
   getErpProject(stableId: string): ErpProject | undefined {
     return this.store.getErpProject(stableId);
+  }
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined {
+    return this.store.getErpChangeProposal(proposalId);
+  }
+  listErpChangeProposals(version: WowVersion, includeTerminal = false): ErpChangeProposal[] {
+    return this.store.listErpChangeProposals(version, includeTerminal);
   }
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
     return this.store.getActiveDemand(version, demandType, baseItemId);

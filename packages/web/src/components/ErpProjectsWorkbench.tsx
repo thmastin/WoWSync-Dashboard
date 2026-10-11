@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ErpNeedEvidence, ErpProject, ErpProjectStatus, ErpProjectView, ErpResourceCommitmentLine, ErpResourceNeed, ErpResourceSourceCandidate, ErpResourceSourceScreen, ErpSavedNeedHistory, ErpSourceFulfillmentReview, ErpWorkOrder } from "@wowsync-dashboard/core";
 import { buildErpNeedReviewSnapshot } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
-import { appendErpProvisioningReviewBatch, appendErpWorkOrderBatch, createErpProject, fetchErpProjects, fetchSharedStorage, setErpProjectStatus, updateErpProject, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
+import { appendErpProvisioningReviewBatch, appendErpWorkOrderBatch, approveErpChangeProposal, createErpProject, fetchErpChangeProposals, fetchErpProjects, fetchSharedStorage, rejectErpChangeProposal, setErpProjectStatus, updateErpProject, type ErpWorkOrderBatchTaskDraft } from "../api.ts";
 import { ErpProjectHistory } from "./ErpProjectHistory.tsx";
 import { ErpWorkOrderReadinessLine } from "./ErpWorkOrderReadinessLine.tsx";
 import { ErpWorkOrderProgressLine } from "./ErpWorkOrderProgressLine.tsx";
@@ -56,6 +56,7 @@ const recipeStateText: Record<string, string> = {
 
 export default function ErpProjectsWorkbench({ version, refreshTick, characters, onRefresh }: { version: VersionOrUnknown; refreshTick: number; characters: CharacterFacts[]; onRefresh: () => void }) {
   const load = useAsync((signal) => version === "unknown-version" ? Promise.resolve(undefined) : fetchErpProjects(version, signal), version, refreshTick);
+  const proposalLoad = useAsync((signal) => version === "unknown-version" ? Promise.resolve({ proposals: [] as import("@wowsync-dashboard/core").ErpChangeProposal[] }) : fetchErpChangeProposals(version, signal), version, refreshTick);
   const sharedLoad = useAsync((signal) => version === "retail" ? fetchSharedStorage(signal) : Promise.resolve(undefined), version, refreshTick);
   const [title, setTitle] = useState(""); const [objective, setObjective] = useState(""); const [priority, setPriority] = useState("3");
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
@@ -104,6 +105,10 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
   const sourceName = (need: ErpResourceNeed) => need.sourceOwnerKey ? storageOwnerName(need.sourceOwnerKey) : name(need.sourceIdentityKey);
 
   async function run(action: () => Promise<unknown>) { setBusy(true); setError(""); setNotice(""); try { await action(); onRefresh(); } catch (e) { setError(e instanceof Error ? e.message : "Could not save the project."); } finally { setBusy(false); } }
+  async function respondToProposal(proposal: import("@wowsync-dashboard/core").ErpChangeProposal, approve: boolean) {
+    if (approve && !window.confirm(`Approve this exact persistent ${proposal.operation.replaceAll("_", " ").toLowerCase()} for ${String(proposal.version)}? Project revisions and the complete proposed payload are shown below. The MCP cannot approve it.`)) return;
+    await run(() => approve ? approveErpChangeProposal(proposal.version, proposal.proposalId, proposal.digest) : rejectErpChangeProposal(proposal.version, proposal.proposalId, proposal.digest));
+  }
   function clearPrefilledManualSupply() {
     setPrefilledNeedId(null);
     setEditingOrderId(null); setOrderKind("INVESTIGATE"); setOrderTitle(""); setOrderInstructions(""); setAssigned(""); setOrderSource(""); setOrderDestination(""); setOrderNeedIds([]); setOrderDependencyIds([]); setOutputKey(""); setOutputLabel(""); setOutputQuantity("1"); setOutputObservationIdentityKey(""); setPurchaseTargetNeedId(""); setPurchaseCeilingCopper(""); setPurchaseBudgetNeedId("");
@@ -387,6 +392,8 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
   if (load.state.status === "loading" && !load.state.data) return <div className="loading">Loading projects…</div>;
   if (load.state.status === "error" && !load.state.data) return <section className="erp-workbench"><h1>Projects &amp; Work Orders</h1><p role="alert">{load.state.error instanceof Error ? load.state.error.message : "Projects could not be loaded."}</p><button onClick={load.retry}>Retry</button></section>;
   const projects = load.state.data?.projects ?? [];
+  const proposals = proposalLoad.state.data?.proposals ?? [];
+  const proposalProjectName = (proposal: import("@wowsync-dashboard/core").ErpChangeProposal) => proposal.projectIds.map((projectId) => projects.find((entry) => entry.stableId === projectId)?.title ?? projectId).join(", ") || (typeof proposal.mutation.title === "string" ? proposal.mutation.title : "New project");
   const selectedProject = projectSelection(projects, selectedProjectByVersion[String(version)]);
   const selectedNextOrder = selectedProject ? nextPlayerWorkOrder(selectedProject) : undefined;
   const selectedReadiness = selectedProject && selectedNextOrder ? selectedProject.workOrderReadiness.find((entry) => entry.workOrderId === selectedNextOrder.stableId) : undefined;
@@ -408,6 +415,20 @@ export default function ErpProjectsWorkbench({ version, refreshTick, characters,
   return <section className="erp-workbench">
       <header className="erp-workbench-header"><div><p className="eyebrow">{String(version).toUpperCase()} · PLANNING</p><h1>Projects &amp; Work Orders</h1><p>Your active goals and the next player-controlled step.</p></div><span className="erp-scope-note">No game actions are executed</span></header>
     {error && <p role="alert" className="erp-form-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {proposals.length > 0 && <section className="erp-change-approvals" aria-labelledby="erp-change-approvals-title">
+      <h2 id="erp-change-approvals-title">Operations change approvals</h2>
+      <p>A conversational client can prepare a change, but only an explicit Dashboard action can approve it. Approval is bound to the exact digest, version, project, and revision below.</p>
+      {proposals.map((proposal) => <article className="erp-change-approval" key={proposal.proposalId} data-testid="erp-change-approval">
+        <header><div><span className={`erp-status erp-status-${proposal.status.toLowerCase()}`}>{proposal.status}</span><h3>{proposal.operation.replaceAll("_", " ")} · {proposalProjectName(proposal)}</h3></div><span>{proposal.version} · expires {when(proposal.expiresAt)}</span></header>
+        <p><strong>Reason:</strong> {proposal.rationale}</p>
+        <p><strong>Project revisions:</strong> {proposal.projectIds.length ? proposal.projectIds.map((projectId) => `${proposalProjectName(proposal)} r${proposal.expectedRevisions[projectId]}`).join("; ") : "New project (no existing project revision)"}</p>
+        <details><summary>Inspect exact proposed change</summary><pre>{JSON.stringify(proposal.mutation, null, 2)}</pre></details>
+        <p className="erp-approval-digest">SHA-256: {proposal.digest}</p>
+        {proposal.status === "PENDING" && <div className="erp-change-approval-actions"><button type="button" disabled={busy || proposal.expiresAt <= Math.floor(Date.now() / 1000)} onClick={() => void respondToProposal(proposal, true)}>Approve this exact change</button><button type="button" className="secondary" disabled={busy} onClick={() => void respondToProposal(proposal, false)}>Reject</button></div>}
+        {proposal.status === "APPROVED" && <p role="status">Approved. Ask the Operations conversation to commit this proposal.</p>}
+        {proposal.status === "COMMITTING" && <p role="alert">Commit outcome is being checked. Inspect project history before taking another action.</p>}
+      </article>)}
+    </section>}
     {projects.length > 0 && <div className="erp-player-projects">
       <nav className="erp-player-project-nav" aria-label="Your projects"><h2>Your projects</h2><ul>{orderedProjects.map((project) => <li key={project.stableId}><button type="button" aria-pressed={selectedProject?.stableId === project.stableId} onClick={() => selectProject(project.stableId)}><span className={`erp-status erp-status-${project.status.toLowerCase()}`}>{playerProjectStatusLabel(project.status)}</span><strong>{project.title}</strong></button></li>)}</ul></nav>
       {selectedProject && <section className="erp-player-project-detail" aria-labelledby="erp-player-project-title" data-testid="erp-player-project-detail">

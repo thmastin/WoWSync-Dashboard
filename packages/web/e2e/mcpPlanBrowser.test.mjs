@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -25,7 +26,11 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     store = new SqliteSnapshotStore(databasePath);
     const now = Math.floor(Date.now() / 1000);
     const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "MCP Plan Character", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 3 }, { itemRef: "item:2589:0:0", name: "Linen Cloth", qty: 2 }] }] }, bank: { containers: [] } }));
-    server = await listenOnce(createApp(store, 0, webDist, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+    const reservation = http.createServer();
+    await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+    const port = reservation.address().port;
+    await new Promise((resolve) => reservation.close(resolve));
+    server = await listenOnce(createApp(store, port, webDist, { selfOrigin: `http://127.0.0.1:${port}`, allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", port);
     const address = server.address(); assert.ok(address && typeof address !== "string");
     const baseUrl = `http://127.0.0.1:${address.port}`;
     const executablePath = process.env.WOWSYNC_CHROMIUM_PATH ?? (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
@@ -43,12 +48,24 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
     assert.equal(tools.find((tool) => tool.name === "plan_erp_work_order_batch")?.annotations?.destructiveHint, true, "host clients receive a confirmation hint before saving work orders");
 
     await page.goto(`${baseUrl}/#/retail/overview`);
-    await page.getByRole("button", { name: "Projects & Work Orders" }).click();
-    await page.locator('.erp-advanced-planning > summary').click();
-    await page.getByRole("heading", { name: "Projects & Work Orders" }).waitFor();
+    const approveInDashboard = async (proposal, expectedOperation) => {
+      await page.reload();
+      await page.getByRole("button", { name: "Projects & Work Orders" }).click();
+      const operationText = expectedOperation.replaceAll("_", " ");
+      const approval = page.getByTestId("erp-change-approval").filter({ hasText: new RegExp(operationText, "i") });
+      await approval.waitFor();
+      assert.match(await approval.innerText(), new RegExp(operationText, "i"));
+      assert.match(await approval.innerText(), new RegExp(proposal.digest));
+      await approval.getByText("Inspect exact proposed change").click();
+      assert.ok(await approval.locator("pre").innerText(), "the exact mutation payload is available for player inspection before approval");
+      page.once("dialog", (dialog) => dialog.accept());
+      await approval.getByRole("button", { name: "Approve this exact change" }).click();
+      await approval.getByText("Approved. Ask the Operations conversation to commit this proposal.").waitFor();
+    };
 
-    const createdResult = await mcpClient.callTool({ name: "create_erp_project", arguments: {
+    const stagedCreate = await mcpClient.callTool({ name: "create_erp_project", arguments: {
       version: "retail",
+      proposalId: crypto.randomUUID(),
       idempotencyKey: "browser-acceptance-mcp-provisioning-plan",
       rationale: "Player approved a new resource review project.",
       title: "MCP-authored provisioning plan",
@@ -59,8 +76,12 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
         { stableId: "linen-cloth", kind: "ITEM_REF", resourceKey: "item:2589:0:0", label: "Linen Cloth", requiredQuantity: 4, sourceIdentityKey: imported.character.identityKey },
       ],
     } });
+    assert.equal(stagedCreate.isError, undefined, JSON.stringify(stagedCreate.structuredContent));
+    const createProposal = stagedCreate.structuredContent.proposal;
+    await approveInDashboard(createProposal, "CREATE_PROJECT");
+    const createdResult = await mcpClient.callTool({ name: "commit_approved_erp_change", arguments: { version: "retail", proposalId: createProposal.proposalId, digest: createProposal.digest } });
     assert.equal(createdResult.isError, undefined, JSON.stringify(createdResult.structuredContent));
-    const createdProject = createdResult.structuredContent.project;
+    const createdProject = createdResult.structuredContent.result.project;
     assert.equal(createdProject.history[0]?.rationale, "Player approved a new resource review project.");
 
     let rest = await fetch(`${baseUrl}/api/versions/retail/erp/projects`).then((response) => response.json());
@@ -75,19 +96,27 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] MCP-authored project intent appears consist
 
     const reviewProject = new DashboardReadModel(store).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === project.stableId);
     assert.ok(reviewProject);
-    const planned = await mcpClient.callTool({ name: "plan_erp_work_order_batch", arguments: { version: "retail", updates: [{
+    const planned = await mcpClient.callTool({ name: "plan_erp_work_order_batch", arguments: { version: "retail", proposalId: crypto.randomUUID(), rationale: "Player approved review tasks for both known needs.", updates: [{
       projectId: project.stableId,
       expectedRevision: project.revision,
       tasks: reviewProject.needs.map((need) => ({ needId: need.stableId, kind: "INVESTIGATE", title: `Review ${need.label}`, instructions: "Player checks the observed source and decides the next manual step; no action is executed by MCP.", reviewSnapshot: buildErpNeedReviewSnapshot(reviewProject, need.stableId) })),
     }] } });
-    assert.equal(planned.isError, undefined, JSON.stringify(planned.structuredContent));
+    assert.equal(planned.isError, undefined, JSON.stringify(planned));
+    const planProposal = planned.structuredContent.proposal;
+    await approveInDashboard(planProposal, "APPEND_WORK_ORDER_BATCH");
+    const plannedCommit = await mcpClient.callTool({ name: "commit_approved_erp_change", arguments: { version: "retail", proposalId: planProposal.proposalId, digest: planProposal.digest } });
+    assert.equal(plannedCommit.isError, undefined, JSON.stringify(plannedCommit.structuredContent));
     rest = await fetch(`${baseUrl}/api/versions/retail/erp/projects`).then((response) => response.json());
     project = rest.projects.find((entry) => entry.stableId === project.stableId);
     assert.equal(project.workOrders.length, 2, "the review-checked MCP batch saves both multi-need manual steps atomically");
     assert.deepEqual(project.workOrders.map((order) => order.status), ["PLANNED", "PLANNED"]);
 
-    const updatedResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, rationale: "Player paused the project pending a review.", project: { ...project, status: "PAUSED" } } });
+    const updatedResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", proposalId: crypto.randomUUID(), projectId: project.stableId, expectedRevision: project.revision, rationale: "Player paused the project pending a review.", project: { ...project, status: "PAUSED" } } });
     assert.equal(updatedResult.isError, undefined, JSON.stringify(updatedResult.structuredContent));
+    const updateProposal = updatedResult.structuredContent.proposal;
+    await approveInDashboard(updateProposal, "UPDATE_PROJECT_PLAN");
+    const updateCommit = await mcpClient.callTool({ name: "commit_approved_erp_change", arguments: { version: "retail", proposalId: updateProposal.proposalId, digest: updateProposal.digest } });
+    assert.equal(updateCommit.isError, undefined, JSON.stringify(updateCommit.structuredContent));
     const staleResult = await mcpClient.callTool({ name: "update_erp_project_plan", arguments: { version: "retail", projectId: project.stableId, expectedRevision: project.revision, rationale: "This stale edit must be rejected.", project: { ...project, status: "COMPLETED" } } });
     assert.equal(staleResult.isError, true, "stale replacement is refused rather than overwriting the newer plan");
 

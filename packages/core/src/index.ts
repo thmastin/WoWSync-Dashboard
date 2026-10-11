@@ -29,6 +29,7 @@ export * from "./researchRegistry.ts";
 export * from "./demand.ts";
 export * from "./erpLimits.ts";
 export * from "./erpProjects.ts";
+export * from "./erpChangeApproval.ts";
 export * from "./erpProcurementPortfolio.ts";
 export * from "./erpProcurementBuyerPortfolio.ts";
 export * from "./erpObservationChanges.ts";
