@@ -14,6 +14,7 @@ import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { createWatcher, nodeFs, runWatchSaved, selectNewestExport, type RunDeps, type WatchConfig, type WatchDeps, type WatchFs } from "../src/watchSaved.ts";
 import { discoverWatchTargets, watchTargetLabel } from "../src/importSaved.ts";
 import { exportFor, record, savedVariables, toLua } from "./savedVariablesFixtures.ts";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { VIREK_TUPLE, envelope, sidecar, type EnvelopeOptions } from "../../core/test/equipmentObservationFixtures.ts";
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -739,6 +740,52 @@ test("END TO END: a real save, then a re-save with the same export, then a new e
   }
 });
 
+test("END TO END: watcher imports a new Forever 70338 character with a surname into the Forever roster", async () => {
+  const generatedAt = 1_791_683_475;
+  const text = buildWowSyncExport({ generatedAt, character: {
+    name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
+    realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } });
+  const dir = join(root, `forever${counter++}`, "_classic_beta_", "WTF", "Account", "262269#1", "SavedVariables");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "GearExport.lua");
+  writeFileSync(file, savedVariables([{
+    guid: "Player-4613-016F932B", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt,
+    captureProfile: "Forever:1.60.1:70338:16001",
+  }]));
+
+  const store = new SqliteSnapshotStore(":memory:");
+  const server = await listenOnce(createApp(store, 0, undefined, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    let now = 0;
+    const out: string[] = [];
+    const err: string[] = [];
+    const watcher = createWatcher({ file, origin: base, once: true, pollMs: POLL, quietMs: QUIET }, {
+      fs: nodeFs, clock: () => now, out: (line) => out.push(line), err: (line) => err.push(line), fetch,
+    });
+    await watcher.tick();
+    for (let i = 0; i < 3 && !watcher.finished; i++) {
+      now += POLL;
+      await watcher.tick();
+    }
+    assert.equal(watcher.finished, true, all(err) || all(out));
+    assert.equal(watcher.exitCode, 0, all(err) || all(out));
+    assert.match(all(out), /Result: imported as a new snapshot/);
+    const characters = store.listCharacters("forever");
+    assert.equal(characters.length, 1);
+    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(characters[0]?.surname, "Longbraid");
+    assert.equal(store.listCharacters("retail").length, 0);
+    assert.equal(store.listSnapshots(characters[0]!.identityKey)[0]?.parsed.character.clientBuild, "70338");
+    assert.equal(store.listSnapshots(characters[0]!.identityKey)[0]?.parsed.character.moneyCopper, undefined);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+  }
+});
+
 test("watchTargetLabel picks the product folder from a SavedVariables path", () => {
   assert.equal(watchTargetLabel("D:/World of Warcraft/_retail_/WTF/Account/EY215/SavedVariables/GearExport.lua"), "_retail_");
   assert.equal(watchTargetLabel("D:/World of Warcraft/_anniversary_/WTF/Account/EY215/SavedVariables/GearExport.lua"), "_anniversary_");
@@ -748,7 +795,7 @@ test("watchTargetLabel picks the product folder from a SavedVariables path", () 
 test("discoverWatchTargets returns every GearExport.lua under an install root", () => {
   const install = join(root, "multi-install");
   const files = [];
-  for (const product of ["_retail_", "_anniversary_"]) {
+  for (const product of ["_retail_", "_anniversary_", "_classic_beta_"]) {
     const dir = join(install, product, "WTF", "Account", "A1", "SavedVariables");
     mkdirSync(dir, { recursive: true });
     const file = join(dir, "GearExport.lua");
@@ -756,7 +803,7 @@ test("discoverWatchTargets returns every GearExport.lua under an install root", 
     files.push(file);
   }
   const found = discoverWatchTargets({ wowDir: install, env: {} });
-  assert.equal(found.length, 2);
+  assert.equal(found.length, 3);
   assert.deepEqual(found.map((f) => f.path).sort(), files.sort());
 });
 

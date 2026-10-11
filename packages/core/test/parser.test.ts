@@ -15,7 +15,7 @@ test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   assert.equal(snapshot.character.status.state, "OBSERVED");
 });
 
-test("Forever 70291 surname is optional display metadata and legacy exports remain valid", () => {
+test("Forever 70291 and 70338 surnames are optional display metadata and legacy exports remain valid", () => {
   const forever = parseWowSyncExport(buildWowSyncExport({ character: {
     name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Classic Beta PvP 2", clientFamily: "Forever",
     clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
@@ -24,6 +24,15 @@ test("Forever 70291 surname is optional display metadata and legacy exports rema
   assert.equal(forever.character.surname, "Emberstone");
   assert.equal(forever.character.surnameSource, "UnitName[2]+GetUnitName suffix");
   assert.equal(forever.character.realm, "Classic Beta PvP 2");
+
+  const forever70338 = parseWowSyncExport(buildWowSyncExport({ character: {
+    name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]", realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }));
+  assert.equal(forever70338.character.name, "Rordin");
+  assert.equal(forever70338.character.surname, "Longbraid");
+  assert.equal(forever70338.character.class, "Warrior");
+  assert.equal(forever70338.character.level, 3);
 
   const withoutSurname = parseWowSyncExport(buildWowSyncExport({ character: {
     name: "Fizzwick", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
@@ -35,6 +44,10 @@ test("Forever 70291 surname is optional display metadata and legacy exports rema
     name: "RetailOne", surname: "Unexpected", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933",
   } }).replace("Name: RetailOne\n", "Name: RetailOne\nSurname: Unexpected\n");
   assert.throws(() => parseWowSyncExport(retailWithSurname), /Surname is only supported for the verified Forever/);
+  const unknownForeverWithSurname = buildWowSyncExport({ character: {
+    name: "Future", surname: "Profile", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } }).replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
+  assert.throws(() => parseWowSyncExport(unknownForeverWithSurname), /70291 or 70338 profile/);
 });
 
 test("parses all eight sections present and labeled correctly", () => {

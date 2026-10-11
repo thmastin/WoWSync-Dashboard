@@ -198,8 +198,8 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
-  if (surname !== undefined && (clientFamily !== "Forever" || clientVersion !== "1.60.1" || clientBuild !== "70291" || iface !== "16001")) {
-    fail("Surname is only supported for the verified Forever 1.60.1 build 70291 profile");
+  if (surname !== undefined && (clientFamily !== "Forever" || clientVersion !== "1.60.1" || !["70291", "70338"].includes(clientBuild ?? "") || iface !== "16001")) {
+    fail("Surname is only supported for the verified Forever 1.60.1 build 70291 or 70338 profile");
   }
 
   return {

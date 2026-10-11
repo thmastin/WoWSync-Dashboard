@@ -599,6 +599,44 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
   });
 });
 
+test("END TO END: the SavedVariables bridge discovers a new Forever 70338 character with a surname", async () => {
+  const generatedAt = 1_791_683_475;
+  const text = buildWowSyncExport({ generatedAt, character: {
+    name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
+    realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } });
+  const rordin = {
+    guid: "Player-4613-016F932B", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt,
+    captureProfile: "Forever:1.60.1:70338:16001",
+  };
+  const rootDir = wow({
+    [svPath("_classic_beta_", "262269#1")]: savedVariables([rordin]),
+  });
+  await withServer(async (base, store) => {
+    const imported = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--wow-dir", rootDir, "--url", base], live(base));
+    assert.equal(imported.exitCode, 0, all(imported));
+    assert.match(all(imported), /Result: imported as a new snapshot/);
+    const characters = store.listCharacters("forever");
+    assert.equal(characters.length, 1);
+    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(characters[0]?.name, "Rordin");
+    assert.equal(characters[0]?.surname, "Longbraid");
+    assert.equal(characters[0]?.realm, "Classic Beta PvP 2");
+    assert.equal(store.listCharacters("retail").length, 0, "the import remains in the Forever version bucket");
+    const snapshot = store.listSnapshots(characters[0]!.identityKey)[0];
+    assert.equal(snapshot?.parsed.character.clientBuild, "70338");
+    assert.equal(snapshot?.parsed.character.moneyCopper, undefined, "unobserved gold remains unknown");
+    assert.equal(snapshot?.parsed.raw, text, "the exact persisted WOWSYNC v1 export reaches storage");
+    const rosterResponse = await fetch(`${base}/api/versions/forever/characters`);
+    assert.equal(rosterResponse.status, 200);
+    const roster = await rosterResponse.json() as { characters: Array<{ identityKey: string; surname?: string; latestLevel?: number }> };
+    assert.deepEqual(roster.characters.map(({ identityKey, surname, latestLevel }) => ({ identityKey, surname, latestLevel })), [
+      { identityKey: "forever::classic beta pvp 2::rordin", surname: "Longbraid", latestLevel: 3 },
+    ], "the roster REST contract exposes the newly imported Forever character");
+  });
+});
+
 test("END TO END: a refusal by the real server and an absent server both leave the Dashboard untouched", async () => {
   const file = svFile(savedVariables([VIREK]));
   const store = new SqliteSnapshotStore(":memory:");
