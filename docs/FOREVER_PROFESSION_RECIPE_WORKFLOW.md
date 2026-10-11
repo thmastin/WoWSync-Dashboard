@@ -21,3 +21,13 @@ Forever 1.60.1 recipe records are a version-scoped character-state sidecar attac
 ## Validation status
 
 Automated fixtures cover parser validation, saved-variable forwarding, Forever version isolation, learned states, output/reagent rows, ERP evidence, and MCP readback. Synthetic data does not establish live game API behavior. Live acceptance requires the real Windows Forever client and connected DEV MCP; no Rordin project change or craft is implied by deployment.
+
+## 2026-10-11 deployment checkpoint
+
+The reviewed implementation at `601e345fcba7a0e02101e1449da2f2140431e99c` was promoted to DEV through the guarded launcher. The promotion audit classified the schema as `NONE` (`user_version` 0 to 0), verified the backup integrity, and passed Dashboard, MCP, and required HTTP checks. A fresh DEV status check reports the same SHA healthy. Independent review returned PASS WITH NON-BLOCKING NOTES; it noted only that parser validation does not reject a raw candidate count smaller than stored recipe rows. The production GearExport producer emits raw enumeration counts, and this mismatch cannot establish learned state or completeness.
+
+Connected MCP readback after promotion found Rordin Longbraid on Forever snapshot 165, level 6, Mining 3/75 and Blacksmithing 1/75. Recipe knowledge remains UNKNOWN because the Windows profession-panel capture has not occurred. Rordin's existing project remains ACTIVE at revision 5; it was read only and was not changed by deployment. No recipe, trainer, crafting, or upgrade evidence is claimed live-validated.
+
+### Required Windows live-validation action
+
+After closing Forever completely, install reviewed GearExport SHA `96fc46b9a151a775dfdb7d5306eae17a4aa356e7` with the guarded PowerShell command documented in the GearExport README. Launch Forever, log into Rordin Longbraid on Classic Beta PvP 2, open Blacksmithing and wait for the profession panel to populate, run `/wowsync`, then log out normally so SavedVariables are flushed and the existing import pipeline can ingest the export. Query `get_character_professions` through connected DEV MCP and verify the recipe sidecar includes observed candidate/learned state, output and reagent fields wherever the client supplied them. Do not craft an item or modify the project to validate retrieval. Record unsupported or UNKNOWN fields as such. The MCP recipe-material review may be used after evidence appears; it reports only Rordin's own carried bags and does not establish craftability or an upgrade.
