@@ -31,6 +31,14 @@ The reviewed implementation at `d7de64b510349d810a3a0da2b98eec43bb0080fa` was pr
 
 The final fresh independent review returned PASS WITH NON-BLOCKING NOTES. It verified current scope/root count consistency, allowing retained LAST_SEEN rows and historical scopes to exceed current counts, including multi-scope and Retail coverage. Earlier count-validation findings were fixed before this reviewed SHA. No new schema or migration was added.
 
+### 2026-10-11 recipe progression metadata follow-up
+
+GearExport `24fc5de7fdfdf23bcc863c3e679b82b3bdcdbec1` and Dashboard `7ca19e2d769d2665bcb31f1edfd881329ba35008` were independently reviewed as PASS WITH NON-BLOCKING NOTES. Review caught and the follow-up fixed two provenance issues: recipe-info identity is now checked when the API returns an ID, and relative difficulty must be one of the documented integer enum values 0–3 at both capture and import. The metadata remains optional; `maxTrivialLevel` is not interpreted as a minimum profession requirement.
+
+Dashboard `7ca19e2d769d2665bcb31f1edfd881329ba35008` was promoted to DEV with the guarded launcher on 2026-10-11. Audit result `PROMOTE_SUCCESS`; schema classification `NONE`, no added/removed/changed objects, `user_version` 0 to 0. Backup integrity was `ok`, with SHA256 `2f9c9b35ca6e9222533036aed8fddd3319c0dedf3c4d38613c1b67b94ca18b40`. Post-deploy status reports Dashboard, MCP tunnel, Herdr, and required HTTP checks healthy at that SHA. No project was edited and no database migration occurred.
+
+The Windows client has not yet supplied a profession-panel capture. The connected ChatGPT WoWSync MCP call currently fails because its tunnel client has not been seen within 300 seconds; local MCP tests pass, but this is not live MCP recipe validation. The next acceptance step is a real Windows capture on Rordin: close Forever, install the reviewed GearExport branch with `scripts/deploy-forever.ps1`, launch Rordin on Classic Beta PvP 2, open Blacksmithing and wait for the recipe list, run `/wowsync`, then log out normally to flush SavedVariables. Once the import completes and the connected MCP tunnel is reachable, read Rordin's profession/recipe evidence. Do not craft or modify the project for retrieval validation.
+
 Connected MCP readback after the final promotion still finds Rordin Longbraid on Forever snapshot 165, level 6, Mining 3/75 and Blacksmithing 1/75. Recipe knowledge remains UNKNOWN because the Windows profession-panel capture has not occurred. Rordin's existing project remains ACTIVE at revision 5; it was read only and was not changed by either deployment. No recipe, trainer, crafting, or upgrade evidence is claimed live-validated.
 
 ### Required Windows live-validation action
