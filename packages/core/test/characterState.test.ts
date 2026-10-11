@@ -214,7 +214,7 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
   assert.ok(normalizeCharacterStateSidecar(unknownRecipe, "forever"), "fresh candidate identity remains usable when learned/schematic evidence is UNKNOWN");
   assert.equal(normalizeCharacterStateSidecar(sidecar, "retail"), undefined, "Forever sidecar cannot cross into Retail");
   assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Retail" }, "forever"), undefined);
-  for (const [field, value] of [["relativeDifficulty", "2"], ["maxTrivialLevel", -1], ["numSkillUps", true], ["canSkillUp", 1], ["recipeProgressionInfoState", "PRESENT"]] as const) {
+  for (const [field, value] of [["relativeDifficulty", "2"], ["relativeDifficulty", 4], ["relativeDifficulty", 999], ["maxTrivialLevel", -1], ["numSkillUps", true], ["canSkillUp", 1], ["recipeProgressionInfoState", "PRESENT"]] as const) {
     const malformed = structuredClone(sidecar);
     (malformed.professionRecipes.data.professions[0].recipes[0] as any)[field] = value;
     assert.equal(normalizeCharacterStateSidecar(malformed, "forever"), undefined, `malformed ${field} is rejected`);

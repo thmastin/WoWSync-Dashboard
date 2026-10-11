@@ -92,6 +92,7 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
         const value = recipe[field];
         if (value !== undefined && (!finite(value) || !Number.isInteger(value) || value < 0)) return undefined;
       }
+      if (recipe.relativeDifficulty !== undefined && (recipe.relativeDifficulty as number) > 3) return undefined;
       if (recipe.canSkillUp !== undefined && typeof recipe.canSkillUp !== "boolean") return undefined;
       if (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN" && recipe.evidence !== "UNKNOWN") return undefined;
       if (profession.evidence === "LAST_SEEN" && recipe.evidence !== "LAST_SEEN") return undefined;
