@@ -24,9 +24,11 @@ Automated fixtures cover parser validation, saved-variable forwarding, Forever v
 
 ## 2026-10-11 deployment checkpoint
 
-The reviewed implementation at `601e345fcba7a0e02101e1449da2f2140431e99c` was promoted to DEV through the guarded launcher. The promotion audit classified the schema as `NONE` (`user_version` 0 to 0), verified the backup integrity, and passed Dashboard, MCP, and required HTTP checks. A fresh DEV status check reports the same SHA healthy. Independent review returned PASS WITH NON-BLOCKING NOTES; it noted only that parser validation does not reject a raw candidate count smaller than stored recipe rows. The production GearExport producer emits raw enumeration counts, and this mismatch cannot establish learned state or completeness.
+The reviewed implementation at `d7de64b510349d810a3a0da2b98eec43bb0080fa` was promoted to DEV through the guarded launcher. The promotion audit classified the schema as `NONE` (`user_version` 0 to 0), verified backup integrity, and passed Dashboard, MCP, and required HTTP checks. A fresh DEV status check reports the same SHA healthy. The second guarded promotion was from `601e345fcba7a0e02101e1449da2f2140431e99c` to this validation-only fix. Its backup is `/var/lib/wowsync-dev/backups/deploy/20261011T200033.071Z-7f2211aa-601e345fcba7a0e02101e1449da2f2140431e99c-to-d7de64b510349d810a3a0da2b98eec43bb0080fa.sqlite`, SHA256 `2f9c9b35ca6e9222533036aed8fddd3319c0dedf3c4d38613c1b67b94ca18b40`, integrity `ok`.
 
-Connected MCP readback after promotion found Rordin Longbraid on Forever snapshot 165, level 6, Mining 3/75 and Blacksmithing 1/75. Recipe knowledge remains UNKNOWN because the Windows profession-panel capture has not occurred. Rordin's existing project remains ACTIVE at revision 5; it was read only and was not changed by deployment. No recipe, trainer, crafting, or upgrade evidence is claimed live-validated.
+The final fresh independent review returned PASS WITH NON-BLOCKING NOTES. It verified current scope/root count consistency, allowing retained LAST_SEEN rows and historical scopes to exceed current counts, including multi-scope and Retail coverage. Earlier count-validation findings were fixed before this reviewed SHA. No new schema or migration was added.
+
+Connected MCP readback after the final promotion still finds Rordin Longbraid on Forever snapshot 165, level 6, Mining 3/75 and Blacksmithing 1/75. Recipe knowledge remains UNKNOWN because the Windows profession-panel capture has not occurred. Rordin's existing project remains ACTIVE at revision 5; it was read only and was not changed by either deployment. No recipe, trainer, crafting, or upgrade evidence is claimed live-validated.
 
 ### Required Windows live-validation action
 
