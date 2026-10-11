@@ -186,6 +186,7 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
     skillLineID: 164, skillLineAssociationState: "OBSERVED", skillLineIDs: [164],
     schematicState: "OBSERVED", name: "Copper Chain Belt", outputItemID: 2857,
     outputQuantityMin: 1, outputQuantityMax: 1,
+    recipeProgressionInfoState: "OBSERVED", relativeDifficulty: 2, maxTrivialLevel: 25, numSkillUps: 1, canSkillUp: true,
     reagentSlots: [{ slotIndex: 1, quantityRequired: 2, required: true, requiredSkillRank: 1, reagents: [{ itemID: 2835 }] }],
   };
   const scope = {
@@ -202,6 +203,7 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
   const row = (normalized?.professionRecipes?.data?.professions as any[])[0].recipes[0];
   assert.equal(row.recipeID, 2660);
   assert.equal(row.outputItemID, 2857);
+  assert.deepEqual([row.recipeProgressionInfoState, row.relativeDifficulty, row.maxTrivialLevel, row.numSkillUps, row.canSkillUp], ["OBSERVED", 2, 25, 1, true]);
   assert.deepEqual(row.reagentSlots[0].reagents, [{ itemID: 2835 }]);
   const unknownRecipe = structuredClone(sidecar);
   const unknown = unknownRecipe.professionRecipes.data.professions[0].recipes[0] as any;
@@ -212,6 +214,11 @@ test("Forever recipe sidecar preserves client/build provenance, output and reage
   assert.ok(normalizeCharacterStateSidecar(unknownRecipe, "forever"), "fresh candidate identity remains usable when learned/schematic evidence is UNKNOWN");
   assert.equal(normalizeCharacterStateSidecar(sidecar, "retail"), undefined, "Forever sidecar cannot cross into Retail");
   assert.equal(normalizeCharacterStateSidecar({ ...sidecar, clientFamily: "Retail" }, "forever"), undefined);
+  for (const [field, value] of [["relativeDifficulty", "2"], ["maxTrivialLevel", -1], ["numSkillUps", true], ["canSkillUp", 1], ["recipeProgressionInfoState", "PRESENT"]] as const) {
+    const malformed = structuredClone(sidecar);
+    (malformed.professionRecipes.data.professions[0].recipes[0] as any)[field] = value;
+    assert.equal(normalizeCharacterStateSidecar(malformed, "forever"), undefined, `malformed ${field} is rejected`);
+  }
   const wrongClient = structuredClone(sidecar);
   (wrongClient.professionRecipes.data.professions[0] as any).client.clientVersion = "1.60.0";
   assert.equal(normalizeCharacterStateSidecar(wrongClient, "forever"), undefined, "wrong Forever client version is rejected");

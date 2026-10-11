@@ -14,6 +14,7 @@ Forever 1.60.1 recipe records are a version-scoped character-state sidecar attac
 | Carried materials | Character bags | Forever structured bags merged into the Forever carried-item read model | Only the selected character's observed bags count; stale/partial/unidentified rows prevent a confirmed shortfall |
 | Bank/other characters | Existing version-specific storage views | Bank may be UNKNOWN; another character is a separate owner | Never assume bank access, transfer, or account membership |
 | Crafted gear output | Retail item and equipment evidence | `GetItemInfoInstant` output identity/class/location when available | Item location can identify an equipment candidate; upgrade and character eligibility remain UNKNOWN without validated comparative evidence |
+| Recipe progression metadata | Retail recipe detail and difficulty fields | Forever `GetRecipeInfo` fields are optional and preserved only with valid primitive types | `relativeDifficulty`, `maxTrivialLevel`, `numSkillUps`, and `canSkillUp` are raw client observations; `maxTrivialLevel` is not a minimum required skill, and no field is inferred when absent |
 | Craft completion | Snapshot diffs and explicit project reconciliation | Inventory/equipment/skill changes remain observations | A quantity or skill change alone never identifies a craft; user approval remains required |
 
 `get_character_profession_recipes` returns bounded exact captured rows. `review_forever_recipe_materials` joins one exact recipe with only the same character's current Forever carried inventory and equipment observation. Alternative reagents remain alternatives; currencies and incomplete bag quantities remain UNKNOWN. Equipment output is reported as a candidate, not a verified upgrade. Existing ERP `RECIPE` requirements can use an explicit current learned-state observation, but need coverage does not prove profession skill, reagent availability, or craftability. Project writes continue through the existing immutable proposal, exact revision, Dashboard approval, and commit workflow. No project is changed by these read tools.
@@ -21,6 +22,8 @@ Forever 1.60.1 recipe records are a version-scoped character-state sidecar attac
 ## Validation status
 
 Automated fixtures cover parser validation, saved-variable forwarding, Forever version isolation, learned states, output/reagent rows, ERP evidence, and MCP readback. Synthetic data does not establish live game API behavior. Live acceptance requires the real Windows Forever client and connected DEV MCP; no Rordin project change or craft is implied by deployment.
+
+Forever 1.60.1 documents `GetRecipeInfo` metadata including recipe name, relative difficulty, maximum trivial level, skill-up count, and whether a recipe can skill up. GearExport now preserves the name as a fallback when the schematic has no name and emits the other fields only when their returned primitive values have the expected type and range. These values pass through the existing sidecar and MCP recipe read tool. This does not establish an exact minimum profession requirement, trainer availability, or an exhaustive recipe list. Runtime hydration and actual returned values remain pending Windows capture.
 
 ## 2026-10-11 deployment checkpoint
 
