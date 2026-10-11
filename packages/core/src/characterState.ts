@@ -71,6 +71,9 @@ function normalizeRecipeSection(raw: unknown, clientFamily: "Retail" | "Forever"
     // cases make the counts differ; validating the equality would reject the
     // whole evidence section after a profession-panel switch.
     if (!object(profession) || !positiveID(profession.baseSkillLineID) || !positiveID(profession.skillLineID) || profession.parentProfessionID !== profession.baseSkillLineID || profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN" || !object(profession.client) || profession.client.clientFamily !== clientFamily || typeof profession.client.clientVersion !== "string" || clientFamily === "Forever" && profession.client.clientVersion !== "1.60.1" || !positiveID(profession.client.clientBuild) || clientFamily === "Forever" && profession.client.interface !== 16001 || !Array.isArray(profession.recipes) || profession.recipes.length === 0 || !object(profession.coverage) || profession.coverage.state !== "PARTIAL" || profession.coverage.enumeration !== "OBSERVED" || profession.coverage.candidateCompleteness !== "UNKNOWN" || profession.coverage.filteredEnumerationUsed !== false || !Number.isSafeInteger(profession.coverage.returnedRecipeCount) || (profession.coverage.returnedRecipeCount as number) < 0) return undefined;
+    // The root count covers this current scan and can include other current
+    // professions. A historical scope may keep an older, larger count.
+    if (profession.evidence === "OBSERVED" && (profession.coverage.returnedRecipeCount as number) > (data.coverage.returnedRecipeCount as number)) return undefined;
     const scopeKey = `${profession.baseSkillLineID}:${profession.skillLineID}`;
     if (professionScopes.has(scopeKey)) return undefined;
     professionScopes.add(scopeKey);

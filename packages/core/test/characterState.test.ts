@@ -255,6 +255,9 @@ test("Forever recipe sidecar accepts partial enumeration counts with retained an
   const impossibleScopeCount = structuredClone(sidecar);
   impossibleScopeCount.professionRecipes.data.professions[1].coverage.returnedRecipeCount = 0;
   assert.equal(normalizeCharacterStateSidecar(impossibleScopeCount, "forever"), undefined, "raw profession count cannot be smaller than its current candidate rows");
+  const oversizedCurrentScopeCount = structuredClone(sidecar);
+  oversizedCurrentScopeCount.professionRecipes.data.professions[1].coverage.returnedRecipeCount = 2;
+  assert.equal(normalizeCharacterStateSidecar(oversizedCurrentScopeCount, "forever"), undefined, "a current scope count cannot exceed the root enumeration count");
   const staleScopeWithFreshRecipe = structuredClone(sidecar);
   staleScopeWithFreshRecipe.professionRecipes.data.professions[0].recipes[0].evidence = "OBSERVED";
   assert.equal(normalizeCharacterStateSidecar(staleScopeWithFreshRecipe, "forever"), undefined, "a LAST_SEEN profession cannot contain a current recipe row");
