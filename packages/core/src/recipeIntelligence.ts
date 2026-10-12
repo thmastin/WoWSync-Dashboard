@@ -213,7 +213,12 @@ export interface TrainerRecipeMatch {
 }
 
 /** Join one trainer service to this character's captured recipe rows, conservatively. */
-export function matchTrainerService(service: { spellID?: string; ability?: string }, rows: readonly RecipeKnowledgeRow[]): TrainerRecipeMatch | undefined {
+export function matchTrainerService(service: { spellID?: string; ability?: string }, allRows: readonly RecipeKnowledgeRow[], trainerCategory?: string): TrainerRecipeMatch | undefined {
+  // Only rows whose profession is compatible with the trainer category may match
+  // (Retail tier names contain the base profession name); unknown sides stay eligible.
+  const category = trainerCategory?.trim().toLowerCase();
+  const compatible = (row: RecipeKnowledgeRow) => !category || !row.profession || row.profession.toLowerCase().includes(category) || category.includes(row.profession.toLowerCase());
+  const rows = allRows.filter(compatible);
   const view = (row: RecipeKnowledgeRow, basis: TrainerRecipeMatch["basis"]): TrainerRecipeMatch => ({ basis, recipeID: row.recipeID, learnedState: row.learnedState, evidence: row.evidence, ...(row.sourceSnapshotId !== undefined ? { sourceSnapshotId: row.sourceSnapshotId } : {}), ...(row.outputItemID !== undefined ? { outputItemID: row.outputItemID } : {}), reagentSlots: row.reagentSlots });
   const id = service.spellID !== undefined && /^\d+$/.test(service.spellID) ? Number(service.spellID) : undefined;
   const byId = id !== undefined ? rows.find((row) => row.recipeID === id) : undefined;

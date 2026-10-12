@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { assessErpNeed } from "../src/erpProjects.ts";
+import { matchTrainerService, type RecipeKnowledgeRow } from "../src/recipeIntelligence.ts";
 import { RORDIN_SNAPSHOT_180, RORDIN_SNAPSHOT_190, seedRordinSnapshot190 } from "./fixtures/foreverSnapshot180.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 
@@ -212,3 +213,13 @@ test("trainer offers join captured recipe rows by exact ID first, then by unique
   assert.equal(byName["Rough Copper Vest"]?.recipeID, 12260);
   assert.equal(byName["Copper Chain Pants"], undefined, "no captured recipe row means no fabricated match");
 }));
+
+test("matchTrainerService never joins across professions and refuses ambiguous names", () => {
+  const row = (recipeID: number, name: string, profession: string): RecipeKnowledgeRow => ({ recipeID, name, profession, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", reagentSlots: [] });
+  const rows = [row(100, "Copper Rod", "Blacksmithing"), row(200, "Elixir", "Alchemy"), row(300, "Twin", "Blacksmithing"), row(301, "Twin", "Blacksmithing")];
+  assert.equal(matchTrainerService({ spellID: "200", ability: "Elixir" }, rows, "Blacksmithing"), undefined, "an ID from another profession is not a match");
+  assert.equal(matchTrainerService({ spellID: "100" }, rows, "Blacksmithing")?.basis, "RECIPE_ID");
+  assert.equal(matchTrainerService({ ability: "Elixir" }, rows, "Alchemy")?.recipeID, 200);
+  assert.equal(matchTrainerService({ ability: "Twin" }, rows, "Blacksmithing"), undefined, "two recipe IDs with one name stay unmatched");
+  assert.equal(matchTrainerService({ ability: "Copper Rod" }, rows, "Midnight Blacksmithing")?.basis, "DERIVED_NAME", "tier-named categories still match");
+});

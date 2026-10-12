@@ -73,6 +73,11 @@ test("structured state imports into existing summary, profession, and Renown pro
     assert.equal(reputation?.account.majorFactions[0].ownerScope, "ACCOUNT_WARBAND");
     assert.equal(reputation?.byCharacter[0].factions.some((row) => row.factionID === 1090), true);
     assert.equal(read.getRenown({ version: "classic-era", name: "Groit", realm: "Stormrage" }).status, "NOT_FOUND");
+    // A later text-only import keeps Renown visible, but only as historical evidence.
+    assert.equal(renown.status === "FOUND" && renown.value.provenance.state, "OBSERVED");
+    store.importSnapshot(buildWowSyncExport({ generatedAt: ts + 100, character: { name: "Groit", realm: "Stormrage", clientFamily: "Retail", clientVersion: "12.1.0" } }));
+    const carried = new DashboardReadModel(store, () => ts + 101).getRenown({ version: "retail", name: "Groit", realm: "Stormrage" });
+    assert.equal(carried.status === "FOUND" && carried.value.provenance.state, "LAST_SEEN", "carried reputation is never reported as current");
   } finally { store.close(); }
 });
 

@@ -1558,7 +1558,7 @@ export class DashboardReadModel {
           return !needle || `${service.spellID ?? ""} ${service.ability ?? ""} ${service.rank ?? ""} ${service.requirementsAtVisit ?? ""}`.toLocaleLowerCase().includes(needle);
         })
         .map((service) => {
-          const recipeMatch = matchTrainerService(service, recipeRows);
+          const recipeMatch = matchTrainerService(service, recipeRows, category.category);
           return { category: category.category, categoryState: category.status.state, observedAt, freshness, spellID: service.spellID, ability: service.ability, rank: service.rank, statusAtVisit: service.statusAtVisit, requiredLevel: service.requiredLevel, costCopper: service.costCopper, requirementsAtVisit: service.requirementsAtVisit, ...(recipeMatch ? { recipeMatch } : {}) };
         }));
       const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
@@ -1918,8 +1918,10 @@ export class DashboardReadModel {
       }
       if (rows.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "Major Faction enumeration was observed, but no usable Renown records were captured." } };
       const partial = [characterDomain, accountDomain].some((domain) => domain && domain.completeness !== "complete");
+      // Carried-forward or import-merged domains are historical; never report them as current.
+      const historical = [characterDomain, accountDomain].some((domain) => domain?.status.state === "LAST_SEEN");
       return { data: { majorFactions: rows, completeness: partial ? "partial" : "complete" }, provenance: {
-        state: "OBSERVED", version: query.version, identityKey: character.identityKey,
+        state: historical ? "LAST_SEEN" : "OBSERVED", ...(historical ? { warning: "Renown is from an earlier observation and is not current." } : {}), version: query.version, identityKey: character.identityKey,
         ...([characterDomain?.observedAt, accountDomain?.observedAt].some((n) => typeof n === "number") ? { observedAt: Math.max(...[characterDomain?.observedAt, accountDomain?.observedAt].filter((n): n is number => typeof n === "number")) } : {}),
         snapshotId: snapshot.id, source: "captured C_MajorFactions Renown records",
         ...(partial ? { warning: "Renown observations are useful, but overall reputation coverage is partial." } : {}),
