@@ -268,3 +268,8 @@ test("RETAIL BRIDGE REGRESSION: Retail sidecars keep the Retail family and gain 
   const store = new SqliteSnapshotStore(":memory:");
   try { assert.equal(store.importSnapshot(record!.text!, { characterState: state }).characterState, "recorded"); } finally { store.close(); }
 });
+
+test("BRIDGE DRY RUN: names the Classic domains that would travel", async () => {
+  const { describeSidecars } = await import("../src/importSaved.ts");
+  assert.equal(describeSidecars(fixture("classic-era")), "Sidecars:   Classic state (professionRecipes, quests, talents, reputation)");
+});

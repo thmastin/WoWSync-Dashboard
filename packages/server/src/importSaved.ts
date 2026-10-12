@@ -739,6 +739,22 @@ function describeSummary(s: ExportSummary, now: number): string[] {
   ];
 }
 
+/** One line naming the structured sidecars that travel with the text (validated again by the server). */
+export function describeSidecars(entry: SavedExport): string {
+  const parts: string[] = [];
+  const state = entry.characterState as Record<string, unknown> | undefined;
+  if (state) {
+    const reputation = state.reputation as Record<string, unknown> | undefined;
+    const domains = ["professionRecipes", "quests", "talents", "combatSpecialization", "professionSpecializations"].filter((key) => state[key] !== undefined)
+      .concat(reputation?.character !== undefined ? ["reputation"] : [], reputation?.account !== undefined ? ["accountReputation"] : []);
+    parts.push(`${String(state.clientFamily)} state (${domains.join(", ") || "no domains"})`);
+  }
+  if (entry.foreverGearObservation !== undefined) parts.push("Forever structured observation");
+  if (entry.equipmentObservation !== undefined) parts.push("Retail equipment observation");
+  if (entry.currencies !== undefined) parts.push("currencies");
+  return `Sidecars:   ${parts.length ? parts.join("; ") : "none"}`;
+}
+
 // --- the one POST -----------------------------------------------------------------------------------
 
 /** Why a POST did not import: the Dashboard could not be reached (worth retrying), or it answered and did not accept the text. */
@@ -862,6 +878,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const summary = describeExport(text);
     for (const w of warnings) stderr.push(`warning: ${w}`);
     out(...describeSummary(summary, now));
+    out(describeSidecars(chosen));
     const problems = consistencyProblems(chosen, summary, request);
     if (problems.length > 0) {
       throw new BridgeError(`Stopping: this saved export is not what was asked for.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
