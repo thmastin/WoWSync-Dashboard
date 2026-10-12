@@ -3,8 +3,7 @@
 Status: Phase 6 complete; Secure MCP Tunnel and the personal ChatGPT MCP App
 were live-validated on 2026-09-28. No public Dashboard/MCP endpoint, MCP OAuth,
 or Dashboard UI integration exists or is intended for this path. Ask My Account
-may consume the deterministic Retail gear allocation tool result; it remains an
-explainer and is not authoritative for equipment selection or ranking.
+was retired on 2026-10-12; MCP is the only AI integration.
 
 The current **DEV** tunnel runtime is on Omarchy. The root-managed
 `wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
@@ -150,7 +149,7 @@ imports may update the database.
 | `get_character_history` | Return a compact, newest-first paged snapshot timeline for one character. |
 | `get_character_changes` | Compare the previous/latest snapshots or two explicit snapshots for one character. |
 | `get_character_spells` | Return bounded known-spellbook evidence from the current or selected snapshot. |
-| `get_character_trainer` | Return bounded trainer-visit services and the exact captured status at visit. |
+| `get_character_trainer` | Return bounded trainer-visit services and the exact captured status at visit; an earlier visit is LAST_SEEN, and Retail/Forever services may carry `recipeMatch` (RECIPE_ID or DERIVED_NAME) to captured recipe rows. |
 | `get_account_overview` | Return bounded version-scoped account/economy facts, currencies and storage coverage. |
 | `get_account_currencies` | Return detailed bounded currency evidence with ownership scope and per-character coverage. |
 | `get_account_changes` | Page the existing AccountFacts recent meaningful-change summaries. |
@@ -160,6 +159,8 @@ imports may update the database.
 | `get_character_professions` | Return captured profession observations and their provenance. |
 | `get_character_currencies` | Return captured currency data, bounded to 100 records. |
 | `get_profession_coverage` | Return per-version account profession coverage as derived data. |
+| `find_recipe_crafters` | Which characters in one version have captured evidence for a recipe, output item, or recipe name (learned / observed-not-learned / unresolved, with OBSERVED or LAST_SEEN rows); characters without captures are listed separately, never as unable. |
+| `get_recipe_reagent_availability` | One character's recipe reagents (OR alternatives kept separate) with per-owner holdings: crafter bags, crafter bank, other characters; craftability stays NOT_ESTABLISHED and no transfer is assumed. |
 | `get_renown` | Return captured Renown state; currently `UNKNOWN` because WoWSync does not capture it. |
 | `list_research_documents` | List registered research metadata with a bounded section outline, not document bodies. |
 | `get_research_document` | Retrieve one registered document, capped at 40,000 characters. |
@@ -291,7 +292,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Item search | MCP PARITY | Bounded search over typed version-scoped read projections. |
 | Professions | MCP PARITY | Current bounded character profession state. |
 | Profession coverage | MCP PARITY | Derived by `AccountFacts` / provider-neutral coverage. |
-| Known profession recipes | PARTIAL MCP PARITY | Retail recipe learned-state observations and Forever 1.60.1 build 70338 captured candidates are returned through `get_character_professions` `recipeKnowledge`. Forever rows can include exact recipe IDs, observed learned state, output item IDs, and reagent slots/quantities. Both catalogues remain partial; absence never means unlearned, and recipe evidence does not establish skill eligibility or present craftability. |
+| Known profession recipes | PARTIAL MCP PARITY (recipe evidence resolves across snapshots as LAST_SEEN since 2026-10-12) | Retail recipe learned-state observations and Forever 1.60.1 build 70338 captured candidates are returned through `get_character_professions` `recipeKnowledge`. Forever rows can include exact recipe IDs, observed learned state, output item IDs, and reagent slots/quantities. Both catalogues remain partial; absence never means unlearned, and recipe evidence does not establish skill eligibility or present craftability. |
 | Trainer observations | MCP PARITY | `spells`/`trainer` snapshot sections; exact visit statuses and freshness retained. |
 | Known spells / spellbook | MCP PARITY | Captured spellbook section; capture coverage may be limited by client/spec. |
 | Character currencies | MCP PARITY | Structured currency list, per-character state and quantities. |
