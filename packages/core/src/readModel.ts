@@ -22,6 +22,7 @@ import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
 import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
+import { resolveRecipeEvidence } from "./recipeEvidence.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -1046,10 +1047,11 @@ export class DashboardReadModel {
       if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || !["70291", "70338"].includes(profile.clientBuild ?? "") || profile.interface !== "16001") {
         return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This assessment requires a verified Forever 1.60.1 build 70291 or 70338 / interface 16001 snapshot." } };
       }
-      if (!snapshot.parsed.foreverGearObservation) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This snapshot has no structured Forever recipe and item evidence sidecar." } };
-      const data = buildForeverCraftedUpgradeAssessment({ identity: { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm }, snapshot, now: this.now() });
-      const observedAt = snapshot.parsed.foreverGearObservation.professionRecipes?.observedAt ?? snapshot.generatedAt;
-      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, ...(observedAt !== undefined ? { observedAt, freshness: classifyFreshness(observedAt, this.now()) } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "Forever canonical versioned snapshot, learned-recipe sidecar, equipped slots, and exact item API evidence", reason: "Snapshot-scoped assessment does not use or weaken the historical gear GUID guard. Missing or mismatched evidence remains UNKNOWN." } };
+      const recipeEvidence = resolveRecipeEvidence("forever", this.store.listSnapshots(character.identityKey), snapshot);
+      if (!snapshot.parsed.foreverGearObservation && recipeEvidence.state === "UNKNOWN") return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: `This snapshot has no structured Forever item evidence sidecar, and no compatible recipe observation was found. ${recipeEvidence.reason}` } };
+      const data = buildForeverCraftedUpgradeAssessment({ identity: { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm }, snapshot, now: this.now(), recipeEvidence });
+      const observedAt = snapshot.generatedAt ?? recipeEvidence.observedAt;
+      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, ...(observedAt !== undefined ? { observedAt, freshness: classifyFreshness(observedAt, this.now()) } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: recipeEvidence.state === "LAST_SEEN" ? `Forever snapshot ${snapshot.id} equipment/bags/item evidence combined with LAST_SEEN learned recipes from snapshot ${recipeEvidence.sourceSnapshotId}` : "Forever canonical versioned snapshot, learned-recipe sidecar, equipped slots, and exact item API evidence", reason: "Each fact keeps its own provenance: recipe knowledge may be LAST_SEEN from an earlier compatible snapshot; equipment, bags, and item stats come only from the selected snapshot. The historical gear GUID guard is not weakened. Missing or mismatched evidence remains UNKNOWN." } };
     });
   }
 
@@ -1446,14 +1448,12 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const value = snapshot.parsed.professions;
       const captured = snapshot.parsed.characterState?.professionSpecializations;
-      const recipes = query.version === "forever"
-        ? snapshot.parsed.foreverGearObservation?.professionRecipes
-        : snapshot.parsed.characterState?.professionRecipes;
-      const recipeKnowledge = query.version === "retail"
-        ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "No successful Retail profession recipe observation has been imported." }, completeness: "unknown" as const }
-        : query.version === "forever"
-          ? recipes ?? { status: { state: "UNKNOWN" as const, reason: "This Forever snapshot contains no structured profession recipe section. Missing rows do not mean unlearned, and the candidate list is not a complete recipe catalogue." }, completeness: "unknown" as const }
-          : undefined;
+      const resolution = query.version === "forever" || query.version === "retail" ? resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot) : undefined;
+      const recipeKnowledge = resolution
+        ? resolution.section
+          ? { ...resolution.section, evidence: { state: resolution.state, sourceSnapshotId: resolution.sourceSnapshotId, selectedSnapshotId: resolution.selectedSnapshotId, excludedScopes: resolution.excludedScopes, reason: resolution.reason } }
+          : { status: { state: "UNKNOWN" as const, reason: resolution.reason }, completeness: "unknown" as const }
+        : undefined;
       // Recipe knowledge is a separate evidence section. A recipe-panel capture
       // must not upgrade profession-skill provenance or its timestamp.
       const state = value.status.state === "UNKNOWN" && captured

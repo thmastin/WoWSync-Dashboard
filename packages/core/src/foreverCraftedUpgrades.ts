@@ -2,6 +2,7 @@
 
 import { classifyFreshness } from "./freshness.ts";
 import { compareForeverStatTables, evaluateForeverSlotCompatibility, foreverSlotsForEquipLocation, type ForeverStatTable } from "./foreverGearEvaluation.ts";
+import type { RecipeEvidenceResolution } from "./recipeEvidence.ts";
 import type { ParsedSnapshot, SectionState } from "./types.ts";
 
 type Row = Record<string, unknown>;
@@ -12,6 +13,7 @@ export interface ForeverCraftedUpgradeAssessment {
   version: "forever";
   identity: { identityKey: string; name: string; surname?: string; realm: string };
   snapshot: { snapshotId: number; generatedAt?: number; importedAt: number; clientProfile: string; freshness: "recent" | "stale" | "unknown" };
+  recipeEvidence: { state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; sourceSnapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; excludedScopes: RecipeEvidenceResolution["excludedScopes"]; reason: string };
   recipeCoverage: { state: string; candidateCompleteness: string; returnedRecipeCount?: number; learnedTrueCount?: number; knownNonEquipmentLearnedRecipeCount: number; equipmentCandidatesReturned: number; reason: string };
   candidates: ForeverCraftedUpgradeCandidate[];
   bank: { state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; reason?: string };
@@ -19,11 +21,11 @@ export interface ForeverCraftedUpgradeAssessment {
 }
 
 export interface ForeverCraftedUpgradeCandidate {
-  recipe: { recipeID: number; name?: string; state: "OBSERVED_TRUE"; observedAt?: number; freshness: "recent" | "stale" | "unknown" };
+  recipe: { recipeID: number; name?: string; state: "OBSERVED_TRUE"; evidence: "OBSERVED" | "LAST_SEEN"; sourceSnapshotId?: number; profession?: string; observedAt?: number; freshness: "recent" | "stale" | "unknown" };
   output: { state: "OBSERVED" | "UNKNOWN" | "CONFLICT"; itemID?: number; quantity?: number; itemType?: string; itemSubType?: string; equipLocation?: string; possibleSlots: number[]; provenance: "OBSERVED" | "UNKNOWN"; itemAPIEquippable: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN"; reason?: string };
   reagents: Array<{ itemID?: number; quantity?: number; identityState: "OBSERVED" | "UNKNOWN"; availability: "OBSERVED_AVAILABLE" | "OBSERVED_INSUFFICIENT" | "LAST_SEEN" | "UNKNOWN"; observedQuantity?: number; observedAt?: number; reason: string }>;
   slot: { state: "MAPPED" | "UNKNOWN" | "NOT_EQUIPMENT"; possibleSlots: number[]; equippedItem?: { itemID?: number; itemRef?: string; name?: string; slot: number; state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" }; reason: string };
-  eligibility: { state: "INELIGIBLE_REQUIRED_LEVEL" | "UNKNOWN"; requiredLevel: { state: "MET" | "NOT_MET" | "UNKNOWN"; itemLevel?: number; characterLevel?: number }; playerSpecificCheck: "TRUE" | "FALSE" | "UNKNOWN"; explicitClassRestriction: "OBSERVED_NONE" | "OBSERVED_RESTRICTION" | "UNKNOWN"; professionSkill: { name: "Blacksmithing"; state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; skill?: number; requiredSkill: "UNKNOWN" }; reason: string };
+  eligibility: { state: "INELIGIBLE_REQUIRED_LEVEL" | "UNKNOWN"; requiredLevel: { state: "MET" | "NOT_MET" | "UNKNOWN"; itemLevel?: number; characterLevel?: number }; playerSpecificCheck: "TRUE" | "FALSE" | "UNKNOWN"; explicitClassRestriction: "OBSERVED_NONE" | "OBSERVED_RESTRICTION" | "UNKNOWN"; professionSkill: { name: string; state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; skill?: number; requiredSkill: "UNKNOWN" }; reason: string };
   statComparison: { state: "COMPARED" | "UNKNOWN"; provenance: "DERIVED" | "UNKNOWN"; status: "POSSIBLE_RECORDED_STAT_UPGRADE" | "RECORDED_STAT_TRADEOFF" | "RECORDED_STAT_SIDEGRADE" | "NO_RECORDED_STAT_GAIN" | "UNKNOWN"; values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; labelProvenance: string; candidate: number; equipped: number; delta: number }>; referenceLeads: ReferenceLead[]; reason: string };
   upgradeConclusion: { state: "POSSIBLE_RECORDED_STAT_UPGRADE" | "NOT_A_RECORDED_STAT_UPGRADE" | "UNKNOWN"; provenUpgrade: false; reason: string };
   crafting: { state: "NOT_ESTABLISHED" | "BLOCKED_BY_OBSERVED_REAGENTS" | "UNKNOWN"; professionSkill: string; requiredSkill: "UNKNOWN"; facilities: "UNKNOWN"; learnedRecipeDoesNotProveCraftability: true; reasons: string[] };
@@ -87,10 +89,10 @@ function apiObservedAt(item: Row | undefined, key: string): number | undefined {
 function getPlayerCanUse(item: Row | undefined): boolean | undefined {
   return item ? rawCallFirst(item.playerCanUseItem, "C_PlayerInfo.CanUseItem") as boolean | undefined : undefined;
 }
-function professionSkill(snapshot: ParsedSnapshot): ForeverCraftedUpgradeCandidate["eligibility"]["professionSkill"] {
+function professionSkill(snapshot: ParsedSnapshot, name: string): ForeverCraftedUpgradeCandidate["eligibility"]["professionSkill"] & { maxSkill?: number } {
   const state = snapshot.professions.status.state;
-  const entry = snapshot.professions.entries.find((row) => row.name.toLowerCase() === "blacksmithing");
-  return { name: "Blacksmithing", state: state === "OBSERVED" ? "OBSERVED" : state === "LAST_SEEN" ? "LAST_SEEN" : "UNKNOWN", ...(entry ? { skill: entry.skill } : {}), requiredSkill: "UNKNOWN" };
+  const entry = snapshot.professions.entries.find((row) => row.name.toLowerCase() === name.toLowerCase());
+  return { name, state: !entry ? "UNKNOWN" : state === "OBSERVED" ? "OBSERVED" : state === "LAST_SEEN" ? "LAST_SEEN" : "UNKNOWN", ...(entry ? { skill: entry.skill, maxSkill: entry.maxSkill } : {}), requiredSkill: "UNKNOWN" };
 }
 function freshness(at: number | undefined, now: number): "recent" | "stale" | "unknown" { return at === undefined ? "unknown" : classifyFreshness(at, now); }
 function sectionState(value: SectionState): "OBSERVED" | "LAST_SEEN" | "UNKNOWN" { return value === "OBSERVED" || value === "LAST_SEEN" ? value : "UNKNOWN"; }
@@ -100,16 +102,22 @@ function referenceLeads(item: Row | undefined, currentBuild?: string): Reference
 }
 
 /** Build an evidence-only assessment from one canonical, already version-scoped Forever snapshot. */
-export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverCraftedUpgradeAssessment["identity"]; snapshot: { id: number; generatedAt?: number; importedAt: number; parsed: ParsedSnapshot }; now: number }): ForeverCraftedUpgradeAssessment {
-  const { identity, snapshot, now } = input;
+export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverCraftedUpgradeAssessment["identity"]; snapshot: { id: number; generatedAt?: number; importedAt: number; parsed: ParsedSnapshot }; now: number; recipeEvidence?: RecipeEvidenceResolution }): ForeverCraftedUpgradeAssessment {
+  const { identity, snapshot, now, recipeEvidence } = input;
   const parsed = snapshot.parsed;
   const structured = record(parsed.foreverGearObservation) ?? {};
-  const recipeSection = record(structured.professionRecipes);
+  const recipeSection = recipeEvidence ? record(recipeEvidence.section) : record(structured.professionRecipes);
+  const recipeState = recipeEvidence?.state ?? (recipeSection ? "OBSERVED" : "UNKNOWN");
   const recipeData = record(recipeSection?.data);
   const professionScopes = array(recipeData?.professions).map(record).filter((row): row is Row => !!row);
-  const recipeRows = professionScopes.flatMap((scope) => array(scope.recipes).map(record).filter((row): row is Row => !!row));
+  const recipeProfession = new Map<Row, string>();
+  const recipeRows = professionScopes.flatMap((scope) => array(scope.recipes).map(record).filter((row): row is Row => !!row).map((row) => {
+    const name = str(scope.professionName) ?? str(scope.name);
+    if (name) recipeProfession.set(row, name);
+    return row;
+  }));
   const coverageRows = professionScopes.map((scope) => record(scope.coverage) ?? record(recipeData?.coverage) ?? {});
-  const learnedRows = recipeRows.filter((recipe) => recipe.learned === true && recipe.learnedState === "OBSERVED_TRUE" && recipe.evidence === "OBSERVED" && typeof recipe.recipeID === "number");
+  const learnedRows = recipeRows.filter((recipe) => recipe.learned === true && recipe.learnedState === "OBSERVED_TRUE" && (recipe.evidence === "OBSERVED" || recipe.evidence === "LAST_SEEN") && typeof recipe.recipeID === "number");
   const learnedNonEquipment = learnedRows.filter((recipe) => {
     const info = record(recipe.outputItemInfo);
     return info?.state === "OBSERVED" && (info.itemType !== "Armor" && info.itemType !== "Weapon" || info.equipLocation === "INVTYPE_NON_EQUIP_IGNORE");
@@ -131,9 +139,10 @@ export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverC
   const bagComplete = (capturedBagSection?.completeness === "complete" || parsed.bags.status.completeness === "complete") && bagState === "OBSERVED";
   const equipmentAt = number(capturedEquipment?.observedAt) ?? parsed.equipment.status.observedAt;
   const equipmentCurrent = parsed.equipment.status.state === "OBSERVED" && capturedEquipment?.lastAttemptStale !== true && freshness(equipmentAt, now) === "recent";
-  const blacksmith = professionSkill(parsed);
   const candidateBuilds: ForeverCraftedUpgradeCandidate[] = equipmentLearned.map((recipe) => {
     const info = record(recipe.outputItemInfo);
+    const professionName = recipeProfession.get(recipe);
+    const skill = professionSkill(parsed, professionName ?? "UNKNOWN");
     const itemID = number(recipe.outputItemID);
     const metadataID = number(info?.itemID);
     const identityConflict = itemID !== undefined && metadataID !== undefined && itemID !== metadataID;
@@ -186,14 +195,14 @@ export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverC
       ...(mismatchLeads.length ? [`Reference facts from build ${mismatchLeads.map((lead) => lead.build).join(", ")} are older than snapshot build ${currentBuild ?? "unknown"} and are not used as observed candidate stats.`] : []),
     ];
     return {
-      recipe: { recipeID: recipe.recipeID as number, ...(str(recipe.name) ? { name: str(recipe.name) } : {}), state: "OBSERVED_TRUE", ...(number(recipe.observedAt) !== undefined ? { observedAt: number(recipe.observedAt) } : {}), freshness: freshness(number(recipe.observedAt) ?? number(recipeSection?.observedAt), now) },
+      recipe: { recipeID: recipe.recipeID as number, ...(str(recipe.name) ? { name: str(recipe.name) } : {}), state: "OBSERVED_TRUE", evidence: recipe.evidence === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED", ...(recipeEvidence?.sourceSnapshotId !== undefined ? { sourceSnapshotId: recipeEvidence.sourceSnapshotId } : {}), ...(professionName ? { profession: professionName } : {}), ...(number(recipe.observedAt) !== undefined ? { observedAt: number(recipe.observedAt) } : {}), freshness: freshness(number(recipe.observedAt) ?? number(recipeSection?.observedAt), now) },
       output: { state: outputState, ...(itemID !== undefined ? { itemID } : {}), ...(number(recipe.outputQuantityMin) === number(recipe.outputQuantityMax) && number(recipe.outputQuantityMin) !== undefined ? { quantity: number(recipe.outputQuantityMin) } : {}), ...(str(info?.itemType) ? { itemType: str(info?.itemType) } : {}), ...(str(info?.itemSubType) ? { itemSubType: str(info?.itemSubType) } : {}), ...(equipLocation ? { equipLocation } : {}), possibleSlots, provenance: outputState === "OBSERVED" ? "OBSERVED" : "UNKNOWN", itemAPIEquippable: candidateEquippable === undefined ? "UNKNOWN" : candidateEquippable ? "OBSERVED_TRUE" : "OBSERVED_FALSE", ...(outputState !== "OBSERVED" ? { reason: identityConflict ? "Output IDs disagree." : "Captured recipe output metadata is incomplete." } : {}) },
       reagents,
       slot: { state: possibleSlots.length ? slotEval.state : "UNKNOWN", possibleSlots, ...(matchingEquipped ? { equippedItem: { ...(matchingEquipped.itemID !== undefined ? { itemID: matchingEquipped.itemID } : {}), ...(matchingEquipped.itemRef ? { itemRef: matchingEquipped.itemRef } : {}), ...(matchingEquipped.name ? { name: matchingEquipped.name } : {}), slot: matchingEquipped.slot, state: equipmentCurrent ? "OBSERVED" as const : parsed.equipment.status.state === "LAST_SEEN" || capturedEquipment?.lastAttemptStale === true ? "LAST_SEEN" as const : "UNKNOWN" as const } } : {}), reason: possibleSlots.length ? slotEval.reason : "Captured equip-location does not map to a known equipment slot." },
-      eligibility: { state: eligibilityState, requiredLevel: { state: levelState, ...(candidateLevel !== undefined ? { itemLevel: candidateLevel } : {}), ...(characterLevel !== undefined ? { characterLevel } : {}) }, playerSpecificCheck: playerCanUse !== undefined && apiAt !== undefined && classifyFreshness(apiAt, now) === "recent" ? playerCanUse ? "TRUE" : "FALSE" : "UNKNOWN", explicitClassRestriction: "UNKNOWN", professionSkill: blacksmith, reason: eligibilityState === "INELIGIBLE_REQUIRED_LEVEL" ? "Fresh observed character level is below the captured item required level." : "Overall eligibility remains UNKNOWN because current-player CanUseItem evidence alone does not establish explicit class restrictions or all exact-item eligibility rules." },
+      eligibility: { state: eligibilityState, requiredLevel: { state: levelState, ...(candidateLevel !== undefined ? { itemLevel: candidateLevel } : {}), ...(characterLevel !== undefined ? { characterLevel } : {}) }, playerSpecificCheck: playerCanUse !== undefined && apiAt !== undefined && classifyFreshness(apiAt, now) === "recent" ? playerCanUse ? "TRUE" : "FALSE" : "UNKNOWN", explicitClassRestriction: "UNKNOWN", professionSkill: { name: skill.name, state: skill.state, ...(skill.skill !== undefined ? { skill: skill.skill } : {}), requiredSkill: "UNKNOWN" }, reason: eligibilityState === "INELIGIBLE_REQUIRED_LEVEL" ? "Fresh observed character level is below the captured item required level." : "Overall eligibility remains UNKNOWN because current-player CanUseItem evidence alone does not establish explicit class restrictions or all exact-item eligibility rules." },
       statComparison: { state: rawComparison ? "COMPARED" : "UNKNOWN", provenance: rawComparison ? "DERIVED" : "UNKNOWN", status: statStatus, values: statValues, referenceLeads: leads, reason: rawComparison?.reason ?? (reasons.join(" ") || "A same-snapshot comparison requires fresh complete candidate and equipped item stat tables.") },
       upgradeConclusion: { state: upgradeState, provenUpgrade: false, reason: upgradeState === "POSSIBLE_RECORDED_STAT_UPGRADE" ? "The candidate dominates the complete same-snapshot recorded stat vector. This is a possible recorded-stat upgrade, not a proven overall gameplay upgrade." : upgradeState === "UNKNOWN" ? reasons.join(" ") || "Required same-snapshot comparison evidence is unavailable." : "Observed recorded stats do not establish an upgrade; no build weights or unobserved effects are inferred." },
-      crafting: { state: reagents.some((reagent) => reagent.availability === "OBSERVED_INSUFFICIENT") ? "BLOCKED_BY_OBSERVED_REAGENTS" : reagents.every((reagent) => reagent.availability === "OBSERVED_AVAILABLE") && reagents.length > 0 ? "NOT_ESTABLISHED" : "UNKNOWN", professionSkill: blacksmith.state === "OBSERVED" ? `Blacksmithing ${blacksmith.skill ?? "?"}/${parsed.professions.entries.find((entry) => entry.name.toLowerCase() === "blacksmithing")?.maxSkill ?? "?"}` : `Blacksmithing ${blacksmith.state}`, requiredSkill: "UNKNOWN", facilities: "UNKNOWN", learnedRecipeDoesNotProveCraftability: true, reasons: [...(blacksmith.state === "OBSERVED" ? [] : ["Current Blacksmithing skill is not freshly observed."]), "The captured recipe does not provide a verified required crafting skill or facility/tool check.", ...reagents.map((reagent) => reagent.reason)] },
+      crafting: { state: reagents.some((reagent) => reagent.availability === "OBSERVED_INSUFFICIENT") ? "BLOCKED_BY_OBSERVED_REAGENTS" : reagents.every((reagent) => reagent.availability === "OBSERVED_AVAILABLE") && reagents.length > 0 ? "NOT_ESTABLISHED" : "UNKNOWN", professionSkill: skill.state === "OBSERVED" ? `${skill.name} ${skill.skill ?? "?"}/${skill.maxSkill ?? "?"}` : `${skill.name} ${skill.state}`, requiredSkill: "UNKNOWN", facilities: "UNKNOWN", learnedRecipeDoesNotProveCraftability: true, reasons: [...(skill.state === "OBSERVED" ? [] : [`Current ${skill.name} skill is not freshly observed.`]), ...(recipe.evidence === "LAST_SEEN" ? [`Learned state is LAST_SEEN from snapshot ${recipeEvidence?.sourceSnapshotId ?? "unknown"}, not re-observed in this snapshot.`] : []), "The captured recipe does not provide a verified required crafting skill or facility/tool check.", ...reagents.map((reagent) => reagent.reason)] },
     };
   });
   const coverage = coverageRows[0] ?? record(recipeData?.coverage) ?? {};
@@ -203,6 +212,7 @@ export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverC
     version: "forever", identity,
     snapshot: { snapshotId: snapshot.id, ...(snapshot.generatedAt !== undefined ? { generatedAt: snapshot.generatedAt } : {}), importedAt: snapshot.importedAt, clientProfile: str(structured.clientProfile) ?? `Forever:${parsed.character.clientVersion ?? "unknown"}:${parsed.character.clientBuild ?? "unknown"}:${parsed.character.interface ?? "unknown"}`, freshness: freshness(snapshot.generatedAt ?? snapshot.importedAt, now) },
     recipeCoverage: { state: str(coverage.state) ?? str(recipeSection?.status) ?? "UNKNOWN", candidateCompleteness: str(coverage.candidateCompleteness) ?? "UNKNOWN", ...(number(coverage.returnedRecipeCount) !== undefined ? { returnedRecipeCount: number(coverage.returnedRecipeCount) } : {}), ...(number(coverage.learnedTrueCount) !== undefined ? { learnedTrueCount: number(coverage.learnedTrueCount) } : {}), knownNonEquipmentLearnedRecipeCount: learnedNonEquipment.length, equipmentCandidatesReturned: candidateBuilds.length, reason: "Only positively OBSERVED_TRUE learned recipes are assessed. Partial catalogue coverage means unreturned recipes remain unknown, not unlearned." },
+    recipeEvidence: { state: recipeState, ...(recipeEvidence?.sourceSnapshotId !== undefined ? { sourceSnapshotId: recipeEvidence.sourceSnapshotId } : recipeSection ? { sourceSnapshotId: snapshot.id } : {}), ...(number(recipeSection?.observedAt) !== undefined ? { observedAt: number(recipeSection?.observedAt) } : {}), freshness: freshness(number(recipeSection?.observedAt), now), excludedScopes: recipeEvidence?.excludedScopes ?? [], reason: recipeEvidence?.reason ?? (recipeSection ? "Recipe rows were observed in this snapshot." : "This snapshot contains no structured recipe section; recipe knowledge is UNKNOWN, not empty.") },
     candidates: candidateBuilds,
     bank: { state: bankState, ...(parsed.bank.status.observedAt !== undefined ? { observedAt: parsed.bank.status.observedAt } : {}), ...(parsed.bank.status.reason ? { reason: parsed.bank.status.reason } : {}) },
     provenance: { state: "DERIVED", source: "Forever versioned snapshot and structured sidecars", snapshotId: snapshot.id, ...(guid ? { sourceCharacterGuid: guid } : {}), gearGuidHistoryGuard: "NOT_APPLIED_TO_THIS_SNAPSHOT_SCOPED_ASSESSMENT" },

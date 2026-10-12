@@ -134,3 +134,33 @@ export function seedRordinSnapshot180(store: SqliteSnapshotStore, options: { ful
   } });
   return result.snapshot.id;
 }
+
+export const RORDIN_SNAPSHOT_190 = { id: 190, generatedAt: RORDIN_SNAPSHOT_180.generatedAt + 4_000, copperBars: 3 };
+
+/**
+ * Seeds snapshot 180, plain snapshots 181–189, then a fresh snapshot 190 with
+ * current equipment and complete bags but no structured recipe section.
+ */
+export function seedRordinSnapshot190(store: SqliteSnapshotStore, options: { guid?: string; professions?: Array<{ name: string; skill: number; maxSkill: number }>; copperBars?: number } = {}): number {
+  seedRordinSnapshot180(store);
+  const { name, realm } = RORDIN_SNAPSHOT_180.identity;
+  const character = { name, surname: "Longbraid", race: "Dwarf", faction: "Alliance", realm, class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" };
+  for (let id = RORDIN_SNAPSHOT_180.id + 1; id < RORDIN_SNAPSHOT_190.id; id++) {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: RORDIN_SNAPSHOT_180.generatedAt + (id - RORDIN_SNAPSHOT_180.id) * 100, character }));
+  }
+  const generatedAt = RORDIN_SNAPSHOT_190.generatedAt;
+  const bars = options.copperBars ?? RORDIN_SNAPSHOT_190.copperBars;
+  const text = buildWowSyncExport({ generatedAt, character,
+    equipment: { slots: [{ slot: 5, slotName: "Chest", itemRef: "item:1364::::::::6:1491:::::::::", name: "Ragged Leather Vest", itemLevel: 5, requiredLevel: 1 }, { slot: 9, slotName: "Wrist", itemRef: "item:2651::::::::6:1491:::::::::", name: "Flimsy Chain Bracers", itemLevel: 4, requiredLevel: 1 }] },
+    professions: { entries: options.professions ?? [{ name: "Mining", skill: 9, maxSkill: 75 }, { name: "Blacksmithing", skill: 4, maxSkill: 75 }] },
+    bags: { containers: [{ id: 0, capacity: 20, items: [{ itemRef: "item:117::::::::6:1491:::::::::", name: "Tough Jerky", qty: 11 }, ...(bars > 0 ? [{ itemRef: "item:2840::::::::6:1491:::::::::", name: "Copper Bar", qty: bars }] : [])] }] },
+    bank: { unknown: true } });
+  const result = store.importSnapshot(text, { foreverGearObservation: {
+    clientProfile: QUEST_PROFILE, name, realm, generatedAt,
+    sourceCharacterGuid: options.guid ?? RORDIN_SNAPSHOT_180.sourceCharacterGuid,
+    equipment: { observedAt: generatedAt - 5, completeness: "partial", data: { slots: { "5": { itemID: 1364, itemString: "item:1364::::::::6:1491:::::::::", name: "Ragged Leather Vest" }, "9": { itemID: 2651, itemString: "item:2651::::::::6:1491:::::::::", name: "Flimsy Chain Bracers" } } } },
+    bags: { observedAt: generatedAt - 5, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 117, itemString: "item:117::::::::6:1491:::::::::", name: "Tough Jerky", count: 11 }, ...(bars > 0 ? { "2": { itemID: 2840, itemString: "item:2840::::::::6:1491:::::::::", name: "Copper Bar", count: bars } } : {}) } }] } },
+    bank: { observedAt: generatedAt - 5, completeness: "unknown", reason: "Not observed", data: {} },
+  } });
+  return result.snapshot.id;
+}

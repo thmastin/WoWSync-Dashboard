@@ -43,6 +43,7 @@ import {
   type UpdateDemandInput,
 } from "./demand.ts";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
+import { resolveRecipeEvidence, snapshotRecipeSection, withResolvedRecipeSection } from "./recipeEvidence.ts";
 import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
 import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } from "./chronology.ts";
 import { characterIdentity } from "./identity.ts";
@@ -1583,7 +1584,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const latestParsed = new Map<string, ParsedSnapshot>();
     for (const character of characters) {
       const latestRow = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, character.id);
-      if (latestRow) latestParsed.set(character.identityKey, toStoredSnapshot(latestRow).parsed);
+      if (!latestRow) continue;
+      const latest = toStoredSnapshot(latestRow);
+      latestParsed.set(character.identityKey, (version === "forever" || version === "retail") && !snapshotRecipeSection(version, latest)
+        ? withResolvedRecipeSection(version, latest.parsed, resolveRecipeEvidence(version, this.listSnapshots(character.identityKey), latest))
+        : latest.parsed);
     }
     const allDiffs = this.allDiffs(version);
     const diffs = new Map(allDiffs.map((d) => [d.identityKey, d.diff]));

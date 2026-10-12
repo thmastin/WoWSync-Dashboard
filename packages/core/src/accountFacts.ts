@@ -666,7 +666,7 @@ function buildProfessionsByCharacter(
         data: latestParsed.get(c.identityKey)!.characterState!.professionRecipes!.data,
       } } : version === "forever" && latestParsed.get(c.identityKey)?.foreverGearObservation?.professionRecipes ? (() => {
         const recipe = latestParsed.get(c.identityKey)!.foreverGearObservation!.professionRecipes!;
-        return { recipeKnowledge: { status: recipe.status.state, completeness: recipe.completeness, observedAt: recipe.observedAt, data: recipe.data } };
+        return { recipeKnowledge: { status: recipe.status.state, completeness: recipe.completeness, observedAt: recipe.observedAt, ...((recipe.status as { reason?: string }).reason ? { reason: (recipe.status as { reason?: string }).reason } : {}), data: recipe.data } };
       })() : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } }
         : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "This Forever snapshot contains no structured profession recipe section. Missing rows are not evidence that recipes are unlearned." } } : {}),
     };
