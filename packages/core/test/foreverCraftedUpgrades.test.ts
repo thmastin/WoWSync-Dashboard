@@ -61,6 +61,8 @@ test("complete same-snapshot candidate evidence can produce a positive recorded-
     const candidate = result.value.data!.candidates.find((row) => row.output.itemID === 2853)!;
     assert.equal(candidate.statComparison.status, "POSSIBLE_RECORDED_STAT_UPGRADE");
     assert.deepEqual(candidate.statComparison.values.map((row) => [row.key, row.candidate, row.equipped, row.delta, row.labelState]), [["RESISTANCE0_NAME", 35, 25, 10, "UNKNOWN"]]);
+    assert.match(candidate.statComparison.reason, /Unknown stat \(RESISTANCE0_NAME\): candidate 35 vs equipped 25 \(\+10\)/);
+    assert.doesNotMatch(candidate.statComparison.reason, /Armor/, "a withheld build-specific label must not reappear in the prose explanation");
     assert.equal(candidate.eligibility.state, "UNKNOWN", "a positive CanUseItem signal does not resolve explicit class and full eligibility semantics");
     assert.equal(candidate.upgradeConclusion.state, "POSSIBLE_RECORDED_STAT_UPGRADE");
     assert.equal(candidate.upgradeConclusion.provenUpgrade, false, "recorded-stat dominance is not an overall gameplay proof");
