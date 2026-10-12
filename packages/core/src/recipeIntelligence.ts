@@ -10,6 +10,7 @@
 
 import { classifyFreshness, type Freshness } from "./freshness.ts";
 import { resolveRecipeEvidence, type RecipeEvidenceResolution } from "./recipeEvidence.ts";
+import { resolveSnapshotView } from "./snapshotEvidence.ts";
 import type { StoredCharacterSummary, StoredSnapshot } from "./store.ts";
 import type { InventorySection, VersionOrUnknown } from "./types.ts";
 
@@ -172,8 +173,8 @@ function inventoryHolding(section: InventorySection, itemID: number, base: Omit<
 }
 
 /** Where one recipe's reagents are observed, separated by owner and accessibility. */
-export function reagentAvailability(crafter: CharacterHistory, others: CharacterHistory[], recipe: RecipeKnowledgeRow, now: number): ReagentAvailabilityView[] {
-  const latest = crafter.snapshots[0]!;
+export function reagentAvailability(version: VersionOrUnknown, crafter: CharacterHistory, others: CharacterHistory[], recipe: RecipeKnowledgeRow, now: number): ReagentAvailabilityView[] {
+  const latest = resolveSnapshotView(version, crafter.snapshots, crafter.snapshots[0]!);
   const crafterBase = (scope: "CRAFTER_BAGS" | "CRAFTER_BANK") => ({ ownerScope: scope, identityKey: crafter.character.identityKey, name: crafter.character.name, realm: crafter.character.realm, snapshotId: latest.id, usableForCraftingWithoutMove: scope === "CRAFTER_BAGS" ? true as const : "UNKNOWN" as const });
   return recipe.reagentSlots.map((slot) => ({
     slot,
@@ -183,7 +184,7 @@ export function reagentAvailability(crafter: CharacterHistory, others: Character
       const bags = inventoryHolding(latest.parsed.bags, itemID, crafterBase("CRAFTER_BAGS"), now);
       const bank = inventoryHolding(latest.parsed.bank, itemID, crafterBase("CRAFTER_BANK"), now);
       const otherHoldings = others.flatMap(({ character, snapshots }) => {
-        const snap = snapshots[0];
+        const snap = snapshots[0] && resolveSnapshotView(version, snapshots, snapshots[0]);
         if (!snap) return [];
         return [snap.parsed.bags, snap.parsed.bank].map((section) => inventoryHolding(section, itemID, { ownerScope: "OTHER_CHARACTER", identityKey: character.identityKey, name: character.name, realm: character.realm, snapshotId: snap.id, usableForCraftingWithoutMove: false }, now))
           .filter((holding) => (holding.quantity ?? 0) > 0)

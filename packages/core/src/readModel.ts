@@ -23,6 +23,7 @@ import { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
 import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
 import { resolveRecipeEvidence } from "./recipeEvidence.ts";
+import { resolveSnapshotView } from "./snapshotEvidence.ts";
 import { foreverBuildVerification, isForeverClient } from "./foreverProfile.ts";
 import { findRecipeCrafters, knowledgeRows, reagentAvailability, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
@@ -1493,7 +1494,7 @@ export class DashboardReadModel {
       const recipe = knowledgeRows(resolution).find((row) => row.recipeID === query.recipeID);
       if (!recipe) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, reason: `Recipe ${query.recipeID} is not among this character's captured recipe rows. Candidate coverage is partial, so this does not mean unlearned or unknown reagents in the game. ${resolution.reason}` } };
       const others = this.characterHistories(query.version).filter((entry) => entry.character.identityKey !== character.identityKey);
-      const reagents = reagentAvailability({ character, snapshots }, others, recipe, this.now());
+      const reagents = reagentAvailability(query.version, { character, snapshots }, others, recipe, this.now());
       return { data: { recipe, reagents, recipeEvidence: { state: resolution.state, ...(resolution.sourceSnapshotId !== undefined ? { sourceSnapshotId: resolution.sourceSnapshotId } : {}), reason: resolution.reason },
         sharedStorage: query.version === "retail" ? "Warband and guild bank holdings are separate ownership domains and are not included; read them with get_shared_storage." : "Forever has no captured shared storage domain; none is assumed.",
         craftability: "NOT_ESTABLISHED", semantics: "Reagents must be in the crafter's bags to craft. Bank and other-character holdings are listed separately and require moves this tool never performs or assumes possible. Required skill, tools, and facilities are not captured and remain UNKNOWN." },
@@ -1926,7 +1927,8 @@ export class DashboardReadModel {
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const character = candidates[0];
-    return { status: "FOUND", value: build(character, this.store.listSnapshots(character.identityKey)[0]) };
+    const snapshots = this.store.listSnapshots(character.identityKey);
+    return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
   }
 
   private resolveSelectedSnapshot<T>(query: CharacterSnapshotQuery, build: (character: StoredCharacterSummary, snapshot: StoredSnapshot | undefined) => T): CharacterResolution<T> {
@@ -1939,7 +1941,7 @@ export class DashboardReadModel {
     const snapshots = this.store.listSnapshots(character.identityKey);
     const snapshot = query.snapshotId === undefined ? snapshots[0] : snapshots.find((entry) => entry.id === query.snapshotId);
     if (query.snapshotId !== undefined && !snapshot) throw new TypeError("snapshotId must belong to the resolved character in the requested WoW version");
-    return { status: "FOUND", value: build(character, snapshot) };
+    return { status: "FOUND", value: build(character, snapshot && resolveSnapshotView(query.version, snapshots, snapshot)) };
   }
 
   private resolveSection<T extends EquipmentSection | ProfessionsSection>(query: CharacterQuery, section: "equipment" | "professions"): CharacterResolution<ReadValue<T>> {

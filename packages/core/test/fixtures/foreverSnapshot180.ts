@@ -106,7 +106,8 @@ export function seedRordinSnapshot180(store: SqliteSnapshotStore, options: { ful
   const { name, realm } = RORDIN_SNAPSHOT_180.identity;
   for (let id = 1; id < RORDIN_SNAPSHOT_180.id; id++) {
     const generatedAt = RORDIN_SNAPSHOT_180.generatedAt - (RORDIN_SNAPSHOT_180.id - id) * 100;
-    const text = buildWowSyncExport({ generatedAt, character: { name, surname: "Longbraid", realm, class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+    // Rordin's real history never observed the character bank.
+    const text = buildWowSyncExport({ generatedAt, character: { name, surname: "Longbraid", realm, class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, bank: { unknown: true } });
     store.importSnapshot(text, id === RORDIN_SNAPSHOT_180.id - 1 ? { foreverGearObservation: {
       clientProfile: QUEST_PROFILE, name, realm, generatedAt, sourceCharacterGuid: "Player-HISTORICAL-MISMATCH",
     } } : undefined);
@@ -146,7 +147,7 @@ export function seedRordinSnapshot190(store: SqliteSnapshotStore, options: { gui
   const { name, realm } = RORDIN_SNAPSHOT_180.identity;
   const character = { name, surname: "Longbraid", race: "Dwarf", faction: "Alliance", realm, class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" };
   for (let id = RORDIN_SNAPSHOT_180.id + 1; id < RORDIN_SNAPSHOT_190.id; id++) {
-    store.importSnapshot(buildWowSyncExport({ generatedAt: RORDIN_SNAPSHOT_180.generatedAt + (id - RORDIN_SNAPSHOT_180.id) * 100, character }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: RORDIN_SNAPSHOT_180.generatedAt + (id - RORDIN_SNAPSHOT_180.id) * 100, character, bank: { unknown: true } }));
   }
   const generatedAt = RORDIN_SNAPSHOT_190.generatedAt;
   const bars = options.copperBars ?? RORDIN_SNAPSHOT_190.copperBars;

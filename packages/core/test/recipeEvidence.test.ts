@@ -173,3 +173,18 @@ test("ERP RECIPE needs use the shared resolver: snapshot 190 reports LAST_SEEN c
   assert.equal(shuffled.state, "POTENTIAL_COVERAGE_LAST_SEEN", "resolution does not depend on caller ordering");
   assert.equal(assessErpNeed(need, snapshots, NOW, undefined, "retail").state, "UNKNOWN", "never crosses versions");
 }));
+
+test("an older observed bank is carried forward as LAST_SEEN, never as current, when the latest export did not open the bank", () => withStore((store) => {
+  const character = { name: "Banker", realm: "Classic Beta PvP 2", class: "Mage", level: 10, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" };
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 3_000, character, bank: { containers: [{ id: -1, capacity: 24, items: [{ itemRef: "item:2840::::::::10:1491:::::::::", name: "Copper Bar", qty: 12 }] }] } }));
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 100, character, bank: { unknown: true } }));
+  const read = new DashboardReadModel(store, () => NOW);
+  const storage = read.getCharacterStorage({ version: "forever", name: "Banker", storage: "bank" } as any);
+  assert.equal(storage.status, "FOUND");
+  if (storage.status === "FOUND") assert.equal(storage.value.provenance.state, "LAST_SEEN");
+  const facts = store.buildAccountFacts("forever", NOW);
+  assert.equal(facts.characters.find((row) => row.name === "Banker")?.bankStatus, "LAST_SEEN");
+  assert.equal(facts.inventory.unknownBank.some((row) => row.name === "Banker"), false, "a carried bank is historical, not unknown");
+  const state = read.getCharacterState({ version: "forever", name: "Banker" });
+  assert.equal(state.status, "FOUND");
+}));

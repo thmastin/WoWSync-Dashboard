@@ -8,6 +8,8 @@ export type SectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 
 export interface SectionStatus {
   state: SectionState;
+  /** Set when a LAST_SEEN section was carried forward from an earlier snapshot by read-time resolution. */
+  carriedFromSnapshotId?: number;
   completeness?: string;
   observedAt?: number;
   categories?: number;
