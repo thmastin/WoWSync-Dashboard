@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
+import { assessErpNeed } from "../src/erpProjects.ts";
 import { RORDIN_SNAPSHOT_180, RORDIN_SNAPSHOT_190, seedRordinSnapshot190 } from "./fixtures/foreverSnapshot180.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 
@@ -159,4 +160,15 @@ test("get_recipe_reagent_availability separates crafter bags, unknown bank, and 
   assert.match(other!.reason, /transfer is not assumed/);
   const missing = new DashboardReadModel(store, () => NOW).getRecipeReagentAvailability({ ...RORDIN, recipeID: 999999 });
   assert.equal(missing.status === "FOUND" && missing.value.provenance.state, "UNKNOWN");
+}));
+
+test("ERP RECIPE needs use the shared resolver: snapshot 190 reports LAST_SEEN coverage, never current coverage", () => withStore((store) => {
+  seedRordinSnapshot190(store);
+  const snapshots = store.listSnapshots(RORDIN_SNAPSHOT_180.identity.identityKey);
+  const need = { stableId: "bracers_recipe", kind: "RECIPE" as const, resourceKey: "2663", label: "Copper Bracers recipe", requiredQuantity: 1, sourceIdentityKey: RORDIN_SNAPSHOT_180.identity.identityKey };
+  const result = assessErpNeed(need, snapshots, NOW, undefined, "forever");
+  assert.equal(result.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+  const shuffled = assessErpNeed(need, [...snapshots].reverse(), NOW, undefined, "forever");
+  assert.equal(shuffled.state, "POTENTIAL_COVERAGE_LAST_SEEN", "resolution does not depend on caller ordering");
+  assert.equal(assessErpNeed(need, snapshots, NOW, undefined, "retail").state, "UNKNOWN", "never crosses versions");
 }));

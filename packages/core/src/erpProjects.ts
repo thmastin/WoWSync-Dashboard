@@ -3,6 +3,7 @@ import type { AccountCurrencies, CharacterCurrencies } from "./wowCurrencies.ts"
 import { ownerObservationHistoryFromJournal, parseOwnerKey, projectOwnerFromJournal, type ProjectedObservation, type SharedJournal, type SharedStorageProjection } from "./sharedStorage.ts";
 import type { WowVersion } from "./types.ts";
 import { snapshotObservedAt } from "./chronology.ts";
+import { resolveRecipeEvidence } from "./recipeEvidence.ts";
 import type { Freshness } from "./freshness.ts";
 import { MAX_ERP_PROJECT_COLLECTION_ENTRIES } from "./erpLimits.ts";
 import { ERP_WORK_ORDER_TYPES, type ErpWorkOrderType } from "./erpWorkOrderTypes.ts";
@@ -685,9 +686,9 @@ export function assessErpNeed(need: ErpResourceNeed, snapshots: readonly StoredS
   const freshness = evidenceFreshness(observedAt, now);
   const characterSource = { section: "character" as const, state: snapshot.parsed.character.status.state, ...(snapshot.parsed.character.status.observedAt !== undefined ? { observedAt: snapshot.parsed.character.status.observedAt } : {}), ...(snapshot.parsed.character.status.completeness ? { completeness: snapshot.parsed.character.status.completeness } : {}) };
   if (need.kind === "RECIPE") {
-    const section = version === "forever"
-      ? snapshot.parsed.foreverGearObservation?.professionRecipes
-      : snapshot.parsed.characterState?.professionRecipes;
+    // Shared resolution: a newer export without a recipe section carries the
+    // freshest compatible observation forward as LAST_SEEN instead of UNKNOWN.
+    const section = resolveRecipeEvidence(version ?? "unknown-version", snapshots, snapshot).section;
     const sectionData = section?.data as Record<string, unknown> | undefined;
     const professionRows = Array.isArray(sectionData?.professions) ? sectionData.professions as Array<Record<string, unknown>> : [];
     const matches = professionRows.flatMap((profession) => {

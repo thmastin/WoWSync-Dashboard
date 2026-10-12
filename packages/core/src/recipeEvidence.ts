@@ -8,6 +8,7 @@
  * WoW versions, client versions, or character GUIDs.
  */
 
+import { snapshotObservedAt } from "./chronology.ts";
 import type { StoredSnapshot } from "./store.ts";
 import type { CapturedCharacterDomain, CapturedCharacterState, ParsedSnapshot, VersionOrUnknown } from "./types.ts";
 
@@ -37,6 +38,10 @@ export interface RecipeEvidenceResolution {
   /** Newer snapshots skipped because they carried no compatible recipe section. */
   snapshotsWithoutRecipeSection: number;
   reason: string;
+}
+
+function newestFirst(a: StoredSnapshot, b: StoredSnapshot): number {
+  return snapshotObservedAt(b.generatedAt, b.importedAt) - snapshotObservedAt(a.generatedAt, a.importedAt) || b.id - a.id;
 }
 
 function record(value: unknown): Row | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Row : undefined; }
@@ -72,8 +77,11 @@ export function resolveRecipeEvidence(version: VersionOrUnknown, snapshots: read
   if (version !== "forever" && version !== "retail") {
     return { ...base, state: "UNKNOWN", selectedSnapshotId: selected.id, reason: `Structured learned-recipe capture is not supported for ${version}; recipe knowledge is UNKNOWN, not empty.` };
   }
-  const start = snapshots.findIndex((snapshot) => snapshot.id === selected.id);
-  const history = start >= 0 ? snapshots.slice(start) : [selected];
+  // Order by the store's chronology (generated time with import-time ceiling,
+  // then id) so callers need not pre-sort; never look past the selected snapshot.
+  const ordered = [...snapshots].sort(newestFirst);
+  const start = ordered.findIndex((snapshot) => snapshot.id === selected.id);
+  const history = start >= 0 ? ordered.slice(start) : [selected];
   let skipped = 0;
   for (const source of history) {
     const section = snapshotRecipeSection(version, source);
