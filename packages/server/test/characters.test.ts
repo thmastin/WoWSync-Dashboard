@@ -190,6 +190,27 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
   } }));
 });
 
+test("snapshot-scoped crafted upgrade assessment REST and AccountContext share Rordin's unresolved evidence", async () => {
+  await withApp(async (api) => {
+    const key = RORDIN_SNAPSHOT_180.identity.identityKey;
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-crafted-upgrade-assessment?snapshotId=180`);
+    assert.equal(rest.status, 200, JSON.stringify(rest.body));
+    const value = rest.body.value;
+    assert.equal(value.provenance.identityKey, key);
+    assert.equal(value.provenance.snapshotId, 180);
+    assert.equal(value.data.recipeCoverage.state, "PARTIAL");
+    assert.deepEqual(value.data.candidates.map((candidate: any) => [candidate.recipe.recipeID, candidate.output.itemID, candidate.upgradeConclusion.state]), [[2663, 2853, "UNKNOWN"], [12260, 10421, "UNKNOWN"]]);
+    assert.equal(value.data.bank.state, "UNKNOWN");
+    const context = await api.get("/api/account-context");
+    const contextValue = context.body.versions.forever.characters.find((character: any) => character.identityKey === key).foreverCraftedUpgradeAssessment;
+    assert.deepEqual(contextValue, rest.body, "AccountContext reuses the same core resolution and projection");
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(key)}/forever-crafted-upgrade-assessment?snapshotId=999`)).status, 400);
+    const retail = await api.importCapture({ text: buildWowSyncExport({ generatedAt: Math.floor(Date.now() / 1000), character: { name: "Other", realm: "Classic Beta PvP 2", clientFamily: "Retail", clientVersion: "12.0.0" } }) });
+    const retailKey = retail.body.result.character.identityKey;
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(retailKey)}/forever-crafted-upgrade-assessment`)).status, 404);
+  }, (store) => { seedRordinSnapshot180(store); });
+});
+
 test("snapshot 180 quest REST and AccountContext expose the canonical quest projection without the gear GUID gate", async () => {
   await withApp(async (api) => {
     const key = RORDIN_SNAPSHOT_180.identity.identityKey;

@@ -1596,6 +1596,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
     const foreverGearObservations = new Map<string, ReturnType<DashboardReadModel["getForeverGearObservation"]>>();
     const foreverQuestObservations = new Map<string, ReturnType<DashboardReadModel["getForeverQuestObservation"]>>();
+    const foreverCraftedUpgradeAssessments = new Map<string, ReturnType<DashboardReadModel["getForeverCraftedUpgradeAssessment"]>>();
     const foreverGearAllocations = new Map<string, ReturnType<DashboardReadModel["getForeverGearAllocation"]>>();
     for (const version of WOW_VERSIONS) {
       const facts = this.buildAccountFacts(version, now);
@@ -1608,10 +1609,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     for (const character of versionFacts.forever.characters) {
       foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
       foreverQuestObservations.set(character.identityKey, readModel.getForeverQuestObservation({ version: "forever", name: character.name, realm: character.realm }));
+      foreverCraftedUpgradeAssessments.set(character.identityKey, readModel.getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm }));
       foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm }));
     }
     const erpProjects = WOW_VERSIONS.flatMap((version) => readModel.getErpProjects({ version }));
-    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverQuestObservations, foreverGearAllocations, erpProjects });
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverQuestObservations, foreverGearAllocations, foreverCraftedUpgradeAssessments, erpProjects });
   }
 
   // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------

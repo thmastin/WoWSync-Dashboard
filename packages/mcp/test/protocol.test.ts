@@ -167,8 +167,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     const registeredQuestTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_character_quests");
+    const registeredCraftedUpgradeTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_crafted_upgrade_assessment");
     assert.ok(registeredQuestTool, "quest operation is present in the actual MCP tools/list protocol response");
     assert.ok((registeredQuestTool.inputSchema as any).properties?.snapshotId, "MCP exposes historical snapshot selection");
+    assert.ok(registeredCraftedUpgradeTool, "crafted-upgrade assessment is present in the actual MCP tools/list protocol response");
+    assert.ok((registeredCraftedUpgradeTool.inputSchema as any).properties?.snapshotId, "MCP exposes pinned snapshot assessment");
     assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
       "analyze_retail_gear_candidate",
@@ -192,6 +195,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_erp_project",
       "get_erp_projects",
       "get_forever_character_quests",
+      "get_forever_crafted_upgrade_assessment",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",
@@ -385,6 +389,19 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       const expectedQuestProjection = new DashboardReadModel(questReadStore, () => questNow).getForeverQuestObservation({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: 180 });
       assert.deepEqual(realForeverQuests, expectedQuestProjection, "the registered MCP protocol handler returns the canonical read model result unchanged");
     } finally { questReadStore.close(); }
+    const realCraftedUpgrade = structured<{ status: string; value?: any }>(await client.callTool({ name: "get_forever_crafted_upgrade_assessment", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
+    assert.equal(realCraftedUpgrade.status, "FOUND");
+    assert.equal(realCraftedUpgrade.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(realCraftedUpgrade.value?.provenance.snapshotId, 180);
+    assert.deepEqual(realCraftedUpgrade.value?.data?.candidates.map((candidate: any) => [candidate.recipe.recipeID, candidate.recipe.state, candidate.output.itemID, candidate.upgradeConclusion.state, candidate.upgradeConclusion.provenUpgrade]), [[2663, "OBSERVED_TRUE", 2853, "UNKNOWN", false], [12260, "OBSERVED_TRUE", 10421, "UNKNOWN", false]]);
+    assert.equal(realCraftedUpgrade.value?.data?.recipeCoverage.state, "PARTIAL");
+    assert.equal(realCraftedUpgrade.value?.data?.bank.state, "UNKNOWN");
+    const craftedReadStore = new SqliteSnapshotReadStore(databasePath);
+    try {
+      const expectedCraftedProjection = new DashboardReadModel(craftedReadStore, () => Math.floor(Date.now() / 1000)).getForeverCraftedUpgradeAssessment({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id });
+      assert.deepEqual(realCraftedUpgrade, expectedCraftedProjection, "the registered MCP protocol handler returns the canonical read-model result unchanged");
+    } finally { craftedReadStore.close(); }
+    assert.equal((await client.callTool({ name: "get_forever_crafted_upgrade_assessment", arguments: { name: "Rordin", realm: "Classic Beta PvP 2" } })).isError, true, "Forever version is explicit and mandatory");
     assert.equal((await client.callTool({ name: "get_forever_character_quests", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "the Forever quest reader requires its explicit version");
     assert.equal(foreverView.value?.provenance.freshness, "stale");
     const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; allocationPlan?: Array<{ disposition: string; item: { itemRef?: string }; recipient: { identityKey: string }; evidence: { transferability: string } }>; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
@@ -845,6 +862,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_erp_project",
       "get_erp_projects",
       "get_forever_character_quests",
+      "get_forever_crafted_upgrade_assessment",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
       "get_gear_candidate_evidence",

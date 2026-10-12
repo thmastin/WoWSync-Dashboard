@@ -21,6 +21,7 @@ import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelt
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
+import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -1033,6 +1034,22 @@ export class DashboardReadModel {
           ...(state === "LAST_SEEN" ? { warning: "Quest values are historical and are not a current observation." } : {}),
         },
       };
+    });
+  }
+
+  getForeverCraftedUpgradeAssessment(query: CharacterSnapshotQuery): CharacterResolution<ReadValue<ForeverCraftedUpgradeAssessment>> {
+    requireVersion(query.version);
+    if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Crafted-equipment assessments are isolated to Forever snapshots." } } };
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      if (!snapshot) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
+      const profile = snapshot.parsed.character;
+      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || !["70291", "70338"].includes(profile.clientBuild ?? "") || profile.interface !== "16001") {
+        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This assessment requires a verified Forever 1.60.1 build 70291 or 70338 / interface 16001 snapshot." } };
+      }
+      if (!snapshot.parsed.foreverGearObservation) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This snapshot has no structured Forever recipe and item evidence sidecar." } };
+      const data = buildForeverCraftedUpgradeAssessment({ identity: { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm }, snapshot, now: this.now() });
+      const observedAt = snapshot.parsed.foreverGearObservation.professionRecipes?.observedAt ?? snapshot.generatedAt;
+      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, ...(observedAt !== undefined ? { observedAt, freshness: classifyFreshness(observedAt, this.now()) } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, source: "Forever canonical versioned snapshot, learned-recipe sidecar, equipped slots, and exact item API evidence", reason: "Snapshot-scoped assessment does not use or weaken the historical gear GUID guard. Missing or mismatched evidence remains UNKNOWN." } };
     });
   }
 

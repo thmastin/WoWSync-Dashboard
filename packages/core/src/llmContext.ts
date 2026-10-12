@@ -31,7 +31,7 @@ import type { SectionState, WowVersion } from "./types.ts";
 
 // "llm-3": character-state specializations, compact profession investment,
 // separate character/account reputation, and compatible state transitions.
-export const LLM_CONTEXT_SCHEMA_VERSION = "llm-4";
+export const LLM_CONTEXT_SCHEMA_VERSION = "llm-5";
 
 /**
  * Whether a character has two or more observed snapshots to compare.
@@ -122,6 +122,8 @@ export interface LlmCharacter {
   professions: LlmProfession[];
   /** Same canonical Forever quest projection exposed by AccountContext, REST, MCP, and Character Detail. */
   foreverQuestObservation?: CharacterContext["foreverQuestObservation"];
+  /** Same compact read-only Forever crafted-equipment assessment exposed by AccountContext and MCP. */
+  foreverCraftedUpgradeAssessment?: CharacterContext["foreverCraftedUpgradeAssessment"];
   /** Current formally observed combat specialization, when captured. */
   combatSpecialization?: Record<string, unknown>;
   /** Captured tree/node investments remain structured facts, without recommendation. */
@@ -412,6 +414,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
         professionsObservationStatus: characterProfessions?.observationStatus ?? "UNKNOWN",
         professions,
         ...(history?.foreverQuestObservation ? { foreverQuestObservation: history.foreverQuestObservation } : {}),
+        ...(history?.foreverCraftedUpgradeAssessment ? { foreverCraftedUpgradeAssessment: history.foreverCraftedUpgradeAssessment } : {}),
         ...(cf.combatSpecialization?.data ? { combatSpecialization: cf.combatSpecialization.data } : {}),
         ...(characterProfessions?.specialization?.data ? { professionSpecializations: compactProfessionSpecializations(characterProfessions.specialization.data, characterProfessions.specialization.completeness) } : {}),
         ...(characterReputation ? { reputation: { status: characterReputation.status, completeness: characterReputation.completeness,

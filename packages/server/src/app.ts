@@ -249,6 +249,26 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json(result);
   });
 
+  app.get("/api/characters/:identityKey/forever-crafted-upgrade-assessment", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    if (character.version !== "forever") return res.status(404).json({ error: "Forever crafted-upgrade assessments are not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
+    let snapshotId: number | undefined;
+    if (req.query.snapshotId !== undefined) {
+      if (typeof req.query.snapshotId !== "string" || !/^\d+$/.test(req.query.snapshotId)) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+      snapshotId = Number(req.query.snapshotId);
+      if (!Number.isSafeInteger(snapshotId) || snapshotId < 1) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+    }
+    let result: ReturnType<DashboardReadModel["getForeverCraftedUpgradeAssessment"]>;
+    try {
+      result = new DashboardReadModel(store).getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+    } catch (error) {
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
+      throw error;
+    }
+    res.json(result);
+  });
+
   app.get("/api/characters/:identityKey/forever-quests", (req, res) => {
     const character = store.getCharacter(req.params.identityKey);
     if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });

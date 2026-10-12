@@ -415,6 +415,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverGearObservation(query)));
+  server.registerTool("get_forever_crafted_upgrade_assessment", {
+    title: "Assess Forever learned equipment recipes against observed gear",
+    description: "Read-only, snapshot-scoped assessment of positively observed learned Forever equipment recipes, output identity, slot, exact captured item stats, candidate eligibility, profession prerequisites, reagent requirements and source-character reagent availability. Partial recipe coverage remains partial; older-build reference facts are never promoted to current observations; missing bank, access, eligibility, item stats or craftability remain UNKNOWN. Does not craft, transfer, reserve, or mutate ERP plans.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, snapshotId: z.number().int().positive().optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getForeverCraftedUpgradeAssessment(query)));
   server.registerTool("get_forever_character_quests", {
     title: "Get Forever active quests and objectives",
     description: "Returns read-only quest and objective observations for one explicit Forever character, optionally pinned to a snapshotId belonging to that character. Active quests, objective progress, completion, turn-in readiness, completed history, tracking, and waypoint context remain separately evidenced; partial/stale/unavailable data stays explicit. A quest disappearing from the active log does not prove completion. Never applies Retail rules or takes gameplay actions.",

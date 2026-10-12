@@ -32,6 +32,7 @@ import type { StoredSnapshot } from "./store.ts";
 import type { CharacterResolution, ReadValue } from "./readModel.ts";
 import type { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import type { ForeverQuestObservation } from "./foreverQuests.ts";
+import type { ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
 import type { DashboardReadModel } from "./readModel.ts";
 import { WOW_VERSIONS } from "./version.ts";
 import { buildErpResourceCommitmentSummary, type ErpProjectView, type ErpWorkOrder } from "./erpProjects.ts";
@@ -70,7 +71,7 @@ import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErp
 // 45 for bounded post-review observation interval summaries, 46 for
 // actionable intervening-variation history counts, and 47 for portfolio
 // attention signals sourced from saved requirement history.
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "48";
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "49";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -146,6 +147,8 @@ export interface CharacterContext {
   foreverGearObservation?: CharacterResolution<ReadValue<ReturnType<typeof buildForeverGearObservation>>>;
   /** Forever quest evidence from its canonical versioned snapshot resolver; independent of gear GUID history checks. */
   foreverQuestObservation?: CharacterResolution<ReadValue<ForeverQuestObservation>>;
+  /** Snapshot-scoped read-only assessment of observed learned Forever equipment recipes against captured gear. */
+  foreverCraftedUpgradeAssessment?: CharacterResolution<ReadValue<ForeverCraftedUpgradeAssessment>>;
   /** Evidence-gated, cross-character Forever assessment; all unsupported conclusions remain UNKNOWN. */
   foreverGearAllocation?: ReturnType<DashboardReadModel["getForeverGearAllocation"]>;
 }
@@ -179,6 +182,7 @@ export interface AccountContextInput {
   /** Precomputed with the canonical read-model version and source-GUID guard. */
   foreverGearObservations?: Map<string, CharacterContext["foreverGearObservation"]>;
   foreverQuestObservations?: Map<string, CharacterContext["foreverQuestObservation"]>;
+  foreverCraftedUpgradeAssessments?: Map<string, CharacterContext["foreverCraftedUpgradeAssessment"]>;
   foreverGearAllocations?: Map<string, CharacterContext["foreverGearAllocation"]>;
   erpProjects?: readonly ErpProjectView[];
 }
@@ -223,7 +227,7 @@ function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHis
   };
 }
 
-function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], surname?: string, surnameSource?: string, race?: string, foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverQuestObservation?: CharacterContext["foreverQuestObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"]): CharacterContext {
+function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], surname?: string, surnameSource?: string, race?: string, foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverQuestObservation?: CharacterContext["foreverQuestObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"], foreverCraftedUpgradeAssessment?: CharacterContext["foreverCraftedUpgradeAssessment"]): CharacterContext {
   const chronological = [...snapshots].sort(compareSnapshotsChronologically);
 
   const snapshotHistory = chronological.map((s) => toHistoryEntry(s.parsed, s.importedAt));
@@ -255,7 +259,7 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
         }))
     : [];
 
-  return { identityKey, name, ...(surname ? { surname } : {}), ...(surnameSource ? { surnameSource } : {}), ...(race ? { race } : {}), realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverQuestObservation ? { foreverQuestObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}) };
+  return { identityKey, name, ...(surname ? { surname } : {}), ...(surnameSource ? { surnameSource } : {}), ...(race ? { race } : {}), realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverQuestObservation ? { foreverQuestObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}), ...(foreverCraftedUpgradeAssessment ? { foreverCraftedUpgradeAssessment } : {}) };
 }
 
 export function buildAccountContext(input: AccountContextInput): AccountContext {
@@ -269,7 +273,7 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
       .map((c) => {
         const snapshots = characterSnapshots.get(c.identityKey) ?? [];
         const latest = [...snapshots].sort(compareSnapshotsChronologically).at(-1);
-        return buildCharacterContext(c.identityKey, c.name, c.realm, snapshots, c.surname, c.surnameSource, latest?.parsed.character.race, version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverQuestObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined);
+        return buildCharacterContext(c.identityKey, c.name, c.realm, snapshots, c.surname, c.surnameSource, latest?.parsed.character.race, version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverQuestObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverCraftedUpgradeAssessments?.get(c.identityKey) : undefined);
       });
 
     versions[version] = {
