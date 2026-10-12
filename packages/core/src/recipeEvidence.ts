@@ -101,7 +101,8 @@ function materialize(version: VersionOrUnknown, selected: StoredSnapshot, source
   // conflicts with older learned rows for that profession (it may have been
   // dropped). Those scopes are excluded rather than reported as known.
   const current = selected.parsed.professions;
-  const currentNames = current.status.state === "OBSERVED" ? new Set(current.entries.map((entry) => entry.name.toLowerCase())) : undefined;
+  // Only a current, non-partial profession list may contradict older rows.
+  const currentNames = current.status.state === "OBSERVED" && current.status.completeness !== "partial" ? new Set(current.entries.map((entry) => entry.name.toLowerCase())) : undefined;
   const kept = professions.filter((scope) => {
     const name = typeof scope.professionName === "string" ? scope.professionName : typeof scope.name === "string" ? scope.name : undefined;
     // Retail scopes carry tier names ("Midnight Engineering"), so match by containment.

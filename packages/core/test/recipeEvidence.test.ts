@@ -126,3 +126,37 @@ test("Retail tier-named recipe scopes carry forward and are not excluded by base
   assert.deepEqual(knowledge.evidence.excludedScopes, []);
   assert.equal(knowledge.data.professions[0].recipes[0].recipeID, 1229853);
 }));
+
+test("find_recipe_crafters: Rordin is a LAST_SEEN crafter; characters without captures are not reported as unable", () => withStore((store) => {
+  seedRordinSnapshot190(store);
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Hallo", surname: "Emberstone", realm: "Classic Beta PvP 2", class: "Paladin", level: 7, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2840::::::::6:1491:::::::::", name: "Copper Bar", qty: 20 }] }] }, bank: { unknown: true } }));
+  const read = new DashboardReadModel(store, () => NOW);
+  const byOutput = read.findRecipeCrafters({ version: "forever", outputItemID: 2853 }).data!;
+  assert.deepEqual(byOutput.learned.map((row) => [row.name, row.recipe.recipeID, row.recipe.evidence, row.recipe.sourceSnapshotId, row.professionSkill?.skill]), [["Rordin", 2663, "LAST_SEEN", 180, 4]]);
+  assert.deepEqual(byOutput.charactersWithoutRecipeEvidence.map((row) => row.name), ["Hallo"]);
+  const byName = read.findRecipeCrafters({ version: "forever", nameContains: "copper" }).data!;
+  assert.deepEqual(byName.learned.map((row) => row.recipe.recipeID).sort((a, b) => a - b), [2663, 12260, 1245287]);
+  assert.equal(read.findRecipeCrafters({ version: "retail", recipeID: 2663 }).data?.learned.length, 0, "Forever rows never appear in Retail");
+  assert.equal(read.findRecipeCrafters({ version: "classic-era", recipeID: 2663 }).provenance.state, "UNKNOWN");
+  assert.throws(() => read.findRecipeCrafters({ version: "forever" }), /Provide recipeID/);
+}));
+
+test("get_recipe_reagent_availability separates crafter bags, unknown bank, and another character's holdings", () => withStore((store) => {
+  seedRordinSnapshot190(store);
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Hallo", surname: "Emberstone", realm: "Classic Beta PvP 2", class: "Paladin", level: 7, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2840::::::::6:1491:::::::::", name: "Copper Bar", qty: 20 }] }] }, bank: { unknown: true } }));
+  const result = new DashboardReadModel(store, () => NOW).getRecipeReagentAvailability({ ...RORDIN, recipeID: 12260 });
+  assert.equal(result.status, "FOUND");
+  if (result.status !== "FOUND") return;
+  const value = result.value.data!;
+  assert.equal(value.recipe.evidence, "LAST_SEEN");
+  assert.equal(value.craftability, "NOT_ESTABLISHED");
+  const copper = value.reagents[0]!.perAlternative[0]!;
+  assert.equal(copper.carriedConclusion, "INSUFFICIENT_IN_COMPLETE_CURRENT_BAGS", "3 carried bars < 4 required");
+  const [bags, bank, other] = copper.holdings;
+  assert.deepEqual([bags!.ownerScope, bags!.state, bags!.quantity, bags!.usableForCraftingWithoutMove], ["CRAFTER_BAGS", "OBSERVED", 3, true]);
+  assert.deepEqual([bank!.ownerScope, bank!.state, bank!.quantity], ["CRAFTER_BANK", "UNKNOWN", undefined], "unobserved bank is UNKNOWN, not zero");
+  assert.deepEqual([other!.ownerScope, other!.name, other!.quantity, other!.usableForCraftingWithoutMove], ["OTHER_CHARACTER", "Hallo", 20, false]);
+  assert.match(other!.reason, /transfer is not assumed/);
+  const missing = new DashboardReadModel(store, () => NOW).getRecipeReagentAvailability({ ...RORDIN, recipeID: 999999 });
+  assert.equal(missing.status === "FOUND" && missing.value.provenance.state, "UNKNOWN");
+}));

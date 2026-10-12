@@ -175,6 +175,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
       "analyze_retail_gear_candidate",
+      "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
@@ -203,6 +204,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
+      "get_recipe_reagent_availability",
       "get_renown",
       "get_research_document",
       "get_research_section",
@@ -213,6 +215,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "search_items",
       "search_research",
     ]);
+    const crafters = structured<{ data?: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }));
+    assert.equal(crafters.provenance.state, "DERIVED");
+    assert.ok(crafters.data?.charactersWithoutRecipeEvidence.some((row) => row.name === "Hallo"), "characters without captures are reported as unresolved, not unable");
+    const eraCrafters = structured<{ provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "classic-era", recipeID: 2663 } }));
+    assert.equal(eraCrafters.provenance.state, "UNKNOWN");
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
@@ -842,6 +849,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
       "analyze_retail_gear_candidate",
+      "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
@@ -870,6 +878,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
+      "get_recipe_reagent_availability",
       "get_renown",
       "get_research_document",
       "get_research_section",

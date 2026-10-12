@@ -439,6 +439,18 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterProfessions(query)));
+  server.registerTool("find_recipe_crafters", {
+    title: "Find characters with captured evidence for a recipe",
+    description: "Answers 'which of my characters can make this?' for one explicit version (Retail or Forever recipe captures). Filter by recipeID, outputItemID, or nameContains. Groups characters into learned (OBSERVED_TRUE), observedNotLearned, and unresolved, with per-row OBSERVED/LAST_SEEN evidence and source snapshot. Candidate coverage is partial: characters without captured evidence are listed separately and are not proven unable. Knowing a recipe does not establish skill, facility, or reagent readiness. Classic Era and TBC Anniversary have no recipe capture and return UNKNOWN.",
+    inputSchema: z.object({ version: versionSchema, recipeID: z.number().int().positive().optional(), outputItemID: z.number().int().positive().optional(), nameContains: z.string().trim().min(2).max(80).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.findRecipeCrafters(query)));
+  server.registerTool("get_recipe_reagent_availability", {
+    title: "Get a recipe's reagents and where they are observed",
+    description: "For one explicit-version character and recipeID from its captured recipe rows: the reagent slots (alternatives are OR choices, never summed), and per-owner holdings in the crafter's bags, the crafter's bank, and other characters' bags/bank, each with OBSERVED/LAST_SEEN/UNKNOWN provenance and freshness. Only current crafter bags can support a carried-sufficiency conclusion; UNKNOWN storage is not empty and other characters' items are not transferable by assumption. Never crafts or moves items; craftability stays NOT_ESTABLISHED.",
+    inputSchema: characterQuery.extend({ recipeID: z.number().int().positive() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel.getRecipeReagentAvailability(query)));
   server.registerTool("get_character_currencies", {
     title: "Get latest-known character currencies",
     description: "Returns at most 100 structured currency records for one explicit-version character. Missing capture remains UNKNOWN, never zero.",

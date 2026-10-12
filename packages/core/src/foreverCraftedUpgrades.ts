@@ -142,7 +142,7 @@ export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverC
   const candidateBuilds: ForeverCraftedUpgradeCandidate[] = equipmentLearned.map((recipe) => {
     const info = record(recipe.outputItemInfo);
     const professionName = recipeProfession.get(recipe);
-    const skill = professionSkill(parsed, professionName ?? "UNKNOWN");
+    const skill = professionSkill(parsed, professionName ?? "Unidentified profession");
     const itemID = number(recipe.outputItemID);
     const metadataID = number(info?.itemID);
     const identityConflict = itemID !== undefined && metadataID !== undefined && itemID !== metadataID;
