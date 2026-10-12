@@ -1,5 +1,15 @@
 # Current WoWSync ERP state — Operations platform source checkpoint (2026-10-11)
 
+**DEV deployment (2026-10-12, 20:48Z):** guarded promote of `f5dc309eb29c97205991d859cf2dcda8dc2750fe` from `b5609a5` (GearExport 2c5e9b3 integration).
+- Backup: `/var/lib/wowsync-dev/backups/deploy/20261012T204749.314Z-12884349-b5609a55…-to-f5dc309e….sqlite`, integrity ok. Schema plan `none`; schema unchanged. Dashboard (`/`, `/api/versions`, `/api/account-context` 200) and MCP healthy; Herdr untouched; no journal warnings.
+- Pre-deploy: typecheck 0; core 871, server 253 + 1 skip, MCP 11, web 317, browser e2e 25, deploy-tool 92 all pass; release rebuilt and tested by the deploy tool.
+- Live checks:
+  - Classic Era and TBC characters report recipe knowledge UNKNOWN with the new reason, because no Classic sidecar has been imported yet (the Windows bridge is not updated).
+  - Rordin snapshot 192: VERIFIED; recipes LAST_SEEN from 180; both candidates `BLOCKED_BY_OBSERVED_REAGENTS`.
+  - Retail account facts still list 484 known recipes; `POST /api/ask` returns 404.
+- Snapshot 192 was stored by the old parser, so its exporter claim reads `EXPORTER_NOT_STATED`. The deployed parser reads that exact text as `VERIFIED_PROFILE` → `AGREE`.
+- Rollback: `wowsync-dev-deploy rollback b5609a55da3d11eced7d13ddc83411c2a4bf026e`.
+
 **GearExport 2c5e9b3 integration checkpoint (2026-10-12, not deployed):** `feature/profession-intelligence` `783267c`…`b19e82d`. DEV still runs `b5609a5`.
 - Classic Era / TBC Anniversary SavedVariables domains travel as a separate `Classic` state family: open-window recipes (TradeSkill = learned, Craft = visible with learned state UNKNOWN, Enchanting = enchant identity), quests with objectives and completed quest IDs, visible reputation rows, and talents. Each domain is validated against the export's own version; history carries forward as LAST_SEEN under a GUID guard.
 - Forever: the exporter `Compatibility` claim is parsed, verification uses the exact version:build:interface profile, and Dashboard/exporter agreement is reported.
