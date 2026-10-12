@@ -261,6 +261,55 @@ function isRetailExportText(text: string): boolean {
   }
 }
 
+/** True only for a Classic Era / TBC Anniversary export (no ClientFamily; 1.x or 2.x client), by the store's own routing. */
+function isClassicExportText(text: string): boolean {
+  try {
+    const version = detectVersion(parseWowSyncExport(text).character);
+    return version === "classic-era" || version === "tbc-anniversary";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GearExport section envelope fields that travel for Classic domains. `lastAttemptAt`/`lastAttemptError` are
+ * mutable attempt diagnostics and are not carried; `lastAttemptStale` is kept because it means the stored data
+ * is no longer current.
+ */
+const CLASSIC_ENVELOPE_FIELDS = ["data", "observedAt", "changedAt", "revision", "completeness", "reason", "source", "lastAttemptStale"] as const;
+
+/**
+ * Classic Era / TBC legacy-UI observations (GearExport 2c5e9b3+): open-window recipes, quest log, visible
+ * reputation rows, talents. Sent as a separate "Classic" state family; the store validates each domain against
+ * the export's own version and drops anything else. Undefined when the record has none of them.
+ */
+function classicCharacterState(sections: LuaValue | undefined, guid: string | undefined): Record<string, unknown> | undefined {
+  const envelope = (key: string): Record<string, unknown> | undefined => {
+    const section = luaGet(sections, key);
+    if (!isLuaTable(section) || !isLuaTable(luaGet(section, "data"))) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const field of CLASSIC_ENVELOPE_FIELDS) {
+      const value = luaGet(section, field);
+      if (value !== undefined) out[field] = luaToPlain(value);
+    }
+    return out;
+  };
+  const professionRecipes = envelope("professionRecipes");
+  const quests = envelope("quests");
+  const reputation = envelope("reputation");
+  const talents = envelope("talents");
+  if (!professionRecipes && !quests && !reputation && !talents) return undefined;
+  return {
+    formatVersion: 1,
+    clientFamily: "Classic",
+    ...(guid ? { sourceCharacterGuid: guid } : {}),
+    ...(professionRecipes ? { professionRecipes } : {}),
+    ...(quests ? { quests } : {}),
+    ...(reputation ? { reputation: { character: reputation } } : {}),
+    ...(talents ? { talents } : {}),
+  };
+}
+
 /** The export's own Forever profile; a sidecar is only accepted when its captureProfile matches it. */
 function foreverExportProfile(text: string): string | undefined {
   try {
@@ -330,10 +379,16 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const professionSpecializations = luaGet(sections, "professionSpecializations");
     const characterReputation = luaGet(sections, "reputation");
     const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
-    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || retailProfessionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
+    const retailText = typeof text === "string" && isRetailExportText(text);
+    const classicText = typeof text === "string" && isClassicExportText(text);
+    const guid = luaGet(luaGet(record, "identity"), "guid");
+    const characterState = classicText
+      ? classicCharacterState(sections, typeof guid === "string" ? guid : undefined)
+      : retailText && (combat instanceof Map || professionSpecializations instanceof Map || retailProfessionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
       ? {
           formatVersion: 1,
           clientFamily: "Retail",
+          ...(typeof guid === "string" ? { sourceCharacterGuid: guid } : {}),
           ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
           ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
           ...(retailProfessionRecipes instanceof Map ? { professionRecipes: luaToPlain(retailProfessionRecipes) } : {}),

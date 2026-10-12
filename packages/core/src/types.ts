@@ -44,6 +44,9 @@ export interface CharacterSection {
   clientBuild?: string;
   clientFamily?: string;
   interface?: string;
+  /** Forever only: the exporter's own compatibility claim (VERIFIED_PROFILE / UNVERIFIED_BUILD), verbatim. */
+  exporterCompatibility?: string;
+  exporterCompatibilityNote?: string;
 }
 
 export interface LocationSection {
@@ -278,7 +281,20 @@ export interface CapturedCharacterDomain<T = Record<string, unknown>> {
 
 export interface CapturedCharacterState {
   formatVersion: 1;
-  clientFamily: "Retail";
+  /**
+   * Retail: SavedVariables state domains (specialization, profession trees, recipes, reputation).
+   * Classic: Classic Era / TBC Anniversary legacy-UI observations (open-window recipes, quests,
+   * visible reputation rows, talents). The two families never share a validator or merge rule.
+   */
+  clientFamily: "Retail" | "Classic";
+  /** WoWSyncDB record GUID that produced this sidecar; guards carry-forward across recreated characters. */
+  sourceCharacterGuid?: string;
+  /** Classic only: "Classic:<projectID>:<interface>" profile stated by the collectors. */
+  clientProfile?: string;
+  /** Classic only: legacy quest log, objectives, and client-returned completed quest IDs. */
+  quests?: CapturedCharacterDomain;
+  /** Classic only: legacy talent trees and ranks. */
+  talents?: CapturedCharacterDomain;
   combatSpecialization?: CapturedCharacterDomain;
   professionSpecializations?: CapturedCharacterDomain;
   /** Retail profession recipe learned-state observations. Candidate coverage is intentionally partial/unknown. */

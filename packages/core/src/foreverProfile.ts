@@ -42,6 +42,31 @@ export function isForeverProfile(profile: unknown): profile is `Forever:${string
   return parseForeverProfile(profile) !== undefined;
 }
 
-export function foreverBuildVerification(build: string | undefined): ForeverBuildVerification {
-  return build !== undefined && VERIFIED_FOREVER_BUILDS.includes(build) ? "VERIFIED" : "UNVERIFIED_BUILD";
+/**
+ * Exact version:build:interface profiles with direct compatibility evidence; mirrors GearExport's
+ * VERIFIED_PROFILE table (WoWSyncCompat knownProfiles). A known build on another version or interface is not verified.
+ */
+export const VERIFIED_FOREVER_PROFILES: readonly string[] = ["1.60.1:70291:16001", "1.60.1:70338:16001"];
+
+/**
+ * VERIFIED only for an exact verified profile. Given only a build (legacy callers), the build must be one of
+ * VERIFIED_FOREVER_BUILDS; given a full client identity, the whole version/build/interface triple must match.
+ */
+export function foreverBuildVerification(client: string | ForeverClientFields | undefined): ForeverBuildVerification {
+  if (client === undefined) return "UNVERIFIED_BUILD";
+  if (typeof client === "string") return VERIFIED_FOREVER_BUILDS.includes(client) ? "VERIFIED" : "UNVERIFIED_BUILD";
+  return VERIFIED_FOREVER_PROFILES.includes(`${client.clientVersion}:${client.clientBuild}:${client.interface}`) ? "VERIFIED" : "UNVERIFIED_BUILD";
+}
+
+/**
+ * The exporter's own compatibility claim beside the Dashboard's verdict. GearExport 2c5e9b3+ writes
+ * VERIFIED_PROFILE or UNVERIFIED_BUILD; older exporters write nothing (NOT_STATED). A disagreement is
+ * surfaced, never resolved in favour of the more optimistic side.
+ */
+export function foreverCompatibility(character: ForeverClientFields & { exporterCompatibility?: string; exporterCompatibilityNote?: string }): { dashboard: ForeverBuildVerification; exporter: string; exporterNote?: string; agreement: "AGREE" | "DISAGREE" | "EXPORTER_NOT_STATED" } {
+  const dashboard = foreverBuildVerification(character);
+  const exporter = character.exporterCompatibility ?? "NOT_STATED";
+  const agreement = exporter === "NOT_STATED" ? "EXPORTER_NOT_STATED" as const
+    : (exporter === "VERIFIED_PROFILE") === (dashboard === "VERIFIED") ? "AGREE" as const : "DISAGREE" as const;
+  return { dashboard, exporter, ...(character.exporterCompatibilityNote ? { exporterNote: character.exporterCompatibilityNote } : {}), agreement };
 }

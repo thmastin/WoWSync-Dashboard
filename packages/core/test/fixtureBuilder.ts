@@ -94,6 +94,9 @@ export interface FixtureOptions {
   generatedAt?: number;
   character?: {
     name?: string;
+    /** GearExport 2c5e9b3+ Forever exporter claim, rendered as Compatibility/CompatibilityNote after Interface. */
+    compatibility?: string;
+    compatibilityNote?: string;
     surname?: string;
     surnameSource?: string;
     realm?: string;
@@ -251,6 +254,10 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       if (c.clientFamily) {
         out.push(field("ClientFamily", c.clientFamily));
         out.push(field("Interface", c.interface ?? "?"));
+        if (c.compatibility) {
+          out.push(field("Compatibility", c.compatibility));
+          if (c.compatibilityNote) out.push(field("CompatibilityNote", c.compatibilityNote));
+        }
       }
     }
     sections.push(out.join("\n"));

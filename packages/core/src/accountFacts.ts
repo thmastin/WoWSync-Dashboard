@@ -668,7 +668,8 @@ function buildProfessionsByCharacter(
         const recipe = latestParsed.get(c.identityKey)!.foreverGearObservation!.professionRecipes!;
         return { recipeKnowledge: { status: recipe.status.state, completeness: recipe.completeness, observedAt: recipe.observedAt, ...((recipe.status as { reason?: string }).reason ? { reason: (recipe.status as { reason?: string }).reason } : {}), data: recipe.data } };
       })() : version === "retail" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown" } }
-        : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "This Forever snapshot contains no structured profession recipe section. Missing rows are not evidence that recipes are unlearned." } } : {}),
+        : version === "forever" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "This Forever snapshot contains no structured profession recipe section. Missing rows are not evidence that recipes are unlearned." } }
+        : version === "classic-era" || version === "tbc-anniversary" ? { recipeKnowledge: { status: "UNKNOWN" as const, completeness: "unknown", reason: "No legacy profession window observation has been imported for this character. Recipes are only captured from a profession window the player opens; missing rows are not evidence that recipes are unlearned." } } : {}),
     };
   });
 }
@@ -774,7 +775,9 @@ function buildReputationFacts(characters: StoredCharacterSummary[], latestParsed
   let source: string | undefined; let rangeMin: number | undefined; let rangeMax: number | undefined; let globalCatalogueVerified: boolean | undefined;
   const substantive = (row: Record<string, unknown>) =>
     typeof row.currentStanding === "number" && row.currentStanding > 0 ||
-    row.friendshipState === "OBSERVED" || row.paragonState === "OBSERVED_TRUE";
+    row.friendshipState === "OBSERVED" || row.paragonState === "OBSERVED_TRUE" ||
+    // Classic legacy rows: a returned standing ID is itself the observation.
+    typeof row.standingID === "number";
   for (const character of characters) {
     const domain = latestParsed.get(character.identityKey)?.characterState?.reputation;
     if (!domain) { byCharacter.push({ identityKey: character.identityKey, name: character.name, status: "UNKNOWN", completeness: "unknown", factions: [], majorFactions: [] }); continue; }

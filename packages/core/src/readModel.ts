@@ -20,12 +20,14 @@ import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
-import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
+import { buildForeverQuestObservation, buildQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
+import { buildClassicReputationView, buildClassicTalentView, type ClassicReputationView, type ClassicTalentView } from "./classicProgression.ts";
+import { isClassicVersion } from "./classicState.ts";
 import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
-import { resolveRecipeEvidence } from "./recipeEvidence.ts";
+import { resolveRecipeEvidence, supportsRecipeCapture } from "./recipeEvidence.ts";
 import { resolveSnapshotView } from "./snapshotEvidence.ts";
-import { foreverBuildVerification, isForeverClient } from "./foreverProfile.ts";
-import { findRecipeCrafters, knowledgeRows, matchTrainerService, reagentAvailability, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
+import { foreverBuildVerification, foreverCompatibility, isForeverClient } from "./foreverProfile.ts";
+import { findRecipeCrafters, knowledgeRows, matchesRecipeFilter, matchTrainerService, reagentAvailability, recipeRowIdentity, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -51,6 +53,10 @@ export type CharacterResolution<T> =
 
 export interface CharacterQuery { version: VersionOrUnknown; name: string; realm?: string }
 export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
+export interface CharacterQuestQuery extends CharacterSnapshotQuery { completedQuestIDs?: number[] }
+export interface CharacterProgressionQuery extends CharacterSnapshotQuery { factionQuery?: string; includeTalents?: boolean }
+/** One recipe chosen by exactly one identity: recipeID (Retail/Forever), recipeKey (Classic), outputItemID, enchantID, or exact name. */
+export interface RecipeSelector { recipeID?: number; recipeKey?: string; outputItemID?: number; enchantID?: number; recipeName?: string }
 export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
 export interface CharacterTrainerQuery extends CharacterSnapshotQuery { category?: string; query?: string; status?: "known" | "available" | "unavailable" | "other"; offset?: number; limit?: number }
 export interface AccountChangesQuery { version: VersionOrUnknown; realm?: string; offset?: number; limit?: number }
@@ -501,6 +507,17 @@ export interface CharacterCurrentState {
   bank: { state: ReadState; freeSlots?: number; totalSlots?: number; itemStackCount?: number; provenance: ReadProvenance };
   professions: { state: ReadState; entries?: Array<{ name: string; skill?: number; maxSkill?: number; tier?: string; expansion?: string }>; totalCount?: number; truncated?: boolean; provenance: ReadProvenance };
   currencies: { state: ReadState; entries?: Array<{ currencyID: number; name: string | null; quantity: number | null; isAccountWide: boolean | null }>; totalCount?: number; truncated?: boolean; provenance: ReadProvenance };
+  /**
+   * Which structured (SavedVariables) observation domains exist for this character and how current each is.
+   * Domains a version does not capture are omitted; UNKNOWN means not captured, never empty.
+   */
+  structuredObservations?: {
+    clientCompatibility?: ReturnType<typeof foreverCompatibility>;
+    recipes?: { state: ReadState; sourceSnapshotId?: number; professions?: string[] };
+    quests?: { state: ReadState; observedAt?: number; sourceSnapshotId?: number };
+    reputation?: { state: ReadState; observedAt?: number; sourceSnapshotId?: number };
+    talents?: { state: ReadState; observedAt?: number; sourceSnapshotId?: number };
+  };
 }
 export interface SharedStorageReadQuery { version: VersionOrUnknown; kind: "warband" | "guild"; guildClubId?: string; query?: string; offset?: number; limit?: number; ownerOffset?: number; ownerLimit?: number }
 export type PagedSharedObservation = Omit<SharedObservationView, "content"> & { content: Omit<SharedObservationView["content"], "items"> & { items: SharedObservationView["content"]["items"]; totalCount: number; offset: number; limit: number; truncated: boolean } };
@@ -966,8 +983,27 @@ export class DashboardReadModel {
         bank: { state: parsed.bank.status.state, ...(parsed.bank.status.state !== "UNKNOWN" ? { freeSlots: parsed.bank.freeSlots, totalSlots: parsed.bank.totalSlots, itemStackCount: parsed.bank.items.length } : {}), provenance: sectionProvenance(parsed.bank.status.state, parsed.bank.status.observedAt ?? observedAt, parsed.bank.status.reason) },
         professions: { state: professions.status.state, ...(boundedProfessions ? { entries: boundedProfessions, totalCount: professions.entries.length, truncated: professions.entries.length > 10 } : {}), provenance: sectionProvenance(professions.status.state, professions.status.observedAt ?? observedAt, professions.status.reason) },
         currencies: { state: currencyState, ...(boundedCurrencies ? { entries: boundedCurrencies, totalCount: currencyEntries!.length, truncated: currencyEntries!.length > 20 } : {}), provenance: sectionProvenance(currencyState, currencyResult?.observedAt ?? undefined, currencyResult?.state === "UNKNOWN" ? "Currency list was not captured." : currencyResult?.lastSeenReason ?? undefined) },
+        ...this.structuredObservations(query.version, character.identityKey, snapshot),
       }, provenance: sectionProvenance("OBSERVED", observedAt) };
     });
+  }
+
+  private structuredObservations(version: VersionOrUnknown, identityKey: string, snapshot: StoredSnapshot): Pick<CharacterCurrentState, "structuredObservations"> {
+    const out: NonNullable<CharacterCurrentState["structuredObservations"]> = {};
+    if (version === "forever" && isForeverClient(snapshot.parsed.character)) out.clientCompatibility = foreverCompatibility(snapshot.parsed.character);
+    if (supportsRecipeCapture(version)) {
+      const resolution = resolveRecipeEvidence(version, this.store.listSnapshots(identityKey), snapshot);
+      const professions = Array.isArray((resolution.section?.data as Record<string, unknown> | undefined)?.professions) ? ((resolution.section!.data as Record<string, unknown>).professions as Record<string, unknown>[]).map((row) => typeof row.professionName === "string" ? row.professionName : typeof row.name === "string" ? row.name : undefined).filter((name): name is string => !!name) : [];
+      out.recipes = { state: resolution.state, ...(resolution.sourceSnapshotId !== undefined ? { sourceSnapshotId: resolution.sourceSnapshotId } : {}), ...(professions.length ? { professions } : {}) };
+    }
+    if (isClassicVersion(version)) {
+      const state = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState : undefined;
+      const summarize = (domain: CapturedCharacterState["quests"]) => domain ? { state: statusToReadState(domain.status.state), ...(domain.observedAt !== undefined ? { observedAt: domain.observedAt } : {}), ...(domain.status.carriedFromSnapshotId !== undefined ? { sourceSnapshotId: domain.status.carriedFromSnapshotId } : {}) } : { state: "UNKNOWN" as const };
+      out.quests = summarize(state?.quests);
+      out.reputation = summarize(state?.reputation?.character);
+      out.talents = summarize(state?.talents);
+    }
+    return Object.keys(out).length ? { structuredObservations: out } : {};
   }
 
   getCharacterEquipment(query: CharacterQuery): CharacterResolution<ReadValue<EquipmentSection>> {
@@ -1450,7 +1486,7 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const value = snapshot.parsed.professions;
       const captured = snapshot.parsed.characterState?.professionSpecializations;
-      const resolution = query.version === "forever" || query.version === "retail" ? resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot) : undefined;
+      const resolution = supportsRecipeCapture(query.version) ? resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot) : undefined;
       const recipeKnowledge = resolution
         ? resolution.section
           ? { ...resolution.section, evidence: { state: resolution.state, sourceSnapshotId: resolution.sourceSnapshotId, selectedSnapshotId: resolution.selectedSnapshotId, excludedScopes: resolution.excludedScopes, reason: resolution.reason } }
@@ -1477,28 +1513,90 @@ export class DashboardReadModel {
   findRecipeCrafters(query: { version: VersionOrUnknown } & RecipeFilter): ReadValue<RecipeCraftersResult> {
     requireVersion(query.version);
     const { version, ...filter } = query;
-    if (filter.recipeID === undefined && filter.outputItemID === undefined && !filter.nameContains?.trim()) throw new TypeError("Provide recipeID, outputItemID, or nameContains");
-    if (version !== "forever" && version !== "retail") return { provenance: { state: "UNKNOWN", version, reason: `Structured learned-recipe capture is not supported for ${version}; which characters know a recipe is UNKNOWN, not none.` } };
+    if (filter.recipeID === undefined && filter.recipeKey === undefined && filter.outputItemID === undefined && filter.enchantID === undefined && !filter.nameContains?.trim()) throw new TypeError("Provide recipeID, recipeKey, outputItemID, enchantID, or nameContains");
+    if (!supportsRecipeCapture(version)) return { provenance: { state: "UNKNOWN", version, reason: `Structured learned-recipe capture is not supported for ${version}; which characters know a recipe is UNKNOWN, not none.` } };
     const data = findRecipeCrafters(version, this.characterHistories(version), filter);
     return { data, provenance: { state: "DERIVED", version, source: "Version-scoped captured recipe rows, resolved per character to the freshest compatible observation", reason: data.semantics } };
   }
 
   /** One character's recipe reagents with per-owner observed holdings. Read-only; implies no transfer or craft. */
-  getRecipeReagentAvailability(query: CharacterQuery & { recipeID: number }): CharacterResolution<ReadValue<{ recipe: RecipeKnowledgeRow; reagents: ReagentAvailabilityView[]; recipeEvidence: { state: string; sourceSnapshotId?: number; reason: string }; sharedStorage: string; craftability: "NOT_ESTABLISHED"; semantics: string }>> {
-    if (!Number.isSafeInteger(query.recipeID) || query.recipeID < 1) throw new TypeError("recipeID must be a positive integer");
+  getRecipeReagentAvailability(query: CharacterQuery & RecipeSelector): CharacterResolution<ReadValue<{ recipe: RecipeKnowledgeRow; reagents: ReagentAvailabilityView[]; recipeEvidence: { state: string; sourceSnapshotId?: number; reason: string }; sharedStorage: string; craftability: "NOT_ESTABLISHED"; semantics: string } | { ambiguous: Array<Pick<RecipeKnowledgeRow, "recipeID" | "recipeKey" | "name" | "profession" | "outputItemID" | "enchantID" | "evidence" | "knowledgeClass">>; reason: string }>> {
+    const selectors = [query.recipeID, query.recipeKey, query.outputItemID, query.enchantID, query.recipeName].filter((value) => value !== undefined);
+    if (selectors.length !== 1) throw new TypeError("Provide exactly one of recipeID, recipeKey, outputItemID, enchantID, or recipeName");
+    for (const key of ["recipeID", "outputItemID", "enchantID"] as const) if (query[key] !== undefined && (!Number.isSafeInteger(query[key]) || query[key]! < 1)) throw new TypeError(`${key} must be a positive integer`);
+    const label = query.recipeID !== undefined ? `Recipe ${query.recipeID}` : query.recipeKey !== undefined ? `Recipe key ${query.recipeKey}` : query.outputItemID !== undefined ? `A recipe making item ${query.outputItemID}` : query.enchantID !== undefined ? `Enchant ${query.enchantID}` : `Recipe "${query.recipeName}"`;
     return this.resolve(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
-      if (query.version !== "forever" && query.version !== "retail") return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: `Structured recipe reagent capture is not supported for ${query.version}.` } };
+      if (!supportsRecipeCapture(query.version)) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: `Structured recipe reagent capture is not supported for ${query.version}.` } };
       const snapshots = this.store.listSnapshots(character.identityKey);
       const resolution = resolveRecipeEvidence(query.version, snapshots, snapshot);
-      const recipe = knowledgeRows(resolution).find((row) => row.recipeID === query.recipeID);
-      if (!recipe) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, reason: `Recipe ${query.recipeID} is not among this character's captured recipe rows. Candidate coverage is partial, so this does not mean unlearned or unknown reagents in the game. ${resolution.reason}` } };
+      const name = query.recipeName?.trim().toLowerCase();
+      const candidates = knowledgeRows(resolution).filter((row) => name !== undefined ? row.name?.trim().toLowerCase() === name : matchesRecipeFilter(row, { recipeID: query.recipeID, recipeKey: query.recipeKey, outputItemID: query.outputItemID, enchantID: query.enchantID }));
+      const distinct = [...new Map(candidates.map((row) => [recipeRowIdentity(row), row])).values()];
+      if (distinct.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, reason: `${label} is not among this character's captured recipe rows. Candidate coverage is partial, so this does not mean unlearned or unknown reagents in the game. ${resolution.reason}` } };
+      if (distinct.length > 1) return { data: { ambiguous: distinct.slice(0, 20).map((row) => ({ ...(row.recipeID !== undefined ? { recipeID: row.recipeID } : {}), ...(row.recipeKey ? { recipeKey: row.recipeKey } : {}), ...(row.name ? { name: row.name } : {}), ...(row.profession ? { profession: row.profession } : {}), ...(row.outputItemID !== undefined ? { outputItemID: row.outputItemID } : {}), ...(row.enchantID !== undefined ? { enchantID: row.enchantID } : {}), evidence: row.evidence, knowledgeClass: row.knowledgeClass })), reason: `${label} matches ${distinct.length} captured recipe rows; select one by recipeID or recipeKey. Rows without a stable identity are never merged.` }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, reason: "Ambiguous recipe selection; nothing was chosen on the caller's behalf." } };
+      const recipe = distinct[0]!;
       const others = this.characterHistories(query.version).filter((entry) => entry.character.identityKey !== character.identityKey);
       const reagents = reagentAvailability(query.version, { character, snapshots }, others, recipe, this.now());
+      const sharedStorage = query.version === "retail" ? "Warband and guild bank holdings are separate ownership domains and are not included; read them with get_shared_storage."
+        : query.version === "forever" ? "Forever has no captured shared storage domain; none is assumed."
+        : "Classic Era / TBC have no account-wide storage; guild bank contents are not captured and are never counted as personal holdings.";
+      const knowledgeNote = recipe.knowledgeClass === "LEARNED" ? "" : recipe.knowledgeClass === "VISIBLE_LEARNED_UNKNOWN" ? " This row was visible in a Classic Craft window, which does not establish that the recipe is learned." : ` Learned state is ${recipe.learnedState}; the recipe is not established as known.`;
       return { data: { recipe, reagents, recipeEvidence: { state: resolution.state, ...(resolution.sourceSnapshotId !== undefined ? { sourceSnapshotId: resolution.sourceSnapshotId } : {}), reason: resolution.reason },
-        sharedStorage: query.version === "retail" ? "Warband and guild bank holdings are separate ownership domains and are not included; read them with get_shared_storage." : "Forever has no captured shared storage domain; none is assumed.",
-        craftability: "NOT_ESTABLISHED", semantics: "Reagents must be in the crafter's bags to craft. Bank and other-character holdings are listed separately and require moves this tool never performs or assumes possible. Required skill, tools, and facilities are not captured and remain UNKNOWN." },
+        sharedStorage,
+        craftability: "NOT_ESTABLISHED", semantics: `Reagents must be in the crafter's bags to craft. Bank and other-character holdings are listed separately and require moves this tool never performs or assumes possible. Required skill, tools, and facilities are not captured and remain UNKNOWN. A clientReportedCount/clientReportedCarried value is the client's report at observation time, not current availability.${knowledgeNote}` },
         provenance: { state: "DERIVED", version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, source: "Resolved recipe row plus per-owner bag and bank observations", reason: recipe.evidence === "LAST_SEEN" ? `Recipe row is LAST_SEEN from snapshot ${recipe.sourceSnapshotId}.` : "Each holding keeps its own provenance." } };
+    });
+  }
+
+  /**
+   * Active quests, objectives, and client-returned completed quest IDs for Forever (C_QuestLog) or Classic Era /
+   * TBC (legacy quest log). Retail quest state is not captured. Optional exact completed-ID lookups.
+   */
+  getCharacterQuests(query: CharacterQuestQuery): CharacterResolution<ReadValue<ForeverQuestObservation>> {
+    if (query.completedQuestIDs !== undefined && (query.completedQuestIDs.length > 50 || !query.completedQuestIDs.every((id) => Number.isSafeInteger(id) && id > 0))) throw new TypeError("completedQuestIDs must be at most 50 positive integers");
+    if (query.version === "forever") {
+      const forever = this.getForeverQuestObservation(query);
+      if (forever.status !== "FOUND" || !query.completedQuestIDs?.length || !forever.value.data) return forever;
+      return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+        const structured = snapshot?.parsed.foreverGearObservation;
+        const data = buildForeverQuestObservation({ section: structured?.quests, profile: structured?.clientProfile ?? "UNKNOWN", identity: { identityKey: character.identityKey, name: character.name, realm: character.realm }, now: this.now(), completedLookup: query.completedQuestIDs });
+        return { ...forever.value, data: { ...forever.value.data!, completedHistory: data.completedHistory } };
+      });
+    }
+    if (!isClassicVersion(query.version)) {
+      requireVersion(query.version);
+      return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Quest observations are captured for Forever, Classic Era, and TBC Anniversary only; Retail quest state is not part of the WoWSync capture." } } };
+    }
+    const version = query.version;
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      const identity = { identityKey: character.identityKey, name: character.name, realm: character.realm };
+      if (!snapshot) return { provenance: { state: "UNKNOWN", version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
+      const domain = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState.quests : undefined;
+      const carried = domain?.status.state === "LAST_SEEN";
+      const section = domain ? { data: domain.data, observedAt: domain.observedAt, completeness: domain.completeness, ...(domain.status.reason ? { reason: domain.status.reason } : {}), ...(carried ? { lastAttemptStale: true } : {}) } : undefined;
+      const profile = typeof (domain?.data as Record<string, unknown> | undefined)?.clientProfile === "string" ? (domain!.data as Record<string, unknown>).clientProfile as string : "UNKNOWN";
+      const observation = buildQuestObservation({ version, section, profile, identity, now: this.now(), ...(query.completedQuestIDs ? { completedLookup: query.completedQuestIDs } : {}) });
+      return { data: observation, provenance: { state: observation.state, version, identityKey: character.identityKey, ...(observation.observedAt !== undefined ? { observedAt: observation.observedAt } : {}), importedAt: snapshot.importedAt, snapshotId: domain?.status.carriedFromSnapshotId ?? snapshot.id, freshness: observation.freshness, source: "Classic legacy quest log sidecar (GearExport WoWSyncDB)",
+        ...(observation.reason ? { reason: observation.reason } : !domain ? { reason: "No Classic quest sidecar has been imported for this character." } : {}),
+        ...(observation.state === "LAST_SEEN" ? { warning: carried ? `Quest values are carried from snapshot ${domain!.status.carriedFromSnapshotId}; they are historical, not current.` : "Quest values are historical and are not a current observation." } : {}) } };
+    });
+  }
+
+  /** Classic Era / TBC visible reputation rows and talent trees. Retail reputation is read with get_renown. */
+  getCharacterProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ClassicTalentView }>> {
+    if (!isClassicVersion(query.version)) {
+      requireVersion(query.version);
+      return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: query.version === "retail" ? "Retail reputation is captured separately; use get_renown (major factions) and get_account_overview. Retail talents are summarized under combat specialization." : "Reputation and talent observations are captured for Classic Era and TBC Anniversary only." } } };
+    }
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
+      const state = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState : undefined;
+      const reputation = buildClassicReputationView(state?.reputation?.character, this.now(), { ...(query.factionQuery ? { query: query.factionQuery } : {}) });
+      const talents = buildClassicTalentView(state?.talents, this.now(), { includeTalents: query.includeTalents === true });
+      const states = [reputation.state, talents.state];
+      const overall: ReadState = states.every((value) => value === "UNKNOWN") ? "UNKNOWN" : states.includes("LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
+      return { data: { version: query.version, reputation, talents }, provenance: { state: overall, version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, importedAt: snapshot.importedAt, source: "Classic legacy reputation and talent sidecars (GearExport WoWSyncDB)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character." } : {}), ...(overall === "LAST_SEEN" ? { warning: "At least one domain is historical; each domain states its own evidence." } : {}) } };
     });
   }
 
@@ -1538,7 +1636,7 @@ export class DashboardReadModel {
       const section = snapshot.parsed.trainer;
       const status = section.status.state;
       // Trainer offers joined to this character's captured recipe rows (Forever/Retail only).
-      const recipeRows = query.version === "forever" || query.version === "retail" ? knowledgeRows(resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot)) : [];
+      const recipeRows = supportsRecipeCapture(query.version) ? knowledgeRows(resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot)) : [];
       const selectedCategories = [...section.categories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
       const categoryRead = selectedCategories.map((category) => {
         const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);

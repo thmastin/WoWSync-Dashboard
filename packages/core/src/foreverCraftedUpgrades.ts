@@ -3,7 +3,7 @@
 import { classifyFreshness } from "./freshness.ts";
 import { compareForeverStatTables, evaluateForeverSlotCompatibility, foreverSlotsForEquipLocation, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import type { RecipeEvidenceResolution } from "./recipeEvidence.ts";
-import { foreverBuildVerification, type ForeverBuildVerification } from "./foreverProfile.ts";
+import { foreverBuildVerification, foreverCompatibility, type ForeverBuildVerification } from "./foreverProfile.ts";
 import type { ParsedSnapshot, SectionState } from "./types.ts";
 
 type Row = Record<string, unknown>;
@@ -13,7 +13,7 @@ type ReferenceLead = { build: string; relationToSnapshot: "BUILD_MATCHED_REFEREN
 export interface ForeverCraftedUpgradeAssessment {
   version: "forever";
   identity: { identityKey: string; name: string; surname?: string; realm: string };
-  snapshot: { snapshotId: number; generatedAt?: number; importedAt: number; clientProfile: string; buildVerification: ForeverBuildVerification; freshness: "recent" | "stale" | "unknown" };
+  snapshot: { snapshotId: number; generatedAt?: number; importedAt: number; clientProfile: string; buildVerification: ForeverBuildVerification; compatibility: ReturnType<typeof foreverCompatibility>; freshness: "recent" | "stale" | "unknown" };
   recipeEvidence: { state: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; sourceSnapshotId?: number; observedAt?: number; freshness: "recent" | "stale" | "unknown"; excludedScopes: RecipeEvidenceResolution["excludedScopes"]; reason: string };
   recipeCoverage: { state: string; candidateCompleteness: string; returnedRecipeCount?: number; learnedTrueCount?: number; knownNonEquipmentLearnedRecipeCount: number; equipmentCandidatesReturned: number; reason: string };
   candidates: ForeverCraftedUpgradeCandidate[];
@@ -211,7 +211,7 @@ export function buildForeverCraftedUpgradeAssessment(input: { identity: ForeverC
   const guid = str(structured.sourceCharacterGuid);
   return {
     version: "forever", identity,
-    snapshot: { snapshotId: snapshot.id, ...(snapshot.generatedAt !== undefined ? { generatedAt: snapshot.generatedAt } : {}), importedAt: snapshot.importedAt, clientProfile: str(structured.clientProfile) ?? `Forever:${parsed.character.clientVersion ?? "unknown"}:${parsed.character.clientBuild ?? "unknown"}:${parsed.character.interface ?? "unknown"}`, buildVerification: foreverBuildVerification(parsed.character.clientBuild), freshness: freshness(snapshot.generatedAt ?? snapshot.importedAt, now) },
+    snapshot: { snapshotId: snapshot.id, ...(snapshot.generatedAt !== undefined ? { generatedAt: snapshot.generatedAt } : {}), importedAt: snapshot.importedAt, clientProfile: str(structured.clientProfile) ?? `Forever:${parsed.character.clientVersion ?? "unknown"}:${parsed.character.clientBuild ?? "unknown"}:${parsed.character.interface ?? "unknown"}`, buildVerification: foreverBuildVerification(parsed.character), compatibility: foreverCompatibility(parsed.character), freshness: freshness(snapshot.generatedAt ?? snapshot.importedAt, now) },
     recipeCoverage: { state: str(coverage.state) ?? str(recipeSection?.status) ?? "UNKNOWN", candidateCompleteness: str(coverage.candidateCompleteness) ?? "UNKNOWN", ...(number(coverage.returnedRecipeCount) !== undefined ? { returnedRecipeCount: number(coverage.returnedRecipeCount) } : {}), ...(number(coverage.learnedTrueCount) !== undefined ? { learnedTrueCount: number(coverage.learnedTrueCount) } : {}), knownNonEquipmentLearnedRecipeCount: learnedNonEquipment.length, equipmentCandidatesReturned: candidateBuilds.length, reason: "Only positively OBSERVED_TRUE learned recipes are assessed. Partial catalogue coverage means unreturned recipes remain unknown, not unlearned." },
     recipeEvidence: { state: recipeState, ...(recipeEvidence?.sourceSnapshotId !== undefined ? { sourceSnapshotId: recipeEvidence.sourceSnapshotId } : recipeSection ? { sourceSnapshotId: snapshot.id } : {}), ...(number(recipeSection?.observedAt) !== undefined ? { observedAt: number(recipeSection?.observedAt) } : {}), freshness: freshness(number(recipeSection?.observedAt), now), excludedScopes: recipeEvidence?.excludedScopes ?? [], reason: recipeEvidence?.reason ?? (recipeSection ? "Recipe rows were observed in this snapshot." : "This snapshot contains no structured recipe section; recipe knowledge is UNKNOWN, not empty.") },
     candidates: candidateBuilds,

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForeverQuestObservation } from "../src/foreverQuests.ts";
+import { buildForeverQuestObservation, buildQuestObservation } from "../src/foreverQuests.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
@@ -229,4 +229,23 @@ test("quest resolver keeps missing sidecar evidence UNKNOWN rather than an empty
       assert.equal(result.value.data?.completedHistory.state, "UNKNOWN");
     }
   } finally { store.close(); }
+});
+
+test("exporter-kept LAST_SEEN quest rows and completed IDs are never presented as current", () => {
+  // GearExport keeps a quest that vanished from the log (turned in, abandoned, filtered) as evidence LAST_SEEN.
+  const stale = { ...questData.active[0], evidence: "LAST_SEEN", lastSeenAt: NOW - 500 };
+  const result = buildForeverQuestObservation({ section: section({ active: [stale], activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, completedHistory: { state: "PARTIAL", questIDs: [7, 8], quests: [{ questID: 7, evidence: "LAST_SEEN" }, { questID: 8, evidence: "OBSERVED" }], returnedCount: 2 } }), profile: "Forever:1.60.1:70338:16001", identity, now: NOW, completedLookup: [7, 8, 9] });
+  assert.equal(result.active![0]!.rowEvidence, "LAST_SEEN");
+  assert.equal(result.active![0]!.titleState, "LAST_SEEN");
+  assert.equal(result.active![0]!.lastSeenAt, NOW - 500);
+  assert.equal(result.completeness, "partial");
+  assert.equal(result.completedHistory.lastSeenCount, 1);
+  assert.deepEqual(result.completedHistory.lookup, [{ questID: 7, state: "LAST_SEEN" }, { questID: 8, state: "OBSERVED" }, { questID: 9, state: "UNKNOWN" }]);
+});
+
+test("a Classic quest section is never accepted under a Forever profile, nor a Forever section under Classic", () => {
+  const classic = buildQuestObservation({ version: "classic-era", section: section(), profile: "Forever:1.60.1:70338:16001", identity, now: NOW });
+  assert.equal(classic.state, "UNKNOWN");
+  const forever = buildForeverQuestObservation({ section: section({ clientFamily: "Classic", clientProfile: "Classic:2:11509", source: "legacy quest log APIs" }), profile: "Classic:2:11509", identity, now: NOW });
+  assert.equal(forever.state, "UNKNOWN");
 });

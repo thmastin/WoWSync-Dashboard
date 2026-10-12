@@ -792,7 +792,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     // Parse first: a malformed export throws before anything is written.
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
-    const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version);
+    const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version, parsed.character);
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
     const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
     if (normalizedForeverObservation) parsed.foreverGearObservation = normalizedForeverObservation;
@@ -892,7 +892,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const index = rows.findIndex((row) => row.id === newId);
       const isLatest = index === 0;
       const predecessorRow = rows[index + 1];
-      if (isLatest && predecessorRow) {
+      // Classic sidecars are not copied into later snapshots: GearExport already keeps per-row
+      // LAST_SEEN history, and read-time resolution (snapshotEvidence.ts) carries absent domains.
+      if (isLatest && predecessorRow && parsed.characterState?.clientFamily !== "Classic" && toStoredSnapshot(predecessorRow).parsed.characterState?.clientFamily !== "Classic") {
         const predecessor = toStoredSnapshot(predecessorRow).parsed.characterState;
         const merged = mergeCharacterState(predecessor, parsed.characterState);
         if (merged) {
@@ -1588,8 +1590,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (!latestRow) continue;
       const latest = toStoredSnapshot(latestRow);
       // Only pay for history when the latest export left a section unobserved.
-      const needsHistory = CARRIED_SECTIONS.some((key) => latest.parsed[key].status.state === "UNKNOWN") || ((version === "forever" || version === "retail") && !snapshotRecipeSection(version, latest))
-        || (version === "retail" && (!latest.parsed.characterState?.combatSpecialization || !latest.parsed.characterState?.reputation?.character));
+      const needsHistory = CARRIED_SECTIONS.some((key) => latest.parsed[key].status.state === "UNKNOWN") || ((version === "forever" || version === "retail" || version === "classic-era" || version === "tbc-anniversary") && !snapshotRecipeSection(version, latest))
+        || (version === "retail" && (!latest.parsed.characterState?.combatSpecialization || !latest.parsed.characterState?.reputation?.character))
+        || ((version === "classic-era" || version === "tbc-anniversary") && (!latest.parsed.characterState?.quests || !latest.parsed.characterState?.talents || !latest.parsed.characterState?.reputation?.character));
       latestParsed.set(character.identityKey, needsHistory ? resolveSnapshotView(version, this.listSnapshots(character.identityKey), latest, { recipes: true }).parsed : latest.parsed);
     }
     const allDiffs = this.allDiffs(version);

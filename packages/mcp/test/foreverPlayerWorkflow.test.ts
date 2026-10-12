@@ -112,8 +112,9 @@ test("FOREVER WORKFLOW: a multi-character launch-build account answers crafting,
     assert.deepEqual(assessment.value.data.candidates.map((row) => [row.recipe.recipeID, row.crafting.state, row.upgradeConclusion.state]), [[2663, "NOT_ESTABLISHED", "UNKNOWN"], [12260, "BLOCKED_BY_OBSERVED_REAGENTS", "UNKNOWN"]]);
 
     // Version isolation: the Classic Era twin never gets Forever recipes.
-    const era = await call<{ provenance: { state: string } }>("find_recipe_crafters", { version: "classic-era", outputItemID: 2853 });
-    assert.equal(era.provenance.state, "UNKNOWN");
+    const era = await call<{ data: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> } }>("find_recipe_crafters", { version: "classic-era", outputItemID: 2853 });
+    assert.deepEqual(era.data.learned, []);
+    assert.deepEqual(era.data.charactersWithoutRecipeEvidence.map((row) => row.name), ["Smith"], "the Classic twin has no recipe capture: UNKNOWN, not unable");
   } finally {
     await client.close();
   }

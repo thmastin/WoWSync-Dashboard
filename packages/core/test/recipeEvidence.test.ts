@@ -107,7 +107,8 @@ test("recipe evidence never crosses WoW versions for a same-named character", ()
   assert.equal(classic.status, "FOUND", "the Classic Era twin is a separate identity");
   if (classic.status === "FOUND") {
     assert.notEqual(classic.value.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
-    assert.equal((classic.value.data as any)?.recipeKnowledge, undefined, "Classic Era never receives Forever recipe rows");
+    assert.equal((classic.value.data as any)?.recipeKnowledge?.status.state, "UNKNOWN", "Classic Era never receives Forever recipe rows");
+    assert.equal((classic.value.data as any)?.recipeKnowledge?.data, undefined);
   }
   const forever = read.getCharacterProfessions(RORDIN);
   assert.equal(forever.status === "FOUND" && (forever.value.data?.recipeKnowledge as any)?.evidence.sourceSnapshotId, 180);
@@ -138,9 +139,9 @@ test("find_recipe_crafters: Rordin is a LAST_SEEN crafter; characters without ca
   assert.deepEqual(byOutput.learned.map((row) => [row.name, row.recipe.recipeID, row.recipe.evidence, row.recipe.sourceSnapshotId, row.professionSkill?.skill]), [["Rordin", 2663, "LAST_SEEN", 180, 4]]);
   assert.deepEqual(byOutput.charactersWithoutRecipeEvidence.map((row) => row.name), ["Hallo"]);
   const byName = read.findRecipeCrafters({ version: "forever", nameContains: "copper" }).data!;
-  assert.deepEqual(byName.learned.map((row) => row.recipe.recipeID).sort((a, b) => a - b), [2663, 12260, 1245287]);
+  assert.deepEqual(byName.learned.map((row) => row.recipe.recipeID!).sort((a, b) => a - b), [2663, 12260, 1245287]);
   assert.equal(read.findRecipeCrafters({ version: "retail", recipeID: 2663 }).data?.learned.length, 0, "Forever rows never appear in Retail");
-  assert.equal(read.findRecipeCrafters({ version: "classic-era", recipeID: 2663 }).provenance.state, "UNKNOWN");
+  assert.equal(read.findRecipeCrafters({ version: "classic-era", recipeID: 2663 }).data?.learned.length, 0, "Forever rows never appear in Classic Era");
   assert.throws(() => read.findRecipeCrafters({ version: "forever" }), /Provide recipeID/);
 }));
 
@@ -150,7 +151,9 @@ test("get_recipe_reagent_availability separates crafter bags, unknown bank, and 
   const result = new DashboardReadModel(store, () => NOW).getRecipeReagentAvailability({ ...RORDIN, recipeID: 12260 });
   assert.equal(result.status, "FOUND");
   if (result.status !== "FOUND") return;
-  const value = result.value.data!;
+  const raw = result.value.data!;
+  assert.ok("recipe" in raw);
+  const value = raw;
   assert.equal(value.recipe.evidence, "LAST_SEEN");
   assert.equal(value.craftability, "NOT_ESTABLISHED");
   const copper = value.reagents[0]!.perAlternative[0]!;
@@ -215,7 +218,7 @@ test("trainer offers join captured recipe rows by exact ID first, then by unique
 }));
 
 test("matchTrainerService never joins across professions and refuses ambiguous names", () => {
-  const row = (recipeID: number, name: string, profession: string): RecipeKnowledgeRow => ({ recipeID, name, profession, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", reagentSlots: [] });
+  const row = (recipeID: number, name: string, profession: string): RecipeKnowledgeRow => ({ recipeID, identityBasis: "RECIPE_ID", name, profession, learnedState: "OBSERVED_FALSE", knowledgeClass: "VISIBLE_NOT_LEARNED", evidence: "OBSERVED", outputKind: "UNKNOWN", reagentSlots: [] });
   const rows = [row(100, "Copper Rod", "Blacksmithing"), row(200, "Elixir", "Alchemy"), row(300, "Twin", "Blacksmithing"), row(301, "Twin", "Blacksmithing")];
   assert.equal(matchTrainerService({ spellID: "200", ability: "Elixir" }, rows, "Blacksmithing"), undefined, "an ID from another profession is not a match");
   assert.equal(matchTrainerService({ spellID: "100" }, rows, "Blacksmithing")?.basis, "RECIPE_ID");

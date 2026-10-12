@@ -201,6 +201,10 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
+  // GearExport 2c5e9b3+: Forever exports state their own compatibility claim. Kept verbatim and never
+  // trusted over the Dashboard's own build verification.
+  const exporterCompatibility = clientFamily !== undefined ? fieldValue(get("Compatibility: ", false)) : undefined;
+  const exporterCompatibilityNote = exporterCompatibility !== undefined ? fieldValue(get("CompatibilityNote: ", false)) : undefined;
   if (surname !== undefined && !isForeverClient({ clientFamily, clientVersion, clientBuild, interface: iface })) {
     fail("Surname is only supported for a well-formed Forever client profile");
   }
@@ -224,6 +228,8 @@ function parseCharacter(lines: string[]): CharacterSection {
     clientBuild,
     clientFamily,
     interface: iface,
+    ...(exporterCompatibility !== undefined ? { exporterCompatibility } : {}),
+    ...(exporterCompatibilityNote !== undefined ? { exporterCompatibilityNote } : {}),
   };
 }
 

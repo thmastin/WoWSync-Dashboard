@@ -185,6 +185,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_progression",
+      "get_character_quests",
       "get_character_spells",
       "get_character_state",
       "get_character_storage",
@@ -218,8 +220,8 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const crafters = structured<{ data?: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }));
     assert.equal(crafters.provenance.state, "DERIVED");
     assert.ok(crafters.data?.charactersWithoutRecipeEvidence.some((row) => row.name === "Hallo"), "characters without captures are reported as unresolved, not unable");
-    const eraCrafters = structured<{ provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "classic-era", recipeID: 2663 } }));
-    assert.equal(eraCrafters.provenance.state, "UNKNOWN");
+    const eraCrafters = structured<{ data?: { learned: unknown[] }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "classic-era", recipeID: 2663 } }));
+    assert.equal(eraCrafters.data?.learned.length, 0, "Forever recipe rows never appear in Classic Era");
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
@@ -859,6 +861,8 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_progression",
+      "get_character_quests",
       "get_character_spells",
       "get_character_state",
       "get_character_storage",

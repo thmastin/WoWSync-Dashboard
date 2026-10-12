@@ -49,9 +49,17 @@ function record(value: unknown): Row | undefined { return value && typeof value 
 /** Raw recipe section for one snapshot, using the version's established sidecar location. */
 export function snapshotRecipeSection(version: VersionOrUnknown, snapshot: StoredSnapshot): CapturedCharacterDomain | undefined {
   if (version === "forever") return snapshot.parsed.foreverGearObservation?.professionRecipes as CapturedCharacterDomain | undefined;
-  if (version === "retail") return snapshot.parsed.characterState?.professionRecipes;
+  if (version === "retail") return snapshot.parsed.characterState?.clientFamily === "Retail" ? snapshot.parsed.characterState.professionRecipes : undefined;
+  if (version === "classic-era" || version === "tbc-anniversary") return snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState.professionRecipes : undefined;
   return undefined;
 }
+
+/** Versions with a structured recipe capture (Retail C_TradeSkillUI, Forever, Classic legacy open-window lists). */
+export function supportsRecipeCapture(version: VersionOrUnknown): version is "retail" | "forever" | "classic-era" | "tbc-anniversary" {
+  return version === "retail" || version === "forever" || version === "classic-era" || version === "tbc-anniversary";
+}
+
+const RECIPE_SOURCE_LABEL: Record<string, string> = { forever: "Forever", retail: "Retail", "classic-era": "Classic Era legacy profession window", "tbc-anniversary": "TBC Anniversary legacy profession window" };
 
 function clientKey(snapshot: StoredSnapshot): string {
   const c = snapshot.parsed.character;
@@ -59,12 +67,12 @@ function clientKey(snapshot: StoredSnapshot): string {
 }
 
 function guid(snapshot: StoredSnapshot): string | undefined {
-  return snapshot.parsed.foreverGearObservation?.sourceCharacterGuid;
+  return snapshot.parsed.foreverGearObservation?.sourceCharacterGuid ?? snapshot.parsed.characterState?.sourceCharacterGuid;
 }
 
 function profileOf(version: VersionOrUnknown, snapshot: StoredSnapshot): string {
   const c = snapshot.parsed.character;
-  return snapshot.parsed.foreverGearObservation?.clientProfile ?? `${c.clientFamily ?? version}:${c.clientVersion ?? "unknown"}:${c.clientBuild ?? "unknown"}:${c.interface ?? "unknown"}`;
+  return snapshot.parsed.foreverGearObservation?.clientProfile ?? (snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState.clientProfile : undefined) ?? `${c.clientFamily ?? version}:${c.clientVersion ?? "unknown"}:${c.clientBuild ?? "unknown"}:${c.interface ?? "unknown"}`;
 }
 
 /**
@@ -74,7 +82,7 @@ function profileOf(version: VersionOrUnknown, snapshot: StoredSnapshot): string 
 export function resolveRecipeEvidence(version: VersionOrUnknown, snapshots: readonly StoredSnapshot[], selected: StoredSnapshot | undefined): RecipeEvidenceResolution {
   const base = { excludedScopes: [] as ExcludedRecipeScope[], snapshotsWithoutRecipeSection: 0, completeness: "unknown" as const };
   if (!selected) return { ...base, state: "UNKNOWN", reason: "No snapshot exists for this character." };
-  if (version !== "forever" && version !== "retail") {
+  if (!supportsRecipeCapture(version)) {
     return { ...base, state: "UNKNOWN", selectedSnapshotId: selected.id, reason: `Structured learned-recipe capture is not supported for ${version}; recipe knowledge is UNKNOWN, not empty.` };
   }
   // Order by the store's chronology (generated time with import-time ceiling,
@@ -97,7 +105,7 @@ export function resolveRecipeEvidence(version: VersionOrUnknown, snapshots: read
     }
     return materialize(version, selected, source, section, skipped);
   }
-  return { ...base, state: "UNKNOWN", selectedSnapshotId: selected.id, snapshotsWithoutRecipeSection: skipped, reason: `No structured profession recipe section (${version === "forever" ? "Forever" : "Retail"}) exists in any of the ${skipped} snapshot(s) at or before snapshot ${selected.id}. The profession panel must be opened before capture; missing rows do not mean unlearned.` };
+  return { ...base, state: "UNKNOWN", selectedSnapshotId: selected.id, snapshotsWithoutRecipeSection: skipped, reason: `No structured profession recipe section (${RECIPE_SOURCE_LABEL[version]}) exists in any of the ${skipped} snapshot(s) at or before snapshot ${selected.id}. The profession panel must be opened before capture; missing rows do not mean unlearned.` };
 }
 
 function materialize(version: VersionOrUnknown, selected: StoredSnapshot, source: StoredSnapshot, section: CapturedCharacterDomain, skipped: number): RecipeEvidenceResolution {
@@ -157,5 +165,6 @@ export function withResolvedRecipeSection(version: VersionOrUnknown, parsed: Par
   if (!resolution.section) return parsed;
   if (version === "forever") return { ...parsed, foreverGearObservation: { ...(parsed.foreverGearObservation ?? {}), professionRecipes: resolution.section } as ParsedSnapshot["foreverGearObservation"] };
   if (version === "retail") return { ...parsed, characterState: { ...(parsed.characterState ?? { formatVersion: 1, clientFamily: "Retail" }), professionRecipes: resolution.section } as CapturedCharacterState };
+  if (version === "classic-era" || version === "tbc-anniversary") return { ...parsed, characterState: { ...(parsed.characterState ?? { formatVersion: 1, clientFamily: "Classic" }), professionRecipes: resolution.section } as CapturedCharacterState };
   return parsed;
 }
