@@ -1588,7 +1588,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (!latestRow) continue;
       const latest = toStoredSnapshot(latestRow);
       // Only pay for history when the latest export left a section unobserved.
-      const needsHistory = CARRIED_SECTIONS.some((key) => latest.parsed[key].status.state === "UNKNOWN") || ((version === "forever" || version === "retail") && !snapshotRecipeSection(version, latest));
+      const needsHistory = CARRIED_SECTIONS.some((key) => latest.parsed[key].status.state === "UNKNOWN") || ((version === "forever" || version === "retail") && !snapshotRecipeSection(version, latest))
+        || (version === "retail" && (!latest.parsed.characterState?.combatSpecialization || !latest.parsed.characterState?.reputation?.character));
       latestParsed.set(character.identityKey, needsHistory ? resolveSnapshotView(version, this.listSnapshots(character.identityKey), latest, { recipes: true }).parsed : latest.parsed);
     }
     const allDiffs = this.allDiffs(version);

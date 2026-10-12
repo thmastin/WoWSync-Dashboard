@@ -14,7 +14,7 @@
 import { snapshotObservedAt } from "./chronology.ts";
 import { resolveRecipeEvidence, snapshotRecipeSection, withResolvedRecipeSection } from "./recipeEvidence.ts";
 import type { StoredSnapshot } from "./store.ts";
-import type { ParsedSnapshot, SectionStatus, VersionOrUnknown } from "./types.ts";
+import type { CapturedCharacterDomain, CapturedCharacterState, ParsedSnapshot, SectionStatus, VersionOrUnknown } from "./types.ts";
 
 export const CARRIED_SECTIONS = ["equipment", "bags", "bank", "professions", "trainer"] as const;
 export type CarriedSection = typeof CARRIED_SECTIONS[number];
@@ -52,8 +52,35 @@ export function resolveSnapshotView(version: VersionOrUnknown, snapshots: readon
       : { ...section, status };
     parsed = { ...parsed, [key]: carried };
   }
+  if (version === "retail") parsed = carryRetailState(parsed, older, selected.id);
   if (options.recipes && (version === "forever" || version === "retail") && !snapshotRecipeSection(version, selected)) {
     parsed = withResolvedRecipeSection(version, parsed, resolveRecipeEvidence(version, snapshots, selected));
   }
   return parsed === selected.parsed ? selected : { ...selected, parsed };
+}
+
+const lastSeen = (domain: CapturedCharacterDomain, sourceId: number, selectedId: number): CapturedCharacterDomain => ({
+  ...domain,
+  status: { ...domain.status, state: "LAST_SEEN", carriedFromSnapshotId: sourceId, reason: `Not captured in snapshot ${selectedId}; carried forward from snapshot ${sourceId}. Historical, not current.` },
+});
+
+/**
+ * Retail SavedVariables state domains (specializations, reputation) carried
+ * forward when a newer import lacks them (e.g. a text-only import). Recipes
+ * are handled by recipeEvidence.ts.
+ */
+function carryRetailState(parsed: ParsedSnapshot, older: readonly StoredSnapshot[], selectedId: number): ParsedSnapshot {
+  const current: CapturedCharacterState = parsed.characterState ?? { formatVersion: 1, clientFamily: "Retail" };
+  let next = current;
+  for (const key of ["combatSpecialization", "professionSpecializations"] as const) {
+    if (next[key]) continue;
+    const source = older.find((snapshot) => snapshot.parsed.characterState?.[key]);
+    if (source) next = { ...next, [key]: lastSeen(source.parsed.characterState![key]!, source.id, selectedId) };
+  }
+  for (const scope of ["character", "account"] as const) {
+    if (next.reputation?.[scope]) continue;
+    const source = older.find((snapshot) => snapshot.parsed.characterState?.reputation?.[scope]);
+    if (source) next = { ...next, reputation: { ...next.reputation, [scope]: lastSeen(source.parsed.characterState!.reputation![scope]!, source.id, selectedId) } };
+  }
+  return next === current ? parsed : { ...parsed, characterState: next };
 }
