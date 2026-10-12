@@ -145,13 +145,17 @@ test("Forever observation REST route preserves the build guard for older capture
 });
 
 test("Forever potential equipment candidates reach REST and AccountContext with eligibility and upgrade UNKNOWN", async () => {
-  const generatedAt = 1_791_509_781;
+  // This HTTP test covers a current observation; keep the exported observation
+  // within the production three-day freshness window regardless of when the
+  // suite runs. Stale and missing Forever evidence are covered separately.
+  const generatedAt = Math.floor(Date.now() / 1000) - 60;
   const itemString = "item:1777:3:5";
   const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed item", qty: 1 }] }] }, bank: { unknown: true } });
   await withApp(async (api) => {
     const key = "forever::forever realm::gearcheck";
     const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-observation`);
     assert.equal(rest.body.value.data.evaluationCandidates.state, "OBSERVED");
+    assert.equal(rest.body.value.data.evaluationCandidates.freshness, "recent");
     assert.equal(rest.body.value.data.evaluationCandidates.items[0].itemRef, itemString);
     assert.equal(rest.body.value.data.evaluationCandidates.items[0].eligibility, "UNKNOWN");
     assert.equal(rest.body.value.data.evaluationCandidates.items[0].upgradeStatus, "UNKNOWN");
@@ -166,6 +170,13 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
     assert.deepEqual(accountView.value, rest.body.value, "AccountContext reuses the REST read model result");
     assert.deepEqual(accountView.value.data.quests.active, questRest.body.value.data.active, "AccountContext and quest REST use the same projection");
     assert.equal(context.body.versions.retail.characters.some((character: any) => character.identityKey === key), false);
+
+    const retailText = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Retail", clientVersion: "12.0.0" } });
+    const retailImport = await api.importCapture({ text: retailText });
+    assert.equal(retailImport.status, 200);
+    const retailQuest = await api.get("/api/characters/retail%3A%3Aforever%20realm%3A%3Agearcheck/forever-quests");
+    assert.equal(retailQuest.status, 404);
+    assert.equal(retailQuest.body.code, "VERSION_NOT_SUPPORTED");
   }, (store) => store.importSnapshot(text, { foreverGearObservation: {
     clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
     equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
