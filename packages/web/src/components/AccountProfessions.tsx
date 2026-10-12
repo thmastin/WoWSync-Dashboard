@@ -127,7 +127,8 @@ export default function AccountProfessions({
       completeness: character.specialization?.completeness ?? "unknown", nodes: Array.isArray(tree.nodes) ? tree.nodes : [], currencies: Array.isArray(tier.currencies) ? tier.currencies : [],
     }))));
   });
-  const showRecipeObservations = isRetail || scoped.version === "forever";
+  const isClassic = scoped.version === "classic-era" || scoped.version === "tbc-anniversary";
+  const showRecipeObservations = isRetail || scoped.version === "forever" || isClassic;
   const recipeObservations = showRecipeObservations ? scoped.professions.byCharacter.flatMap((character) => {
     const scopes = character.recipeKnowledge?.data?.professions;
     if (!Array.isArray(scopes)) return [];
@@ -138,7 +139,9 @@ export default function AccountProfessions({
         learned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_TRUE").length,
         unlearned: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_FALSE").length,
         unknown: recipes.filter((recipe: any) => recipe.learnedState !== "OBSERVED_TRUE" && recipe.learnedState !== "OBSERVED_FALSE").length,
-        learnedRows: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_TRUE" && recipe.learned === true && recipe.evidence === "OBSERVED") };
+        // Classic legacy rows state learnedState only (no learned flag); their row evidence may be the
+        // exporter's LAST_SEEN, which is shown as such rather than hidden.
+        learnedRows: recipes.filter((recipe: any) => recipe.learnedState === "OBSERVED_TRUE" && (recipe.learned === true || isClassic) && (recipe.evidence === "OBSERVED" || isClassic && recipe.evidence === "LAST_SEEN")) };
     });
   }) : [];
 
@@ -248,23 +251,27 @@ export default function AccountProfessions({
       {showRecipeObservations && (recipeObservations.length > 0 || !filterActive) && (
         <section className="panel">
           <h3>Observed recipe knowledge</h3>
-          <p className="muted small">{scoped.version === "forever"
+          <p className="muted small">{isClassic
+            ? "Classic recipe rows come only from profession windows the player opened. TradeSkill rows are the character's own learned list; Craft-window rows (e.g. Enchanting) are visible but their learned state is unknown. Coverage is partial; absence does not mean unlearned."
+            : scoped.version === "forever"
             ? "Forever recipe rows are observed candidates from the character's captured profession data. Candidate coverage is incomplete; absence does not mean unlearned, and recipe data alone does not prove current craftability."
             : "Returned recipes only; the client has not established a complete recipe catalogue. No account-wide missing-recipe count is available."}</p>
           {recipeObservations.length === 0 ? <p className="muted">No profession recipe state has been observed yet.</p> : (
             <div className="table-scroll"><table className="history-table professions-table">
               <thead><tr><th>Character</th><th>Profession context</th><th>Observation</th><th>Known in context</th><th>Unlearned in context</th><th>Unknown in context</th><th>Observed learned recipes</th><th>Coverage</th></tr></thead>
               <tbody>{recipeObservations.filter((row) => matchesFilter(row.scope.professionName ?? row.scope.baseProfessionName ?? "", filter)).map((row) => (
-                <tr key={`${row.identityKey}:${row.scope.baseSkillLineID}:${row.scope.skillLineID}`}>
+                <tr key={`${row.identityKey}:${row.scope.professionKey ?? `${row.scope.baseSkillLineID}:${row.scope.skillLineID}`}`}>
                   <td><button type="button" className="roster-name-link profession-char-chip" onClick={() => onOpenCharacter(row.identityKey)}>{row.characterName}</button></td>
-                  <td>{row.scope.professionName ?? row.scope.baseProfessionName} <span className="muted small">({row.scope.skillLineID})</span></td>
+                  <td>{row.scope.professionName ?? row.scope.baseProfessionName ?? row.scope.name}{row.scope.skillLineID !== undefined ? <span className="muted small"> ({row.scope.skillLineID})</span> : null}</td>
                   <td>{row.state === "LAST_SEEN" || row.scope.evidence === "LAST_SEEN" ? "LAST_SEEN" : row.scope.evidence ?? "UNKNOWN"} · {row.scope.observedAt ? new Date(row.scope.observedAt * 1000).toLocaleString() : "time unknown"}</td>
                   <td>{row.learned}</td><td>{row.unlearned}</td><td>{row.unknown}</td>
                   <td>{row.learnedRows.length === 0 ? "None observed" : <details><summary>{row.learnedRows.length} recipe(s)</summary><ul>{row.learnedRows.map((recipe: any) => {
-                    const reagents = Array.isArray(recipe.reagentSlots) ? recipe.reagentSlots.flatMap((slot: any) => (slot.reagents ?? []).map((item: any) => `${slot.quantityRequired ?? "?"} × item ${item.itemID ?? "?"}`)).join(", ") : "Reagents UNKNOWN";
-                    return <li key={recipe.recipeID}>{recipe.name ?? `Recipe ${recipe.recipeID}`} (ID {recipe.recipeID}){typeof recipe.outputItemID === "number" ? ` → item ${recipe.outputItemID}` : " → output UNKNOWN"}; {reagents}</li>;
+                    const reagents = Array.isArray(recipe.reagentSlots) ? recipe.reagentSlots.flatMap((slot: any) => (slot.reagents ?? []).map((item: any) => `${slot.quantityRequired ?? "?"} × item ${item.itemID ?? "?"}`)).join(", ")
+                      : Array.isArray(recipe.reagents) ? recipe.reagents.map((item: any) => `${item.required ?? "?"} × item ${item.itemID ?? "?"}`).join(", ") : "Reagents UNKNOWN";
+                    const output = typeof recipe.outputItemID === "number" ? ` → item ${recipe.outputItemID}` : typeof recipe.enchantID === "number" ? ` → enchant ${recipe.enchantID}` : " → output UNKNOWN";
+                    return <li key={recipe.recipeID ?? recipe.recipeKey ?? recipe.name}>{recipe.name ?? `Recipe ${recipe.recipeID}`}{typeof recipe.recipeID === "number" ? ` (ID ${recipe.recipeID})` : ""}{recipe.evidence === "LAST_SEEN" ? " · LAST_SEEN" : ""}{output}; {reagents}</li>;
                   })}</ul></details>}</td>
-                  <td>PARTIAL · {row.associated} associated · {row.total} returned in context</td>
+                  <td>PARTIAL · {isClassic ? `${row.total} visible rows` : `${row.associated} associated · ${row.total} returned in context`}</td>
                 </tr>
               ))}</tbody>
             </table></div>
