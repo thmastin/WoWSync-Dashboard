@@ -1,6 +1,15 @@
 # Current WoWSync ERP state — Operations platform source checkpoint (2026-10-11)
 
-**Forever launch-readiness checkpoint (2026-10-12, not deployed):** `feature/profession-intelligence` `ed3747d` (on top of DEV `4ed2590`) does the following:
+**DEV deployment (2026-10-12):** guarded promote of `b5609a55da3d11eced7d13ddc83411c2a4bf026e` from `4ed2590`.
+- `b5609a5` is docs-only; its `packages/` and `tools/` trees are identical to the reviewed code commit `ed3747d`.
+- Backup `/var/lib/wowsync-dev/backups/deploy/20261012T164246.470Z-e812d9ef-4ed2590…-to-b5609a5….sqlite`, integrity ok.
+- Schema unchanged. Dashboard and MCP healthy, Herdr untouched, no journal warnings.
+- Post-deploy, `POST /api/ask` returns 404 and `/api/account-context` returns 200.
+- Rordin's assessment reads snapshot 190 on a VERIFIED build, with LAST_SEEN recipes from snapshot 180. Both recipes are `BLOCKED_BY_OBSERVED_REAGENTS` (no Copper Bars in the complete current bags); bank and upgrade are UNKNOWN.
+- Connected ChatGPT MCP acceptance is pending.
+- Rollback: `wowsync-dev-deploy rollback 4ed2590e909ed4d6e20fa1fb345bbd867dbcd2fa`.
+
+**Forever launch-readiness checkpoint (2026-10-12):** `feature/profession-intelligence` `ed3747d` (on top of DEV `4ed2590`) does the following:
 - Accepts any well-formed Forever client build at import and labels assessments `VERIFIED`/`UNVERIFIED_BUILD`. This fixes launch-day data loss from the 70291/70338 allowlists.
 - Carries unobserved character sections, Retail state and recipes forward as LAST_SEEN through one shared resolver (`snapshotEvidence.ts`, `recipeEvidence.ts`), including ERP RECIPE needs and `search_items`.
 - Joins trainer offers to recipes (`recipeMatch`).
