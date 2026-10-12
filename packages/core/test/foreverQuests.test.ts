@@ -85,6 +85,24 @@ test("blank objective descriptions remain partial rather than appearing as obser
   assert.equal(malformed.active?.[0]?.objectives?.[0]?.text, undefined);
 });
 
+test("an explicitly observed empty Lua objective table survives SavedVariables normalization as zero objectives", () => {
+  const observed = buildForeverQuestObservation({ section: section({
+    active: [{ ...questData.active[0], objectiveState: "OBSERVED", objectives: {} }],
+    activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 },
+  }), profile: "Forever:1.60.1:70338:16001", identity, now: NOW });
+  assert.equal(observed.completeness, "complete");
+  assert.equal(observed.active?.[0]?.objectiveState, "OBSERVED");
+  assert.deepEqual(observed.active?.[0]?.objectives, []);
+
+  const unknown = buildForeverQuestObservation({ section: section({
+    active: [{ ...questData.active[0], objectiveState: "UNKNOWN", objectives: {} }],
+    activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 },
+  }), profile: "Forever:1.60.1:70338:16001", identity, now: NOW });
+  assert.equal(unknown.active?.[0]?.objectiveState, "UNKNOWN", "an empty table without observed empty-state provenance cannot mean zero objectives");
+  assert.equal(unknown.active?.[0]?.objectives, undefined);
+  assert.equal(unknown.completeness, "partial", "unknown objective coverage keeps the overall observation partial");
+});
+
 test("unsupported profiles fail closed; old and failed refreshes remain LAST_SEEN", () => {
   const unsupported = buildForeverQuestObservation({ section: section(), profile: "Retail:12.0", identity, now: NOW });
   assert.equal(unsupported.state, "UNKNOWN");

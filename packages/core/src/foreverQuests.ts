@@ -100,11 +100,13 @@ function normalizeQuest(value: unknown): { row?: ForeverQuestRow; partial: boole
   let objectives: ForeverQuestObjective[] | undefined;
   let objectiveState: ForeverQuestRow["objectiveState"] = "UNKNOWN";
   let partial = !titleValid;
-  if (Array.isArray(v.objectives) && (v.objectiveState === "OBSERVED" || v.objectiveState === "PARTIAL")) {
+  const emptyLuaArray = v.objectiveState === "OBSERVED" && record(v.objectives) !== undefined && Object.keys(record(v.objectives)!).length === 0;
+  if ((Array.isArray(v.objectives) || emptyLuaArray) && (v.objectiveState === "OBSERVED" || v.objectiveState === "PARTIAL")) {
     objectives = [];
     objectiveState = v.objectiveState;
-    if (v.objectives.length > MAX_OBJECTIVES) { objectives = v.objectives.slice(0, MAX_OBJECTIVES).flatMap((o) => normalizeObjective(o).row ? [normalizeObjective(o).row!] : []); objectiveState = "PARTIAL"; partial = true; }
-    else for (const raw of v.objectives) { const parsed = normalizeObjective(raw); if (parsed.row) objectives.push(parsed.row); if (parsed.partial || !parsed.row) { objectiveState = "PARTIAL"; partial = true; } }
+    const rows = Array.isArray(v.objectives) ? v.objectives : [];
+    if (rows.length > MAX_OBJECTIVES) { objectives = rows.slice(0, MAX_OBJECTIVES).flatMap((o) => normalizeObjective(o).row ? [normalizeObjective(o).row!] : []); objectiveState = "PARTIAL"; partial = true; }
+    else for (const raw of rows) { const parsed = normalizeObjective(raw); if (parsed.row) objectives.push(parsed.row); if (parsed.partial || !parsed.row) { objectiveState = "PARTIAL"; partial = true; } }
   } else if (v.objectives !== undefined || v.objectiveState !== "UNKNOWN") partial = true;
   const completionValid = typeof v.isComplete === "boolean";
   const readinessValid = typeof v.readyForTurnIn === "boolean";
@@ -195,5 +197,3 @@ export function buildForeverQuestObservation(input: {
   const reasonText = !activeAvailable ? "Active quest coverage is UNKNOWN; unavailable data is not an empty quest log." : typeof section.reason === "string" ? section.reason : failedRefresh ? "The latest quest refresh failed; displayed values are the last successful observation." : freshness === "stale" ? "This observation is older than the current freshness window." : undefined;
   return { version: "forever", identity: input.identity, source: "Forever C_QuestLog structured sidecar", state, completeness: partial ? "partial" : "complete", observedAt, freshness, activeState, ...(activeAvailable ? { active: staleActive } : {}), ...(activeCounts ? { activeCounts } : {}), completedHistory, issues, ...(reasonText ? { reason: reasonText } : {}) };
 }
-
-\n
