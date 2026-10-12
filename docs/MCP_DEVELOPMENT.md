@@ -156,6 +156,7 @@ imports may update the database.
 | `get_account_changes` | Page the existing AccountFacts recent meaningful-change summaries. |
 | `get_character_equipment` | Return latest-known slot equipment with provenance. |
 | `get_forever_gear_observation` | Return Forever 70291 observed equipped and carried items with structured source/freshness; candidate classification and all allocation claims stay UNKNOWN absent validated Forever metadata. Requires `version: "forever"`. |
+| `get_forever_character_quests` | Return the canonical Forever quest projection with identity, snapshot and freshness provenance; optionally select a character-owned `snapshotId`. OBSERVED, LAST_SEEN, UNKNOWN, objective, completion, history, and waypoint evidence remain separate. Requires `version: "forever"`. |
 | `get_character_professions` | Return captured profession observations and their provenance. |
 | `get_character_currencies` | Return captured currency data, bounded to 100 records. |
 | `get_profession_coverage` | Return per-version account profession coverage as derived data. |

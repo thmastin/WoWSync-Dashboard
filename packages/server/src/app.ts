@@ -253,7 +253,19 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     const character = store.getCharacter(req.params.identityKey);
     if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
     if (character.version !== "forever") return res.status(404).json({ error: "Forever quest observations are not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
-    const result = new DashboardReadModel(store).getForeverQuestObservation({ version: character.version, name: character.name, realm: character.realm });
+    let snapshotId: number | undefined;
+    if (req.query.snapshotId !== undefined) {
+      if (typeof req.query.snapshotId !== "string" || !/^\d+$/.test(req.query.snapshotId)) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+      snapshotId = Number(req.query.snapshotId);
+      if (!Number.isSafeInteger(snapshotId) || snapshotId < 1) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+    }
+    let result: ReturnType<DashboardReadModel["getForeverQuestObservation"]>;
+    try {
+      result = new DashboardReadModel(store).getForeverQuestObservation({ version: character.version, name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+    } catch (error) {
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
+      throw error;
+    }
     if (result.status !== "FOUND") return res.status(404).json({ error: "Forever quest observations are not available for this character.", code: result.status });
     res.json(result);
   });

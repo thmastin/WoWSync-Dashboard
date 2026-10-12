@@ -18,6 +18,7 @@ import type {
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
 import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpPortfolioFulfillmentReview, ErpPortfolioNextActionReview, ErpSourceFulfillmentReview, ErpProcurementBudgetPortfolioReview, ErpProcurementBuyerPortfolioReview, ErpNeedReviewSnapshot, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
+import type { CharacterResolution, ForeverQuestObservation, ReadValue } from "@wowsync-dashboard/core";
 
 export interface GearCandidateEvidenceApi {
   data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
@@ -349,8 +350,9 @@ export function fetchForeverGearAllocation(identityKey: string, signal?: AbortSi
   return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-gear-allocation`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
 }
 
-export function fetchForeverQuests(identityKey: string, signal?: AbortSignal) {
-  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-quests`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+export function fetchForeverQuests(identityKey: string, snapshotId?: number, signal?: AbortSignal): Promise<CharacterResolution<ReadValue<ForeverQuestObservation>>> {
+  const query = snapshotId === undefined ? "" : `?snapshotId=${encodeURIComponent(String(snapshotId))}`;
+  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-quests${query}`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
 }
 
 /** Every demand for a version, any status (the removed-target history and conflict lookups read this). */

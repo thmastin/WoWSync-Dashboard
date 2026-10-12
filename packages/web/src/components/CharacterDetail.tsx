@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchCharacter, fetchSnapshots, fetchForeverGearAllocation } from "../api.ts";
+import { fetchCharacter, fetchSnapshots, fetchForeverGearAllocation, fetchForeverQuests } from "../api.ts";
 import { useAsync } from "../useAsync.ts";
 import ErrorNotice from "./ErrorNotice.tsx";
 import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCatalog.ts";
@@ -141,6 +141,11 @@ export default function CharacterDetail({
   const foreverAllocationLoad = useAsync(
     (signal) => character?.version === "forever" ? fetchForeverGearAllocation(identityKey, signal) : Promise.resolve(null),
     `forever-allocation:${identityKey}`,
+    refreshTick,
+  );
+  const foreverQuestLoad = useAsync(
+    (signal) => character?.version === "forever" && snapshot ? fetchForeverQuests(identityKey, snapshot.id, signal) : Promise.resolve(null),
+    `forever-quests:${identityKey}:${snapshot?.id ?? "none"}`,
     refreshTick,
   );
 
@@ -379,8 +384,11 @@ export default function CharacterDetail({
           {character.version === "forever" && (
             <section className="detail-card" id="detail-forever-quests">
               <h3>Forever quests and objectives</h3>
-              {!foreverObservation ? <p>Quest observation unavailable for this client profile.</p> : (() => {
-                const quests = foreverObservation.quests;
+              {foreverQuestLoad.state.status === "error" ? <p role="status">Quest observation unavailable: {String(foreverQuestLoad.state.error)} <button onClick={foreverQuestLoad.retry}>Retry</button></p>
+                : foreverQuestLoad.state.status !== "ready" || !foreverQuestLoad.state.data ? <p>Loading quest observation…</p>
+                : foreverQuestLoad.state.data.status !== "FOUND" || !foreverQuestLoad.state.data.value?.data ? <p>Quest observation unavailable for this character snapshot.</p>
+                : (() => {
+                const quests = foreverQuestLoad.state.data.value.data;
                 return <>
                   <p className="muted small">{quests.state} · {quests.completeness} coverage · {quests.observedAt ? `observed ${formatAbsoluteTime(quests.observedAt)} (${quests.freshness})` : "observation time UNKNOWN"} · {quests.source}</p>
                   {quests.reason && <p>{quests.reason}</p>}
@@ -393,8 +401,8 @@ export default function CharacterDetail({
                       {quest.objectiveState === "UNKNOWN" ? <p>Objectives: UNKNOWN; the client did not provide objective data.</p>
                         : quest.objectives?.length ? quest.objectives.map((objective, index) => <p className="muted small" key={`${quest.questID}-objective-${index}`}>
                           {objective.text ?? "Objective text UNKNOWN"} · Finished {objective.finishedState === "OBSERVED" ? `OBSERVED (${objective.finished ? "yes" : "no"})` : "UNKNOWN"} · Progress {objective.numFulfilledState === "OBSERVED" && objective.numRequiredState === "OBSERVED" ? `OBSERVED ${objective.numFulfilled}/${objective.numRequired}` : "UNKNOWN"}
-                        </p>) : <p className="muted small">No objectives returned in this observed quest record.</p>}
-                      {quest.waypointState === "OBSERVED" && quest.waypoint && <p className="muted small">Observed waypoint{quest.waypointText ? ` (${quest.waypointText})` : ""}: map {quest.waypoint.mapID}, {quest.waypoint.x.toFixed(3)}, {quest.waypoint.y.toFixed(3)}.</p>}
+                        </p>) : quest.objectiveState === "OBSERVED" ? <p className="muted small">Objectives: OBSERVED empty list.</p> : <p className="muted small">Objectives: {quest.objectiveState}; no objective rows are available.</p>}
+                      {quest.waypointState === "OBSERVED" && quest.waypoint ? <p className="muted small">Observed waypoint{quest.waypointText ? ` (${quest.waypointText})` : ""}: map {quest.waypoint.mapID}, {quest.waypoint.x.toFixed(3)}, {quest.waypoint.y.toFixed(3)}.</p> : <p className="muted small">Waypoint: UNKNOWN.</p>}
                     </article>) : <p>Active quest log observed empty.</p>}
                   <p className="muted small">Completed-quest history: {quests.completedHistory.state}{quests.completedHistory.returnedCount !== undefined ? ` · ${quests.completedHistory.returnedCount} IDs returned` : ""}{quests.completedHistory.truncated ? " · partial/truncated" : ""}. History is separate from the active quest log.</p>
                   {quests.completedHistory.quests?.length ? <ul className="compact-list">{quests.completedHistory.quests.slice(0, 40).map((quest) => <li key={`completed-quest-${quest.questID}`}>{quest.titleState === "UNKNOWN" ? `Quest ${quest.questID}` : quest.title} <span className="muted small">· {quest.titleState} · ID {quest.questID}</span></li>)}</ul> : null}

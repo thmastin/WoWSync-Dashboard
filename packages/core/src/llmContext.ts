@@ -23,7 +23,7 @@
 // Deterministic and pure: no I/O, no clock reads, same input always
 // produces the same output.
 
-import type { AccountContext, CurrencyConvention } from "./accountContext.ts";
+import type { AccountContext, CharacterContext, CurrencyConvention } from "./accountContext.ts";
 import { formatCopper, formatCopperDelta } from "./currency.ts";
 import type { Freshness } from "./freshness.ts";
 import { professionEntryIsEvidence } from "./professionCatalog.ts";
@@ -31,7 +31,7 @@ import type { SectionState, WowVersion } from "./types.ts";
 
 // "llm-3": character-state specializations, compact profession investment,
 // separate character/account reputation, and compatible state transitions.
-export const LLM_CONTEXT_SCHEMA_VERSION = "llm-3";
+export const LLM_CONTEXT_SCHEMA_VERSION = "llm-4";
 
 /**
  * Whether a character has two or more observed snapshots to compare.
@@ -120,6 +120,8 @@ export interface LlmCharacter {
    */
   professionsObservationStatus: SectionState;
   professions: LlmProfession[];
+  /** Same canonical Forever quest projection exposed by AccountContext, REST, MCP, and Character Detail. */
+  foreverQuestObservation?: CharacterContext["foreverQuestObservation"];
   /** Current formally observed combat specialization, when captured. */
   combatSpecialization?: Record<string, unknown>;
   /** Captured tree/node investments remain structured facts, without recommendation. */
@@ -409,6 +411,7 @@ export function buildLlmContext(context: AccountContext): LlmContext {
         bankStatus: cf.bankStatus,
         professionsObservationStatus: characterProfessions?.observationStatus ?? "UNKNOWN",
         professions,
+        ...(history?.foreverQuestObservation ? { foreverQuestObservation: history.foreverQuestObservation } : {}),
         ...(cf.combatSpecialization?.data ? { combatSpecialization: cf.combatSpecialization.data } : {}),
         ...(characterProfessions?.specialization?.data ? { professionSpecializations: compactProfessionSpecializations(characterProfessions.specialization.data, characterProfessions.specialization.completeness) } : {}),
         ...(characterReputation ? { reputation: { status: characterReputation.status, completeness: characterReputation.completeness,

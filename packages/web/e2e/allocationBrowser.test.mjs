@@ -2003,7 +2003,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] connect bank retrieval, craft inputs/output
     assert.match(await portfolio.innerText(), /CAUSE UNKNOWN|cause remains unknown/i);
     const rest = await page.evaluate(async () => (await (await fetch("/api/versions/retail/erp/projects")).json()));
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "47");
+    assert.equal(context.schemaVersion, "48");
     const contextProject = context.planning.projects.find((entry) => entry.stableId === project.stableId);
     const progressStates = Object.fromEntries([...new Set(current.workOrderProgress.map((entry) => entry.reconciliation))].sort().map((state) => [state, current.workOrderProgress.filter((entry) => entry.reconciliation === state).length]));
     assert.deepEqual(contextProject.workOrderProgressStates, progressStates, "AccountContext summarizes the same later evidence state as the project read model");
@@ -2111,7 +2111,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.match(await resourcePackage.innerText(), /Review the separate provisioning need.*PROVISION.*PLANNED/);
     assert.match(await resourcePackage.innerText(), /These are separate plans, not reservations/);
     const accountContext = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(accountContext.schemaVersion, "47");
+    assert.equal(accountContext.schemaVersion, "48");
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedSourceCoverageReviewsWithOtherProjectNeeds, 1);
     assert.equal(accountContext.planning.procurementBuyerReview.retail.returnedOtherSourceScopedNeedCount, 1);
     const otherPlanReview = resourcePackage.getByRole("button", { name: "Review this project need" });
@@ -2198,7 +2198,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] review combined unfinished purchase ceiling
     assert.deepEqual(restProvisioning, plannedProvisioning, "the manual source review is persisted and exposed by REST");
     assert.deepEqual(rest.procurementBudgetReview.lines[0].orders.map((order) => [order.targetNeedId, order.targetResourceKey, order.spendingCeilingCopper]), [["stone", fullRef(ITEM_ID), 700], ["cloth", String(ITEM_ID + 1), 500]]);
     const context = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(context.schemaVersion, "47");
+    assert.equal(context.schemaVersion, "48");
     assert.equal(context.planning.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrderCounts.PLANNED, rest.projects.find((entry) => entry.stableId === selectedProject.stableId)?.workOrders.filter((order) => order.status === "PLANNED").length, "AccountContext reflects the resulting work-order count");
     assert.deepEqual(context.planning.procurementBudgetReview.retail, { lineCount: 2, overPlannedBudget: 1, totalOpenCeilingCopper: 12200, quoteReviewStates: { RECENT_QUOTES_COVER_OBSERVED_GAPS: 2 }, quoteBudgetsAbovePlan: 1, quoteBudgetsIncomplete: 0, truncated: false });
     assert.deepEqual(context.planning.procurementBuyerReview.retail, { buyerCount: 1, returnedBuyerCount: 1, returnedQuoteStates: { QUOTES_EXCEED_RECORDED_REMAINDER: 1 }, returnedQuoteTotalsAboveRecordedRemainder: 1, returnedIncompleteQuoteCoverage: 0, returnedCrossProjectResourcePackageCount: 1, returnedPackagesWithObservedSourceLeads: 1, returnedPackagesWithIncompleteSourceReview: 0, returnedObservedSourceLeadRows: 1, returnedPackageNeedReviewCount: 2, returnedPackageNeedReviewStates: { SHORTFALL_OBSERVED: 2 }, returnedPackagesWithOpenProvisioningReview: 1, returnedPackageSourceCoverageReviewCount: 1, returnedPackageSourceCoverageReviewStates: { UNRESERVED_LOWER_BOUND_BELOW_REVIEWED_GAPS: 1 }, returnedSourceCoverageReviewsWithOtherProjectNeeds: 1, returnedOtherSourceScopedNeedCount: 1, unresolvedBuyerOrderCount: 0, truncated: false });
@@ -2296,7 +2296,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] select exact portfolio reviews into one ato
     assert.ok(saved.every((project) => project.reservations.length === 0), "queue handoff makes no reservation unless the player explicitly requested one");
     assert.equal(rest.resourceCommitments.items.find((line) => line.resourceKey === fullRef(ITEM_ID))?.observedQuantity, 1, "planning leaves observed stock unchanged");
     const account = await page.evaluate(async () => (await (await fetch("/api/account-context")).json()));
-    assert.equal(account.schemaVersion, "47");
+    assert.equal(account.schemaVersion, "48");
     assert.ok(account.planning.projects.some((project) => project.stableId === first.stableId && project.workOrderCounts.PLANNED === 1));
     assert.deepEqual(account.planning.portfolioFulfillment.retail, { packageCount: rest.portfolioFulfillment.totalPackageCount, stepCount: rest.portfolioFulfillment.totalStepCount, stepsNeedingReview: rest.portfolioFulfillment.stepsNeedingReview, stepsWithPrerequisiteReview: rest.portfolioFulfillment.stepsWithPrerequisiteReview, savedBatchCount: 1, savedBatchReviewStates: { AWAITING_NEW_OBSERVATION: 1 }, savedBatchTaskCount: 2, replanFollowUpCount: 0, replanLineageConflictCount: 0, batchesWithFollowUps: 0, savedNeedHistoryCount: 2, savedNeedHistoryNextReviewCounts: { REVIEW_OPEN_MANUAL_WORK: 2 }, savedBatchIntervalSampleCount: 0, savedBatchIntervalsWithPartialEvidence: 0, savedBatchIntervalsTruncated: 0, savedNeedHistoriesTruncated: false, savedBatchesTruncated: false, pathwayReviewTruncated: rest.portfolioFulfillment.pathwayReviewTruncated, truncated: rest.portfolioFulfillment.truncated });
     assert.ok(account.planning.projects.some((project) => project.stableId === second.stableId && project.workOrderCounts.PLANNED === 1));

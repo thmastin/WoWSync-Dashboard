@@ -41,6 +41,7 @@ test("[SYNTHETIC BROWSER ACCEPTANCE] Forever Character Detail separates objectiv
     await page.goto(`http://127.0.0.1:${address.port}/#/forever/c/${encodeURIComponent(imported.character.identityKey)}`);
     const quests = page.locator("#detail-forever-quests");
     await quests.getByRole("heading", { name: "Forever quests and objectives" }).waitFor();
+    await page.waitForFunction(() => document.querySelector("#detail-forever-quests")?.textContent?.includes("OBSERVED · partial coverage"));
     assert.match(await quests.innerText(), /OBSERVED · partial coverage/);
     assert.match(await quests.innerText(), /A Local Problem/);
     assert.match(await quests.innerText(), /Collect local reports · Finished OBSERVED \(no\) · Progress OBSERVED 1\/3/);

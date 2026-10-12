@@ -20,7 +20,7 @@ import { snapshotObservedAt } from "./chronology.ts";
 import { diffSnapshots, type ItemDelta, type ProfessionDelta, type EquipmentDelta } from "./diff.ts";
 import { assessRetailCandidate } from "./retailGearAllocation.ts";
 import { buildForeverGearObservation } from "./foreverGearObservation.ts";
-import type { ForeverQuestObservation } from "./foreverQuests.ts";
+import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -993,23 +993,47 @@ export class DashboardReadModel {
     });
   }
 
-  getForeverQuestObservation(query: CharacterQuery): CharacterResolution<ReadValue<ForeverQuestObservation>> {
+  getForeverQuestObservation(query: CharacterSnapshotQuery): CharacterResolution<ReadValue<ForeverQuestObservation>> {
     if (query.version !== "forever") return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: "Quest observations are isolated to Forever 1.60.1 build 70291 or 70338 / interface 16001." } } };
-    const resolved = this.getForeverGearObservation(query);
-    if (resolved.status !== "FOUND") return resolved;
-    const observation = resolved.value.data?.quests;
-    return { status: "FOUND", value: {
-      ...(observation ? { data: observation } : {}),
-      provenance: {
-        state: observation?.state ?? "UNKNOWN", version: "forever", identityKey: resolved.value.provenance.identityKey,
-        ...(observation?.observedAt !== undefined ? { observedAt: observation.observedAt } : {}),
-        ...(resolved.value.provenance.importedAt !== undefined ? { importedAt: resolved.value.provenance.importedAt } : {}),
-        ...(resolved.value.provenance.snapshotId !== undefined ? { snapshotId: resolved.value.provenance.snapshotId } : {}),
-        ...(observation ? { freshness: observation.freshness } : { freshness: "unknown" as const }),
-        source: "Forever C_QuestLog quest observation sidecar",
-        ...(observation?.reason ? { reason: observation.reason } : undefined),
-      },
-    } };
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      const identity = { identityKey: character.identityKey, name: character.name, realm: character.realm };
+      if (!snapshot) return { data: buildForeverQuestObservation({ identity, profile: "UNKNOWN", now: this.now() }), provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
+
+      const profile = snapshot.parsed.character;
+      const allowed = profile.clientFamily === "Forever" && profile.clientVersion === "1.60.1"
+        && ["70291", "70338"].includes(profile.clientBuild ?? "") && profile.interface === "16001";
+      const structured = snapshot.parsed.foreverGearObservation;
+      const structuredIdentityMatches = structured !== undefined
+        && structured.name.toLocaleLowerCase() === character.name.toLocaleLowerCase()
+        && structured.realm.toLocaleLowerCase() === character.realm.toLocaleLowerCase()
+        && structured.generatedAt === snapshot.generatedAt;
+      const section = allowed && structuredIdentityMatches ? structured?.quests : undefined;
+      const observation = buildForeverQuestObservation({
+        section,
+        profile: allowed && structuredIdentityMatches ? structured!.clientProfile : "UNKNOWN",
+        identity,
+        now: this.now(),
+      });
+      const state = observation.state;
+      const observedAt = observation.observedAt;
+      return {
+        data: observation,
+        provenance: {
+          state,
+          version: "forever",
+          identityKey: character.identityKey,
+          ...(observedAt !== undefined ? { observedAt } : {}),
+          importedAt: snapshot.importedAt,
+          snapshotId: snapshot.id,
+          freshness: observation.freshness,
+          source: "Forever C_QuestLog quest observation sidecar",
+          ...(!allowed ? { reason: "This observation view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001 profile." }
+            : !structuredIdentityMatches ? { reason: "The persisted Forever sidecar identity or export generation does not match the canonical character snapshot." }
+            : observation.reason ? { reason: observation.reason } : {}),
+          ...(state === "LAST_SEEN" ? { warning: "Quest values are historical and are not a current observation." } : {}),
+        },
+      };
+    });
   }
 
   /**

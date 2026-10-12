@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { buildForeverQuestObservation } from "../src/foreverQuests.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
+import { buildLlmContext } from "../src/llmContext.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "./fixtures/foreverSnapshot180.ts";
 
 const NOW = 1_797_000_000;
 const identity = { identityKey: "forever::forever realm::questhero", name: "Questhero", realm: "Forever Realm" };
@@ -150,5 +152,85 @@ test("SQLite persistence, REST-facing read model, and AccountContext reuse the s
     assert.equal(read.getForeverQuestObservation({ version: "retail", name: identity.name, realm: identity.realm }).status, "FOUND");
     const retail = read.getForeverQuestObservation({ version: "retail", name: identity.name, realm: identity.realm });
     if (retail.status === "FOUND") assert.equal(retail.value.data, undefined);
+  } finally { store.close(); }
+});
+
+test("snapshot 180 quests resolve canonically despite older GUID gaps and agree through AccountContext and Ask context", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    assert.equal(seedRordinSnapshot180(store), 180);
+    const now = 1_791_800_000;
+    const read = new DashboardReadModel(store, () => now);
+    const query = { ...RORDIN_SNAPSHOT_180.identity, snapshotId: RORDIN_SNAPSHOT_180.id };
+    const result = read.getForeverQuestObservation(query);
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") return;
+    const value = result.value;
+    assert.equal(value.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(value.provenance.snapshotId, 180);
+    assert.equal(value.provenance.state, "OBSERVED");
+    assert.equal(value.provenance.freshness, "recent");
+    assert.equal(value.data?.state, "OBSERVED");
+    assert.deepEqual(value.data?.active?.map((row) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+    assert.deepEqual(value.data?.completedHistory.questIDs, RORDIN_SNAPSHOT_180.completedQuestIDs);
+    assert.equal(value.data?.completedHistory.returnedCount, 29);
+    const emptyObjectives = value.data?.active?.find((row) => row.questID === 98322);
+    assert.equal(emptyObjectives?.objectiveState, "OBSERVED");
+    assert.deepEqual(emptyObjectives?.objectives, []);
+    const conflict = value.data?.active?.find((row) => row.questID === 96629);
+    assert.equal(conflict?.isComplete, false);
+    assert.equal(conflict?.completionState, "OBSERVED");
+    assert.equal(conflict?.objectives?.[0]?.numFulfilled, 1);
+    assert.equal(conflict?.objectives?.[0]?.numRequired, 1);
+    assert.equal(conflict?.objectives?.[0]?.finished, false);
+    assert.equal(conflict?.waypointState, "UNKNOWN");
+
+    const gear = read.getForeverGearObservation({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
+    assert.equal(gear.status, "FOUND");
+    if (gear.status === "FOUND") assert.match(gear.value.provenance.reason ?? "", /missing or conflicting WoWSyncDB character GUIDs/);
+
+    const account = store.buildAccountContext(now);
+    const accountCharacter = account.versions.forever.characters.find((character) => character.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.deepEqual(accountCharacter?.foreverQuestObservation?.status, "FOUND");
+    if (accountCharacter?.foreverQuestObservation?.status === "FOUND") {
+      const latestResult = read.getForeverQuestObservation({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
+      assert.deepEqual(accountCharacter.foreverQuestObservation.value, latestResult.status === "FOUND" ? latestResult.value : undefined);
+    }
+    const llmCharacter = buildLlmContext(account).versions.forever.characters.find((character) => character.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(llmCharacter?.foreverQuestObservation?.status, "FOUND");
+    if (llmCharacter?.foreverQuestObservation?.status === "FOUND") assert.deepEqual(llmCharacter.foreverQuestObservation.value.data?.active?.map((row) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+
+    const historical = new DashboardReadModel(store, () => now + 4 * 24 * 60 * 60).getForeverQuestObservation(query);
+    assert.equal(historical.status, "FOUND");
+    if (historical.status === "FOUND") {
+      assert.equal(historical.value.provenance.state, "LAST_SEEN");
+      assert.equal(historical.value.data?.activeState, "LAST_SEEN");
+    }
+
+    for (const version of ["retail", "classic-era", "tbc-anniversary"] as const) {
+      const isolated = read.getForeverQuestObservation({ version, name: "Rordin", realm: "Classic Beta PvP 2" });
+      assert.equal(isolated.status, "FOUND");
+      if (isolated.status === "FOUND") {
+        assert.equal(isolated.value.provenance.version, version);
+        assert.equal(isolated.value.provenance.state, "UNKNOWN");
+        assert.equal(isolated.value.data, undefined);
+      }
+    }
+  } finally { store.close(); }
+});
+
+test("quest resolver keeps missing sidecar evidence UNKNOWN rather than an empty quest log", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const generatedAt = NOW - 5;
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Questless", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } }));
+    const result = new DashboardReadModel(store, () => NOW).getForeverQuestObservation({ version: "forever", name: "Questless", realm: "Forever Realm" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.provenance.state, "UNKNOWN");
+      assert.equal(result.value.data?.activeState, "UNKNOWN");
+      assert.equal(result.value.data?.active, undefined);
+      assert.equal(result.value.data?.completedHistory.state, "UNKNOWN");
+    }
   } finally { store.close(); }
 });

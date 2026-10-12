@@ -15,6 +15,7 @@ import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { guild, itemRow } from "../../core/test/sharedStorageBuilders.ts";
 import { renderExport } from "../../core/test/sharedStorageExports.ts";
 import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
+import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "../../core/test/fixtures/foreverSnapshot180.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
@@ -73,6 +74,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const writer = new SqliteSnapshotStore(databasePath);
   let operationsContextProjectId = "";
   try {
+    assert.equal(seedRordinSnapshot180(writer), RORDIN_SNAPSHOT_180.id);
     writer.importSnapshot(retail("Virek", "Cairne", true, 100, true, now - 20, 89), {
       currencies: {
         observedAt: now,
@@ -164,6 +166,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   try {
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    const registeredQuestTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_character_quests");
+    assert.ok(registeredQuestTool, "quest operation is present in the actual MCP tools/list protocol response");
+    assert.ok((registeredQuestTool.inputSchema as any).properties?.snapshotId, "MCP exposes historical snapshot selection");
     assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
       "analyze_retail_gear_candidate",
@@ -340,7 +345,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 10, true], "MCP callers can bound ERP project results without losing the total count");
 
     const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
-    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"]]);
+    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"], ["Rordin", "Longbraid", "Fixture API candidate"]]);
     const foreverSummary = structured<{ status: string; value?: { data?: { name: string; surname?: string; surnameSource?: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
     assert.equal(foreverSummary.value?.data?.name, "Hallo");
     assert.equal(foreverSummary.value?.data?.surname, "Emberstone");
@@ -366,6 +371,20 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(foreverQuests.value?.data?.completedHistory.questIDs, [444]);
     assert.equal(foreverQuests.value?.data?.completedHistory.quests?.[0]?.title, "Old MCP Quest");
     assert.equal(foreverQuests.value?.data?.completeness, "partial");
+    const realForeverQuests = structured<{ status: string; value?: { provenance: { identityKey: string; snapshotId: number; state: string }; data?: { active?: Array<{ questID: number; objectiveState: string; objectives?: unknown[] }>; completedHistory: { questIDs?: number[] } } } }>(await client.callTool({ name: "get_forever_character_quests", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
+    assert.equal(realForeverQuests.status, "FOUND");
+    assert.equal(realForeverQuests.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(realForeverQuests.value?.provenance.snapshotId, 180);
+    assert.equal(realForeverQuests.value?.provenance.state, "OBSERVED");
+    assert.deepEqual(realForeverQuests.value?.data?.active?.map((row) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+    assert.deepEqual(realForeverQuests.value?.data?.completedHistory.questIDs, RORDIN_SNAPSHOT_180.completedQuestIDs);
+    assert.deepEqual(realForeverQuests.value?.data?.active?.find((row) => row.questID === 98322)?.objectives, []);
+    const questReadStore = new SqliteSnapshotReadStore(databasePath);
+    try {
+      const questNow = Math.floor(Date.now() / 1000);
+      const expectedQuestProjection = new DashboardReadModel(questReadStore, () => questNow).getForeverQuestObservation({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: 180 });
+      assert.deepEqual(realForeverQuests, expectedQuestProjection, "the registered MCP protocol handler returns the canonical read model result unchanged");
+    } finally { questReadStore.close(); }
     assert.equal((await client.callTool({ name: "get_forever_character_quests", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "the Forever quest reader requires its explicit version");
     assert.equal(foreverView.value?.provenance.freshness, "stale");
     const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; allocationPlan?: Array<{ disposition: string; item: { itemRef?: string }; recipient: { identityKey: string }; evidence: { transferability: string } }>; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
+import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "../../core/test/fixtures/foreverSnapshot180.ts";
 import { createApp } from "../src/app.ts";
 import { readSavedExports } from "../src/importSaved.ts";
 
@@ -187,6 +188,31 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
       isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
     }] } },
   } }));
+});
+
+test("snapshot 180 quest REST and AccountContext expose the canonical quest projection without the gear GUID gate", async () => {
+  await withApp(async (api) => {
+    const key = RORDIN_SNAPSHOT_180.identity.identityKey;
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests?snapshotId=180`);
+    assert.equal(rest.status, 200);
+    assert.equal(rest.body.status, "FOUND");
+    assert.equal(rest.body.value.provenance.identityKey, key);
+    assert.equal(rest.body.value.provenance.snapshotId, 180);
+    assert.equal(rest.body.value.provenance.state, "OBSERVED");
+    assert.deepEqual(rest.body.value.data.active.map((row: any) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+    assert.equal(rest.body.value.data.active.find((row: any) => row.questID === 98322).objectiveState, "OBSERVED");
+    assert.deepEqual(rest.body.value.data.active.find((row: any) => row.questID === 98322).objectives, []);
+    const context = await api.get("/api/account-context");
+    const character = context.body.versions.forever.characters.find((row: any) => row.identityKey === key);
+    assert.deepEqual(character.foreverQuestObservation.value, rest.body.value);
+    assert.equal(context.body.versions.retail.characters.some((row: any) => row.identityKey === key), false);
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests?snapshotId=999`)).status, 400);
+    const retailText = buildWowSyncExport({ generatedAt: RORDIN_SNAPSHOT_180.generatedAt, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", clientFamily: "Retail", clientVersion: "12.0.0" } });
+    assert.equal((await api.importCapture({ text: retailText })).status, 200);
+    const retail = await api.get("/api/characters/retail%3A%3Aclassic%20beta%20pvp%202%3A%3Arordin/forever-quests");
+    assert.equal(retail.status, 404);
+    assert.equal(retail.body.code, "VERSION_NOT_SUPPORTED");
+  }, (store) => { assert.equal(seedRordinSnapshot180(store), 180); });
 });
 
 test("Forever allocation route exposes separate evidence-gated decisions without cross-version leakage", async () => {

@@ -417,8 +417,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async (query) => textResult(readModel.getForeverGearObservation(query)));
   server.registerTool("get_forever_character_quests", {
     title: "Get Forever active quests and objectives",
-    description: "Returns read-only quest and objective observations for one explicit Forever character. Active quests, objective progress, completion, turn-in readiness, completed history, tracking, and waypoint context remain separately evidenced; partial/stale/unavailable data stays explicit. A quest disappearing from the active log does not prove completion. Never applies Retail rules or takes gameplay actions.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    description: "Returns read-only quest and objective observations for one explicit Forever character, optionally pinned to a snapshotId belonging to that character. Active quests, objective progress, completion, turn-in readiness, completed history, tracking, and waypoint context remain separately evidenced; partial/stale/unavailable data stays explicit. A quest disappearing from the active log does not prove completion. Never applies Retail rules or takes gameplay actions.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, snapshotId: z.number().int().positive().optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverQuestObservation(query)));
   server.registerTool("get_forever_gear_allocation", {
