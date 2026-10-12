@@ -1,33 +1,56 @@
 # Forever Quest Read Model Release Checkpoint — 2026-10-12
 
-## Candidate and guarded preparation
+## Guarded deployment
 
 - Feature ref: `refs/heads/feature/forever-gear-observation`
-- Prepared release SHA: `5ac7976b0c8f3415e3d7751c0debfc514e88d50f`
-- Expected and observed DEV baseline: `25e9f7e165547bb2da085d3f38a71c8286ab0d2c`
-- Guarded command: `wowsync-dev-deploy prepare feature/forever-gear-observation 5ac7976b0c8f3415e3d7751c0debfc514e88d50f --json`
-- Result: `PREPARED`; schema plan `NONE`; `user_version` 0 → 0; no declarations or plan problems.
-- DEV was healthy before and after preparation. Preparation did not promote code, restart services, mutate snapshots, or create a database backup.
-- The online SQLite backup and its integrity check are deployment-time requirements and remain pending deployment authorization. The documented guarded rollback workflow remains the only rollback path; no rollback was needed.
+- Deployed release SHA: `5ac7976b0c8f3415e3d7751c0debfc514e88d50f`
+- Expected pre-deployment DEV SHA: `25e9f7e165547bb2da085d3f38a71c8286ab0d2c` (matched).
+- Guarded prepare immediately before promotion: `PREPARED` for the exact SHA; schema plan `NONE`; no added, removed, or changed objects; `user_version` 0 → 0.
+- Guarded deployment result: `DEPLOYED` / `PROMOTE_SUCCESS` at `2026-10-12T05:18:41.307Z`. No migration ran.
+- Previous release: `25e9f7e165547bb2da085d3f38a71c8286ab0d2c`. No rollback was needed.
 
-## Validation
+## Online backup
 
-- Focused quest/core, REST, and stdio MCP tests: 29 passed, 1 opt-in test skipped.
-- Workspace validation (`npm run validate:erp`): 317 unit tests passed; typecheck passed; web build passed; 25 browser tests passed.
-- Deploy-tool validation (`npm run test:deploy-tool`): 92 passed.
-- `git diff --check`: passed.
-- Live DEV status: Dashboard, MCP tunnel, and HTTP `/` plus `/api/versions` healthy at the baseline SHA.
+- Path: `/var/lib/wowsync-dev/backups/deploy/20261012T051837.464Z-17a5caeb-25e9f7e165547bb2da085d3f38a71c8286ab0d2c-to-5ac7976b0c8f3415e3d7751c0debfc514e88d50f.sqlite`
+- SHA-256: `77a29fcc40efd34ea8567e3690d5c0b42e961d77ccd08ac943a7f83331cef7ba`
+- Guarded workflow result: backup integrity `ok`; schema compatibility unchanged; `user_version` 0.
 
-## Snapshot-180 correction
+## Runtime and data preservation
 
-Snapshot 180's canonical Forever character quest sidecar now resolves independently of the gear observation's historical GUID consistency check. The canonical character identity, selected snapshot id, sidecar identity, export generation, freshness, and evidence states are retained. The gear GUID protection was left unchanged and regression tested.
+- Post-deployment status: Dashboard and MCP tunnel active/running and healthy; HTTP `/` and `/api/versions` return 200.
+- Herdr remained active/running with PID `2937229`, zero restarts, unchanged before/after. It was outside the restart boundary.
+- Character counts remain Classic Era 3, TBC Anniversary 3, Retail 16, Forever 8, unknown-version 0 (unchanged from the prior checkpoint).
+- Rordin remains at 19 snapshots; snapshot 180 is readable with generation `1791764829`. No SavedVariables were imported or replayed.
+- Forever ERP projects: Rordin's project `project_goal_30357e44148dd5dbc3dcbca4ca8afc98a73898c5dc8b039d70f41baa68fe7bde` remains ACTIVE at revision 5 with seven work orders. The second Forever project remains ACTIVE at revision 1. Other version project lists remain empty. No project mutation occurred.
 
-The same read model projection is exposed by the quest REST route, AccountContext, stdio MCP tool `get_forever_character_quests`, and Character Detail. Ask My Account receives the same quest projection through its LLM context. Fixtures cover the six active IDs, 29 completed-history IDs, observed-empty objectives for 98322, contradictory progress/completion data for 96629, and unknown waypoints. No SavedVariables were imported and no DEV data or ERP project was changed.
+## Quest projection and UI validation
 
-The active connected-app tool catalog in the development execution environment did not list `get_forever_character_quests`, even though local stdio MCP `tools/list` exposed it and protocol calls returned the canonical projection. The previously reported successful ChatGPT invocation and the latest absent-tool report cannot be reconciled from the local repository: they may reflect different connector instances or catalog snapshots. Host-side protocol exposure remains to be checked after release; local registration alone is not treated as connected-host acceptance.
+Read-only GET `/api/characters/forever%3A%3Aclassic%20beta%20pvp%202%3A%3Arordin/forever-quests?snapshotId=180` returned HTTP 200 and `FOUND`:
 
-## Deployment gate
+- Provenance: `OBSERVED`, Forever identity `forever::classic beta pvp 2::rordin`, snapshot 180, observation time `1791764792`, `recent` freshness.
+- Six active IDs: 384, 400, 96629, 98321, 98322, 99158.
+- Completed-history list contains 29 IDs.
+- Quest 98322 has `objectiveState: OBSERVED` and `objectives: []`.
+- Quest 96629 preserves `isComplete: false`, objective `finished: false`, and progress 1/1.
+- Waypoint state is `UNKNOWN` on all six quests.
+- AccountContext quest resolution exactly matches the REST response. The live AccountContext was projected with the production `buildLlmContext` function; its Rordin quest resolution exactly matches REST. No model-provider request was sent.
+- A headless browser smoke on the live Dashboard rendered all six quest titles, completed-history count, observed-empty objectives, and UNKNOWN waypoints with no page errors.
 
-This checkpoint records preparation only. Do not deploy from this checkpoint without separate explicit deployment authorization. On authorization, use the exact prepared SHA and standard guarded workflow; require its online SQLite backup to pass integrity checks before promotion, then verify Dashboard/MCP/HTTP health, preserved data and Rordin's project, Herdr untouched, and read-only quest REST/MCP behavior. Do not import SavedVariables.
+## MCP verification boundary
 
-Current live quest route behavior remains unvalidated on the candidate because DEV deployment is intentionally stopped at the authorization gate. Until then, the deployed baseline retains the known FOUND/UNKNOWN defect.
+- The deployment starts the MCP tunnel from the deployed release and the service reports healthy.
+- The local stdio MCP protocol test passed on the deployed candidate source: `tools/list` exposes `get_forever_character_quests`, and a call returns the canonical snapshot-180 projection from the realistic regression fixture.
+- The connected ChatGPT WoWSync DEV catalog has independently been checked by the project owner and exposes the quest tool. A connected ChatGPT tool invocation has not been made in this deployment session; do not treat local protocol testing as connected-host acceptance.
+
+Exact read-only connected query for final acceptance:
+
+> Using the WoWSync DEV MCP tool `get_forever_character_quests`, read Forever character Rordin on realm Classic Beta PvP 2 at snapshotId 180. Return the provenance state and freshness, active quest IDs, completed-history ID count, quest 98322 objective state/list, quest 96629 completion and objective progress flags, and waypoint states. Do not import or replay SavedVariables.
+
+## Validation and limits
+
+- Post-deployment live REST, AccountContext, and LLM projection assertions passed.
+- Post-deployment browser smoke passed: HTTP 200, six quest titles and history visible, no page errors.
+- Focused stdio MCP protocol tests passed: 2/2. These validate registration and projection agreement with realistic fixture data, not a connected ChatGPT invocation.
+- Pre-deployment validation: 317 workspace unit tests passed; typecheck, production build, and all 25 browser tests passed; deploy-tool suite 92/92 passed.
+- Gear GUID guard was unchanged. No SavedVariables, ERP project, GearExport, BankCleanup, or Herdr changes were made.
+- The deployment is live and healthy. Final independent connected ChatGPT MCP acceptance remains pending the read-only query above.
