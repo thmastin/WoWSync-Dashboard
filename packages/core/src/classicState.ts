@@ -193,6 +193,8 @@ export function normalizeClassicCharacterState(input: unknown, version: VersionO
  */
 export function mergeClassicCharacterState(previous: CapturedCharacterState | undefined, current: CapturedCharacterState | undefined): CapturedCharacterState | undefined {
   if (!previous || previous.clientFamily !== "Classic") return current;
+  // An absent or invalid re-sent payload carries no new evidence; it must not degrade what this snapshot already holds.
+  if (!current) return previous;
   if (current && current.clientFamily !== "Classic") return current;
   if (current?.sourceCharacterGuid && previous.sourceCharacterGuid && current.sourceCharacterGuid !== previous.sourceCharacterGuid) return current;
   const retained = (domain: CapturedCharacterDomain | undefined): CapturedCharacterDomain | undefined => domain && { ...domain, status: { ...domain.status, state: "LAST_SEEN", reason: "Not present in this later payload for the same export; earlier observation retained." } };

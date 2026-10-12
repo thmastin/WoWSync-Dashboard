@@ -1030,7 +1030,7 @@ export class DashboardReadModel {
         now: this.now(),
       });
       const observedAt = snapshot.parsed.foreverGearObservation?.generatedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
-      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: snapshot.parsed.foreverGearObservation ? "Forever 70291 WoWSyncDB structured sections plus WOWSYNC v1 export" : "WOWSYNC v1 export; structured WoWSyncDB section timestamps unavailable", reason: snapshot.parsed.foreverGearObservation ? undefined : "Structured Forever section sidecar was not available for this imported snapshot." } };
+      return { data, provenance: { state: "DERIVED", version: "forever", identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: snapshot.parsed.foreverGearObservation ? `Forever WoWSyncDB structured sections (${snapshot.parsed.foreverGearObservation.clientProfile}) plus WOWSYNC v1 export` : "WOWSYNC v1 export; structured WoWSyncDB section timestamps unavailable", reason: snapshot.parsed.foreverGearObservation ? undefined : "Structured Forever section sidecar was not available for this imported snapshot." } };
     });
   }
 

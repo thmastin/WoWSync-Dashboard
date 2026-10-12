@@ -273,3 +273,12 @@ test("BRIDGE DRY RUN: names the Classic domains that would travel", async () => 
   const { describeSidecars } = await import("../src/importSaved.ts");
   assert.equal(describeSidecars(fixture("classic-era")), "Sidecars:   Classic state (professionRecipes, quests, talents, reputation)");
 });
+
+test("CLASSIC RE-IMPORT: an invalid re-sent sidecar never degrades the snapshot's valid domains", () => withStore((store) => {
+  const record = fixture("classic-era");
+  importFixture(store, record);
+  const result = importFixture(store, record, { formatVersion: 1, clientFamily: "Classic", quests: { data: "corrupt" } });
+  assert.equal(result.characterState, "invalid-or-unsupported");
+  const stored = store.listSnapshots(result.character.identityKey)[0]!.parsed.characterState!;
+  assert.deepEqual([stored.quests?.status.state, stored.talents?.status.state, stored.professionRecipes?.status.state], ["OBSERVED", "OBSERVED", "OBSERVED"]);
+}));
