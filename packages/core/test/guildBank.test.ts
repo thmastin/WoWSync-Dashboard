@@ -19,7 +19,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { parseWowSyncExport, WowSyncParseError } from "../src/parser.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
@@ -391,9 +390,9 @@ test("[DERIVED] Guild Bank contents are NOT in account inventory, item search, t
     assert.deepEqual(new Set(facts.inventory.items.flatMap((i) => i.locations.map((l) => l.storage))), new Set(["bags", "bank"]));
 
     const ctx = store.buildAccountContext(1789480000);
-    const serialized = JSON.stringify(ctx) + JSON.stringify(buildLlmContext(ctx));
+    const serialized = JSON.stringify(ctx);
     for (const shared of ["Linen Cloth", "Copper Ore", "Fixture Guild", "18014398509481985", "Netherweave Cloth", "GUILD"]) {
-      assert.equal(serialized.includes(shared), false, `${shared} must not reach AccountContext / LlmContext yet`);
+      assert.equal(serialized.includes(shared), false, `${shared} must not reach AccountContext yet`);
     }
   } finally {
     store.close();

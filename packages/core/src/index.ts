@@ -12,7 +12,6 @@ export * from "./needsAttention.ts";
 export * from "./professionCatalog.ts";
 export * from "./accountFacts.ts";
 export * from "./accountContext.ts";
-export * from "./llmContext.ts";
 export * from "./store.ts";
 export { SqliteSnapshotStore, SqliteSnapshotReadStore, SnapshotReadStoreOpenError } from "./sqliteStore.ts";
 export * from "./sharedStorage.ts";

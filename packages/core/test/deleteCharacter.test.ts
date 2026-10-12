@@ -12,7 +12,6 @@ import { DatabaseSync } from "node:sqlite";
 import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { searchInventory } from "../src/accountFacts.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { observation, retailExport } from "./equipmentObservationFixtures.ts";
@@ -311,23 +310,17 @@ test("[REAL] inventory search and version summaries after deletion no longer see
   }
 });
 
-test("[REAL] AccountContext and the Ask-My-Account LLM payload after deletion contain no trace of the deleted character", () => {
+test("[REAL] AccountContext after deletion contains no trace of the deleted character", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     seed(store);
     store.deleteCharacter(VOODAN);
     const ctx = store.buildAccountContext(NOW);
-    const llm = buildLlmContext(ctx);
 
     assert.deepEqual(ctx.versions["tbc-anniversary"].characters.map((c) => c.name), ["Tenivard", "Torahn"]);
     assert.equal(ctx.versions["tbc-anniversary"].facts.characterCount, 2);
     assert.equal(JSON.stringify(ctx).toLowerCase().includes("voodan"), false, "not even in embedded facts, transitions, or inventory");
-    assert.equal(JSON.stringify(llm).toLowerCase().includes("voodan"), false);
 
-    const index = llm.latestTransitionIndex;
-    for (const list of [index.comparable, index.insufficientHistory, index.goldChanged, index.inventoryChanged, index.levelChanged, index.playtimeChanged]) {
-      assert.equal(list.includes(VOODAN), false);
-    }
     // The other characters, including Forever's Hallo, are still fully present.
     assert.equal(ctx.versions["forever"].characters[0].name, "Hallo Emberstone");
     assert.equal(ctx.versions["forever"].characters[0].snapshotHistory.length, 2);
@@ -348,10 +341,6 @@ test("[REAL] a store after deleting X is indistinguishable from one that never i
       withDeletion.deleteCharacter(HALLO);
       seed(never, ["torahn", "tenivard", "bromrik", "ezaller"]);
       assert.equal(JSON.stringify(withDeletion.buildAccountContext(NOW)), JSON.stringify(never.buildAccountContext(NOW)));
-      assert.equal(
-        JSON.stringify(buildLlmContext(withDeletion.buildAccountContext(NOW))),
-        JSON.stringify(buildLlmContext(never.buildAccountContext(NOW))),
-      );
     } finally {
       withDeletion.close();
       never.close();

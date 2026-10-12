@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, before, mock, test } from "node:test";
-import { SqliteSnapshotStore, buildLlmContext } from "@wowsync-dashboard/core";
+import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce, resolveHost } from "../src/net.ts";
 import { BIG_ID, guild, warband } from "../../core/test/sharedStorageBuilders.ts";
@@ -757,7 +757,6 @@ test("shared storage stays OUT of AccountFacts, recent changes, AccountContext a
         changes: (await c.get("/api/versions/retail/recent-changes")).body,
         versions: (await c.get("/api/versions")).body,
         context,
-        llm: buildLlmContext(context),
       });
       if (withShared) assert.equal((await c.shared()).guilds.length, 2, "the shared journal is populated in this run");
     });

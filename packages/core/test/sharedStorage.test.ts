@@ -18,7 +18,6 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseWowSyncExport } from "../src/parser.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { snapshotObservedAt } from "../src/chronology.ts";
 import { BIG_ID, admit, admitAll, carrier, guild, itemRow, warband, type TabSpec } from "./sharedStorageBuilders.ts";
 import {
@@ -735,7 +734,6 @@ test("[REAL] running shared-storage reconciliation changes nothing observable el
       JSON.stringify({
         facts: store.buildAccountFacts("retail", NOW),
         context: store.buildAccountContext(NOW),
-        llm: buildLlmContext(store.buildAccountContext(NOW)),
         versions: store.listVersions(),
       });
     const before = snapshotOfWorld();
@@ -759,7 +757,7 @@ test("[REAL] running shared-storage reconciliation changes nothing observable el
     const after = snapshotOfWorld();
     assert.equal(after, before, "no existing projection depends on, or is altered by, the shared-storage module");
     for (const shared of ["Light Leather", "Ghost Iron Ore", "Silkweed", "Linen Cloth", "Copper Ore", "Netherweave Cloth", "Fixture Guild", BIG_ID]) {
-      assert.equal(after.includes(shared), false, `${shared} (shared storage) must not reach facts / AccountContext / LlmContext`);
+      assert.equal(after.includes(shared), false, `${shared} (shared storage) must not reach facts / AccountContext`);
     }
     // Diffs ignore shared storage as well.
     assert.equal(store.recentChanges("retail").some((c) => c.diff.bankItems.length > 0 && c.characterName === "Virek"), false);

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { buildForeverQuestObservation } from "../src/foreverQuests.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "./fixtures/foreverSnapshot180.ts";
 
@@ -196,9 +195,6 @@ test("snapshot 180 quests resolve canonically despite older GUID gaps and agree 
       const latestResult = read.getForeverQuestObservation({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
       assert.deepEqual(accountCharacter.foreverQuestObservation.value, latestResult.status === "FOUND" ? latestResult.value : undefined);
     }
-    const llmCharacter = buildLlmContext(account).versions.forever.characters.find((character) => character.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey);
-    assert.equal(llmCharacter?.foreverQuestObservation?.status, "FOUND");
-    if (llmCharacter?.foreverQuestObservation?.status === "FOUND") assert.deepEqual(llmCharacter.foreverQuestObservation.value.data?.active?.map((row) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
 
     const historical = new DashboardReadModel(store, () => now + 4 * 24 * 60 * 60).getForeverQuestObservation(query);
     assert.equal(historical.status, "FOUND");

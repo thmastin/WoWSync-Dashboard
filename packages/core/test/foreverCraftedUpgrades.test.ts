@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "./fixtures/foreverSnapshot180.ts";
@@ -76,10 +75,6 @@ test("the exact compact assessment is shared by AccountContext and Ask My Accoun
     const context = store.buildAccountContext(NOW);
     const character = context.versions.forever.characters.find((row) => row.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey)!;
     assert.deepEqual(character.foreverCraftedUpgradeAssessment, new DashboardReadModel(store, () => NOW).getForeverCraftedUpgradeAssessment(RORDIN));
-    const llm = buildLlmContext(context);
-    const llmCharacter = llm.versions.forever.characters.find((row) => row.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey)!;
-    assert.deepEqual(llmCharacter.foreverCraftedUpgradeAssessment, character.foreverCraftedUpgradeAssessment);
-    assert.equal(JSON.stringify(llmCharacter.foreverCraftedUpgradeAssessment).includes("Hallo"), false);
     const otherVersion = new DashboardReadModel(store, () => NOW).getForeverCraftedUpgradeAssessment({ version: "classic-era", name: "Rordin", realm: "Classic Beta PvP 2" });
     assert.equal(otherVersion.status, "FOUND");
     if (otherVersion.status === "FOUND") assert.equal(otherVersion.value.provenance.state, "UNKNOWN");

@@ -1,5 +1,5 @@
 // The single implementation lives in @wowsync-dashboard/core (shared with
-// the LLM-facing projection, llmContext.ts) - re-exported here rather than
+// core read models) - re-exported here rather than
 // duplicated, per this project's "never duplicate business logic" rule.
 export { formatCopper, formatCopperDelta } from "@wowsync-dashboard/core/currency.ts";
 

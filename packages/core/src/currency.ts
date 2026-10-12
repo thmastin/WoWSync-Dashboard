@@ -1,7 +1,7 @@
 // WoW's copper/silver/gold currency formatting. Deterministic, pure, and
 // the single implementation shared by the web UI (packages/web/src/format.ts
-// re-exports these) and the LLM-facing projection (llmContext.ts) - moved
-// here from packages/web so neither duplicates the conversion (100 copper =
+// re-exports these) and core read models - moved
+// here from packages/web so nothing duplicates the conversion (100 copper =
 // 1 silver, 100 silver = 1 gold, i.e. 10,000 copper = 1 gold).
 
 /** Deterministic thousands separators (ASCII commas). Never locale-dependent. */

@@ -12,7 +12,7 @@
 // result cannot depend on the order in which exports arrived (tests permute it).
 //
 // Nothing here touches SQLite, the importer, the API, the web app, or any existing
-// projection (AccountFacts / AccountContext / LlmContext / diffs). Character storage
+// projection (AccountFacts / AccountContext / diffs). Character storage
 // ([BANK]) is never admitted: it stays character-owned and outside this module.
 //
 // Trust rules this module enforces:

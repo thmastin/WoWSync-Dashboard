@@ -7,13 +7,12 @@
 //   - replays/duplicates/out-of-order arrivals never change the reconciled state;
 //   - deleting a character (transport) never deletes a shared observation or its provenance;
 //   - an existing database is backfilled idempotently, without touching its snapshots;
-//   - AccountFacts / AccountContext / LlmContext / diffs still exclude shared storage.
+//   - AccountFacts / AccountContext / diffs still exclude shared storage.
 // Exports are rendered to real WOWSYNC text (sharedStorageExports.ts) so the parser is exercised too.
 // Every test pins the wall clock after all export times so imported_at is deterministic.
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { snapshotObservedAt } from "../src/chronology.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import {
   EMPTY_JOURNAL,
   SHARED_CONTENT_HASH_VERSION,
@@ -629,7 +628,6 @@ test("[SYNTHETIC] shared storage is still EXCLUDED from AccountFacts, totals, se
       const context = store.buildAccountContext(NOW);
       return JSON.stringify({
         facts: store.buildAccountFacts("retail", NOW),
-        llm: buildLlmContext(context),
         versions: store.listVersions(),
         changes: store.recentChanges("retail").map((c) => c.diff),
       });
