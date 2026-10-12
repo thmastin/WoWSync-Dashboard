@@ -188,3 +188,27 @@ test("an older observed bank is carried forward as LAST_SEEN, never as current, 
   const state = read.getCharacterState({ version: "forever", name: "Banker" });
   assert.equal(state.status, "FOUND");
 }));
+
+test("trainer offers join captured recipe rows by exact ID first, then by unique name (DERIVED), and carry forward as LAST_SEEN", () => withStore((store) => {
+  seedRordinSnapshot190(store);
+  const character = { name: "Rordin", surname: "Longbraid", race: "Dwarf", faction: "Alliance", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" };
+  // A later visit to a Blacksmithing trainer, then an export taken away from the trainer.
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character, bank: { unknown: true }, trainer: { categories: [{ category: "Blacksmithing", name: "Trainer", services: [
+    { spellID: "2663", ability: "Copper Bracers", status: "known", requiredLevel: 1, cost: 10 },
+    { spellID: "999001", ability: "Rough Copper Vest", status: "known", requiredLevel: 1, cost: 10 },
+    { spellID: "999002", ability: "Copper Chain Pants", status: "available", requiredLevel: 1, cost: 50 },
+  ] }] } } as any));
+  store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 10, character, bank: { unknown: true }, trainer: { unknown: true } } as any));
+  const read = new DashboardReadModel(store, () => NOW);
+  const trainer = read.getCharacterTrainer({ ...RORDIN });
+  assert.equal(trainer.status, "FOUND");
+  if (trainer.status !== "FOUND") return;
+  const data = trainer.value.data!;
+  assert.equal(data.sectionState, "LAST_SEEN", "a trainer visit from an earlier export is historical, not current");
+  const byName = Object.fromEntries(data.services.map((service) => [service.ability, service.recipeMatch]));
+  assert.equal(byName["Copper Bracers"]?.basis, "RECIPE_ID");
+  assert.equal(byName["Copper Bracers"]?.recipeID, 2663);
+  assert.equal(byName["Rough Copper Vest"]?.basis, "DERIVED_NAME");
+  assert.equal(byName["Rough Copper Vest"]?.recipeID, 12260);
+  assert.equal(byName["Copper Chain Pants"], undefined, "no captured recipe row means no fabricated match");
+}));

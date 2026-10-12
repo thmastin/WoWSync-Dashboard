@@ -16,7 +16,7 @@ import { resolveRecipeEvidence, snapshotRecipeSection, withResolvedRecipeSection
 import type { StoredSnapshot } from "./store.ts";
 import type { ParsedSnapshot, SectionStatus, VersionOrUnknown } from "./types.ts";
 
-export const CARRIED_SECTIONS = ["equipment", "bags", "bank", "professions"] as const;
+export const CARRIED_SECTIONS = ["equipment", "bags", "bank", "professions", "trainer"] as const;
 export type CarriedSection = typeof CARRIED_SECTIONS[number];
 
 function newestFirst(a: StoredSnapshot, b: StoredSnapshot): number {
@@ -46,7 +46,11 @@ export function resolveSnapshotView(version: VersionOrUnknown, snapshots: readon
     if (!source) continue;
     const section = source.parsed[key];
     const status: SectionStatus = { ...section.status, state: "LAST_SEEN", carriedFromSnapshotId: source.id, reason: `Not observed in snapshot ${selected.id}; carried forward from snapshot ${source.id}. Historical, not current.` };
-    parsed = { ...parsed, [key]: { ...section, status } };
+    // Trainer categories carry their own visit status; relabel them too.
+    const carried = key === "trainer"
+      ? { ...section, status, categories: source.parsed.trainer.categories.map((category) => ({ ...category, status: { ...category.status, state: category.status.state === "UNKNOWN" ? "UNKNOWN" as const : "LAST_SEEN" as const, carriedFromSnapshotId: source.id } })) }
+      : { ...section, status };
+    parsed = { ...parsed, [key]: carried };
   }
   if (options.recipes && (version === "forever" || version === "retail") && !snapshotRecipeSection(version, selected)) {
     parsed = withResolvedRecipeSection(version, parsed, resolveRecipeEvidence(version, snapshots, selected));

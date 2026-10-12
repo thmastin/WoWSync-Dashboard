@@ -25,7 +25,7 @@ import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessm
 import { resolveRecipeEvidence } from "./recipeEvidence.ts";
 import { resolveSnapshotView } from "./snapshotEvidence.ts";
 import { foreverBuildVerification, isForeverClient } from "./foreverProfile.ts";
-import { findRecipeCrafters, knowledgeRows, reagentAvailability, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
+import { findRecipeCrafters, knowledgeRows, matchTrainerService, reagentAvailability, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 
@@ -179,7 +179,7 @@ export interface CharacterTrainerRead {
   snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
   sectionState: SectionState;
   categories: Array<{ category: string; state: SectionState; observedAt?: number; freshness: "recent" | "stale" | "unknown"; trainerName?: string; trainerType?: string; coverage?: string; filters?: string; serviceCount: number; statusCounts: { known: number; available: number; unavailable: number; other: number } }>;
-  services: Array<{ category: string; categoryState: SectionState; observedAt?: number; freshness: "recent" | "stale" | "unknown"; spellID?: string; ability?: string; rank?: string; statusAtVisit?: string; requiredLevel?: string; costCopper?: number; requirementsAtVisit?: string }>;
+  services: Array<{ category: string; categoryState: SectionState; observedAt?: number; freshness: "recent" | "stale" | "unknown"; spellID?: string; ability?: string; rank?: string; statusAtVisit?: string; requiredLevel?: string; costCopper?: number; requirementsAtVisit?: string ; recipeMatch?: import("./recipeIntelligence.ts").TrainerRecipeMatch }>;
   categoryCount: number;
   categoriesTruncated: boolean;
   offset: number;
@@ -1537,6 +1537,8 @@ export class DashboardReadModel {
       if (!snapshot) return { data: { identity, sectionState: "UNKNOWN", categories: [], services: [], offset: 0, limit: query.limit ?? 50, totalCount: 0, truncated: false, categoryCount: 0, categoriesTruncated: false, reason: "No stored snapshot exists for this character." }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshot exists for this character." } };
       const section = snapshot.parsed.trainer;
       const status = section.status.state;
+      // Trainer offers joined to this character's captured recipe rows (Forever/Retail only).
+      const recipeRows = query.version === "forever" || query.version === "retail" ? knowledgeRows(resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot)) : [];
       const selectedCategories = [...section.categories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
       const categoryRead = selectedCategories.map((category) => {
         const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
@@ -1555,7 +1557,10 @@ export class DashboardReadModel {
           if (query.status && (query.status === "other" ? state === "known" || state === "available" || state === "unavailable" : state !== query.status)) return false;
           return !needle || `${service.spellID ?? ""} ${service.ability ?? ""} ${service.rank ?? ""} ${service.requirementsAtVisit ?? ""}`.toLocaleLowerCase().includes(needle);
         })
-        .map((service) => ({ category: category.category, categoryState: category.status.state, observedAt, freshness, spellID: service.spellID, ability: service.ability, rank: service.rank, statusAtVisit: service.statusAtVisit, requiredLevel: service.requiredLevel, costCopper: service.costCopper, requirementsAtVisit: service.requirementsAtVisit })));
+        .map((service) => {
+          const recipeMatch = matchTrainerService(service, recipeRows);
+          return { category: category.category, categoryState: category.status.state, observedAt, freshness, spellID: service.spellID, ability: service.ability, rank: service.rank, statusAtVisit: service.statusAtVisit, requiredLevel: service.requiredLevel, costCopper: service.costCopper, requirementsAtVisit: service.requirementsAtVisit, ...(recipeMatch ? { recipeMatch } : {}) };
+        }));
       const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
       const pageServices = services.slice(page.offset, page.offset + page.limit);
       const categories = categoryRead.slice(0, 50).map(({ category, observedAt, freshness, counts }) => ({ category: category.category, state: category.status.state, observedAt, freshness, trainerName: category.name, trainerType: category.trainerType, coverage: category.coverage, filters: category.filters, serviceCount: category.services.length, statusCounts: counts }));

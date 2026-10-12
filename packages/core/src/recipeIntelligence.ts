@@ -200,3 +200,27 @@ export function reagentAvailability(version: VersionOrUnknown, crafter: Characte
     }),
   }));
 }
+
+export interface TrainerRecipeMatch {
+  /** RECIPE_ID: the trainer service spell ID equals a captured recipe ID. DERIVED_NAME: unique exact name match only. */
+  basis: "RECIPE_ID" | "DERIVED_NAME";
+  recipeID: number;
+  learnedState: string;
+  evidence: RecipeKnowledgeRow["evidence"];
+  sourceSnapshotId?: number;
+  outputItemID?: number;
+  reagentSlots: ReagentSlotView[];
+}
+
+/** Join one trainer service to this character's captured recipe rows, conservatively. */
+export function matchTrainerService(service: { spellID?: string; ability?: string }, rows: readonly RecipeKnowledgeRow[]): TrainerRecipeMatch | undefined {
+  const view = (row: RecipeKnowledgeRow, basis: TrainerRecipeMatch["basis"]): TrainerRecipeMatch => ({ basis, recipeID: row.recipeID, learnedState: row.learnedState, evidence: row.evidence, ...(row.sourceSnapshotId !== undefined ? { sourceSnapshotId: row.sourceSnapshotId } : {}), ...(row.outputItemID !== undefined ? { outputItemID: row.outputItemID } : {}), reagentSlots: row.reagentSlots });
+  const id = service.spellID !== undefined && /^\d+$/.test(service.spellID) ? Number(service.spellID) : undefined;
+  const byId = id !== undefined ? rows.find((row) => row.recipeID === id) : undefined;
+  if (byId) return view(byId, "RECIPE_ID");
+  const name = service.ability?.trim().toLowerCase();
+  if (!name) return undefined;
+  const byName = rows.filter((row) => row.name?.trim().toLowerCase() === name);
+  const ids = new Set(byName.map((row) => row.recipeID));
+  return ids.size === 1 ? view(byName[0]!, "DERIVED_NAME") : undefined;
+}
