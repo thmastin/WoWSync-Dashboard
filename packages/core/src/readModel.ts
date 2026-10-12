@@ -1703,11 +1703,12 @@ export class DashboardReadModel {
       const value = /^\d+$/.test(item.itemKey) ? metadata.get(Number(item.itemKey)) : undefined;
       const scopedLocations = query.storage ? item.locations.filter((location) => location.storage === query.storage) : item.locations;
       const locations: InventorySearchLocation[] = scopedLocations.flatMap((location) => {
-        const snapshot = this.store.listSnapshots(location.identityKey)[0];
+        const snapshots = this.store.listSnapshots(location.identityKey);
+        const snapshot = snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0]);
         const section = snapshot?.parsed[location.storage];
         if (!snapshot || !section || section.status.state === "UNKNOWN") return [];
         const observedAt = section.status.observedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
-        return [{ ...location, state: section.status.state, ...(observedAt !== undefined ? { observedAt } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()) }];
+        return [{ ...location, state: section.status.state, ...(observedAt !== undefined ? { observedAt } : {}), importedAt: snapshot.importedAt, snapshotId: section.status.carriedFromSnapshotId ?? snapshot.id, freshness: classifyFreshness(observedAt, this.now()) }];
       });
       const scopedItem = { ...item, locations };
       return { item: scopedItem, metadataState: value ? "KNOWN" as const : "UNKNOWN" as const, ...(value ? { metadata: value } : {}) };
