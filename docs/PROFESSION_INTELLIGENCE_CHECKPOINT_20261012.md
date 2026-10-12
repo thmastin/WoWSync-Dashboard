@@ -98,3 +98,12 @@ Each step is independently revertible. No schema or data migration is involved.
    | `get_recipe_reagent_availability` for Rordin, recipe 12260 | Copper Bar slot: bags quantity as observed; bank UNKNOWN; other characters listed separately |
 
 3. Do not craft, move items or edit the Rordin ERP project.
+
+## DEV deployment — 2026-10-12
+
+- `wowsync-dev-deploy prepare` built and tested the release; schema plan `none`. `deploy` promoted `4ed2590e909ed4d6e20fa1fb345bbd867dbcd2fa` from the verified baseline `e936d4f941efb350ed79b3cdbc1fc62f9a1e5e2d` (an ancestor). The audit result was `PROMOTE_SUCCESS` at 2026-10-12T15:46:53Z.
+- Backup: `/var/lib/wowsync-dev/backups/deploy/20261012T154645.239Z-22a9232a-e936d4f941efb350ed79b3cdbc1fc62f9a1e5e2d-to-4ed2590e909ed4d6e20fa1fb345bbd867dbcd2fa.sqlite`, integrity `ok`. The SHA-256 was not printed and the file is not readable from the operator shell.
+- Schema unchanged. Dashboard healthy (`/` 200, `/api/versions` 200), MCP healthy, Herdr untouched, no journal warnings. The MCP tunnel process restarted at deploy time from `releases/current`.
+- The resolver is active on real DEV data. `GET /api/characters/forever%3A%3Aclassic%20beta%20pvp%202%3A%3Arordin/forever-crafted-upgrade-assessment` (no pin) returned snapshot 190, `recipeEvidence.state = LAST_SEEN` from snapshot 180, and candidates 2663 and 12260 tagged LAST_SEEN/Blacksmithing. Snapshot 190's complete current bag scan holds no Copper Bars (2840), so both candidates show `OBSERVED_INSUFFICIENT` and `BLOCKED_BY_OBSERVED_REAGENTS`. Bank and upgrade conclusions remain UNKNOWN.
+- The new MCP tools `find_recipe_crafters` and `get_recipe_reagent_availability` are in the deployed SHA. The release's prepare-time protocol test asserts both in `tools/list` and calls `find_recipe_crafters`. The running DEV MCP instance could not be queried directly from the operator shell (stdio behind the tunnel; release and DB are owner-only), so connected ChatGPT MCP acceptance is still pending.
+- No ERP project, gameplay data, GearExport, Herdr, or BankCleanup change. Rollback: `wowsync-dev-deploy rollback e936d4f941efb350ed79b3cdbc1fc62f9a1e5e2d`.
