@@ -94,7 +94,7 @@ test("a malformed percent-encoded URL is a JSON 400 (Express's default is an HTM
 
 test("malformed JSON bodies are a JSON 400 on every route that reads one", async () => {
   await withApp(async (base) => {
-    for (const [method, path] of [["POST", "/api/import"], ["POST", "/api/ask"], ["DELETE", "/api/characters/x"]] as const) {
+    for (const [method, path] of [["POST", "/api/import"], ["DELETE", "/api/characters/x"]] as const) {
       const res = await fetch(base + path, { method, headers: { "Content-Type": "application/json" }, body: "{ not json" });
       assert.equal(res.status, 400, `${method} ${path}`);
       assert.match((await json(res)).error, /JSON/);

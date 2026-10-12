@@ -521,23 +521,6 @@ export interface AccountContext {
   planning?: { projects: Array<{ stableId: string; version: string; title: string; status: string; priority: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; needStates: Record<string, number> }> };
 }
 
-// --- "Ask My Account" (LLM POC) ---
-
-export interface AskAccountUsage {
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
-}
-
-export interface AskAccountResponse {
-  answer: string;
-  model: string;
-  contextGeneratedAt: number;
-  contextSummary: { characterCount: number; versions: string[] };
-  gearAllocationRecommendation?: string;
-  usage?: AskAccountUsage;
-}
-
 // --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------
 // Mirrors packages/core/src/sharedStorageApi.ts (GET /api/shared-storage and the owner-delete routes).
 // Everything here is DERIVED from OBSERVED journal facts; a view is ONE real observation with its own time

@@ -5,7 +5,6 @@ import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountProfessions from "./components/AccountProfessions.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
-import AskAccountModal from "./components/AskAccountModal.tsx";
 import CharactersRoster from "./components/CharactersRoster.tsx";
 import ItemsSearch from "./components/ItemsSearch.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
@@ -57,7 +56,6 @@ export default function App() {
   });
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
-  const [askOpen, setAskOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   const navigate = useCallback((next: AppRoute, replace = false) => {
@@ -187,9 +185,6 @@ export default function App() {
         <div style={{ display: "flex", gap: 8 }}>
           <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
             Developer
-          </button>
-          <button className="dev-button" onClick={() => setAskOpen(true)} title="Experimental: ask an external LLM a question about your account">
-            Ask My Account
           </button>
           <button className="primary-button" onClick={() => setImportOpen(true)}>
             Import WoWSync
@@ -357,7 +352,6 @@ export default function App() {
 
       {devExportOpen && <DeveloperExportModal onClose={() => setDevExportOpen(false)} />}
 
-      {askOpen && <AskAccountModal onClose={() => setAskOpen(false)} />}
     </div>
   );
 }

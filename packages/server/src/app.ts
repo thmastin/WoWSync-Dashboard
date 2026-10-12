@@ -20,7 +20,6 @@ import {
   type TrainerUnlock,
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
-import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.ts";
 import { hostGuard } from "./net.ts";
 import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
 import { registerDemandRoutes } from "./demandRoutes.ts";
@@ -156,83 +155,6 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
       return res.status(400).json({ error: `Invalid "now" query parameter: must be a Unix timestamp in seconds.` });
     }
     res.json(store.buildAccountContext(now));
-  });
-
-  // "Ask My Account" (POC). Every request is independent - no conversation
-  // history is kept or persisted. The account context, user's question, and
-  // any explicitly selected deterministic gear result are sent once to the provider. The API key never
-  // reaches the browser; it's read from the server's own environment.
-  //
-  // The context is retrieved via an actual HTTP call to this server's own
-  // GET /api/account-context (not a second, divergent call path) - the
-  // exact same canonical document the Copy/Download feature produces. If
-  // that call fails, the request fails outright; it never silently falls
-  // back to a stale or differently-built context.
-  app.post("/api/ask", async (req, res) => {
-    const question = typeof req.body?.question === "string" ? req.body.question.trim() : "";
-    if (question.length === 0) {
-      return res.status(400).json({ error: "Missing question." });
-    }
-    if (question.length > MAX_QUESTION_LENGTH) {
-      return res.status(400).json({ error: `Question is too long (max ${MAX_QUESTION_LENGTH} characters).` });
-    }
-
-    let gearAllocation: unknown;
-    let gearAllocationRecommendation: string | undefined;
-    const gearCandidate = req.body?.gearCandidate;
-    if (gearCandidate !== undefined) {
-      if (!gearCandidate || typeof gearCandidate !== "object" || Array.isArray(gearCandidate)
-        || typeof gearCandidate.exporterIdentityKey !== "string" || gearCandidate.exporterIdentityKey.length === 0 || gearCandidate.exporterIdentityKey.length > 500
-        || !Number.isSafeInteger(gearCandidate.snapshotId) || gearCandidate.snapshotId <= 0
-        || !Number.isSafeInteger(gearCandidate.rowOrdinal) || gearCandidate.rowOrdinal <= 0) {
-        return res.status(400).json({ error: "gearCandidate must contain an exporter identity key, positive snapshot ID, and positive one-based row ordinal." });
-      }
-      const resolution = new DashboardReadModel(store).analyzeRetailGearCandidate({ version: "retail", exporterIdentityKey: gearCandidate.exporterIdentityKey, snapshotId: gearCandidate.snapshotId, rowOrdinal: gearCandidate.rowOrdinal });
-      if (resolution.status !== "FOUND") return res.status(400).json({ error: "The selected Retail gear candidate reference is no longer available.", code: resolution.status });
-      gearAllocation = resolution.value;
-      gearAllocationRecommendation = resolution.value.recommendation;
-    }
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          "OPENAI_API_KEY is not configured on the server. Set it in a local .env file (see README) or as an environment variable, then restart the server.",
-      });
-    }
-
-    let context: AccountContext;
-    try {
-      const contextRes = await fetch(`${selfOrigin}/api/account-context`);
-      if (!contextRes.ok) throw new Error(`account-context request returned HTTP ${contextRes.status}`);
-      context = (await contextRes.json()) as AccountContext;
-    } catch (err) {
-      console.error("Ask My Account: failed to retrieve the account context:", err instanceof Error ? err.message : String(err));
-      return res.status(502).json({ error: "Could not retrieve the current account context. Try again." });
-    }
-
-    const model = process.env.WOWSYNC_LLM_MODEL?.trim() || DEFAULT_MODEL;
-    try {
-      const result = await askOpenAI(question, context, { apiKey, model, gearAllocation });
-      const contextSummary = {
-        characterCount: Object.values(context.versions).reduce((sum, v) => sum + v.characters.length, 0),
-        versions: Object.keys(context.versions),
-      };
-      res.json({
-        answer: result.answer,
-        model: result.model,
-        contextGeneratedAt: result.contextGeneratedAt,
-        contextSummary,
-        ...(gearAllocationRecommendation ? { gearAllocationRecommendation } : {}),
-        usage: result.usage,
-      });
-    } catch (err) {
-      if (err instanceof AskError) {
-        return res.status(err.status).json({ error: err.publicMessage });
-      }
-      console.error("Ask My Account: unexpected error:", err instanceof Error ? err.message : String(err));
-      res.status(502).json({ error: "The LLM provider request failed unexpectedly." });
-    }
   });
 
   app.get("/api/characters/:identityKey", (req, res) => {

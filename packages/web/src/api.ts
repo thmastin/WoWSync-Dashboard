@@ -1,7 +1,6 @@
 import type {
   AccountContext,
   AccountFacts,
-  AskAccountResponse,
   DeleteCharacterResult,
   DeleteSharedStorageOwnerResponse,
   ImportResult,
@@ -217,22 +216,6 @@ export function fetchAccountContext(signal?: AbortSignal) {
     signal,
     validate: (body) => isRecord(body) && isRecord(body.versions),
   });
-}
-
-/**
- * "Ask My Account" (POC): sends a single question to the server, which
- * retrieves the same canonical account context (above) and forwards it,
- * the question, and a system prompt to a configured LLM provider. A caller
- * may attach a selected Retail gear-candidate reference for server-side
- * deterministic analysis. Each call is independent - no conversation history
- * is kept on either side.
- */
-export function askAccount(question: string, gearCandidate?: GearCandidateRef) {
-  return request<AskAccountResponse>(
-    "/api/ask",
-    { method: "POST", body: JSON.stringify({ question, ...(gearCandidate ? { gearCandidate } : {}) }) },
-    { validate: (body) => isRecord(body) && typeof body.answer === "string" },
-  );
 }
 
 // --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------

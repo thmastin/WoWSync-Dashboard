@@ -116,9 +116,6 @@ console.log(`Database: ${dbPath}`);
 if (!existsSync(webDist)) {
   console.log(`(Web UI not built yet — run "npm run build:web", or run "npm run dev:web" for the dev server.)`);
 }
-if (!process.env.OPENAI_API_KEY) {
-  console.log(`(Ask My Account is disabled — set OPENAI_API_KEY to enable it. See README.)`);
-}
 
 function shutdown() {
   server?.close();
