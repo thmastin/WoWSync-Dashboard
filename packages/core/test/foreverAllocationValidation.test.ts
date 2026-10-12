@@ -19,7 +19,7 @@ test("[REAL OBSERVED FIXTURE] a pre-70291 Hallo export is kept outside the 70291
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND") throw new Error("Expected a version-scoped response for the real Hallo fixture");
     assert.equal(result.value.data, undefined, "the committed real export is build 69913 and must not be treated as the requested 70291 profile");
-    assert.match(result.value.provenance.reason ?? "", /build 70291/);
+    assert.equal(result.value.provenance.state, "UNKNOWN", "an older unverified build is never interpreted as a 70291 allocation");
   } finally {
     store.close();
   }

@@ -232,7 +232,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
     } else {
       out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
       out.push(field("Name", c.name ?? "Fixture"));
-      if (c.clientFamily === "Forever" && c.clientVersion === "1.60.1" && ["70291", "70338"].includes(c.clientBuild ?? "") && c.interface === "16001") {
+      if (c.clientFamily === "Forever" && ((c.clientVersion === "1.60.1" && ["70291", "70338"].includes(c.clientBuild ?? "") && c.interface === "16001") || c.surname !== undefined)) {
         out.push(field("Surname", c.surname));
         if (c.surname) out.push(field("SurnameSource", c.surnameSource ?? "Fixture API candidate"));
       }

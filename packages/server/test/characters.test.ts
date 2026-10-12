@@ -141,7 +141,7 @@ test("Forever observation REST route preserves the build guard for older capture
     assert.equal(response.status, 200);
     assert.equal(response.body.status, "FOUND");
     assert.equal(response.body.value.data, undefined);
-    assert.match(response.body.value.provenance.reason, /build 70291 or 70338 \/ interface 16001/);
+    assert.equal(response.body.value.provenance.state, "UNKNOWN");
   });
 });
 

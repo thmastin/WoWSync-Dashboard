@@ -40,3 +40,4 @@ export * from "./erpFulfillmentPackageReview.ts";
 export * from "./allocation.ts";
 export * from "./allocationReview.ts";
 export * from "./heldItemIdentity.ts";
+export * from "./foreverProfile.ts";

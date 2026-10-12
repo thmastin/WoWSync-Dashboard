@@ -7,6 +7,7 @@
 // actionable error instead of silently producing wrong data.
 
 import { fieldNumber, fieldValue } from "./escape.ts";
+import { isForeverClient } from "./foreverProfile.ts";
 import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 import type {
   AccountBankSection,
@@ -200,8 +201,8 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
-  if (surname !== undefined && (clientFamily !== "Forever" || clientVersion !== "1.60.1" || !["70291", "70338"].includes(clientBuild ?? "") || iface !== "16001")) {
-    fail("Surname is only supported for the verified Forever 1.60.1 build 70291 or 70338 profile");
+  if (surname !== undefined && !isForeverClient({ clientFamily, clientVersion, clientBuild, interface: iface })) {
+    fail("Surname is only supported for a well-formed Forever client profile");
   }
 
   return {
@@ -855,8 +856,7 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   }
 
   const character = result.character!;
-  if (character.clientFamily === "Forever" && character.clientVersion === "1.60.1"
-    && (character.clientBuild === "70291" || character.clientBuild === "70338") && character.interface === "16001") {
+  if (isForeverClient(character)) {
     for (const slot of result.equipment!.slots) {
       const known = FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot];
       if (known) slot.slotName = known;

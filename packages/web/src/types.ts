@@ -160,7 +160,7 @@ export interface ParsedSnapshot {
     categories: TrainerCategory[];
   };
   foreverGearObservation?: {
-    clientProfile: "Forever:1.60.1:70291:16001" | "Forever:1.60.1:70338:16001";
+    clientProfile: `Forever:${string}`;
     name: string;
     realm: string;
     generatedAt: number;

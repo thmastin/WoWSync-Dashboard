@@ -43,11 +43,13 @@ test("Forever 70291 and 70338 surnames are optional display metadata and legacy 
   const retailWithSurname = buildWowSyncExport({ character: {
     name: "RetailOne", surname: "Unexpected", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933",
   } }).replace("Name: RetailOne\n", "Name: RetailOne\nSurname: Unexpected\n");
-  assert.throws(() => parseWowSyncExport(retailWithSurname), /Surname is only supported for the verified Forever/);
+  assert.throws(() => parseWowSyncExport(retailWithSurname), /Surname is only supported for a well-formed Forever/);
   const unknownForeverWithSurname = buildWowSyncExport({ character: {
     name: "Future", surname: "Profile", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
   } }).replace("Client: 1.60.1 build 70338", "Client: 1.60.1 build 70339");
-  assert.throws(() => parseWowSyncExport(unknownForeverWithSurname), /70291 or 70338 profile/);
+  const launchBuild = parseWowSyncExport(unknownForeverWithSurname);
+  assert.equal(launchBuild.character.surname, "Profile", "a new Forever client build (e.g. the launch build) still imports with its surname");
+  assert.equal(launchBuild.character.clientBuild, "70339");
 });
 
 test("parses all eight sections present and labeled correctly", () => {

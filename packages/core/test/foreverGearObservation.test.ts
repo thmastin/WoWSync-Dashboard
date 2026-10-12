@@ -17,7 +17,7 @@ test("Forever structured sidecar is isolated by version, identity, profile, and 
   assert.equal(normalizeForeverStructuredObservation({ ...sidecar, clientProfile: "Retail" }, "forever", "Hero", "Hallo", 99), undefined);
 });
 
-test("Forever profession recipes accept only the validated 70338 partial catalogue shape", () => {
+test("Forever profession recipes accept the validated partial catalogue shape from any well-formed Forever build", () => {
   const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 1, uniqueCandidateCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, evidence: "OBSERVED", observedAt: 100, recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: 100, outputItemID: 2862, reagentSlots: [{ quantityRequired: 1, reagents: [{ itemID: 2835 }] }] }] }] };
   const recipes = { observedAt: 100, capture: 59, revision: 2, source: "client", data: recipeData };
   const current = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001" as const, professionRecipes: recipes };
@@ -25,8 +25,10 @@ test("Forever profession recipes accept only the validated 70338 partial catalog
   assert.equal(normalized?.professionRecipes?.status.state, "OBSERVED");
   assert.equal((normalized?.professionRecipes?.data.professions as any[])[0].recipes[0].outputItemID, 2862);
   const olderBuild = normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:1.60.1:70291:16001" }, "forever", "Hero", "Hallo", 99);
-  assert.equal(olderBuild?.professionRecipes, undefined, "a build without this validated collector schema cannot assert recipe evidence");
-  assert.ok(olderBuild?.equipment, "unsupported optional recipe evidence does not discard otherwise valid Forever observations");
+  assert.equal(olderBuild?.professionRecipes?.status.state, "OBSERVED", "the recipe shape is validated by content, not by an exact build allowlist");
+  const launchBuild = normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:1.61.0:71234:16100" }, "forever", "Hero", "Hallo", 99);
+  assert.equal(launchBuild?.professionRecipes?.status.state, "OBSERVED", "a future Forever build is not silently discarded at import");
+  assert.equal(normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:beta" }, "forever", "Hero", "Hallo", 99), undefined, "malformed profiles still fail closed");
   assert.equal(normalizeForeverStructuredObservation(current, "retail", "Hero", "Hallo", 99), undefined, "Forever recipe evidence remains version-isolated");
   const falselyComplete = normalizeForeverStructuredObservation({ ...current, professionRecipes: { ...recipes, data: { ...recipeData, coverage: { state: "COMPLETE", candidateCompleteness: "COMPLETE" } } } }, "forever", "Hero", "Hallo", 99);
   assert.equal(falselyComplete?.professionRecipes, undefined, "unsupported complete-catalogue claims fail closed");

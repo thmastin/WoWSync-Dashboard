@@ -23,6 +23,9 @@ import {
   WowSyncParseError,
   characterIdentity,
   detectVersion,
+  foreverProfileOf,
+  isForeverClient,
+  isForeverProfile,
   isLuaTable,
   luaGet,
   luaToPlain,
@@ -258,12 +261,13 @@ function isRetailExportText(text: string): boolean {
   }
 }
 
-function isSupportedForeverExportText(text: string): boolean {
+/** The export's own Forever profile; a sidecar is only accepted when its captureProfile matches it. */
+function foreverExportProfile(text: string): string | undefined {
   try {
     const character = parseWowSyncExport(text).character;
-    return detectVersion(character) === "forever" && character.clientVersion === "1.60.1" && ["70291", "70338"].includes(character.clientBuild ?? "") && character.interface === "16001";
+    return detectVersion(character) === "forever" ? foreverProfileOf(character) : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -341,7 +345,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       : undefined;
     const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
     const captureProfile = luaGet(record, "captureProfile");
-    const foreverGearObservation = typeof text === "string" && typeof captureProfile === "string" && ["Forever:1.60.1:70291:16001", "Forever:1.60.1:70338:16001"].includes(captureProfile) && isSupportedForeverExportText(text)
+    const foreverGearObservation = typeof text === "string" && isForeverProfile(captureProfile) && foreverExportProfile(text) === captureProfile
       ? {
           clientProfile: captureProfile,
           name: typeof name === "string" ? name : "",

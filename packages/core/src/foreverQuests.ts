@@ -1,4 +1,5 @@
 import { classifyFreshness } from "./freshness.ts";
+import { isForeverProfile } from "./foreverProfile.ts";
 
 export type QuestEvidenceState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ForeverQuestObjective {
@@ -146,7 +147,7 @@ export function buildForeverQuestObservation(input: {
   const freshness = observedAt === undefined ? "unknown" : classifyFreshness(observedAt, input.now);
   const reason = (detail: string): ForeverQuestObservation => ({ version: "forever", identity: input.identity, source: "Forever WoWSyncDB sections.quests", state: "UNKNOWN", completeness: "unknown", ...(observedAt !== undefined ? { observedAt } : {}), freshness, activeState: "UNKNOWN", completedHistory: { state: "UNKNOWN" }, issues: [], reason: detail });
   if (!section || !data) return reason("Quest observations were not captured in this export.");
-  if (input.profile !== "Forever:1.60.1:70291:16001" && input.profile !== "Forever:1.60.1:70338:16001") return reason("The quest sidecar profile does not match an allowlisted Forever client.");
+  if (!isForeverProfile(input.profile)) return reason("The quest sidecar profile is not a well-formed Forever client profile.");
   if (data.formatVersion !== 1 || data.clientFamily !== "Forever" || data.clientProfile !== input.profile || data.source !== "C_QuestLog") return reason("The quest sidecar format or source does not match its verified Forever profile.");
   if (!observedAt || !Number.isSafeInteger(data.observedAt) || (data.observedAt as number) > observedAt || observedAt - (data.observedAt as number) > 120) return reason("Quest section timestamp is missing or inconsistent with the persisted section time.");
   const activeAvailable = data.activeState === "OBSERVED" && Array.isArray(data.active) && data.active.length <= MAX_QUESTS;

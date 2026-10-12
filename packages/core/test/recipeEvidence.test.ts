@@ -23,6 +23,7 @@ test("RORDIN ACCEPTANCE: latest snapshot 190 combines LAST_SEEN recipes from 180
   const assessment = result.value.data!;
   assert.equal(result.value.provenance.snapshotId, 190, "the assessment is anchored to the latest snapshot");
   assert.equal(assessment.snapshot.snapshotId, 190);
+  assert.equal(assessment.snapshot.buildVerification, "VERIFIED");
   assert.equal(assessment.recipeEvidence.state, "LAST_SEEN");
   assert.equal(assessment.recipeEvidence.sourceSnapshotId, 180);
   assert.deepEqual(assessment.candidates.map((c) => [c.recipe.recipeID, c.output.itemID, c.recipe.evidence, c.recipe.sourceSnapshotId, c.recipe.profession]), [[2663, 2853, "LAST_SEEN", 180, "Blacksmithing"], [12260, 10421, "LAST_SEEN", 180, "Blacksmithing"]]);

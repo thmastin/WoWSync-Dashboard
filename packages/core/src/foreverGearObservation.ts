@@ -1,10 +1,11 @@
 import type { VersionOrUnknown } from "./types.ts";
+import { isForeverProfile } from "./foreverProfile.ts";
 import { classifyFreshness } from "./freshness.ts";
 import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 import { buildForeverQuestObservation } from "./foreverQuests.ts";
 
 export interface ForeverStructuredObservation {
-  clientProfile: "Forever:1.60.1:70291:16001" | "Forever:1.60.1:70338:16001";
+  clientProfile: `Forever:${string}`;
   name: string;
   realm: string;
   generatedAt: number;
@@ -24,12 +25,11 @@ type ForeverEquipmentLike = { status: { state: ForeverSectionState; observedAt?:
 type ForeverInventoryLike = { status: { state: ForeverSectionState; observedAt?: number }; items: Array<{ itemRef?: string; name?: string; qty?: number }> };
 type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; nameSource?: string; nameResolution: "OBSERVED" | "UNKNOWN"; quantity?: number; bound?: boolean; bindingState?: string; provenance: ForeverSectionState };
 
-const FOREVER_PROFILES = ["Forever:1.60.1:70291:16001", "Forever:1.60.1:70338:16001"] as const;
 
 export function normalizeForeverStructuredObservation(value: unknown, version: VersionOrUnknown, name?: string, realm?: string, generatedAt?: number): ForeverStructuredObservation | undefined {
   if (version !== "forever" || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const v = value as Record<string, unknown>;
-  if (!FOREVER_PROFILES.includes(v.clientProfile as typeof FOREVER_PROFILES[number]) || typeof v.name !== "string" || typeof v.realm !== "string" || !Number.isSafeInteger(v.generatedAt)) return undefined;
+  if (!isForeverProfile(v.clientProfile) || typeof v.name !== "string" || typeof v.realm !== "string" || !Number.isSafeInteger(v.generatedAt)) return undefined;
   if (name?.toLocaleLowerCase() !== v.name.toLocaleLowerCase() || realm?.toLocaleLowerCase() !== v.realm.toLocaleLowerCase() || generatedAt !== v.generatedAt) return undefined;
   const section = (key: string): Record<string, unknown> | undefined => {
     const raw = v[key];
@@ -42,7 +42,6 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
   const recipeCoverage = object(recipeData?.coverage);
   const recipeProfessions = Array.isArray(recipeData?.professions) ? recipeData.professions : undefined;
   const validRecipes = recipeSection !== undefined
-    && v.clientProfile === "Forever:1.60.1:70338:16001"
     && recipeData?.formatVersion === 1
     && recipeData.ownerScope === "CHARACTER"
     && recipeCoverage?.state === "PARTIAL"

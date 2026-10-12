@@ -23,6 +23,7 @@ import { buildForeverGearObservation } from "./foreverGearObservation.ts";
 import { buildForeverQuestObservation, type ForeverQuestObservation } from "./foreverQuests.ts";
 import { buildForeverCraftedUpgradeAssessment, type ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
 import { resolveRecipeEvidence } from "./recipeEvidence.ts";
+import { foreverBuildVerification, isForeverClient } from "./foreverProfile.ts";
 import { findRecipeCrafters, knowledgeRows, reagentAvailability, type CharacterHistory, type ReagentAvailabilityView, type RecipeCraftersResult, type RecipeFilter, type RecipeKnowledgeRow } from "./recipeIntelligence.ts";
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
@@ -978,8 +979,8 @@ export class DashboardReadModel {
     return this.resolve(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
       const profile = snapshot.parsed.character;
-      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || !["70291", "70338"].includes(profile.clientBuild ?? "") || profile.interface !== "16001") {
-        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001 profile." } };
+      if (!isForeverClient(profile)) {
+        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires a well-formed Forever client profile (family, version, build, interface)." } };
       }
       const snapshots = this.store.listSnapshots(character.identityKey);
       const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
@@ -1003,8 +1004,7 @@ export class DashboardReadModel {
       if (!snapshot) return { data: buildForeverQuestObservation({ identity, profile: "UNKNOWN", now: this.now() }), provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
 
       const profile = snapshot.parsed.character;
-      const allowed = profile.clientFamily === "Forever" && profile.clientVersion === "1.60.1"
-        && ["70291", "70338"].includes(profile.clientBuild ?? "") && profile.interface === "16001";
+      const allowed = isForeverClient(profile);
       const structured = snapshot.parsed.foreverGearObservation;
       const structuredIdentityMatches = structured !== undefined
         && structured.name.toLocaleLowerCase() === character.name.toLocaleLowerCase()
@@ -1030,7 +1030,7 @@ export class DashboardReadModel {
           snapshotId: snapshot.id,
           freshness: observation.freshness,
           source: "Forever C_QuestLog quest observation sidecar",
-          ...(!allowed ? { reason: "This observation view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001 profile." }
+          ...(!allowed ? { reason: "This observation view requires a well-formed Forever client profile." }
             : !structuredIdentityMatches ? { reason: "The persisted Forever sidecar identity or export generation does not match the canonical character snapshot." }
             : observation.reason ? { reason: observation.reason } : {}),
           ...(state === "LAST_SEEN" ? { warning: "Quest values are historical and are not a current observation." } : {}),
@@ -1045,8 +1045,8 @@ export class DashboardReadModel {
     return this.resolveSelectedSnapshot(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: "No Forever snapshot exists for this character." } };
       const profile = snapshot.parsed.character;
-      if (profile.clientFamily !== "Forever" || profile.clientVersion !== "1.60.1" || !["70291", "70338"].includes(profile.clientBuild ?? "") || profile.interface !== "16001") {
-        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This assessment requires a verified Forever 1.60.1 build 70291 or 70338 / interface 16001 snapshot." } };
+      if (!isForeverClient(profile)) {
+        return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This assessment requires a well-formed Forever client profile (family, version, build, interface)." } };
       }
       const recipeEvidence = resolveRecipeEvidence("forever", this.store.listSnapshots(character.identityKey), snapshot);
       if (!snapshot.parsed.foreverGearObservation && recipeEvidence.state === "UNKNOWN") return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: `This snapshot has no structured Forever item evidence sidecar, and no compatible recipe observation was found. ${recipeEvidence.reason}` } };
