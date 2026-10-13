@@ -42,8 +42,8 @@ git -C dashboard checkout --quiet --detach "$sha"
 node --disable-warning=ExperimentalWarning dashboard/tools/forever-knowledge/build-bundle.ts \
   --questie QuestieDB --out bundle.new.json --cache cache --observed-url "$dashboard_url" > build.log 2>&1
 
-# Content hash without the build timestamp decides whether anything changed.
-content_hash() { node -e 'const b=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); delete b.builtAt; process.stdout.write(require("crypto").createHash("sha256").update(JSON.stringify(b)).digest("hex"))' "$1"; }
+# Content hash without build/retrieval timestamps decides whether anything changed.
+content_hash() { node -e 'const b=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write(require("crypto").createHash("sha256").update(JSON.stringify(b,(k,v)=>k==="builtAt"||k==="retrievedAt"?undefined:v)).digest("hex"))' "$1"; }
 new_hash="$(content_hash bundle.new.json)"
 old_hash="$(cat installed.sha256 2>/dev/null || true)"
 remote_installed="$(curl -fsS -m 30 "$dashboard_url/api/versions/forever/knowledge" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).installed===true)))')"
