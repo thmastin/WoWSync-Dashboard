@@ -1414,7 +1414,7 @@ export function renderCopilotMarkdown(answer: CopilotAnswer): string {
     if (rec.costs.length) lines.push(`- **Costs/resources:** ${rec.costs.join(" ")}`);
     if (rec.alternatives.length || rec.tradeoffs.length) lines.push(`- **Alternatives/tradeoffs:** ${[...rec.alternatives, ...rec.tradeoffs].join(" ")}`);
     if (rec.unknowns.length) lines.push(`- **Unknown:** ${rec.unknowns.join(" ")}`);
-    lines.push(`- **Next:** ${rec.nextActions.map((action, step) => `(${step + 1}) ${action}`).join(" ")}`);
+    if (rec.nextActions.length) lines.push(`- **Next:** ${rec.nextActions.map((action, step) => `(${step + 1}) ${action}`).join(" ")}`);
     }
   }
   if (answer.otherOpportunities.length) {
