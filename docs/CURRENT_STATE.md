@@ -1,5 +1,12 @@
 # Current WoWSync ERP state — Operations platform source checkpoint (2026-10-11)
 
+**Forever Co-Pilot discovery DEV deployment (2026-10-13, 04:15Z):** guarded promote of `5a612d1631591ac219222b5f4b7b9f16717e84eb` (`feature/forever-copilot`, after `24987b4`) from `1625aff`.
+- The co-pilot discovers quests, gear (quest rewards, vendors, learned/unlearned recipes, drops), class training and profession trainer recipes (from raw Forever trainer windows), class quest chains, profession pairs and a level plan; economies are realm + faction. See [`FOREVER_COPILOT.md`](FOREVER_COPILOT.md).
+- Private knowledge bundle (QuestieDB Forever + Wowhead Forever tooltips; built 2026-10-13T04:05Z; 4,244 quests, 14,889 items, 3,052 item tooltips) installed via `PUT /api/versions/forever/knowledge` into the DEV data directory. Not in git (QuestieDB has no license).
+- Backups integrity ok; schema unchanged; Dashboard/MCP healthy; Herdr untouched. Tests: core 880, MCP 12, server 254 + 2 skips, web 317, typecheck, build, browser 25/25.
+- Live: Hallo, Rordin and stable-gold acceptance questions HTTP 200 on DEV; Retail 422. ChatGPT call of `ask_forever_copilot` not yet observed; MCP now logs one stderr line per tool call.
+- Rollback: `wowsync-dev-deploy rollback 1625aff670889dbc91a95b57ce9080cb2efc0cf1`.
+
 **Forever Co-Pilot DEV deployment (2026-10-13, 03:15Z):** guarded promote of `1625aff670889dbc91a95b57ce9080cb2efc0cf1` (`feature/forever-copilot`) from `a11067c` (from `f5dc309`).
 - New: `answerForeverCopilot` (core), MCP `ask_forever_copilot`, REST `POST /api/versions/forever/copilot`, Forever-tab Co-Pilot dialog, Wowhead Forever knowledge dataset and refresh tool. See [`FOREVER_COPILOT.md`](FOREVER_COPILOT.md).
 - Also carries the earlier unpushed fix `578ee6b` (stat explanations within label evidence).
