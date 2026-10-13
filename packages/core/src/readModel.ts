@@ -2145,7 +2145,7 @@ export interface ForeverTalentView {
 }
 
 function foreverTalentView(talents: ForeverTalents | undefined, now: number, options: { includeTalents: boolean; carried: boolean }): ForeverTalentView {
-  const semantics = "Ranks, availability and points come from the Forever client (C_ClassTalents/C_Traits) at export time. tier/column are DERIVED from node positions; requires is DERIVED from tree edges. Forever reports one combined tree per class. Pass includeTalents for every talent, not only ranked ones.";
+  const semantics = "Ranks, availability and points come from the Forever client (C_ClassTalents/C_Traits) at export time. tier/column are DERIVED from node positions; requires is DERIVED from tree edges. Forever reports one combined tree per class (the three Classic trees side by side). canPurchaseRank means the talent is eligible now (tier and prerequisites met); it can be true with 0 unspentPoints, so check unspentPoints before saying a point can be spent. Pass includeTalents for every talent, not only ranked ones.";
   if (!talents) return { state: "UNKNOWN", completeness: "unknown", freshness: "unknown", trees: [], semantics: "Talents were not captured for this character (needs GearExport with the Forever trait reader, then /wowsync and /reload). " + semantics };
   const total = talents.trees.reduce((sum, tree) => sum + (tree.pointsSpent ?? 0), 0);
   return {
