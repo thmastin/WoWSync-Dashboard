@@ -56,11 +56,15 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
       if (!profession || !Number.isSafeInteger(profession.baseSkillLineID) || !Number.isSafeInteger(profession.skillLineID)
         || (profession.evidence !== "OBSERVED" && profession.evidence !== "LAST_SEEN")
         || !Array.isArray(profession.recipes) || typeof profession.observedAt !== "number") return false;
+      // A profession GearExport carried forward after a failed refresh is LAST_SEEN as a whole; its rows keep the
+      // learned state observed earlier and are labelled LAST_SEEN downstream. Otherwise learned states must be OBSERVED.
+      const carried = profession.evidence === "LAST_SEEN";
       return profession.recipes.every((rawRecipe) => {
         const recipe = object(rawRecipe);
         if (!recipe || !Number.isSafeInteger(recipe.recipeID) || (recipe.evidence !== "OBSERVED" && recipe.evidence !== "LAST_SEEN")) return false;
-        if (recipe.learnedState === "OBSERVED_TRUE") return recipe.learned === true && recipe.evidence === "OBSERVED";
-        if (recipe.learnedState === "OBSERVED_FALSE") return recipe.learned === false && recipe.evidence === "OBSERVED";
+        const evidenceOk = recipe.evidence === "OBSERVED" || (carried && recipe.evidence === "LAST_SEEN");
+        if (recipe.learnedState === "OBSERVED_TRUE") return recipe.learned === true && evidenceOk;
+        if (recipe.learnedState === "OBSERVED_FALSE") return recipe.learned === false && evidenceOk;
         return (recipe.learnedState === "UNKNOWN" || recipe.learnedState === "NIL_RESULT") && recipe.learned === undefined;
       });
     });

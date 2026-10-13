@@ -131,3 +131,17 @@ test("Spellbook future entries become a class ability catalog in answers, plan a
     assert.ok(collectForeverObservedIds(read).spells.includes(2484), "catalog spells feed the knowledge refresh");
   } finally { store.close(); }
 });
+
+test("A recipe catalog GearExport carried forward after a failed refresh is kept as LAST_SEEN, not dropped", async () => {
+  const { normalizeForeverStructuredObservation } = await import("../src/foreverGearObservation.ts");
+  const recipes = (evidence: "OBSERVED" | "LAST_SEEN", rowEvidence: "OBSERVED" | "LAST_SEEN") => ({
+    clientProfile: "Forever:1.60.1:70338:16001", name: "Bramm", realm: "Classic Beta PvE", generatedAt: 1791906300,
+    professionRecipes: { observedAt: 1791906208, data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN" }, professions: [
+      { baseSkillLineID: 185, skillLineID: 2947, evidence, observedAt: 1791906206, recipes: [{ recipeID: 1229517, learned: true, learnedState: "OBSERVED_TRUE", evidence: rowEvidence }] },
+    ] } },
+  });
+  const keep = (value: ReturnType<typeof recipes>) => !!normalizeForeverStructuredObservation(value, "forever", "Bramm", "Classic Beta PvE", 1791906300)?.professionRecipes;
+  assert.equal(keep(recipes("OBSERVED", "OBSERVED")), true, "fresh catalog kept");
+  assert.equal(keep(recipes("LAST_SEEN", "LAST_SEEN")), true, "carried catalog kept");
+  assert.equal(keep(recipes("OBSERVED", "LAST_SEEN")), false, "a LAST_SEEN learned row inside a fresh profession is still rejected");
+});
