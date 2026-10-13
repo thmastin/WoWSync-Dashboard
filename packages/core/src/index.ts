@@ -45,3 +45,5 @@ export * from "./recipeEvidence.ts";
 export * from "./recipeIntelligence.ts";
 export * from "./classicState.ts";
 export * from "./classicProgression.ts";
+export * from "./foreverKnowledge.ts";
+export * from "./foreverCopilot.ts";

@@ -175,6 +175,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
       "analyze_retail_gear_candidate",
+      "ask_forever_copilot",
       "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",
@@ -851,6 +852,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
       "analyze_retail_gear_candidate",
+      "ask_forever_copilot",
       "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",

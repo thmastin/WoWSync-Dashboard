@@ -24,7 +24,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
-const BULLET_RE = /^[-*]\s+(.*)$/;
+const BULLET_RE = /^\s*[-*]\s+(.*)$/;
 const NUMBERED_RE = /^\d+\.\s+(.*)$/;
 
 export function renderMarkdownLite(text: string): ReactNode {

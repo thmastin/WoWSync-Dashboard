@@ -9,6 +9,7 @@ import CharactersRoster from "./components/CharactersRoster.tsx";
 import ItemsSearch from "./components/ItemsSearch.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
+import ForeverCopilotModal from "./components/ForeverCopilotModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
@@ -56,6 +57,7 @@ export default function App() {
   });
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   const navigate = useCallback((next: AppRoute, replace = false) => {
@@ -183,6 +185,11 @@ export default function App() {
           />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {activeVersion === "forever" && (
+            <button className="primary-button" onClick={() => setCopilotOpen(true)} title="Ask the Forever Co-Pilot a goal question about a character or your stable">
+              Co-Pilot
+            </button>
+          )}
           <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
             Developer
           </button>
@@ -351,6 +358,7 @@ export default function App() {
       )}
 
       {devExportOpen && <DeveloperExportModal onClose={() => setDevExportOpen(false)} />}
+      {copilotOpen && <ForeverCopilotModal onClose={() => setCopilotOpen(false)} />}
 
     </div>
   );

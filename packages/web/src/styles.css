@@ -1490,3 +1490,5 @@ button.roster-name-link {
 .erp-advanced-planning { margin-top: 24px; border-top: 1px solid #ffffff20; padding: 4px 14px 16px; border-radius: 8px; background: #ffffff03; }
 .erp-advanced-planning[open] > summary { border-bottom: 1px solid #ffffff20; margin-bottom: 16px; }
 @media (max-width: 760px) { .erp-player-projects { grid-template-columns: 1fr; gap: 12px; } .erp-player-project-nav ul { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); } .erp-player-steps li { grid-template-columns: 24px minmax(0, 1fr); } .erp-player-steps .erp-player-state { grid-column: 2; justify-self: start; } }
+
+.modal-wide { max-width: min(960px, 96vw); max-height: 90vh; overflow-y: auto; }

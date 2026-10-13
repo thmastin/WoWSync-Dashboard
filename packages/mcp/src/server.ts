@@ -12,6 +12,7 @@ import {
   buildErpProcurementBudgetPortfolioReview,
   buildErpProcurementBuyerPortfolioReview,
   DashboardReadModel,
+  answerForeverCopilot,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
   SqliteSnapshotReadStore,
@@ -445,6 +446,25 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getForeverGearAllocation(query)));
+  server.registerTool("ask_forever_copilot", {
+    title: "Ask the Forever Co-Pilot a goal-oriented question",
+    description: "Answers a player's Forever goal question (improve a character, make gold, develop professions, become self-sufficient, level faster) by combining the account's Forever evidence with version-correct Forever game knowledge from the Wowhead Forever database. Returns ranked recommendations, each with what to do, why, OBSERVED/DERIVED/LAST_SEEN/EXTERNAL/UNKNOWN evidence lines with sources, prerequisites, costs, alternatives/tradeoffs, unknowns, and next actions; premise challenges (for example owning a better item already); recorded ERP project goals; and limitations. Name the character in the question or pass character; stable-wide questions are answered per realm because realms are separate economies. Never invents prices, ownership, recipes, or eligibility; Auction House prices are UNKNOWN. Read-only: it never plays, buys, sells, mails, or moves items, and every transfer or /bankx move is for the player to run. Use format 'markdown' for a compact player-facing answer.",
+    inputSchema: z.object({
+      version: z.literal("forever"),
+      question: z.string().trim().min(1).max(2_000),
+      character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(),
+      realm: realmSchema.optional(),
+      objectives: z.array(z.enum(["IMPROVE_CHARACTER", "MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY", "LEVELING", "GEAR"])).min(1).max(6).optional(),
+      preferences: z.object({ emphasis: z.enum(["IMMEDIATE_POWER", "SELF_SUFFICIENCY", "BALANCED"]).optional(), avoidSpending: z.boolean().optional(), goals: z.array(z.string().trim().min(1).max(200)).max(10).optional() }).strict().optional(),
+      limit: z.number().int().min(1).max(20).optional(),
+      format: z.enum(["full", "markdown"]).optional(),
+    }).strict(),
+    annotations: toolAnnotations,
+  }, async ({ format, ...request }) => {
+    const answer = answerForeverCopilot(readModel, request);
+    if (format === "markdown") return textResult({ status: answer.status, markdown: answer.markdown });
+    return textResult(answer);
+  });
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
     description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. Recipe sources: Retail C_TradeSkillUI captures, Forever structured captures (any well-formed build; unverified builds are labelled), and Classic Era / TBC rows from a profession window the player opened (TradeSkill rows are the character's own learned list; Craft-window rows such as Enchanting are visible with learnedState UNKNOWN; Enchanting outputs are enchant identities, not items). Candidate recipe coverage is partial; absence does not mean unlearned, and an earlier observation is labelled LAST_SEEN with its source snapshot. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",

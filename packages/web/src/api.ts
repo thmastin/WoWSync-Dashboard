@@ -460,3 +460,14 @@ export function replanErpReservations(version: VersionOrUnknown, projects: reado
 export function setErpProjectStatus(project: ErpProjectView, status: ErpProject["status"]) {
   return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}/status`, { method: "PATCH", body: JSON.stringify({ expectedRevision: project.revision, status }) }, { validate: hasObject("project") });
 }
+
+export interface ForeverCopilotApiAnswer {
+  status: string;
+  markdown: string;
+  recommendations: Array<{ id: string; title: string }>;
+}
+
+/** Read-only Forever Co-Pilot question. */
+export function askForeverCopilot(question: string, options: RequestOptions = {}): Promise<ForeverCopilotApiAnswer> {
+  return request<ForeverCopilotApiAnswer>("/api/versions/forever/copilot", { method: "POST", body: JSON.stringify({ question }) }, options);
+}
