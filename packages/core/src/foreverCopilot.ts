@@ -1320,7 +1320,8 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
     if (character.brief.snapshotFreshness === "stale") limitations.push(`${label(character)}'s latest export is stale (generated ${isoDay(character.brief.generatedAt)}).`);
   }
   if (subject && !subject.trainerVisits.some((visit) => visit.kind === "CLASS")) limitations.push("No class trainer visit has been captured for this character, so training costs are unknown: open the class trainer once and /reload.");
-  if (subject) limitations.push(subject.talents ? "Reputation standings are not captured for Forever." : "Talents (not yet exported for this character) and reputation standings are not captured for Forever.");
+  if (subject && !subject.talents) limitations.push("Talents are not yet exported for this character (/wowsync and /reload with the current GearExport).");
+  if (subject) limitations.push("Reputation is not used in these recommendations; read standings with get_character_progression.");
   limitations.push("Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations are not in the knowledge base.");
   if (knowledge.ageDays !== undefined && knowledge.ageDays > 7) limitations.push(`Game knowledge was built ${knowledge.ageDays} days ago; newer Forever data may exist.`);
   const otherRealms = [...new Set(summaries.map((summary) => String(summary.realm)))].filter((realm) => !realms.includes(realm));

@@ -215,6 +215,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_forever_knowledge",
       "search_items",
       "search_research",
     ]);
@@ -892,6 +893,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_forever_knowledge",
       "search_items",
       "search_research",
     ]);

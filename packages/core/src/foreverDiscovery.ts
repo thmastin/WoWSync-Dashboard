@@ -553,14 +553,26 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
   const talents = actual.talents;
   if (talents) {
     const spent = talents.trees.reduce((sum, tree) => sum + (tree.pointsSpent ?? 0), 0);
+    const level = actual.brief.level;
+    // Options the client reported purchasable at export time, with their Forever tooltip text. Not ranked.
+    const options = talents.trees.flatMap((tree) => tree.talents).filter((talent) => talent.canPurchaseRank === true)
+      .map((talent) => { const text = index.tooltipSpell(talent.spellID)?.description; return `${talent.name} ${talent.currentRank ?? 0}/${talent.maxRank ?? "?"}${text ? `: ${text}` : ""}`; });
+    // Press reports one point per level from 10; the observed total either agrees or the rule is wrong for this client.
+    const expected = level !== undefined && level >= 10 ? level - 9 : undefined;
+    const observedTotal = spent + (talents.unspentPoints ?? 0);
     drafts.push({
       id: "talents", category: "CLASS_TALENTS",
       title: talents.unspentPoints ? `Spend ${talents.unspentPoints} unspent talent point${talents.unspentPoints > 1 ? "s" : ""}` : `Talents: ${spent} point${spent === 1 ? "" : "s"} spent`,
-      what: talents.trees.map((tree) => `${/^Talent tree \d+$/.test(tree.name) ? "Points spent:" : `${tree.name}:`} ${tree.pointsSpent ?? "?"}${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).length ? ` (${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).map((talent) => `${talent.name} ${talent.currentRank}/${talent.maxRank ?? "?"}`).join(", ")})` : ""}`).join("; ") + ".",
+      what: talents.trees.map((tree) => `${/^Talent tree \d+$/.test(tree.name) ? "Points spent:" : `${tree.name}:`} ${tree.pointsSpent ?? "?"}${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).length ? ` (${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).map((talent) => `${talent.name} ${talent.currentRank}/${talent.maxRank ?? "?"}`).join(", ")})` : ""}`).join("; ") + "."
+        + (talents.unspentPoints && options.length ? ` Talents you can take now: ${options.slice(0, 8).join("; ")}.` : ""),
       why: talents.unspentPoints ? "Unspent talent points are free power." : "Your observed talent choices, for reference when planning gear and abilities.",
       supports: "IMMEDIATE_POWER", feasibility: "READY_NOW",
-      evidence: [{ kind: "OBSERVED", statement: `Forever talent trees observed${talents.observedAt ? ` ${new Date(talents.observedAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} (${talents.completeness ?? "completeness unknown"}).`, source: `Forever talents section (snapshot ${talents.snapshotId})` }],
-      prerequisites: [], costs: ["None."], alternatives: [], tradeoffs: [], unknowns: ["The co-pilot does not rank talent builds."],
+      evidence: [
+        { kind: "OBSERVED", statement: `Forever talent trees observed${talents.observedAt ? ` ${new Date(talents.observedAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} (${talents.completeness ?? "completeness unknown"})${talents.specialization?.name ? `, specialization ${talents.specialization.name}` : ""}.`, source: `Forever talents section (snapshot ${talents.snapshotId})` },
+        ...(expected !== undefined && talents.unspentPoints !== undefined ? [{ kind: "DERIVED" as const, statement: observedTotal === expected ? `${observedTotal} points at level ${level} matches one point per level from 10; expect one more point each level.` : `${observedTotal} points at level ${level} does not match one point per level from 10 (${expected}); the per-level rule is not confirmed for this character.`, source: "Observed talent points vs press-reported Forever rule" }] : []),
+        ...(options.length ? [{ kind: "EXTERNAL" as const, statement: "Talent descriptions are Forever tooltip rank 1 text.", source: "Wowhead Forever tooltips" }] : []),
+      ],
+      prerequisites: [], costs: ["None."], alternatives: [], tradeoffs: [], unknowns: ["The co-pilot does not rank talent builds; ask with your playstyle (solo, group, role) for tradeoffs."],
       nextActions: talents.unspentPoints ? ["Open the talent window and spend your points."] : [],
       value: talents.unspentPoints ? 0.75 : 0.15, confidence: 1, objectives: ["IMPROVE_CHARACTER"],
     });

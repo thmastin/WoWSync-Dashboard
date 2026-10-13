@@ -2,7 +2,7 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { extractForeverTrainerVisit, type ForeverTrainerVisit } from "./foreverTrainer.ts";
-import { extractForeverSkillLines, extractForeverTalents, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
+import { extractForeverReputationDomain, extractForeverSkillLines, extractForeverTalents, type ForeverSkillLines, type ForeverTalent, type ForeverTalents } from "./foreverSkills.ts";
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
@@ -1586,7 +1586,8 @@ export class DashboardReadModel {
   }
 
   /** Classic Era / TBC visible reputation rows and talent trees. Retail reputation is read with get_renown. */
-  getCharacterProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ClassicTalentView }>> {
+  getCharacterProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ClassicTalentView | ForeverTalentView }>> {
+    if (query.version === "forever") return this.getForeverProgression(query);
     if (!isClassicVersion(query.version)) {
       requireVersion(query.version);
       return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: query.version, reason: query.version === "retail" ? "Retail reputation is captured separately; use get_renown (major factions) and get_account_overview. Retail talents are summarized under combat specialization." : "Reputation and talent observations are captured for Classic Era and TBC Anniversary only." } } };
@@ -2039,6 +2040,35 @@ export class DashboardReadModel {
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
   }
 
+  /** Forever reputation (visible rows) and full talent capture, each from the newest snapshot that carries it (or from snapshotId and older). */
+  private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView }>> {
+    const candidates = this.store.listCharacters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    if (candidates.length === 0) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    const character = candidates[0]!;
+    let snapshots = this.store.listSnapshots(character.identityKey);
+    if (query.snapshotId !== undefined) {
+      const at = snapshots.findIndex((snapshot) => snapshot.id === query.snapshotId);
+      if (at < 0) return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: `Snapshot ${query.snapshotId} does not belong to this character.` } } };
+      snapshots = snapshots.slice(at);
+    }
+    const newestId = snapshots[0]?.id;
+    let talents: ForeverTalents | undefined;
+    let reputation: { domain: Parameters<typeof buildClassicReputationView>[0]; snapshotId: number } | undefined;
+    for (const snapshot of snapshots) {
+      talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
+      if (!reputation) { const found = extractForeverReputationDomain(snapshot.parsed); if (found) reputation = { domain: found.domain, snapshotId: snapshot.id }; }
+      if (talents && reputation) break;
+    }
+    const carried = (snapshotId: number | undefined) => snapshotId !== undefined && snapshotId !== newestId;
+    const repDomain = reputation?.domain && carried(reputation.snapshotId) ? { ...reputation.domain, status: { ...reputation.domain.status, state: "LAST_SEEN" as const, carriedFromSnapshotId: reputation.snapshotId } } : reputation?.domain;
+    const reputationView = buildClassicReputationView(repDomain, this.now(), { ...(query.factionQuery ? { query: query.factionQuery } : {}) });
+    const talentView = foreverTalentView(talents, this.now(), { includeTalents: query.includeTalents === true, carried: carried(talents?.snapshotId) });
+    const states = [reputationView.state, talentView.state];
+    const overall: ReadState = states.every((value) => value === "UNKNOWN") ? "UNKNOWN" : states.includes("LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
+    return { status: "FOUND", value: { data: { version: "forever", reputation: reputationView, talents: talentView }, provenance: { state: overall, version: "forever", identityKey: character.identityKey, ...(newestId !== undefined ? { snapshotId: newestId } : {}), source: "Forever reputation and talent sections (GearExport WoWSyncDB, C_Reputation and C_ClassTalents/C_Traits)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character; /wowsync and /reload with a current GearExport." } : {}) } } };
+  }
+
   /** Newest observed Forever skill lines and talents, each from the newest snapshot that carries it. */
   getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents }> {
     requireVersion(query.version);
@@ -2099,3 +2129,36 @@ export class DashboardReadModel {
 
 /** Compile-time reminder that no implicit Retail default can enter this API. */
 export const READ_MODEL_VERSIONS: readonly VersionOrUnknown[] = [...WOW_VERSIONS, "unknown-version"];
+
+export interface ForeverTalentView {
+  state: ReadState;
+  completeness: string;
+  observedAt?: number;
+  freshness: string;
+  sourceSnapshotId?: number;
+  source?: string;
+  specialization?: { id?: number; name?: string };
+  unspentPoints?: number;
+  totalPointsSpent?: number;
+  trees: Array<{ name: string; pointsSpent?: number; talentCount: number; talents: ForeverTalent[] }>;
+  semantics: string;
+}
+
+function foreverTalentView(talents: ForeverTalents | undefined, now: number, options: { includeTalents: boolean; carried: boolean }): ForeverTalentView {
+  const semantics = "Ranks, availability and points come from the Forever client (C_ClassTalents/C_Traits) at export time. tier/column are DERIVED from node positions; requires is DERIVED from tree edges. Forever reports one combined tree per class. Pass includeTalents for every talent, not only ranked ones.";
+  if (!talents) return { state: "UNKNOWN", completeness: "unknown", freshness: "unknown", trees: [], semantics: "Talents were not captured for this character (needs GearExport with the Forever trait reader, then /wowsync and /reload). " + semantics };
+  const total = talents.trees.reduce((sum, tree) => sum + (tree.pointsSpent ?? 0), 0);
+  return {
+    state: options.carried ? "LAST_SEEN" : "OBSERVED",
+    completeness: talents.completeness ?? "unknown",
+    ...(talents.observedAt !== undefined ? { observedAt: talents.observedAt } : {}),
+    freshness: classifyFreshness(talents.observedAt, now),
+    sourceSnapshotId: talents.snapshotId,
+    ...(talents.source ? { source: talents.source } : {}),
+    ...(talents.specialization ? { specialization: talents.specialization } : {}),
+    ...(talents.unspentPoints !== undefined ? { unspentPoints: talents.unspentPoints } : {}),
+    totalPointsSpent: total,
+    trees: talents.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, talentCount: tree.talents.length, talents: options.includeTalents ? tree.talents : tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0) })),
+    semantics,
+  };
+}

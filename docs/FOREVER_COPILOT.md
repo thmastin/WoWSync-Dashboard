@@ -11,6 +11,8 @@ actions; character answers also carry a level-by-level plan.
 | Surface | How |
 | --- | --- |
 | MCP | `ask_forever_copilot` (read-only). `format: "markdown"` returns the compact player answer. |
+| MCP | `get_character_progression` (Forever): visible reputation rows and the full talent capture (spec, unspent, ranks, availability, derived tier/prerequisites, points-in-tree gates, Forever tooltip text). |
+| MCP | `lookup_forever_knowledge`: item, quest, NPC, spell, dungeon or zone from the knowledge bundle by id or name, with sources. Prices and drop chances stay UNKNOWN. |
 | REST | `POST /api/versions/forever/copilot` with `{ question, character?, realm?, objectives?, preferences?, limit? }`. Other versions return 422. |
 | Dashboard | Forever tab, **Co-Pilot** button in the header. |
 | Knowledge | `GET /api/versions/forever/knowledge` (status), `PUT` the same path with the bundle as `application/octet-stream` (install). |
@@ -136,5 +138,7 @@ The Dashboard writes it atomically to `forever-knowledge.json` next to the datab
 
 - Recipe skill thresholds are known only from trainer windows, patterns, or captured profession windows.
 - Vendor buy prices, travel time, quest-giver availability by phase, and drop chances are unknown.
-- Reputation standings are not captured for Forever. Talent builds are shown, not ranked.
+- Reputation is captured (GearExport `de91ae0`, visible rows only) and readable over MCP, but not used in recommendations.
+- Talent builds are not ranked by the engine. The co-pilot lists talents the client says can be taken now, with Forever tooltip text; the connected LLM reasons about tradeoffs.
+- Talent descriptions are Wowhead Forever rank 1 text; they arrive with the next knowledge refresh after a character exports talents.
 - Objective detection is keyword-based.

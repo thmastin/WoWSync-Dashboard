@@ -126,6 +126,7 @@ export class ForeverKnowledgeIndex {
   tooltipSpell(id: number | undefined): ForeverSpellKnowledge | undefined { return id === undefined ? undefined : this.bundle.tooltips.spells[String(id)]; }
   questRewards(questId: number): number[] { return this.rewardsByQuest.get(questId) ?? []; }
   vendorItems(npcId: number): number[] { return this.itemsByVendor.get(npcId) ?? []; }
+  questsStartedBy(npcId: number): number[] { return this.questsByStartNpc.get(npcId) ?? []; }
   quests(): Array<[number, BundleQuest]> { return Object.entries(this.bundle.quests).map(([id, quest]) => [Number(id), quest]); }
   items(): Array<[number, BundleItem]> { return Object.entries(this.bundle.items).map(([id, item]) => [Number(id), item]); }
   questStarter(quest: BundleQuest): BundleNpc | undefined { return quest.startNpcs?.length ? this.npc(quest.startNpcs[0]) : undefined; }
@@ -164,7 +165,7 @@ export class ForeverKnowledgeIndex {
   }
 }
 
-/** IDs the account has actually observed on Forever: equipped/bag/bank items, recipe outputs and reagents, learned recipes, active quests. */
+/** IDs the account has actually observed on Forever: equipped/bag/bank items, recipe outputs and reagents, learned recipes, active quests, talent spells. */
 export interface ForeverObservedIds { items: number[]; spells: number[]; quests: number[] }
 
 // Structural view of the read-model methods used, so this module does not import the read model.
@@ -174,6 +175,7 @@ interface ObservedIdReader {
   getCharacterStorage(query: { version: "forever"; name: string; realm: string; storage: "bags" | "bank"; limit: number }): unknown;
   getCharacterProfessions(query: { version: "forever"; name: string; realm: string }): unknown;
   getForeverQuestObservation(query: { version: "forever"; name: string; realm: string }): unknown;
+  getForeverSkillsAndTalents?(query: { version: "forever"; name: string; realm: string }): unknown;
 }
 
 export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverObservedIds {
@@ -193,6 +195,9 @@ export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverO
       }
     }
     for (const quest of (data(readModel.getForeverQuestObservation(query))?.active ?? []) as Loose[]) if (typeof quest.questID === "number") quests.add(quest.questID);
+    // Talent spells, so the bundle carries their Forever tooltip descriptions.
+    const talents = (readModel.getForeverSkillsAndTalents?.(query) as Loose | undefined)?.value?.talents as Loose | undefined;
+    for (const tree of (talents?.trees ?? []) as Loose[]) for (const talent of (tree.talents ?? []) as Loose[]) if (typeof talent.spellID === "number") spells.add(talent.spellID);
   }
   const sorted = (set: Set<number>) => [...set].sort((a, b) => a - b);
   return { items: sorted(items), spells: sorted(spells), quests: sorted(quests) };

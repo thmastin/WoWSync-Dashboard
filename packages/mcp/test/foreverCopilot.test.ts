@@ -53,3 +53,32 @@ test("MCP ask_forever_copilot answers both acceptance questions from real Foreve
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("MCP lookup_forever_knowledge and Forever get_character_progression are read-only and sourced", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wowsync-lookup-mcp-"));
+  const databasePath = path.join(dir, "fixture.sqlite");
+  const writer = new SqliteSnapshotStore(databasePath);
+  try {
+    const { text, ...extras } = JSON.parse(readFileSync(path.join(fixtureDir, "copilot-rordin.import.json"), "utf8"));
+    writer.importSnapshot(text, extras);
+  } finally { writer.close(); }
+  const client = new Client({ name: "lookup-test", version: "0.0.0" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json") }, stderr: "pipe" });
+  try {
+    await client.connect(transport);
+    const tools = (await client.listTools()).tools;
+    assert.equal(tools.find((entry) => entry.name === "lookup_forever_knowledge")?.annotations?.readOnlyHint, true);
+    const quest = (await client.callTool({ name: "lookup_forever_knowledge", arguments: { version: "forever", kind: "quest", id: 990001 } })).structuredContent as { status: string; results: Array<{ zone: string }>; knowledge: { sources: unknown[] } };
+    assert.equal(quest.status, "FOUND");
+    assert.equal(quest.results[0]!.zone, "Mulgore");
+    assert.ok(quest.knowledge.sources.length > 0);
+    const missing = await client.callTool({ name: "lookup_forever_knowledge", arguments: { version: "forever", kind: "item" } });
+    assert.equal(missing.isError, true, "id or name is required");
+    const progression = (await client.callTool({ name: "get_character_progression", arguments: { version: "forever", name: "Rordin" } })).structuredContent as { status: string; value: { provenance: { state: string } } };
+    assert.equal(progression.status, "FOUND");
+    assert.equal(progression.value.provenance.state, "UNKNOWN", "no talents or reputation in this export yet");
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

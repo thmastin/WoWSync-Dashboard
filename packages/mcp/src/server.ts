@@ -22,6 +22,8 @@ import {
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
 import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
 import { ForeverKnowledgeStore, foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
+import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboard/core/foreverKnowledgeLookup.ts";
+import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { z } from "zod";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -454,11 +456,28 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel.getCharacterQuests(query)));
   server.registerTool("get_character_progression", {
-    title: "Get Classic reputation standings and talents",
-    description: "Classic Era / TBC Anniversary only: the character's visible legacy reputation rows (standing ID with a derived label, raw bar values, at-war/watched flags; collapsed headers hide rows, so coverage is VISIBLE_REPUTATION_ROWS_ONLY and an absent faction is UNKNOWN, not Neutral) and talent trees (points per tree, ranked talents, derived distribution such as 31/20/0). Each domain states OBSERVED, LAST_SEEN (carried from an earlier snapshot or a failed refresh), or UNKNOWN. Retail reputation is read with get_renown; Forever does not capture these domains.",
+    title: "Get reputation standings and talents (Classic Era, TBC Anniversary, Forever)",
+    description: "Forever: visible reputation rows (C_Reputation, same row shape as Classic) and the full talent capture from the Forever trait system: specialization, unspent points, points spent, each talent with current/max rank, client-reported availability (isAvailable, canPurchaseRank), DERIVED tier/column and prerequisites, points-in-tree gates, and the Forever tooltip description (rank 1 text) when the knowledge bundle has it. Forever reports one combined tree per class. includeTalents returns every talent, not only ranked ones. Classic Era / TBC Anniversary: the character's visible legacy reputation rows (standing ID with a derived label, raw bar values, at-war/watched flags; collapsed headers hide rows, so coverage is VISIBLE_REPUTATION_ROWS_ONLY and an absent faction is UNKNOWN, not Neutral) and talent trees (points per tree, ranked talents, derived distribution such as 31/20/0). Each domain states OBSERVED, LAST_SEEN (carried from an earlier snapshot or a failed refresh), or UNKNOWN. Retail reputation is read with get_renown.",
     inputSchema: z.object({ ...characterQuery.shape, snapshotId: z.number().int().positive().optional(), factionQuery: z.string().trim().min(1).max(100).optional(), includeTalents: z.boolean().optional() }).strict(),
     annotations: toolAnnotations,
-  }, async (query) => textResult(readModel.getCharacterProgression(query)));
+  }, async (query) => {
+    const result = readModel.getCharacterProgression(query);
+    if (query.version !== "forever" || result.status !== "FOUND" || !result.value.data) return textResult(result);
+    const data = result.value.data;
+    return textResult({ ...result, value: { ...result.value, data: { ...data, talents: describeForeverTalents(data.talents as ForeverTalentView, foreverKnowledge.get()) } } });
+  });
+  server.registerTool("lookup_forever_knowledge", {
+    title: "Look up Forever game knowledge (items, quests, NPCs, spells, dungeons, zones)",
+    description: "Read-only lookup in the private Forever knowledge bundle (QuestieDB Forever + Wowhead Forever tooltips), by id or name (exact match first, then partial; max 10). item: stats, slot, required level, vendor sell price, who sells it, what drops it, which quest rewards it. quest: level, faction, giver and location, turn-in, objectives, prerequisites, follow-up, rewards, XP (Classic-seeded). npc: title, level, location, faction, roles, quests it starts, items it sells. spell: Forever tooltip text, reagents, tools, created item (talents and recipes). dungeon: creature level range (derived), entrance, quests. zone: quest count, quest level range, quests. Game knowledge only, not account state; vendor buy prices, Auction House prices and drop chances are UNKNOWN. Forever-only content is only partly covered.",
+    inputSchema: z.object({
+      version: z.literal("forever"),
+      kind: z.enum(["item", "quest", "npc", "spell", "dungeon", "zone"]),
+      id: z.number().int().positive().optional(),
+      name: z.string().trim().min(2).max(100).optional(),
+      limit: z.number().int().min(1).max(10).optional(),
+    }).strict().refine((value) => value.id !== undefined || value.name !== undefined, { message: "Pass id or name." }),
+    annotations: toolAnnotations,
+  }, async ({ version: _version, ...query }) => textResult(lookupForeverKnowledge(foreverKnowledge.get(), query)));
   server.registerTool("get_forever_gear_allocation", {
     title: "Evaluate observed Forever gear candidates",
     description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",

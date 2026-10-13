@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DashboardReadModel, SqliteSnapshotStore, foreverCompatibility, parseWowSyncExport } from "@wowsync-dashboard/core";
 import { parseSavedExports, type SavedExport } from "../src/importSaved.ts";
+import type { ClassicTalentView } from "@wowsync-dashboard/core/classicProgression.ts";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 
 const FIXTURES = new URL("../../core/test/fixtures/gearexport-2c5e9b3/", import.meta.url);
@@ -134,7 +135,8 @@ test("CLASSIC PROGRESSION: quests, completed-ID lookups, visible reputation, and
   const progression = read.getCharacterProgression({ version: "tbc-anniversary", name: "Torahn" });
   assert.equal(progression.status, "FOUND");
   if (progression.status !== "FOUND") return;
-  const { reputation, talents } = progression.value.data!;
+  const { reputation } = progression.value.data!;
+  const talents = progression.value.data!.talents as ClassicTalentView;
   assert.equal(reputation.coverage, "VISIBLE_REPUTATION_ROWS_ONLY");
   assert.equal(reputation.completeness, "partial");
   assert.deepEqual(reputation.factions.map((row) => [row.name, row.factionID, row.standingLabel]), [["Orgrimmar", 76, "Friendly"], ["Thunder Bluff", 81, "Honored"], ["Booty Bay", 21, "Neutral"]]);
