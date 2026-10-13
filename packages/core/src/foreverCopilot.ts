@@ -19,6 +19,7 @@ import { requiredSkillFor, type ForeverSkillLines, type ForeverTalents } from ".
 import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
 import { discoveryDrafts, goldDiscoveryDrafts, proficiencyBaseline, type LevelPlanStep } from "./foreverDiscovery.ts";
 import { formatCopper } from "./currency.ts";
+import { AHLEDGER_ATTRIBUTION, currentForeverPrices, describePrice, foreverMarketFor, marketPrice, useForeverPrices, type ForeverPriceIndex, type PriceLookup } from "./foreverPrices.ts";
 import {
   FOREVER_SYSTEM_FACTS,
   useForeverKnowledge,
@@ -984,7 +985,14 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
     if (outputItem) evidence.push(externalItem(outputItem, `${outputItem.name}: vendor ${outputItem.sellPriceCopper !== undefined ? formatCopper(outputItem.sellPriceCopper) : "unknown"} each.`));
     for (const maker of makers) evidence.push({ kind: "OBSERVED", statement: `${label(maker)} can perform ${spell.name} (${maker.recipes.some((recipe) => recipe.recipeID === spell.id) ? "learned recipe observed" : "profession/spell observed"}).`, source: "observed professions/spellbook" });
     const gain = inputVendor !== undefined && outputVendorMin !== undefined ? outputVendorMin - inputVendor : undefined;
-    if (gain !== undefined && gain < 0) continue;
+    const economyRealm = onRealm[0]?.brief.realm, economyFaction = onRealm[0]?.brief.faction;
+    const inputMarket = marketPrice(input.itemId, economyRealm, economyFaction);
+    const outputMarket = marketPrice(spell.createsItemId, economyRealm, economyFaction);
+    const marketGain = inputMarket?.unit !== undefined && outputMarket?.unit !== undefined ? outputMarket.unit * crafts - inputMarket.unit * units : undefined;
+    if (gain !== undefined && gain < 0 && marketGain === undefined) continue;
+    if (inputMarket) evidence.push(priceEvidence(input.name, inputMarket));
+    if (outputMarket) evidence.push(priceEvidence(outputItem?.name ?? `item ${spell.createsItemId}`, outputMarket));
+    if (marketGain !== undefined) evidence.push({ kind: "DERIVED", statement: `At market medians: ${units} ${input.name} = ${formatCopper(inputMarket!.unit! * units)}; ${crafts} ${outputItem?.name ?? "products"} = ${formatCopper(outputMarket!.unit! * crafts)} (${marketGain >= 0 ? "+" : "-"}${formatCopper(Math.abs(marketGain))} for converting). Auction House cut and deposit are not deducted.`, source: "observed quantities + AHledger medians" });
     if (gain !== undefined) evidence.push({ kind: "DERIVED", statement: `${units} ${input.name} vendor for ${formatCopper(inputVendor!)}; converted (at least one ${outputItem?.name} per craft, ${crafts} crafts) they vendor for at least ${formatCopper(outputVendorMin!)}: ${gain >= 0 ? "+" : ""}${formatCopper(Math.abs(gain))}${gain < 0 ? " worse" : ""} at vendor prices.`, source: "observed quantities + Forever vendor prices" });
     const skillUps = makers.some((maker) => maker.brief.professions.some((profession) => profession.skill < profession.maxSkill));
     drafts.push({
@@ -992,7 +1000,7 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
       category: "CONVERT_MATERIALS",
       title: `Convert ${input.name} into ${outputItem?.name ?? "its product"} (${makers.map((maker) => label(maker)).join(" or ")})`,
       what: `${label(makers[0])} turns the stable's ${units} ${input.name} into ${outputItem?.name}${holders.some((holder) => holder.owner !== makers[0]) ? ` (move the ${input.name} first)` : ""}.`,
-      why: `${gain !== undefined ? `At vendor prices the conversion is ${gain >= 0 ? "worth" : "loses"} ${formatCopper(Math.abs(gain))} or more. ` : ""}${skillUps ? "It also raises the crafter's skill toward profitable recipes. " : ""}Auction prices are unknown, so this is a floor, not a market estimate.`,
+      why: `${marketGain !== undefined ? (marketGain >= 0 ? `On the Auction House the ${outputItem?.name ?? "product"} is worth ${formatCopper(marketGain)} more than the raw ${input.name}. ` : `On the Auction House the raw ${input.name} sells for ${formatCopper(-marketGain)} more than the ${outputItem?.name ?? "product"}: convert only for skill-ups, otherwise sell it raw. `) : ""}${gain !== undefined ? `At vendor prices the conversion is ${gain >= 0 ? "worth" : "loses"} ${formatCopper(Math.abs(gain))}. ` : ""}${skillUps ? "It also raises the crafter's skill toward profitable recipes. " : ""}${marketGain === undefined ? "Auction prices are unknown here, so this is a floor, not a market estimate." : "Market prices are crowd-sourced scans and move; check before listing."}`,
       supports: skillUps ? "BOTH" : "GOLD",
       feasibility: holders.some((holder) => holder.owner === makers[0] && holder.item.state === "OBSERVED" && holder.item.qty >= input.quantity) ? "READY_NOW" : holders.every((holder) => holder.owner === makers[0]) ? "UNCERTAIN" : "NEEDS_TRANSFER",
       evidence,
@@ -1000,9 +1008,9 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
       costs: ["Time only at vendor floor; postage if moving materials."],
       alternatives: [`Keep ${input.name} raw for ${makers.find((maker) => maker.brief.professions.some((profession) => profession.name === "Blacksmithing"))?.brief.name ?? "a crafter"}'s own projects instead of selling.`],
       tradeoffs: holders.some((holder) => holder.item.state === "LAST_SEEN") ? ["Some quantities are last-seen bank contents."] : [],
-      unknowns: ["Auction House prices.", "Exact product count per craft is not verified in-client (Wowhead marker not used as yield)."],
+      unknowns: [...(marketGain === undefined ? ["Auction House prices."] : ["Auction House cut and deposit rates for Forever."]), "Exact product count per craft is not verified in-client (Wowhead marker not used as yield)."],
       nextActions: [...[...new Set(holders.map((holder) => holder.owner))].flatMap((owner) => transferSteps(owner, makers[0], holders.find((holder) => holder.owner === owner)!.item)), `${label(makers[0])}: perform ${spell.name}${spell.description && /forge/i.test(spell.description) ? " at a forge" : ""}.`],
-      value: Math.min(0.75, 0.3 + (gain !== undefined && gain > 0 ? Math.min(0.25, gain / 1_000) : 0) + (skillUps ? 0.15 : 0)),
+      value: Math.min(0.8, 0.3 + (marketGain !== undefined ? (marketGain > 0 ? Math.min(0.3, marketGain / 2_000) : -0.1) : gain !== undefined && gain > 0 ? Math.min(0.25, gain / 1_000) : 0) + (skillUps ? 0.15 : 0)),
       objectives: ["MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY"],
     });
   }
@@ -1067,17 +1075,40 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
           nextActions: transferSteps(owner, best.other, item), value: 0.45, objectives: ["MAKE_GOLD", "SELF_SUFFICIENCY", "GEAR"],
         });
       } else {
+        const market = marketPrice(item.itemId, owner.brief.realm, owner.brief.faction);
+        if (market) evidence.push(priceEvidence(item.name, market));
+        const thin = !!market && (market.price.salesPerDay ?? 0) < 1;
         drafts.push({
           id: `sell-${item.itemId}-${owner.brief.identityKey}`, category: "SELL_ON_MARKET",
-          title: `Sell ${item.name} (no character on the realm can use it better)`,
-          what: `List ${item.name} on the Auction House, or vendor it for the floor price.`,
-          why: `No observed same-realm character gains from it. Vendor floor ${knowledge.sellPriceCopper !== undefined ? formatCopper(knowledge.sellPriceCopper) : "unknown"}; its auction value is UNKNOWN.`,
-          supports: "GOLD", feasibility: "READY_NOW", evidence, prerequisites: [], costs: ["Auction deposit (unknown)."], alternatives: ["Keep it for an alt you have not imported."], tradeoffs: [],
-          unknowns: ["Auction House price."], nextActions: [`On ${label(owner)}, check the Auction House price; if it is not clearly above ${knowledge.sellPriceCopper !== undefined ? formatCopper(knowledge.sellPriceCopper) : "the vendor price"}, vendor it.`],
-          value: 0.3 + Math.min(0.2, (knowledge.sellPriceCopper ?? 0) / 2_000), objectives: ["MAKE_GOLD"],
+          title: `Sell ${item.name} (no character on the realm can use it better)${market ? ` - market about ${formatCopper(market.unit!)}` : ""}`,
+          what: market && market.unit! > (knowledge.sellPriceCopper ?? 0) * 1.2 ? `List ${item.name} on the Auction House near ${formatCopper(market.unit!)}.` : `List ${item.name} on the Auction House, or vendor it for the floor price.`,
+          why: `No observed same-realm character gains from it. Vendor floor ${knowledge.sellPriceCopper !== undefined ? formatCopper(knowledge.sellPriceCopper) : "unknown"}; ${market ? `market median ${formatCopper(market.unit!)}${thin ? ", but it rarely sells" : ""}.` : "its auction value is UNKNOWN."}`,
+          supports: "GOLD", feasibility: "READY_NOW", evidence, prerequisites: [], costs: ["Auction deposit (unknown)."], alternatives: ["Keep it for an alt you have not imported."], tradeoffs: thin ? ["Few sales per day: it may take several listings to sell."] : [],
+          unknowns: market ? ["Auction House cut and deposit rates for Forever."] : ["Auction House price."], nextActions: [market ? `On ${label(owner)}, list ${item.name} near ${formatCopper(market.unit!)} (check the current lowest listing first).` : `On ${label(owner)}, check the Auction House price; if it is not clearly above ${knowledge.sellPriceCopper !== undefined ? formatCopper(knowledge.sellPriceCopper) : "the vendor price"}, vendor it.`],
+          value: 0.3 + Math.min(0.3, (market?.unit ?? knowledge.sellPriceCopper ?? 0) / (market ? 5_000 : 2_000)) - (thin ? 0.1 : 0), objectives: ["MAKE_GOLD"],
         });
       }
     }
+  }
+  // 4b. Surplus trade goods with a real market: worth listing rather than vendoring, unless a crafter here uses them.
+  const usedByCrafters = new Set(onRealm.flatMap((crafter) => crafter.recipes.flatMap((recipe) => recipe.reagents.map((reagent) => reagent.itemId))));
+  const surplus = onRealm.flatMap((owner) => owner.held.filter((item) => !item.bound && !TOOL_ITEM_IDS.has(item.itemId) && !foreverItem(item.itemId)?.slot && foreverItem(item.itemId)?.quality !== 0 && !usedByCrafters.has(item.itemId))
+    .flatMap((item) => { const market = marketPrice(item.itemId, owner.brief.realm, owner.brief.faction); const vendor = foreverItem(item.itemId)?.sellPriceCopper ?? 0; return market && market.unit! > vendor * 1.5 && (market.price.salesPerDay ?? 0) >= 1 ? [{ owner, item, market, total: market.unit! * item.qty, vendor }] : []; }))
+    .sort((a, b) => b.total - a.total).slice(0, 6);
+  if (surplus.length && surplus.reduce((sum, entry) => sum + entry.total, 0) >= 100) {
+    const total = surplus.reduce((sum, entry) => sum + entry.total, 0);
+    drafts.push({
+      id: `sell-materials-${realm.toLowerCase().replace(/\W+/g, "-")}`, category: "SELL_ON_MARKET",
+      title: `Sell surplus materials on the Auction House (about ${formatCopper(total)} at market medians)`,
+      what: surplus.map((entry) => `${label(entry.owner)}: ${entry.item.name} x${entry.item.qty} near ${formatCopper(entry.market.unit!)} each (vendor ${formatCopper(entry.vendor)})`).join("; ") + ".",
+      why: "No crafter in this economy uses these, they sell steadily, and the market pays well above vendor.",
+      supports: "GOLD", feasibility: surplus.every((entry) => entry.item.state === "OBSERVED") ? "READY_NOW" : "UNCERTAIN",
+      evidence: surplus.flatMap((entry) => [heldEvidence(entry.item, entry.owner), priceEvidence(entry.item.name, entry.market)]),
+      prerequisites: [], costs: ["Auction deposits (rates unverified for Forever)."], alternatives: ["Keep them if you plan to pick up a profession that uses them."],
+      tradeoffs: ["Medians move; a large stack can push the price down."], unknowns: ["Auction House cut and deposit rates for Forever."],
+      nextActions: [...new Set(surplus.map((entry) => entry.owner))].map((owner) => `On ${label(owner)}, list ${surplus.filter((entry) => entry.owner === owner).map((entry) => entry.item.name).join(", ")} after checking the lowest current listing.`),
+      value: Math.min(0.7, 0.3 + total / 10_000), objectives: ["MAKE_GOLD"],
+    });
   }
   // 5. Crafting skills whose recipes were never captured: the opportunity cannot be valued yet.
   drafts.push(...recipeEvidenceGaps(onRealm));
@@ -1206,8 +1237,13 @@ export function economiesOf(characters: CharacterEvidence[]): Array<{ key: strin
   return [...map.values()];
 }
 
-export function answerForeverCopilot(readModel: DashboardReadModel, request: CopilotRequest, knowledgeIndex?: ForeverKnowledgeIndex): CopilotAnswer {
-  return useForeverKnowledge(knowledgeIndex, () => answerWithKnowledge(readModel, request, knowledgeIndex));
+export function answerForeverCopilot(readModel: DashboardReadModel, request: CopilotRequest, knowledgeIndex?: ForeverKnowledgeIndex, prices?: ForeverPriceIndex, marketRegion = "us"): CopilotAnswer {
+  return useForeverPrices(prices, () => useForeverKnowledge(knowledgeIndex, () => answerWithKnowledge(readModel, request, knowledgeIndex)), marketRegion);
+}
+
+/** EXTERNAL evidence line for a market price, crediting AHledger as its terms require. */
+function priceEvidence(name: string, found: PriceLookup): EvidenceLine {
+  return { kind: "EXTERNAL", statement: describePrice(name, found), source: AHLEDGER_ATTRIBUTION };
 }
 
 function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequest, knowledgeIndex: ForeverKnowledgeIndex | undefined): CopilotAnswer {
@@ -1308,7 +1344,12 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
   }
   if (wantsGold) {
     challenges.push(`Gold on the beta is expected to disappear: ${foreverSystemFactStatement("beta-window")} ${foreverSystemFactStatement("beta-wipe")} Treat beta goldmaking as funding training and testing your launch plan, not as savings.`);
-    challenges.push("Market prices are not available to WoWSync for Forever. Every value below is a vendor floor from the Forever database; Auction House value is UNKNOWN, never estimated.");
+    const priced = currentForeverPrices();
+    const marketsInScope = [...new Set(characters.map((character) => foreverMarketFor(character.brief.realm, character.brief.faction)).filter((market): market is string => !!market))];
+    const covered = priced ? marketsInScope.filter((market) => priced.markets().includes(market)) : [];
+    challenges.push(covered.length
+      ? `Auction House prices are crowd-sourced player scans from AHledger (https://ahledger.com) for ${covered.join(", ")}, fetched ${priced!.bundle.fetchedAt.slice(0, 16).replace("T", " ")} UTC. They are EXTERNAL observations with scan times, not guarantees; vendor prices remain the guaranteed floor.`
+      : "Market prices are not available to WoWSync for these characters' markets. Every value below is a vendor floor from the Forever database; Auction House value is UNKNOWN, never estimated.");
   }
   const projectMentionsBlacksmithing = playerGoals.some((goal) => /blacksmith/i.test(goal.title));
   if (subject && projectMentionsBlacksmithing) challenges.push(`Your active project targets "${playerGoals.find((goal) => /blacksmith/i.test(goal.title))!.title}". The fastest version of that goal is the equip-now step above; Blacksmithing's real value now is skill-ups and future upgrades.`);
@@ -1322,7 +1363,7 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
   if (subject && !subject.trainerVisits.some((visit) => visit.kind === "CLASS")) limitations.push("No class trainer visit has been captured for this character, so training costs are unknown: open the class trainer once and /reload.");
   if (subject && !subject.talents) limitations.push("Talents are not yet exported for this character (/wowsync and /reload with the current GearExport).");
   if (subject) limitations.push("Reputation is not used in these recommendations; read standings with get_character_progression.");
-  limitations.push("Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations are not in the knowledge base.");
+  limitations.push(currentForeverPrices() ? "Auction House prices are AHledger crowd-sourced scans (median of the latest scan); the Auction House cut and deposit are not deducted, and items without a recent scan stay UNKNOWN." : "Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations are not in the knowledge base.");
   if (knowledge.ageDays !== undefined && knowledge.ageDays > 7) limitations.push(`Game knowledge was built ${knowledge.ageDays} days ago; newer Forever data may exist.`);
   const otherRealms = [...new Set(summaries.map((summary) => String(summary.realm)))].filter((realm) => !realms.includes(realm));
   const scopeNote = otherRealms.length ? `Realms are separate economies; ${otherRealms.join(", ")} ${otherRealms.length > 1 ? "were" : "was"} not mixed in.` : realms.length > 1 ? `${realms.length} realms, analysed separately: gold, materials and mail never cross realms.` : "All imported Forever characters are on this realm.";

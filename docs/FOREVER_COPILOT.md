@@ -16,6 +16,7 @@ actions; character answers also carry a level-by-level plan.
 | REST | `POST /api/versions/forever/copilot` with `{ question, character?, realm?, objectives?, preferences?, limit? }`. Other versions return 422. |
 | Dashboard | Forever tab, **Co-Pilot** button in the header. |
 | Knowledge | `GET /api/versions/forever/knowledge` (status), `PUT` the same path with the bundle as `application/octet-stream` (install). |
+| Prices | `GET /api/versions/forever/prices` (status), `GET .../prices/targets`, `PUT .../prices` (install). |
 
 ## Architecture
 
@@ -80,8 +81,10 @@ Main files:
   specific drops. A candidate is an UPGRADE only if no listed stat is worse; item level alone never decides.
   Class armor/weapon proficiency uses a Classic Era baseline that is labelled unverified for Forever.
 - **Training.** Class training comes from the observed trainer window (level, cost, status at the visit).
-- **Prices.** Vendor sell prices are guaranteed floors. Vendor buy prices and Auction House prices are
-  UNKNOWN and never estimated.
+- **Prices.** Vendor sell prices are guaranteed floors. Auction House prices come only from AHledger's
+  crowd-sourced scans (see below) as EXTERNAL evidence with market, scan time, depth and sales rate, credited
+  to AHledger; prices older than 72 hours are not used. The Auction House cut and deposit are not deducted
+  (Forever rates unverified). Vendor buy prices and unscanned items stay UNKNOWN; nothing is estimated.
 - **Player control.** Nothing executes. Transfers are player-run steps.
 
 ## Ranking
@@ -91,6 +94,22 @@ cost penalty when an optional action costs more of the observed gold. Account ob
 confidence 1; QuestieDB-based discoveries about 0.75; Classic-seeded data lower. Minor active quests
 collapse into one item, and every topic the question asks about (gear, quests, professions, class) keeps
 its best items in the answer.
+
+## Forever Auction House prices (AHledger)
+
+Forever has no Blizzard auction feed. [AHledger](https://ahledger.com) aggregates players' own Auction House
+scans per market (ruleset, faction, region: `forever.pvp.alliance.us`) and offers a free API; its terms
+require crediting AHledger wherever prices are shown and honoring cache headers.
+
+- `tools/forever-prices/refresh-prices.ts` reads `GET /api/versions/forever/prices/targets` (the account's
+  markets from realm ruleset + faction, and items: observed items plus known recipe reagents/products), calls
+  AHledger's `/v1/tooltip/{market}` (100 items per request, paced, Retry-After honored) and installs
+  `forever-prices.json` with `PUT /api/versions/forever/prices`. Only market and item ids are sent.
+- On DEV, `install-host-timer.sh` adds the per-user `wowsync-forever-prices.timer` (hourly).
+- The co-pilot uses medians for material conversions (convert vs sell raw), unused gear, and a
+  "sell surplus materials" recommendation; MCP `get_forever_market_prices` returns prices per item.
+- Region defaults to `us` (`WOWSYNC_FOREVER_REGION`). Launch is realmless: the market is derived from the
+  realm name's ruleset, which needs a check against the launch client's realm/ruleset naming.
 
 ## Forever knowledge bundle
 
@@ -130,7 +149,8 @@ The Dashboard writes it atomically to `forever-knowledge.json` next to the datab
 | Wowhead Forever tooltips | Used per ID for stats/recipes; list pages not scraped. |
 | AtlasLoot | Not used: no maintained Forever loot tables; QuestieDB item sources cover quest/vendor/drop. |
 | Pawn | Not used: stat weights unvalidated for Forever; dominance comparison avoids invented weights. |
-| Auctionator / Auctioneer / TSM | Not used: no Forever market data reaches WoWSync; prices stay UNKNOWN. |
+| Auctionator / Auctioneer / TSM | Not used: Auctionator supports Forever but needs per-player full scans (throttled in beta); AHledger already aggregates scans from many players. |
+| AHledger API | **Used** (2026-10-13): crowd-sourced Forever prices per market, free API, attribution required. |
 | Altoholic / DataStore | Not used: GearExport + Dashboard already track the account. |
 | LibStub / Ace3 / LibDataBroker | Not relevant: no addon change in this delivery. |
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "./app.ts";
 import { foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
+import { foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { createCaptureApp } from "./captureReceiver.ts";
 import {
   ConfigError,
@@ -78,6 +79,7 @@ const app = createApp(store, port, webDist, {
   // bind's own address too. A deliberate wider bind serves whatever Host it is reached by.
   allowedHosts: allowedHostsFor(bind),
   foreverKnowledgePath: foreverKnowledgePath(dbPath),
+  foreverPricesPath: foreverPricesPath(dbPath),
 });
 
 let server: http.Server | undefined;

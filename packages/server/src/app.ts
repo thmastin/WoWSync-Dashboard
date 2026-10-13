@@ -27,6 +27,7 @@ import { registerErpProjectRoutes } from "./erpProjectRoutes.ts";
 import { registerErpChangeProposalRoutes } from "./erpChangeProposalRoutes.ts";
 import { registerCopilotRoutes } from "./copilotRoutes.ts";
 import { ForeverKnowledgeStore } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
+import { ForeverPriceStore } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -55,6 +56,8 @@ function isKnownVersion(v: string): v is VersionOrUnknown {
 export interface CreateAppOptions {
   /** File holding the private Forever knowledge bundle used by the co-pilot (optional). */
   foreverKnowledgePath?: string;
+  /** File holding the Forever Auction House price bundle (AHledger), optional. */
+  foreverPricesPath?: string;
   /**
    * Where THIS server can reach itself (used by /api/ask to fetch its own
    * /api/account-context). Defaults to http://127.0.0.1:<port>; index.ts derives
@@ -76,7 +79,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   if (options.allowedHosts) app.use(hostGuard(options.allowedHosts));
   app.use(express.json({ limit: "10mb" }));
   registerErpProjectRoutes(app, store);
-  registerCopilotRoutes(app, store, options.foreverKnowledgePath ? new ForeverKnowledgeStore(options.foreverKnowledgePath) : undefined);
+  registerCopilotRoutes(app, store, options.foreverKnowledgePath ? new ForeverKnowledgeStore(options.foreverKnowledgePath) : undefined, options.foreverPricesPath ? new ForeverPriceStore(options.foreverPricesPath) : undefined);
   registerErpChangeProposalRoutes(app, store, selfOrigin);
 
   app.get("/api/versions", (_req, res) => {

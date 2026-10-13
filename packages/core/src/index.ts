@@ -51,3 +51,4 @@ export * from "./foreverTrainer.ts";
 export * from "./foreverKnowledgeBundle.ts";
 export { parseLuaLiteral, parseQuestieDataBlock, luaArray, LuaLiteralError } from "./luaLiteral.ts";
 export * from "./foreverSkills.ts";
+export * from "./foreverPrices.ts";

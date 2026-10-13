@@ -24,6 +24,8 @@ import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
 import { ForeverKnowledgeStore, foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
 import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboard/core/foreverKnowledgeLookup.ts";
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
+import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
+import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS } from "@wowsync-dashboard/core/foreverPrices.ts";
 import { z } from "zod";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -161,6 +163,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   const store = new SqliteSnapshotReadStore(configuration.databasePath ?? defaults.databasePath);
   const readModel = new DashboardReadModel(store);
   const foreverKnowledge = new ForeverKnowledgeStore(foreverKnowledgePath(configuration.databasePath ?? defaults.databasePath));
+  const foreverPrices = new ForeverPriceStore(foreverPricesPath(configuration.databasePath ?? defaults.databasePath));
+  const marketRegion = (process.env.WOWSYNC_FOREVER_REGION ?? "us").toLowerCase();
   const registry = new ResearchRegistry(configuration.researchRoot ?? defaults.researchRoot, DASHBOARD_RESEARCH_REGISTRATIONS);
   const server = new McpServer(
     { name: planningApiBaseUrl ? "wowsync-local-erp" : "wowsync-readonly", version: "0.1.0" },
@@ -466,6 +470,45 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const data = result.value.data;
     return textResult({ ...result, value: { ...result.value, data: { ...data, talents: describeForeverTalents(data.talents as ForeverTalentView, foreverKnowledge.get()) } } });
   });
+  server.registerTool("get_forever_market_prices", {
+    title: "Get Forever Auction House prices (AHledger crowd-sourced scans)",
+    description: `Read-only Forever Auction House prices from AHledger (https://ahledger.com), crowd-sourced player scans, as cached on this Dashboard (refreshed hourly for the account's markets and the items that matter to it). Pass items by id or exact name (up to 25) and either a character (its realm ruleset and faction pick the market, e.g. forever.pvp.alliance.us) or a market id. Each price has median, lowest buyout, quantity listed, AHledger's sales-per-day estimate, 30-day median, scan time and age; prices older than ${PRICE_FRESH_HOURS}h are marked stale. Vendor sell price is included as the guaranteed floor. Prices are EXTERNAL observations, never estimates; items not in the cache are UNKNOWN. Credit AHledger when showing these prices.`,
+    inputSchema: z.object({
+      version: z.literal("forever"),
+      items: z.array(z.union([z.number().int().positive(), z.string().trim().min(2).max(100)])).min(1).max(25),
+      character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(),
+      market: z.string().regex(/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/).optional(),
+    }).strict().refine((value) => value.character !== undefined || value.market !== undefined, { message: "Pass character or market." }),
+    annotations: toolAnnotations,
+  }, async ({ items, character, market }) => {
+    const prices = foreverPrices.get();
+    if (!prices) return textResult({ status: "UNAVAILABLE", reason: "No Forever price bundle is installed on this Dashboard yet." });
+    let resolvedMarket = market;
+    let marketBasis = market ? "requested" : undefined;
+    if (!resolvedMarket && character) {
+      const matches = readModel.listCharacters({ version: "forever" }).filter((entry) => entry.name.toLowerCase() === character.name.toLowerCase() && (!character.realm || entry.realm === character.realm));
+      if (matches.length !== 1) return textResult({ status: matches.length ? "CHARACTER_AMBIGUOUS" : "CHARACTER_NOT_FOUND", candidates: matches.map((entry) => ({ name: entry.name, realm: entry.realm })) });
+      resolvedMarket = foreverMarketFor(matches[0]!.realm, (matches[0] as { faction?: string }).faction, marketRegion);
+      marketBasis = `DERIVED from ${matches[0]!.name}'s realm "${matches[0]!.realm}" (ruleset) and faction`;
+      if (!resolvedMarket) return textResult({ status: "MARKET_UNKNOWN", reason: `Cannot tell the ruleset or faction for ${matches[0]!.name} (realm "${matches[0]!.realm}"); pass market explicitly.` });
+    }
+    const index = foreverKnowledge.get();
+    const nameToId = (name: string) => {
+      const needle = name.toLowerCase();
+      const fromTooltips = index ? Object.values(index.bundle.tooltips.items).find((item) => item.name.toLowerCase() === needle)?.id : undefined;
+      return fromTooltips ?? (index ? index.items().find(([, item]) => item.name.toLowerCase() === needle)?.[0] : undefined);
+    };
+    const rows = items.map((item) => {
+      const id = typeof item === "number" ? item : nameToId(item);
+      if (id === undefined) return { query: item, status: "UNKNOWN_ITEM" };
+      const found = prices.lookup(resolvedMarket, id);
+      const vendor = index?.tooltipItem(id)?.sellPriceCopper;
+      const name = index?.tooltipItem(id)?.name ?? index?.item(id)?.name;
+      if (!found) return { query: item, itemId: id, name, status: "UNKNOWN", reason: "No AHledger scan for this item in this market in the cache.", vendorSellCopper: vendor };
+      return { query: item, itemId: id, name, status: found.fresh ? "OBSERVED_EXTERNAL" : "STALE", ...found.price, ageHours: found.ageHours !== undefined ? Math.round(found.ageHours * 10) / 10 : undefined, vendorSellCopper: vendor };
+    });
+    return textResult({ status: "FOUND", market: resolvedMarket, marketBasis, fetchedAt: prices.bundle.fetchedAt, prices: rows, units: "copper (10000 = 1 gold)", attribution: AHLEDGER_ATTRIBUTION, notes: "Crowd-sourced scans move; the Auction House cut and deposit are not deducted." });
+  });
   server.registerTool("lookup_forever_knowledge", {
     title: "Look up Forever game knowledge (items, quests, NPCs, spells, dungeons, zones)",
     description: "Read-only lookup in the private Forever knowledge bundle (QuestieDB Forever + Wowhead Forever tooltips), by id or name (exact match first, then partial; max 10). item: stats, slot, required level, vendor sell price, who sells it, what drops it, which quest rewards it. quest: level, faction, giver and location, turn-in, objectives, prerequisites, follow-up, rewards, XP (Classic-seeded). npc: title, level, location, faction, roles, quests it starts, items it sells. spell: Forever tooltip text, reagents, tools, created item (talents and recipes). dungeon: creature level range (derived), entrance, quests. zone: quest count, quest level range, quests. Game knowledge only, not account state; vendor buy prices, Auction House prices and drop chances are UNKNOWN. Forever-only content is only partly covered.",
@@ -499,7 +542,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     }).strict(),
     annotations: toolAnnotations,
   }, async ({ format, ...request }) => {
-    const answer = answerForeverCopilot(readModel, request, foreverKnowledge.get());
+    const answer = answerForeverCopilot(readModel, request, foreverKnowledge.get(), foreverPrices.get(), marketRegion);
     if (format === "markdown") return textResult({ status: answer.status, markdown: answer.markdown });
     return textResult(answer);
   });
