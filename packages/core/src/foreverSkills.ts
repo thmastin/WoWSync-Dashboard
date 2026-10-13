@@ -130,6 +130,13 @@ export function extractForeverClassSpells(parsed: unknown, snapshotId: number): 
   return { observedAt: typeof section.observedAt === "number" ? section.observedAt : undefined, snapshotId, entries };
 }
 
+/** The latest failed recipe capture in one snapshot, if GearExport reported one. */
+export function extractForeverRecipeCaptureIssue(parsed: unknown): { error: string; at?: number } | undefined {
+  const section = object(object(object(parsed)?.foreverGearObservation)?.recipeCaptureAttempt);
+  const error = object(section?.data)?.error;
+  return typeof error === "string" && error ? { error, ...(typeof section?.observedAt === "number" ? { at: section.observedAt } : {}) } : undefined;
+}
+
 /** Forever reputation section as a captured domain, so the Classic visible-row view can present it. */
 export function extractForeverReputationDomain(parsed: unknown): { domain: CapturedCharacterDomain; snapshotObservedAt?: number } | undefined {
   const section = object(object(object(parsed)?.foreverGearObservation)?.reputation);

@@ -155,6 +155,8 @@ export interface CharacterEvidence {
   skills?: ForeverSkillLines;
   talents?: ForeverTalents;
   classSpells?: ForeverClassSpells;
+  /** Latest failed profession-recipe capture, when the newest export reports one. */
+  recipeCaptureIssue?: { error: string; at?: number };
   zone?: string;
   snapshotId?: number;
 }
@@ -269,6 +271,7 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
     skills: skillsAndTalents.skills,
     talents: skillsAndTalents.talents,
     classSpells: skillsAndTalents.classSpells,
+    recipeCaptureIssue: readModel.getForeverRecipeCaptureIssue(query),
     zone: state.location?.zone,
     snapshotId: state.provenance?.snapshotId,
   };
@@ -1368,6 +1371,12 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
     if (character.brief.bankState === "UNKNOWN") limitations.push(`${label(character)}'s bank has never been observed; it may hold more resources.`);
     if (character.brief.bankState === "LAST_SEEN") limitations.push(`${label(character)}'s bank is last-seen, not current.`);
     if (character.brief.snapshotFreshness === "stale") limitations.push(`${label(character)}'s latest export is stale (generated ${isoDay(character.brief.generatedAt)}).`);
+  }
+  for (const character of subject ? [subject] : characters) {
+    const issue = character.recipeCaptureIssue;
+    if (!issue) continue;
+    const lastGood = character.catalog.length ? "Recipes shown are from the last successful capture (LAST_SEEN)." : "No recipe list has been captured yet.";
+    limitations.push(`${label(character)}'s latest profession recipe capture failed${issue.at ? ` (${new Date(issue.at * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC)` : ""}: ${issue.error}. ${lastGood} Reopen the profession window, then /wowsync and /reload.`);
   }
   if (subject && !subject.trainerVisits.some((visit) => visit.kind === "CLASS")) limitations.push("No class trainer visit has been captured for this character, so training costs are unknown: open the class trainer once and /reload.");
   if (subject && !subject.talents) limitations.push("Talents are not yet exported for this character (/wowsync and /reload with the current GearExport).");

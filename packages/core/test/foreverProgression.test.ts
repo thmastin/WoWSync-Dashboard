@@ -16,7 +16,7 @@ const bundle = JSON.parse(readFileSync(new URL("knowledge-fixture.json", FIXTURE
 bundle.tooltips.spells["16178"] = { id: 16178, name: "Purification", tools: [], reagents: [], description: "Increases the effectiveness of your healing spells by 10%.", sourceUrl: "https://www.wowhead.com/forever/spell=16178", retrievedAt: "2026-10-13T11:20:00Z" };
 const KNOWLEDGE = new ForeverKnowledgeIndex(bundle);
 
-function brammWith(talentsData: Record<string, unknown>, unspent = 0, classSpellCatalog?: Record<string, unknown>) {
+function brammWith(talentsData: Record<string, unknown>, unspent = 0, classSpellCatalog?: Record<string, unknown>, recipeCaptureAttempt?: Record<string, unknown>) {
   const { text, foreverGearObservation, ...rest } = JSON.parse(readFileSync(new URL("copilot-bramm.import.json", FIXTURE_DIR), "utf8"));
   const observedAt = foreverGearObservation.generatedAt;
   const talents = { observedAt, changedAt: observedAt, completeness: "complete", data: { formatVersion: 2, source: "C_ClassTalents/C_Traits", unspentPoints: unspent, specialization: { id: 263, name: "Enhancement" }, ...talentsData } };
@@ -24,7 +24,7 @@ function brammWith(talentsData: Record<string, unknown>, unspent = 0, classSpell
     { name: "Ironforge", factionID: 47, standingID: 5, barMin: 3000, barMax: 9000, barValue: 4200, parentCategory: "Alliance", evidence: "OBSERVED", ownerScope: "CHARACTER" },
   ], majorFactions: [] } };
   const store = new SqliteSnapshotStore(":memory:");
-  store.importSnapshot(text, { ...rest, foreverGearObservation: { ...foreverGearObservation, talents, reputation, ...(classSpellCatalog ? { classSpellCatalog: { observedAt, changedAt: observedAt, completeness: "complete", data: classSpellCatalog } } : {}) } });
+  store.importSnapshot(text, { ...rest, foreverGearObservation: { ...foreverGearObservation, talents, reputation, ...(classSpellCatalog ? { classSpellCatalog: { observedAt, changedAt: observedAt, completeness: "complete", data: classSpellCatalog } } : {}), ...(recipeCaptureAttempt ? { recipeCaptureAttempt } : {}) } });
   return { store, read: new DashboardReadModel(store, () => NOW) };
 }
 
@@ -144,4 +144,16 @@ test("A recipe catalog GearExport carried forward after a failed refresh is kept
   assert.equal(keep(recipes("OBSERVED", "OBSERVED")), true, "fresh catalog kept");
   assert.equal(keep(recipes("LAST_SEEN", "LAST_SEEN")), true, "carried catalog kept");
   assert.equal(keep(recipes("OBSERVED", "LAST_SEEN")), false, "a LAST_SEEN learned row inside a fresh profession is still rejected");
+});
+
+test("A failed latest recipe capture is surfaced in answers and in the read model", () => {
+  const { store, read } = brammWith(TREE, 0, undefined, { observedAt: 1791917000, data: { error: "Open profession recipe list does not match a learned profession on this character" } });
+  try {
+    const issue = read.getForeverRecipeCaptureIssue({ version: "forever", name: "Bramm" });
+    assert.match(issue!.error, /does not match a learned profession/);
+    const answer = answerForeverCopilot(read, { version: "forever", question: "Bramm: what should I do over the next five levels?", limit: 20 }, KNOWLEDGE);
+    assert.ok(answer.limitations.some((text) => /Bramm.s latest profession recipe capture failed .*does not match a learned profession.*Reopen the profession window/.test(text)), answer.limitations.join(" | "));
+  } finally { store.close(); }
+  const clean = brammWith(TREE);
+  try { assert.equal(clean.read.getForeverRecipeCaptureIssue({ version: "forever", name: "Bramm" }), undefined, "no issue when the export reports none"); } finally { clean.store.close(); }
 });

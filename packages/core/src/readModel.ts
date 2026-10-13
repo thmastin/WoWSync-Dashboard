@@ -2,7 +2,7 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { extractForeverTrainerVisit, type ForeverTrainerVisit } from "./foreverTrainer.ts";
-import { extractForeverClassSpells, extractForeverReputationDomain, extractForeverSkillLines, extractForeverTalents, type ForeverClassSpells, type ForeverSkillLines, type ForeverTalent, type ForeverTalents } from "./foreverSkills.ts";
+import { extractForeverClassSpells, extractForeverRecipeCaptureIssue, extractForeverReputationDomain, extractForeverSkillLines, extractForeverTalents, type ForeverClassSpells, type ForeverSkillLines, type ForeverTalent, type ForeverTalents } from "./foreverSkills.ts";
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
@@ -2088,6 +2088,16 @@ export class DashboardReadModel {
       if (skills && talents && classSpells) break;
     }
     return { status: "FOUND", value: { skills, talents, classSpells } };
+  }
+
+  /** Whether the character's latest export reports a failed profession-recipe capture (only the newest snapshot counts). */
+  getForeverRecipeCaptureIssue(query: CharacterQuery): { error: string; at?: number; snapshotId: number } | undefined {
+    if (query.version !== "forever") return undefined;
+    const candidates = this.store.listCharacters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    if (candidates.length !== 1) return undefined;
+    const latest = this.store.listSnapshots(candidates[0]!.identityKey)[0];
+    const issue = latest ? extractForeverRecipeCaptureIssue(latest.parsed) : undefined;
+    return issue && latest ? { ...issue, snapshotId: latest.id } : undefined;
   }
 
   /** Newest raw Forever trainer-window capture per trainer frame, scanning the character's history. */

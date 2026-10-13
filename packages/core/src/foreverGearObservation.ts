@@ -18,6 +18,8 @@ export interface ForeverStructuredObservation {
   talents?: Record<string, unknown>;
   reputation?: Record<string, unknown>;
   classSpellCatalog?: Record<string, unknown>;
+  /** The latest failed profession-recipe capture (GearExport lastAttemptError/At); absent after a success. */
+  recipeCaptureAttempt?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
   itemEvidence?: Record<string, unknown>;
   professionRecipes?: { status: { state: "OBSERVED"; completeness: "partial"; observedAt: number }; completeness: "partial"; observedAt: number; data: Record<string, unknown> };
@@ -79,6 +81,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("talents") ? { talents: section("talents") } : {}),
     ...(section("reputation") ? { reputation: section("reputation") } : {}),
     ...(section("classSpellCatalog") ? { classSpellCatalog: section("classSpellCatalog") } : {}),
+    ...(section("recipeCaptureAttempt") && typeof object(section("recipeCaptureAttempt")!.data)?.error === "string" ? { recipeCaptureAttempt: section("recipeCaptureAttempt") } : {}),
     ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
     ...(validRecipes ? { professionRecipes: {
       status: { state: "OBSERVED" as const, completeness: "partial" as const, observedAt: recipeSection!.observedAt as number },
@@ -283,7 +286,7 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
     conflict = true;
   }
   if (incoming.sourceCharacterGuidConflict || existing.sourceCharacterGuidConflict) value.sourceCharacterGuidConflict = true;
-  for (const key of ["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog"] as const) {
+  for (const key of ["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog", "recipeCaptureAttempt"] as const) {
     const before = existing[key]; const next = incoming[key];
     if (!next) continue;
     if (!before) { value[key] = next; updated = true; continue; }
