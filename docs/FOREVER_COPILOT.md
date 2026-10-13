@@ -45,10 +45,11 @@ Main files:
   "Train <skill> at a weapon master first" and lowers the ranking. The Classic baseline is used only when no
   skill lines were captured.
 - **Talents.** GearExport `feature/forever-skills-talents` (`WoWSyncForeverTalents.lua`) reads talent trees and
-  unspent points read-only through the legacy talent API, and the bridge forwards the `talents` section. The
-  Forever 1.60.1 client does not expose that API (first live export: "Talent APIs unavailable"), so GearExport
-  `dea52a2` records the names of the talent functions the client does expose, without calling them. The
-  Dashboard ignores a talents section with no trees, and answers say talents are not captured.
+  unspent points read-only, and the bridge forwards the `talents` section. Forever 1.60.1 has no legacy talent
+  API; it uses the Retail trait system, so GearExport `8a81302` reads `C_ClassTalents`/`C_Traits` with getters
+  only (ranks, spell names, talent currency, specialization). Forever returns one combined tree per class (no
+  Classic tree split), which answers show as "Points spent: N (Talent r/max, ...)". A character without a
+  talent export gets a "not yet exported" note.
 - **Routing.** `foreverRouting.ts`: zone adjacency (Classic map baseline, labelled) scores quests by distance;
   quest givers are clustered into hubs; a "Quest route" recommendation lists hubs in travel order, and the level
   plan orders quests by distance.
@@ -135,5 +136,5 @@ The Dashboard writes it atomically to `forever-knowledge.json` next to the datab
 
 - Recipe skill thresholds are known only from trainer windows, patterns, or captured profession windows.
 - Vendor buy prices, travel time, quest-giver availability by phase, and drop chances are unknown.
-- Talents and reputation standings are not captured for Forever (weapon skills and armor proficiencies are).
+- Reputation standings are not captured for Forever. Talent builds are shown, not ranked.
 - Objective detection is keyword-based.
