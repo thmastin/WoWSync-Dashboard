@@ -4,7 +4,7 @@
 - The co-pilot discovers quests, gear (quest rewards, vendors, learned/unlearned recipes, drops), class training and profession trainer recipes (from raw Forever trainer windows), class quest chains, profession pairs and a level plan; economies are realm + faction. See [`FOREVER_COPILOT.md`](FOREVER_COPILOT.md).
 - Private knowledge bundle (QuestieDB Forever + Wowhead Forever tooltips; built 2026-10-13T04:05Z; 4,244 quests, 14,889 items, 3,052 item tooltips) installed via `PUT /api/versions/forever/knowledge` into the DEV data directory. Not in git (QuestieDB has no license).
 - Backups integrity ok; schema unchanged; Dashboard/MCP healthy; Herdr untouched. Tests: core 880, MCP 12, server 254 + 2 skips, web 317, typecheck, build, browser 25/25.
-- Live: Hallo, Rordin and stable-gold acceptance questions HTTP 200 on DEV; Retail 422. ChatGPT call of `ask_forever_copilot` not yet observed; MCP now logs one stderr line per tool call.
+- Live: Hallo, Rordin and stable-gold acceptance questions HTTP 200 on DEV; Retail 422. ChatGPT called `ask_forever_copilot` through the DEV tunnel (journal: `WoWSync MCP tool=ask_forever_copilot outcome=ok ms=2779`).
 - Rollback: `wowsync-dev-deploy rollback 1625aff670889dbc91a95b57ce9080cb2efc0cf1`.
 
 **Forever Co-Pilot DEV deployment (2026-10-13, 03:15Z):** guarded promote of `1625aff670889dbc91a95b57ce9080cb2efc0cf1` (`feature/forever-copilot`) from `a11067c` (from `f5dc309`).
