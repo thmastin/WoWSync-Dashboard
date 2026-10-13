@@ -1,7 +1,7 @@
 // Builds the private Forever knowledge bundle used by the co-pilot at runtime.
 //
 //   node tools/forever-knowledge/build-bundle.ts --questie <QuestieDB checkout> --out <bundle.json>
-//        [--db <wowsync.sqlite>] [--cache <dir>] [--max-req-level 22] [--offline]
+//        [--db <wowsync.sqlite> | --observed-url <Dashboard origin>] [--cache <dir>] [--max-req-level 22] [--offline]
 //
 // Inputs and their terms:
 //   - QuestieDB (https://github.com/Questie/QuestieDB) data/Forever and support/Forever. The repository
@@ -12,7 +12,7 @@
 //   - Optional: a WoWSync database (read-only) to add every ID the account has observed.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
-import { DashboardReadModel, SqliteSnapshotReadStore } from "../../packages/core/src/index.ts";
+import { DashboardReadModel, SqliteSnapshotReadStore, collectForeverObservedIds } from "../../packages/core/src/index.ts";
 import { luaArray, parseQuestieDataBlock, type LuaTable, type LuaValue } from "../../packages/core/src/luaLiteral.ts";
 import { parseItemTooltip, parseSpellTooltip, type ForeverItemKnowledge, type ForeverSpellKnowledge } from "../../packages/core/src/foreverKnowledge.ts";
 import type { BundleItem, BundleNpc, BundleObject, BundleQuest, ForeverKnowledgeBundle } from "../../packages/core/src/foreverKnowledgeBundle.ts";
@@ -104,7 +104,14 @@ for (const [id, raw] of Object.entries(objectRaw)) {
   const spawns = r[3] && typeof r[3] === "object" ? Object.keys(r[3] as LuaTable).map(Number) : undefined;
   objects[id] = drop({ name: String(r[0]), zones: spawns?.length ? spawns.slice(0, 12) : undefined });
 }
-console.log(`QuestieDB: ${Object.keys(quests).length} quests, ${Object.keys(items).length} items, ${Object.keys(npcs).length} npcs, ${Object.keys(objects).length} objects, ${xpByQuest.size} quest XP rows, ${Object.keys(zones).length} zones`);
+// Dungeons: "[area] = {"Name",{alt areas}|nil,parentZone,{{zone, x, y},...}}," rows from QuestieDB's zone table.
+const dungeons: ForeverKnowledgeBundle["dungeons"] = {};
+const dungeonFile = path.join(questieRoot, "support", "Forever", "Zones", "dungeons.lua");
+if (existsSync(dungeonFile)) for (const match of readFileSync(dungeonFile, "utf8").matchAll(/^\s*\[(\d+)\] = \{"([^"]+)",(\{[^}]*\}|nil),(\d+),\{\{(\d+), ([\d.]+), ([\d.]+)\}/gm)) {
+  const alternatives = match[3] === "nil" ? [] : match[3].replace(/[{}]/g, "").split(",").map(Number).filter(Number.isFinite);
+  dungeons[match[1]] = { name: match[2], areas: [Number(match[1]), ...alternatives], parentZone: Number(match[4]), entrance: [Number(match[5]), Number(match[6]), Number(match[7])] };
+}
+console.log(`QuestieDB: ${Object.keys(dungeons).length} dungeons, ${Object.keys(quests).length} quests, ${Object.keys(items).length} items, ${Object.keys(npcs).length} npcs, ${Object.keys(objects).length} objects, ${xpByQuest.size} quest XP rows, ${Object.keys(zones).length} zones`);
 
 // ---- Tooltip targets
 const itemTargets = new Set<number>();
@@ -116,27 +123,16 @@ for (const [id, item] of Object.entries(items)) {
   if (item.cls === 9 && (item.ilvl ?? 0) <= 40) itemTargets.add(Number(id));
 }
 const dbPath = arg("--db");
+const observedUrl = arg("--observed-url");
+const addObserved = (ids: { items: number[]; spells: number[]; quests: number[] }) => { for (const id of ids.items) itemTargets.add(id); for (const id of ids.spells) spellTargets.add(id); };
 if (dbPath) {
   const store = new SqliteSnapshotReadStore(dbPath);
-  const readModel = new DashboardReadModel(store);
-  try {
-    for (const character of readModel.listCharacters({ version: "forever" })) {
-      const query = { version: "forever" as const, name: character.name, realm: character.realm };
-      const refs: string[] = [];
-      const equipment = readModel.getCharacterEquipment(query);
-      if (equipment.status === "FOUND") for (const slot of (equipment.value.data?.slots ?? []) as Array<{ itemRef?: string }>) if (slot.itemRef) refs.push(slot.itemRef);
-      for (const storage of ["bags", "bank"] as const) { const contents = readModel.getCharacterStorage({ ...query, storage, limit: 100 }); if (contents.status === "FOUND") for (const item of (contents.value.data?.items ?? []) as Array<{ itemRef?: string }>) if (item.itemRef) refs.push(item.itemRef); }
-      for (const ref of refs) { const match = /^item:(\d+)/.exec(ref); if (match) itemTargets.add(Number(match[1])); }
-      const professions = readModel.getCharacterProfessions(query);
-      if (professions.status === "FOUND") for (const profession of (professions.value.data?.recipeKnowledge?.data?.professions ?? []) as Array<{ recipes?: Array<Record<string, unknown>> }>) {
-        for (const recipe of profession.recipes ?? []) {
-          if (typeof recipe.outputItemID === "number") itemTargets.add(recipe.outputItemID);
-          if (recipe.learnedState === "OBSERVED_TRUE" && typeof recipe.recipeID === "number") spellTargets.add(recipe.recipeID);
-          for (const slot of (recipe.reagentSlots ?? []) as Array<{ reagents?: Array<{ itemID?: number }> }>) for (const reagent of slot.reagents ?? []) if (reagent.itemID) itemTargets.add(reagent.itemID);
-        }
-      }
-    }
-  } finally { store.close(); }
+  try { addObserved(collectForeverObservedIds(new DashboardReadModel(store) as never)); } finally { store.close(); }
+}
+if (observedUrl) {
+  const response = await fetch(new URL("/api/versions/forever/knowledge/observed-ids", observedUrl), { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`observed-ids request failed: HTTP ${response.status}`);
+  addObserved(await response.json() as { items: number[]; spells: number[]; quests: number[] });
 }
 
 // ---- Fetch with cache
@@ -199,7 +195,7 @@ const bundle: ForeverKnowledgeBundle = {
     { id: "questie-xp", name: "QuestieDB quest XP (Classic seed)", url: "https://github.com/Questie/QuestieDB", revision: questieRevision, usage: "Quest experience. Seeded from Classic Era; spot checks match Wowhead Forever (e.g. quest 384: 630 XP).", confidence: "CLASSIC_SEED_UNVERIFIED" },
     { id: "wowhead-forever", name: "Wowhead Forever tooltips", url: "https://www.wowhead.com/forever/", usage: "Item stats, slots, required level, vendor sell price; recipe reagents, tools and outputs; pattern skill requirements.", confidence: "FOREVER_DATABASE" },
   ],
-  zones, quests, items, npcs, objects,
+  zones, quests, items, npcs, objects, dungeons,
   tooltips: { items: tooltipItems, spells: tooltipSpells },
   recipesByProfession, recipeItems,
 };

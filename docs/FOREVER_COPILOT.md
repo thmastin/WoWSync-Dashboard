@@ -38,6 +38,25 @@ Main files:
 | `packages/core/src/luaLiteral.ts` | Data-only Lua table reader (never evaluates code) |
 | `tools/forever-knowledge/build-bundle.ts` | Builds the bundle |
 
+## Pass 3 additions (2026-10-13)
+
+- **Observed skills.** Weapon skills and armor proficiencies come from the Forever skill-line capture
+  (`foreverSkills.ts`). An armor type the character lacks blocks the item; a missing weapon skill becomes
+  "Train <skill> at a weapon master first" and lowers the ranking. The Classic baseline is used only when no
+  skill lines were captured.
+- **Talents.** GearExport `feature/forever-skills-talents` (`WoWSyncForeverTalents.lua`) captures talent trees
+  and unspent points read-only; the bridge forwards the `talents` section; answers show unspent points.
+- **Routing.** `foreverRouting.ts`: zone adjacency (Classic map baseline, labelled) scores quests by distance;
+  quest givers are clustered into hubs; a "Quest route" recommendation lists hubs in travel order, and the level
+  plan orders quests by distance.
+- **Dungeons.** QuestieDB's dungeon table (name, areas, entrance). Level range = middle 80% of the creatures
+  placed inside; raids/city instances (span > 15) and dungeons inside the other faction's capital are excluded.
+  Dungeon quests and upgrade drops are listed under a group recommendation, not as solo quests.
+- **Knowledge refresh.** `GET /api/versions/forever/knowledge/observed-ids` (read-only) feeds
+  `build-bundle.ts --observed-url`. `tools/forever-knowledge/refresh-host.sh` (installed by
+  `install-host-timer.sh` as a per-user systemd timer on the DEV host) updates QuestieDB, builds with the
+  deployed Dashboard SHA's builder, and installs only when content changed. Answers report bundle age.
+
 ## Rules the engine enforces
 
 - **Version isolation.** Only Forever; every read uses version `forever`; the bundle is Forever-only.

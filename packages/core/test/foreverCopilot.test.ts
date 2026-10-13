@@ -202,3 +202,58 @@ test("knowledge parsers, Lua literal reader, and the bundle store", () => {
   useForeverKnowledge(KNOWLEDGE, () => assert.equal(foreverItem(2853)?.armor, 35));
   assert.equal(foreverItem(2853), undefined, "knowledge is scoped to the request");
 });
+
+test("pass 3: observed weapon skills decide eligibility; talents parse; route and observed IDs", async () => {
+  const { extractForeverSkillLines, extractForeverTalents, requiredSkillFor } = await import("../src/foreverSkills.ts");
+  const { zoneDistance, questHubs } = await import("../src/foreverRouting.ts");
+  const { collectForeverObservedIds } = await import("../src/foreverKnowledgeBundle.ts");
+  const { store, read } = stable(ALL);
+  try {
+    const snapshot = store.listSnapshots("forever::classic beta pve::hallo")[0]!;
+    const skills = extractForeverSkillLines(snapshot.parsed, snapshot.id)!;
+    assert.deepEqual(skills.weapons.get("Staves"), { rank: 27, maxRank: 30 });
+    assert.equal(skills.weapons.has("Two-Handed Maces"), false);
+    assert.ok(skills.armor.has("Leather") && !skills.armor.has("Mail"));
+    assert.deepEqual(requiredSkillFor("Two-Hand", "Mace"), { kind: "weapon", name: "Two-Handed Maces" });
+
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_HALLO, limit: 20 }, KNOWLEDGE);
+    const mainHand = answer.recommendations.find((rec) => rec.id === "discover-gear-main-hand")!;
+    assert.ok(mainHand.prerequisites.some((line) => /^Train Two-Handed Maces at a weapon master first/.test(line)), "an untrained weapon skill becomes an explicit prerequisite");
+    const route = answer.recommendations.find((rec) => rec.id === "quest-route");
+    assert.ok(route && /Mulgore around \(47, 60\), Synthetic Plainswalker/.test(route.what), "quests are grouped into located hubs");
+    assert.equal(answer.knowledge.ageDays !== undefined, true);
+
+    const talents = extractForeverTalents({ foreverGearObservation: { talents: { observedAt: 10, completeness: "complete", data: { unspentPoints: 1, trees: [{ name: "Balance", pointsSpent: 2, talents: [{ name: "Improved Wrath", currentRank: 2, maxRank: 5 }] }] } } } }, 7)!;
+    assert.deepEqual([talents.unspentPoints, talents.trees[0].pointsSpent, talents.trees[0].talents[0].currentRank], [1, 2, 2]);
+
+    assert.equal(zoneDistance("Mulgore", "The Barrens"), 1);
+    assert.equal(zoneDistance("Mulgore", "Ashenvale"), 2);
+    assert.equal(zoneDistance("Mulgore", "Riverglades"), undefined, "zones outside the baseline stay unknown");
+    const hubs = questHubs([{ zone: "Mulgore", coord: [47, 60], giver: "A", item: 1 }, { zone: "Mulgore", coord: [49, 61], giver: "B", item: 2 }, { zone: "Mulgore", coord: [70, 20], giver: "C", item: 3 }]);
+    assert.deepEqual(hubs.map((hub) => hub.items), [[1, 2], [3]]);
+
+    const ids = collectForeverObservedIds(read as never);
+    assert.ok(ids.items.includes(10421) && ids.spells.includes(2663) && ids.quests.includes(743));
+  } finally { store.close(); }
+});
+
+test("pass 3: dungeons get a level range from their creatures and respect faction and reach", () => {
+  const bundle = JSON.parse(knowledgeJson) as ForeverKnowledgeBundle;
+  bundle.zones["17"] = "The Barrens"; bundle.zones["1637"] = "Orgrimmar";
+  bundle.dungeons = { 718: { name: "Synthetic Caverns", areas: [718], parentZone: 17, entrance: [17, 46, 36.5] }, 2437: { name: "Synthetic Chasm", areas: [2437], parentZone: 1637, entrance: [1637, 52, 49] } };
+  for (let n = 0; n < 8; n += 1) bundle.npcs[String(995000 + n)] = { name: `Cave Thing ${n}`, zone: 718, level: [8 + (n % 3), 9 + (n % 3)], rank: 0 };
+  for (let n = 0; n < 8; n += 1) bundle.npcs[String(996000 + n)] = { name: `Chasm Thing ${n}`, zone: 2437, level: [9, 10], rank: 0 };
+  bundle.quests["990010"] = { name: "Synthetic Cavern Errand", level: 9, reqLevel: 5, races: 178, zone: 718, startNpcs: [990101], xp: 600 };
+  const index = new ForeverKnowledgeIndex(bundle);
+  const caverns = index.dungeons().find((entry) => entry.dungeon.name === "Synthetic Caverns")!;
+  assert.deepEqual([caverns.minLevel, caverns.maxLevel], [8, 11]);
+  const { store, read } = stable(ALL);
+  try {
+    const horde = answerForeverCopilot(read, { version: "forever", question: SCENARIO_HALLO, limit: 20 }, index);
+    const dungeon = horde.recommendations.concat().find((rec) => rec.id === "dungeon-718");
+    assert.ok(dungeon, "a reachable dungeon in level range is offered");
+    assert.match(dungeon!.what, /Synthetic Cavern Errand/);
+    assert.ok(dungeon!.prerequisites.some((line) => /group of five/.test(line)));
+    assert.doesNotMatch(JSON.stringify(horde.recommendations.filter((rec) => rec.category === "DISCOVERED_QUESTS")), /Synthetic Cavern Errand/, "dungeon quests are not listed as solo quests");
+  } finally { store.close(); }
+});

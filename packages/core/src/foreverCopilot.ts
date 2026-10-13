@@ -15,6 +15,7 @@
 //   player-run steps; /bankx transfers always need the player to run each move.
 import type { DashboardReadModel } from "./readModel.ts";
 import type { ForeverTrainerVisit } from "./foreverTrainer.ts";
+import { requiredSkillFor, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
 import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
 import { discoveryDrafts, goldDiscoveryDrafts, proficiencyBaseline, type LevelPlanStep } from "./foreverDiscovery.ts";
 import { formatCopper } from "./currency.ts";
@@ -107,7 +108,7 @@ export interface CopilotAnswer {
   recommendations: CopilotRecommendation[];
   otherOpportunities: Array<{ title: string; reason: string }>;
   limitations: string[];
-  knowledge: { source: string; refreshedAt?: string; available: boolean; sources: Array<{ name: string; url: string; usage: string; confidence: string }>; systemFacts: ForeverSystemFact[] };
+  knowledge: { source: string; refreshedAt?: string; ageDays?: number; available: boolean; sources: Array<{ name: string; url: string; usage: string; confidence: string }>; systemFacts: ForeverSystemFact[] };
   /** Level-by-level plan for the subject when external knowledge is available. */
   plan: LevelPlanStep[];
   discovery?: { questsConsidered: number; gearCandidates: number; professionOptions: number };
@@ -150,6 +151,8 @@ export interface CharacterEvidence {
   /** Every recipe row the client enumerated for a captured profession, learned or not. */
   catalog: LearnedRecipe[];
   trainerVisits: ForeverTrainerVisit[];
+  skills?: ForeverSkillLines;
+  talents?: ForeverTalents;
   zone?: string;
   snapshotId?: number;
 }
@@ -222,6 +225,8 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
   }));
   const trainerResolution = readModel.getForeverTrainerVisits(query);
   const trainerVisits = trainerResolution.status === "FOUND" ? trainerResolution.value : [];
+  const skillsResolution = readModel.getForeverSkillsAndTalents(query);
+  const skillsAndTalents = skillsResolution.status === "FOUND" ? skillsResolution.value : {};
   const professionsSection = state.professions ?? {};
   const brief: CopilotCharacterBrief = {
     name: query.name,
@@ -259,6 +264,8 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
     completedState: kindOf(history?.state),
     catalog: [...recipes, ...catalog],
     trainerVisits,
+    skills: skillsAndTalents.skills,
+    talents: skillsAndTalents.talents,
     zone: state.location?.zone,
     snapshotId: state.provenance?.snapshotId,
   };
@@ -409,7 +416,21 @@ export function eligibility(candidate: ForeverItemKnowledge, character: Characte
     else if (level < candidate.requiredLevel) return { blocked: `requires level ${candidate.requiredLevel} (${label(character)} is ${level})`, prerequisites, evidence };
     else evidence.push({ kind: "DERIVED", statement: `Required level ${candidate.requiredLevel} is met (${label(character)} is level ${level}).`, source: "Forever item record + observed character level" });
   }
-  if (candidate.subtype && ARMOR_TYPES.includes(candidate.subtype)) {
+  const required = requiredSkillFor(candidate.slot, candidate.subtype);
+  const skills = character.skills;
+  if (required && skills && (required.kind === "weapon" ? skills.weapons.size > 0 : skills.armor.size > 0)) {
+    const source = `Forever skill lines (snapshot ${skills.snapshotId})`;
+    if (required.kind === "armor") {
+      if (!skills.armor.has(required.name)) return { blocked: `${label(character)} has no ${required.name} proficiency (observed skill lines)`, prerequisites, evidence };
+      evidence.push({ kind: "OBSERVED", statement: `${label(character)} has the ${required.name} armor proficiency.`, source, observedAt: skills.observedAt });
+    } else {
+      const skill = skills.weapons.get(required.name);
+      if (skill) {
+        evidence.push({ kind: "OBSERVED", statement: `${label(character)} has ${required.name} ${skill.rank}/${skill.maxRank}.`, source, observedAt: skills.observedAt });
+        if (skill.rank < skill.maxRank / 2) prerequisites.push(`${required.name} is only ${skill.rank}/${skill.maxRank}: expect misses until you raise it by fighting with this weapon type.`);
+      } else prerequisites.push(`Train ${required.name} at a weapon master first: it is not among ${label(character)}'s observed weapon skills (${[...skills.weapons.keys()].join(", ")}); training cost unknown.`);
+    }
+  } else if (candidate.subtype && ARMOR_TYPES.includes(candidate.subtype)) {
     if (wearsArmorType(character, candidate.subtype)) evidence.push({ kind: "OBSERVED", statement: `${label(character)} already wears ${candidate.subtype} armor, so the armor type is usable.`, source: "observed equipment" });
     else prerequisites.push(`Confirm ${label(character)} can wear ${candidate.subtype}; no ${candidate.subtype} item is currently equipped, and class armor rules are not captured.`);
   } else if (candidate.subtype && candidate.slot && /Hand/.test(candidate.slot)) {
@@ -1146,8 +1167,8 @@ const PLAYER_CONTROL = "Read-only advice. WoWSync never plays, buys, sells, mail
 const TOPIC_CATEGORIES: Record<string, string[]> = {
   gear: ["EQUIP_OWNED_ITEM", "TRANSFER_OWNED_ITEM", "DISCOVERED_GEAR", "CRAFT_UPGRADE"],
   professions: ["PROFESSION_CHOICE", "PROFESSION_TRAINING", "PROFESSION_TOOL", "CRAFT_ENHANCEMENT", "SECONDARY_PROFESSION", "CONVERT_MATERIALS"],
-  quests: ["QUEST_TURN_IN", "DISCOVERED_QUESTS", "QUEST_PROGRESS"],
-  class: ["CLASS_TRAINING", "CLASS_QUEST"],
+  quests: ["QUEST_ROUTE", "QUEST_TURN_IN", "DISCOVERED_QUESTS", "QUEST_PROGRESS", "DUNGEON"],
+  class: ["CLASS_TRAINING", "CLASS_QUEST", "CLASS_TALENTS"],
 };
 
 function topicsFor(objective: CopilotAnswer["objective"], question: string): string[] {
@@ -1194,6 +1215,7 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
   const knowledge = {
     source: knowledgeIndex ? knowledgeIndex.bundle.sources.map((source) => source.name).join("; ") : "No Forever knowledge bundle is installed: answers use account evidence only.",
     refreshedAt: knowledgeIndex?.bundle.builtAt,
+    ageDays: knowledgeIndex ? Math.max(0, Math.floor((Date.now() - Date.parse(knowledgeIndex.bundle.builtAt)) / 86_400_000)) : undefined,
     available: knowledgeIndex !== undefined,
     sources: (knowledgeIndex?.bundle.sources ?? []).map(({ name, url, usage, confidence }) => ({ name, url, usage, confidence })),
     systemFacts: [...FOREVER_SYSTEM_FACTS],
@@ -1299,7 +1321,8 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
   }
   if (subject && !subject.trainerVisits.some((visit) => visit.kind === "CLASS")) limitations.push("No class trainer visit has been captured for this character, so training costs are unknown: open the class trainer once and /reload.");
   if (subject) limitations.push("Talents and reputation standings are not captured for Forever.");
-  limitations.push("Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations and quest-giver locations are not in the knowledge base.");
+  limitations.push("Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations are not in the knowledge base.");
+  if (knowledge.ageDays !== undefined && knowledge.ageDays > 7) limitations.push(`Game knowledge was built ${knowledge.ageDays} days ago; newer Forever data may exist.`);
   const otherRealms = [...new Set(summaries.map((summary) => String(summary.realm)))].filter((realm) => !realms.includes(realm));
   const scopeNote = otherRealms.length ? `Realms are separate economies; ${otherRealms.join(", ")} ${otherRealms.length > 1 ? "were" : "was"} not mixed in.` : realms.length > 1 ? `${realms.length} realms, analysed separately: gold, materials and mail never cross realms.` : "All imported Forever characters are on this realm.";
 
@@ -1402,6 +1425,6 @@ export function renderCopilotMarkdown(answer: CopilotAnswer): string {
   lines.push("**What WoWSync could not establish**");
   for (const limitation of answer.limitations) lines.push(`- ${limitation}`);
   lines.push("");
-  lines.push(`*Game knowledge:* ${answer.knowledge.source}${answer.knowledge.refreshedAt ? `, built ${answer.knowledge.refreshedAt.slice(0, 10)}` : ""}${answer.discovery ? ` (${answer.discovery.questsConsidered} quests and ${answer.discovery.gearCandidates} gear candidates checked against this character)` : ""}. ${answer.playerControl}`);
+  lines.push(`*Game knowledge:* ${answer.knowledge.source}${answer.knowledge.refreshedAt ? `, built ${answer.knowledge.refreshedAt.slice(0, 10)}${answer.knowledge.ageDays !== undefined ? ` (${answer.knowledge.ageDays === 0 ? "today" : `${answer.knowledge.ageDays} day${answer.knowledge.ageDays === 1 ? "" : "s"} old`})` : ""}` : ""}${answer.discovery ? ` (${answer.discovery.questsConsidered} quests and ${answer.discovery.gearCandidates} gear candidates checked against this character)` : ""}. ${answer.playerControl}`);
   return lines.join("\n");
 }

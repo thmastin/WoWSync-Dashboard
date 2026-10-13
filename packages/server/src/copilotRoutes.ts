@@ -1,6 +1,6 @@
 import express, { type Express } from "express";
 import { ForeverKnowledgeStore } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
-import { answerForeverCopilot, DashboardReadModel, type CopilotEmphasis, type CopilotObjective, type CopilotRequest, type SnapshotStore } from "@wowsync-dashboard/core";
+import { answerForeverCopilot, collectForeverObservedIds, DashboardReadModel, type CopilotEmphasis, type CopilotObjective, type CopilotRequest, type SnapshotStore } from "@wowsync-dashboard/core";
 
 const OBJECTIVES: readonly CopilotObjective[] = ["IMPROVE_CHARACTER", "MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY", "LEVELING", "GEAR"];
 const EMPHASES = ["IMMEDIATE_POWER", "SELF_SUFFICIENCY", "BALANCED"] as const;
@@ -50,6 +50,9 @@ export function registerCopilotRoutes(app: Express, store: SnapshotStore, knowle
   app.get("/api/versions/forever/knowledge", (_req, res) => {
     if (!knowledge) return res.json({ installed: false, reason: "No knowledge path is configured for this server." });
     res.json(knowledge.status());
+  });
+  app.get("/api/versions/forever/knowledge/observed-ids", (_req, res) => {
+    res.json(collectForeverObservedIds(new DashboardReadModel(store) as never));
   });
   app.put("/api/versions/forever/knowledge", express.raw({ type: "application/octet-stream", limit: "80mb" }), (req, res) => {
     if (!knowledge) return res.status(503).json({ error: "No knowledge path is configured for this server.", code: "KNOWLEDGE_UNCONFIGURED" });

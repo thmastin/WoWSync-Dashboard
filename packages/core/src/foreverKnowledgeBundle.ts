@@ -66,6 +66,9 @@ export interface BundleNpc {
 
 export interface BundleObject { name: string; zones?: number[] }
 
+/** Dungeon instance from QuestieDB's zone table: area IDs, parent zone and entrance coordinates. */
+export interface BundleDungeon { name: string; areas: number[]; parentZone?: number; entrance?: [number, number, number] }
+
 export interface ForeverKnowledgeBundle {
   schema: 2;
   version: "forever";
@@ -76,6 +79,7 @@ export interface ForeverKnowledgeBundle {
   items: Record<string, BundleItem>;
   npcs: Record<string, BundleNpc>;
   objects: Record<string, BundleObject>;
+  dungeons?: Record<string, BundleDungeon>;
   tooltips: { items: Record<string, ForeverItemKnowledge>; spells: Record<string, ForeverSpellKnowledge> };
   /** Recipe spell IDs by profession name (seeded IDs verified to exist in the Forever database). */
   recipesByProfession: Record<string, number[]>;
@@ -137,4 +141,59 @@ export class ForeverKnowledgeIndex {
     return npc.friendly.includes(faction.startsWith("H") ? "H" : "A");
   }
   sourceLabel(id: string): BundleSource | undefined { return this.bundle.sources.find((source) => source.id === id); }
+
+  private dungeonCache?: Array<{ id: number; dungeon: BundleDungeon; npcs: number[]; minLevel?: number; maxLevel?: number }>;
+  /** Dungeons with the creatures QuestieDB places inside them and the level range those creatures span. */
+  dungeons(): Array<{ id: number; dungeon: BundleDungeon; npcs: number[]; minLevel?: number; maxLevel?: number }> {
+    if (this.dungeonCache) return this.dungeonCache;
+    const byArea = new Map<number, number>();
+    for (const [id, dungeon] of Object.entries(this.bundle.dungeons ?? {})) for (const area of dungeon.areas) byArea.set(area, Number(id));
+    const npcs = new Map<number, number[]>();
+    for (const [npcId, npc] of Object.entries(this.bundle.npcs)) {
+      const dungeonId = npc.zone !== undefined ? byArea.get(npc.zone) : undefined;
+      if (dungeonId !== undefined) npcs.set(dungeonId, [...(npcs.get(dungeonId) ?? []), Number(npcId)]);
+    }
+    this.dungeonCache = Object.entries(this.bundle.dungeons ?? {}).map(([id, dungeon]) => {
+      const inside = npcs.get(Number(id)) ?? [];
+      const levels = inside.map((npcId) => this.npc(npcId)?.level).filter((level): level is [number, number] => !!level && level[0] > 0 && level[0] < 70);
+      levels.sort((a, b) => a[0] - b[0]);
+      const trimmed = levels.length > 6 ? levels.slice(Math.floor(levels.length * 0.1), Math.ceil(levels.length * 0.9)) : levels;
+      return { id: Number(id), dungeon, npcs: inside, minLevel: trimmed.length ? Math.min(...trimmed.map((level) => level[0])) : undefined, maxLevel: trimmed.length ? Math.max(...trimmed.map((level) => level[1])) : undefined };
+    });
+    return this.dungeonCache;
+  }
+}
+
+/** IDs the account has actually observed on Forever: equipped/bag/bank items, recipe outputs and reagents, learned recipes, active quests. */
+export interface ForeverObservedIds { items: number[]; spells: number[]; quests: number[] }
+
+// Structural view of the read-model methods used, so this module does not import the read model.
+interface ObservedIdReader {
+  listCharacters(query: { version: "forever" }): Array<{ name: string; realm: string }>;
+  getCharacterEquipment(query: { version: "forever"; name: string; realm: string }): unknown;
+  getCharacterStorage(query: { version: "forever"; name: string; realm: string; storage: "bags" | "bank"; limit: number }): unknown;
+  getCharacterProfessions(query: { version: "forever"; name: string; realm: string }): unknown;
+  getForeverQuestObservation(query: { version: "forever"; name: string; realm: string }): unknown;
+}
+
+export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverObservedIds {
+  type Loose = Record<string, any>;
+  const items = new Set<number>(), spells = new Set<number>(), quests = new Set<number>();
+  const data = (resolution: unknown): Loose | undefined => (resolution as Loose)?.status === "FOUND" ? (resolution as Loose).value?.data : undefined;
+  const ref = (value: unknown) => { const match = typeof value === "string" ? /^item:(\d+)/.exec(value) : null; if (match) items.add(Number(match[1])); };
+  for (const character of readModel.listCharacters({ version: "forever" })) {
+    const query = { version: "forever" as const, name: character.name, realm: character.realm };
+    for (const slot of (data(readModel.getCharacterEquipment(query))?.slots ?? []) as Loose[]) ref(slot.itemRef);
+    for (const storage of ["bags", "bank"] as const) for (const item of (data(readModel.getCharacterStorage({ ...query, storage, limit: 100 }))?.items ?? []) as Loose[]) ref(item.itemRef);
+    for (const profession of (data(readModel.getCharacterProfessions(query))?.recipeKnowledge?.data?.professions ?? []) as Loose[]) {
+      for (const recipe of (profession.recipes ?? []) as Loose[]) {
+        if (typeof recipe.outputItemID === "number") items.add(recipe.outputItemID);
+        if (recipe.learnedState === "OBSERVED_TRUE" && typeof recipe.recipeID === "number") spells.add(recipe.recipeID);
+        for (const slot of (recipe.reagentSlots ?? []) as Loose[]) for (const reagent of (slot.reagents ?? []) as Loose[]) if (typeof reagent.itemID === "number") items.add(reagent.itemID);
+      }
+    }
+    for (const quest of (data(readModel.getForeverQuestObservation(query))?.active ?? []) as Loose[]) if (typeof quest.questID === "number") quests.add(quest.questID);
+  }
+  const sorted = (set: Set<number>) => [...set].sort((a, b) => a - b);
+  return { items: sorted(items), spells: sorted(spells), quests: sorted(quests) };
 }

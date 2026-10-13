@@ -2,6 +2,7 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { extractForeverTrainerVisit, type ForeverTrainerVisit } from "./foreverTrainer.ts";
+import { extractForeverSkillLines, extractForeverTalents, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
@@ -2036,6 +2037,23 @@ export class DashboardReadModel {
     const character = candidates[0];
     const snapshots = this.store.listSnapshots(character.identityKey);
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
+  }
+
+  /** Newest observed Forever skill lines and talents, each from the newest snapshot that carries it. */
+  getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents }> {
+    requireVersion(query.version);
+    if (query.version !== "forever") return { status: "FOUND", value: {} };
+    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    let skills: ForeverSkillLines | undefined;
+    let talents: ForeverTalents | undefined;
+    for (const snapshot of this.store.listSnapshots(candidates[0]!.identityKey)) {
+      skills ??= extractForeverSkillLines(snapshot.parsed, snapshot.id);
+      talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
+      if (skills && talents) break;
+    }
+    return { status: "FOUND", value: { skills, talents } };
   }
 
   /** Newest raw Forever trainer-window capture per trainer frame, scanning the character's history. */

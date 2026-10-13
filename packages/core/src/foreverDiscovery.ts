@@ -8,6 +8,7 @@ import { formatCopper } from "./currency.ts";
 import { ARMOR_SUBCLASS, CLASS_BITS, ITEM_CLASS, NPC_FLAG, RACE_BITS, hasBit, type BundleNpc, type BundleQuest, type ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
 import { foreverItem, foreverSpell, type ForeverItemKnowledge } from "./foreverKnowledge.ts";
 import type { ForeverTrainerService } from "./foreverTrainer.ts";
+import { hubLabel, questHubs, zoneDistance, ZONE_ADJACENCY_NOTE } from "./foreverRouting.ts";
 import { compareToEquipped, describeItem, eligibility, externalItem, label, sameRealmFaction, type CharacterEvidence, type Comparison, type Draft, type EvidenceLine } from "./foreverCopilot.ts";
 
 const ALLIANCE_RACE_BITS = [1, 4, 8, 64];
@@ -99,7 +100,18 @@ export interface DiscoveredQuest {
   classQuest: boolean;
   xpShare?: number;
   rewardUpgrades: GearCandidate[];
+  /** Zone steps from the character's current zone (Classic map baseline); undefined when unknown. */
+  distance?: number;
+  /** Set when the quest belongs to a dungeon (a group activity). */
+  dungeon?: string;
   score: number;
+}
+
+const dungeonAreaCache = new WeakMap<ForeverKnowledgeIndex, Map<number, string>>();
+function dungeonByArea(index: ForeverKnowledgeIndex): Map<number, string> {
+  let map = dungeonAreaCache.get(index);
+  if (!map) { map = new Map(); for (const entry of index.dungeons()) for (const area of entry.dungeon.areas) map.set(area, entry.dungeon.name); dungeonAreaCache.set(index, map); }
+  return map;
 }
 
 export function discoverQuests(index: ForeverKnowledgeIndex, subject: CharacterEvidence, window = 5): DiscoveredQuest[] {
@@ -126,14 +138,15 @@ export function discoverQuests(index: ForeverKnowledgeIndex, subject: CharacterE
     if (!zonePlausible(zone, subject)) continue;
     const classQuest = isSingleClass(quest.classes);
     const xpShare = quest.xp && subject.xp ? quest.xp / subject.xp.xpMax : undefined;
-    const sameZone = zone !== undefined && subject.zone !== undefined && zone === subject.zone;
+    const distance = zoneDistance(subject.zone, zone);
+    const dungeon = quest.zone !== undefined ? dungeonByArea(index).get(quest.zone) : undefined;
     // A quest that starts from a dropped item is only available once that item is in the bags.
     const needsDrop = quest.startItem !== undefined && !subject.held.some((item) => item.itemId === quest.startItem);
     if (needsDrop) missing.push(-quest.startItem!);
     const available = missing.length === 0 && reqLevel <= level;
     results.push({
-      id, quest, zone, starter, starterLocation: index.npcLocation(starter), available, missingPrerequisites: missing, classQuest, xpShare, rewardUpgrades: [],
-      score: (xpShare ?? 0.05) + (sameZone ? 0.35 : 0) + (zone && CAPITALS[subject.brief.faction ?? ""]?.includes(zone) ? 0.1 : 0) + (classQuest ? 0.3 : 0) + (available ? 0.1 : 0) - (missing.length ? 0.1 : 0),
+      id, quest, zone, starter, starterLocation: index.npcLocation(starter), available, missingPrerequisites: missing, classQuest, xpShare, rewardUpgrades: [], distance, dungeon,
+      score: (xpShare ?? 0.05) + (distance === 0 ? 0.35 : distance === 1 ? 0.15 : distance === 2 ? 0 : distance === undefined ? -0.05 : -0.2) + (zone && CAPITALS[subject.brief.faction ?? ""]?.includes(zone) ? 0.1 : 0) + (classQuest ? 0.3 : 0) + (available ? 0.1 : 0) - (missing.length ? 0.1 : 0) - (dungeon ? 0.2 : 0),
     });
   }
   // Same-named variants (e.g. per-race copies) collapse to the best-scoring one.
@@ -180,9 +193,11 @@ function evaluateCandidate(itemId: number, subject: CharacterEvidence, window: n
   const evidence: EvidenceLine[] = [externalItem(item)];
   if (comparison.equippedKnowledge) evidence.push(externalItem(comparison.equippedKnowledge, `${label(subject)} wears ${comparison.equippedKnowledge.name} in ${comparison.slotName} (observed): ${describeItem(comparison.equippedKnowledge)}`));
   else if (comparison.equipped?.empty) evidence.push({ kind: "OBSERVED", statement: `${label(subject)}'s ${comparison.slotName} slot is empty.`, source: "observed equipment", observedAt: subject.equipmentObservedAt });
-  if (baseline?.allowed) evidence.push({ kind: "EXTERNAL", statement: `Proficiency: ${baseline.rule}.`, source: "Classic Era baseline (unverified for Forever)" });
+  if (baseline?.allowed && !check.evidence.some((line) => line.source.startsWith("Forever skill lines"))) evidence.push({ kind: "EXTERNAL", statement: `Proficiency: ${baseline.rule}.`, source: "Classic Era baseline (unverified for Forever)" });
+  evidence.push(...check.evidence.filter((line) => line.source.startsWith("Forever skill lines")));
   evidence.push({ kind: "DERIVED", statement: `Listed-stat difference vs ${comparison.equipped?.empty ? "an empty slot" : comparison.equipped?.name}: ${comparison.deltas.join(", ") || "none"}. Not a simulation; item level alone is not used.`, source: "Forever item records" });
-  return { itemId, item, comparison, prerequisites, evidence, reqLevel, magnitude: comparison.verdict === "FILLS_EMPTY_SLOT" ? 0.5 + comparison.magnitude * 0.5 : comparison.verdict === "UPGRADE" ? 0.35 + comparison.magnitude * 0.65 : comparison.magnitude * 0.4 };
+  const untrained = prerequisites.some((line) => line.startsWith("Train "));
+  return { itemId, item, comparison, prerequisites, evidence, reqLevel, magnitude: (untrained ? 0.7 : 1) * (comparison.verdict === "FILLS_EMPTY_SLOT" ? 0.5 + comparison.magnitude * 0.5 : comparison.verdict === "UPGRADE" ? 0.35 + comparison.magnitude * 0.65 : comparison.magnitude * 0.4) };
 }
 
 export function discoverGear(index: ForeverKnowledgeIndex, subject: CharacterEvidence, economy: CharacterEvidence[], quests: DiscoveredQuest[], window = 5): GearCandidate[] {
@@ -398,7 +413,7 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
   }
 
   // Quests: the strongest available quests, grouped by zone.
-  const availableNow = quests.filter((quest) => quest.available && !quest.classQuest);
+  const availableNow = quests.filter((quest) => quest.available && !quest.classQuest && !quest.dungeon);
   const byZone = new Map<string, DiscoveredQuest[]>();
   for (const quest of availableNow) byZone.set(zoneOf(quest), [...(byZone.get(zoneOf(quest)) ?? []), quest]);
   const zones = [...byZone].sort((a, b) => b[1].reduce((sum, quest) => sum + quest.score, 0) - a[1].reduce((sum, quest) => sum + quest.score, 0)).slice(0, 2);
@@ -478,6 +493,76 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
       unknowns: ["Statuses can change after leveling; reopen the trainer to refresh."],
       nextActions: training.now.length ? ["Visit your class trainer and train the available ranks."] : [`Train at level ${[...training.upcoming.keys()].sort((a, b) => a - b)[0] ?? level + 2}.`],
       value: 0.7, confidence: 1, objectives: ["IMPROVE_CHARACTER", "LEVELING"],
+    });
+  }
+
+  // Quest route: hubs in travel order for the next levels.
+  const routeQuests = quests.filter((quest) => !quest.classQuest && !quest.dungeon && (quest.available || quest.missingPrerequisites.every((id) => id > 0)) && (quest.quest.level ?? 0) <= level + 5);
+  const hubs = questHubs(routeQuests.map((quest) => ({ zone: quest.zone, coord: quest.starter?.coord, giver: quest.starter?.name, item: quest })))
+    .map((hub) => ({ hub, distance: zoneDistance(subject.zone, hub.zone), minLevel: Math.min(...hub.items.map((quest) => quest.quest.level ?? 99)), xp: hub.items.reduce((sum, quest) => sum + (quest.quest.xp ?? 0), 0) }))
+    .filter((entry) => entry.hub.items.length >= 2 || entry.distance === 0)
+    .sort((a, b) => (a.distance ?? 9) - (b.distance ?? 9) || a.minLevel - b.minLevel || b.xp - a.xp)
+    .slice(0, 5);
+  if (hubs.length) drafts.push({
+    id: "quest-route", category: "QUEST_ROUTE",
+    title: `Quest route for levels ${level}-${level + 5}: ${hubs.map((entry) => entry.hub.zone).filter((zone, position, all) => all.indexOf(zone) === position).join(" -> ")}`,
+    what: hubs.map((entry, position) => `(${position + 1}) ${hubLabel(entry.hub)}: ${entry.hub.items.sort((a, b) => (a.quest.level ?? 0) - (b.quest.level ?? 0)).slice(0, 5).map((quest) => `"${quest.quest.name}" (${quest.quest.level ?? "?"})`).join(", ")}`).join("; ") + ".",
+    why: `Picking up quests by hub and moving outward from ${subject.zone ?? "your zone"} saves travel. About ${hubs.reduce((sum, entry) => sum + entry.xp, 0)} XP across these hubs (Classic-seeded XP).`,
+    supports: "IMMEDIATE_POWER", feasibility: "READY_NOW",
+    evidence: [{ kind: "EXTERNAL", statement: `Hubs are quest-giver clusters from QuestieDB coordinates; zone order uses ${ZONE_ADJACENCY_NOTE}.`, source: "QuestieDB Forever + routing baseline" }, { kind: subject.completedState === "UNKNOWN" ? "UNKNOWN" : "OBSERVED", statement: `Quests already completed or in your log are excluded (${subject.completedQuests.size} completed IDs checked).`, source: "Forever C_QuestLog sidecar" }],
+    prerequisites: [], costs: ["Travel and time."], alternatives: [], tradeoffs: [], unknowns: ["Travel time is not estimated.", "Forever-only quests missing from QuestieDB are not routed."],
+    nextActions: [`Start at ${hubLabel(hubs[0].hub)}.`],
+    value: 0.55, confidence: 0.75, objectives: ["LEVELING", "IMPROVE_CHARACTER"],
+  });
+
+  // Dungeons for a group: level range from the creatures inside, entrance on a reachable zone.
+  for (const entry of index.dungeons()) {
+    if (entry.minLevel === undefined || entry.maxLevel === undefined) continue;
+    if (entry.minLevel > level + 6 || entry.maxLevel < level + 2) continue;
+    const entranceZone = entry.dungeon.entrance ? index.zoneName(entry.dungeon.entrance[0]) : index.zoneName(entry.dungeon.parentZone);
+    if (!zonePlausible(entranceZone, actual)) continue;
+    if (entry.maxLevel - entry.minLevel > 15 || entry.minLevel < 8) continue; // raids and city instances span every level
+    const otherCapitals = Object.entries(CAPITALS).filter(([faction]) => faction !== actual.brief.faction).flatMap(([, capitals]) => capitals);
+    if (entranceZone && otherCapitals.includes(entranceZone)) continue;
+    const dungeonQuests = quests.filter((quest) => quest.dungeon === entry.dungeon.name);
+    const drops: GearCandidate[] = [];
+    const inside = new Set(entry.npcs);
+    for (const [itemId, item] of index.items()) {
+      if ((item.cls !== ITEM_CLASS.ARMOR && item.cls !== ITEM_CLASS.WEAPON) || !item.dropNpcs?.some((npcId) => inside.has(npcId))) continue;
+      const evaluated = evaluateCandidate(itemId, subject, Math.max(6, entry.maxLevel - level));
+      if (evaluated && ["UPGRADE", "FILLS_EMPTY_SLOT"].includes(evaluated.comparison.verdict)) drops.push({ ...evaluated, source: { kind: "DROP", detail: `drops in ${entry.dungeon.name}` } });
+    }
+    drops.sort((a, b) => b.magnitude - a.magnitude);
+    if (!dungeonQuests.length && !drops.length) continue;
+    const goAt = Math.max(level, entry.minLevel + 1);
+    drafts.push({
+      id: `dungeon-${entry.id}`, category: "DUNGEON",
+      title: `Dungeon with a group: ${entry.dungeon.name} (creatures level ${entry.minLevel}-${entry.maxLevel})`,
+      what: `Around level ${goAt}, run ${entry.dungeon.name}${entry.dungeon.entrance && entranceZone ? ` (entrance in ${entranceZone} at ${entry.dungeon.entrance[1]}, ${entry.dungeon.entrance[2]})` : ""} with a group${dungeonQuests.length ? `; take ${dungeonQuests.slice(0, 4).map((quest) => `"${quest.quest.name}"`).join(", ")} first` : ""}.`,
+      why: `${dungeonQuests.length ? `${dungeonQuests.length} dungeon quest${dungeonQuests.length > 1 ? "s" : ""} you have not done` : "No dungeon quests found"}${drops.length ? `; upgrades that drop there: ${drops.slice(0, 3).map((drop) => `${drop.item.name} (${drop.comparison.slotName}: ${drop.comparison.deltas.join(", ")})`).join("; ")}` : ""}.`,
+      supports: "IMMEDIATE_POWER", feasibility: goAt > level ? "NEEDS_PROGRESSION" : "NEEDS_INPUTS",
+      evidence: [{ kind: "DERIVED", statement: `Level range from the ${entry.npcs.length} creatures QuestieDB places in ${entry.dungeon.name} (middle 80%).`, source: "QuestieDB Forever" }, ...dungeonQuests.slice(0, 3).map((quest) => ({ kind: "EXTERNAL" as const, statement: `"${quest.quest.name}" (level ${quest.quest.level ?? "?"}${quest.starterLocation ? `, from ${quest.starterLocation}` : ""}).`, source: "QuestieDB Forever" })), ...drops.slice(0, 2).flatMap((drop) => drop.evidence.slice(0, 2))],
+      prerequisites: ["A group of five (not soloable at this level).", ...(goAt > level ? [`Level ${goAt} or so.`] : [])],
+      costs: ["Time; repair costs unknown."], alternatives: [], tradeoffs: ["Drops are random; drop chance is unknown."],
+      unknowns: ["Forever dungeon changes are only as current as QuestieDB."], nextActions: [dungeonQuests[0] ? `Pick up "${dungeonQuests[0].quest.name}"${dungeonQuests[0].starterLocation ? ` from ${dungeonQuests[0].starterLocation}` : ""} before the run.` : `Find a group for ${entry.dungeon.name}.`],
+      value: 0.35 + Math.min(0.2, drops.length * 0.05) + Math.min(0.1, dungeonQuests.length * 0.03), confidence: 0.7, objectives: ["GEAR", "LEVELING", "IMPROVE_CHARACTER"],
+    });
+  }
+
+  // Talents, when the Forever client exposed them.
+  const talents = actual.talents;
+  if (talents) {
+    const spent = talents.trees.reduce((sum, tree) => sum + (tree.pointsSpent ?? 0), 0);
+    drafts.push({
+      id: "talents", category: "CLASS_TALENTS",
+      title: talents.unspentPoints ? `Spend ${talents.unspentPoints} unspent talent point${talents.unspentPoints > 1 ? "s" : ""}` : `Talents: ${spent} point${spent === 1 ? "" : "s"} spent`,
+      what: talents.trees.map((tree) => `${tree.name} ${tree.pointsSpent ?? "?"}${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).length ? ` (${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).map((talent) => `${talent.name} ${talent.currentRank}/${talent.maxRank ?? "?"}`).join(", ")})` : ""}`).join("; ") + ".",
+      why: talents.unspentPoints ? "Unspent talent points are free power." : "Your observed talent choices, for reference when planning gear and abilities.",
+      supports: "IMMEDIATE_POWER", feasibility: "READY_NOW",
+      evidence: [{ kind: "OBSERVED", statement: `Forever talent trees observed${talents.observedAt ? ` ${new Date(talents.observedAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} (${talents.completeness ?? "completeness unknown"}).`, source: `Forever talents section (snapshot ${talents.snapshotId})` }],
+      prerequisites: [], costs: ["None."], alternatives: [], tradeoffs: [], unknowns: ["The co-pilot does not rank talent builds."],
+      nextActions: talents.unspentPoints ? ["Open the talent window and spend your points."] : [],
+      value: talents.unspentPoints ? 0.75 : 0.15, confidence: 1, objectives: ["IMPROVE_CHARACTER"],
     });
   }
 
@@ -607,6 +692,7 @@ export function goldDiscoveryDrafts(index: ForeverKnowledgeIndex, members: Chara
 // Level plan
 
 export interface LevelPlanStep { level: number; training: string[]; quests: string[]; gear: string[]; milestones: string[]; goldNeeded?: number }
+const planQuestOrder = (a: DiscoveredQuest, b: DiscoveredQuest) => (a.distance ?? 9) - (b.distance ?? 9) || (a.zone ?? "").localeCompare(b.zone ?? "") || b.score - a.score;
 
 export function buildLevelPlan(index: ForeverKnowledgeIndex, subject: CharacterEvidence, quests: DiscoveredQuest[], gear: GearCandidate[], training: ReturnType<typeof classTraining>, window = 5): LevelPlanStep[] {
   const level = subject.brief.level;
@@ -617,7 +703,7 @@ export function buildLevelPlan(index: ForeverKnowledgeIndex, subject: CharacterE
     const services = lvl === level ? training?.now ?? [] : training?.upcoming.get(lvl) ?? [];
     const cost = services.reduce((sum, service) => sum + (service.costCopper ?? 0), 0);
     cumulative += cost;
-    const questsHere = quests.filter((quest) => !quest.classQuest && (quest.quest.level ?? 0) === lvl && (quest.quest.reqLevel ?? 0) <= lvl).sort((a, b) => b.score - a.score).slice(0, 4);
+    const questsHere = quests.filter((quest) => !quest.classQuest && !quest.dungeon && (quest.quest.level ?? 0) === lvl && (quest.quest.reqLevel ?? 0) <= lvl).sort((a, b) => b.score - a.score).slice(0, 4).sort(planQuestOrder);
     const gearHere = gear.filter((candidate) => (lvl === level ? candidate.reqLevel <= level : candidate.reqLevel === lvl)).slice(0, 3);
     const chainFollowers = new Set(quests.filter((quest) => quest.classQuest && quest.quest.next !== undefined).map((quest) => quest.quest.next!));
     const milestoneQuests = quests.filter((quest) => quest.classQuest && (quest.quest.reqLevel ?? 0) === lvl && quest.missingPrerequisites.length === 0 && !chainFollowers.has(quest.id));

@@ -83,3 +83,12 @@ test("knowledge bundle status and install routes validate and replace the privat
     }, path.join(dir, "forever-knowledge.json"));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("GET /api/versions/forever/knowledge/observed-ids lists the account's observed IDs read-only", async () => {
+  await withApp(async (base) => {
+    const res = await fetch(base + "/api/versions/forever/knowledge/observed-ids");
+    assert.equal(res.status, 200);
+    const ids = await res.json() as { items: number[]; spells: number[]; quests: number[] };
+    assert.ok(ids.items.includes(10421) && ids.spells.includes(2663) && ids.quests.includes(384));
+  });
+});
