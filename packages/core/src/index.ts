@@ -47,3 +47,6 @@ export * from "./classicState.ts";
 export * from "./classicProgression.ts";
 export * from "./foreverKnowledge.ts";
 export * from "./foreverCopilot.ts";
+export * from "./foreverTrainer.ts";
+export * from "./foreverKnowledgeBundle.ts";
+export { parseLuaLiteral, parseQuestieDataBlock, luaArray, LuaLiteralError } from "./luaLiteral.ts";

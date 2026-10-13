@@ -4,8 +4,9 @@ import { renderMarkdownLite } from "../markdownLite.tsx";
 import { useDialogBehavior } from "../useDialogBehavior.ts";
 
 const EXAMPLES = [
-  "I'm playing Rordin. Look at my character, account, and the game. What are the most valuable things I could do to improve this character, including things I haven't considered?",
-  "Look at my Forever stable and tell me how I can make gold using the characters, professions, and resources I actually have.",
+  { label: "Example: Hallo's next five levels", question: "I'm playing Hallo the druid on the PvE realm. Look at my character, my accessible faction resources, and the wider Forever game. What are the best equipment upgrades, profession choices, quests, and class improvements I should pursue over the next five levels? Compare alternatives, including opportunities I haven't encountered yet." },
+  { label: "Example: improve Rordin", question: "I'm playing Rordin. Look at my character, accessible account resources, and the wider Forever game. What are the most valuable things I could do to improve this character, including upgrades, quests, crafting, training, and opportunities I haven't encountered?" },
+  { label: "Example: stable goldmaking", question: "Look at my Forever stable and tell me how I can make gold using my actual characters, professions, and resources, plus profitable opportunities available in the wider Forever game that I haven't discovered yet." },
 ];
 
 /** Forever Co-Pilot: ask a goal question, get ranked, evidence-backed recommendations. Read-only. */
@@ -54,9 +55,9 @@ export default function ForeverCopilotModal({ onClose }: { onClose: () => void }
         />
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
           <button className="primary-button" onClick={() => ask(question)} disabled={busy || !question.trim()}>{busy ? "Thinking…" : "Ask"}</button>
-          {EXAMPLES.map((example, index) => (
-            <button key={example} className="dev-button" onClick={() => ask(example)} disabled={busy} title={example}>
-              {index === 0 ? "Example: improve Rordin" : "Example: stable goldmaking"}
+          {EXAMPLES.map((example) => (
+            <button key={example.label} className="dev-button" onClick={() => ask(example.question)} disabled={busy} title={example.question}>
+              {example.label}
             </button>
           ))}
         </div>

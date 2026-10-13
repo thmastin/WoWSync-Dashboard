@@ -21,6 +21,7 @@ import {
 } from "@wowsync-dashboard/core";
 import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
 import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
+import { ForeverKnowledgeStore, foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
 import { z } from "zod";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
@@ -157,6 +158,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   const planningApiBaseUrl = resolvePlanningApiBaseUrl(configuration.planningApiBaseUrl);
   const store = new SqliteSnapshotReadStore(configuration.databasePath ?? defaults.databasePath);
   const readModel = new DashboardReadModel(store);
+  const foreverKnowledge = new ForeverKnowledgeStore(foreverKnowledgePath(configuration.databasePath ?? defaults.databasePath));
   const registry = new ResearchRegistry(configuration.researchRoot ?? defaults.researchRoot, DASHBOARD_RESEARCH_REGISTRATIONS);
   const server = new McpServer(
     { name: planningApiBaseUrl ? "wowsync-local-erp" : "wowsync-readonly", version: "0.1.0" },
@@ -176,6 +178,23 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   // serveStdio owns and closes each factory-created server instance. Close its
   // associated read-only database connection when the SDK closes this server.
   server.server.onclose = closeStore;
+  // One stderr line per tool call (name, outcome, duration; never arguments or results) so a host such as
+  // the Secure MCP Tunnel leaves verifiable evidence of which tools a connected client actually used.
+  const registerTool = server.registerTool.bind(server);
+  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) => registerTool(name, config as never, (async (...args: unknown[]) => {
+    const started = Date.now();
+    let outcome = "ok";
+    try {
+      const result = await handler(...args) as { isError?: boolean };
+      if (result?.isError) outcome = "error";
+      return result;
+    } catch (error) {
+      outcome = "exception";
+      throw error;
+    } finally {
+      process.stderr.write(`WoWSync MCP tool=${name} outcome=${outcome} ms=${Date.now() - started}\n`);
+    }
+  }) as never)) as typeof server.registerTool;
 
   server.registerTool("list_versions", {
     title: "List WoWSync version buckets",
@@ -461,7 +480,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     }).strict(),
     annotations: toolAnnotations,
   }, async ({ format, ...request }) => {
-    const answer = answerForeverCopilot(readModel, request);
+    const answer = answerForeverCopilot(readModel, request, foreverKnowledge.get());
     if (format === "markdown") return textResult({ status: answer.status, markdown: answer.markdown });
     return textResult(answer);
   });

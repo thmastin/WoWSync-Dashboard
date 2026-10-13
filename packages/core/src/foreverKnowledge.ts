@@ -1,15 +1,13 @@
-// Forever-only external game knowledge.
+// Forever-only external game knowledge, labelled EXTERNAL and never presented as account observations.
 //
-// Two kinds of knowledge live here, both labelled EXTERNAL and never presented as account
-// observations:
-//   1. Database records (items, recipe spells, quests) parsed from Wowhead's Forever database by
-//      tools/forever-knowledge/refresh.ts and committed as foreverKnowledgeData.ts.
-//   2. A short list of curated Forever system facts (beta dates, new systems) with their sources and
-//      a confidence label. Facts that only secondary guides report say so.
+//   1. Database records come from the runtime knowledge bundle (foreverKnowledgeBundle.ts), built by
+//      tools/forever-knowledge/build-bundle.ts from QuestieDB Forever data and Wowhead Forever tooltips.
+//      The bundle is a private cache (not committed); lookups are scoped per request with
+//      useForeverKnowledge().
+//   2. A short list of curated Forever system facts with sources and a confidence label.
 //
-// Nothing here is Retail, Classic Era, Anniversary, or any other version's data: the refresh tool
-// only requests the /forever/ data environment.
-import { FOREVER_KNOWLEDGE_DATA } from "./foreverKnowledgeData.ts";
+// Nothing here is Retail, Classic Era, Anniversary, or any other version's data.
+import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
 
 export interface ForeverItemStat { stat: string; value: number }
 
@@ -58,27 +56,17 @@ export interface ForeverQuestKnowledge {
   id: number;
   name: string;
   level?: number;
+  reqLevel?: number;
   zone?: string;
   summary?: string;
+  /** Quest XP keyed by quest level. QuestieDB's table is seeded from Classic Era (see xpConfidence). */
   xpByLevel: Record<string, number>;
-  coinByLevel: Record<string, number>;
+  xpConfidence: "CLASSIC_SEED_UNVERIFIED";
   reputation: Array<{ faction: string; amount: number }>;
   rewardItemIds: number[];
-  /** Vendor purchase prices Wowhead lists for items referenced on the quest page (e.g. a quest reagent sold by an innkeeper). */
-  vendorBuyPrices: Array<{ itemId: number; name: string; buyPriceCopper: number }>;
-  sourceUrl: string;
-  retrievedAt: string;
-}
-
-export interface ForeverKnowledgeDataset {
-  schema: 1;
-  version: "forever";
+  /** Where the record comes from (QuestieDB Forever); referenceUrl is a page for the player to read. */
   source: string;
-  sourceBaseUrl: string;
-  refreshedAt?: string;
-  items: Record<string, ForeverItemKnowledge>;
-  spells: Record<string, ForeverSpellKnowledge>;
-  quests: Record<string, ForeverQuestKnowledge>;
+  sourceUrl: string;
 }
 
 export type ForeverFactConfidence = "OFFICIAL" | "DATABASE" | "SECONDARY_GUIDES" | "INFERRED_FROM_PRECEDENT";
@@ -137,12 +125,36 @@ export const FOREVER_SYSTEM_FACTS: readonly ForeverSystemFact[] = [
   },
 ];
 
-const dataset = FOREVER_KNOWLEDGE_DATA;
+let current: ForeverKnowledgeIndex | undefined;
 
-export function foreverKnowledgeDataset(): ForeverKnowledgeDataset { return dataset; }
-export function foreverItem(id: number | undefined): ForeverItemKnowledge | undefined { return id === undefined ? undefined : dataset.items[String(id)]; }
-export function foreverSpell(id: number | undefined): ForeverSpellKnowledge | undefined { return id === undefined ? undefined : dataset.spells[String(id)]; }
-export function foreverQuest(id: number | undefined): ForeverQuestKnowledge | undefined { return id === undefined ? undefined : dataset.quests[String(id)]; }
+/** Runs fn with this knowledge index as the active Forever knowledge (undefined = none available). */
+export function useForeverKnowledge<T>(index: ForeverKnowledgeIndex | undefined, fn: () => T): T {
+  const previous = current;
+  current = index;
+  try { return fn(); } finally { current = previous; }
+}
+export function currentForeverKnowledge(): ForeverKnowledgeIndex | undefined { return current; }
+
+const FACTION_NAMES: Record<number, string> = { 47: "Ironforge", 54: "Gnomeregan Exiles", 69: "Darnassus", 72: "Stormwind", 76: "Orgrimmar", 81: "Thunder Bluff", 68: "Undercity", 530: "Darkspear Trolls", 470: "Ratchet", 21: "Booty Bay" };
+
+export function foreverItem(id: number | undefined): ForeverItemKnowledge | undefined { return current?.tooltipItem(id); }
+export function foreverSpell(id: number | undefined): ForeverSpellKnowledge | undefined { return current?.tooltipSpell(id); }
+export function foreverSpells(): ForeverSpellKnowledge[] { return current ? Object.values(current.bundle.tooltips.spells) : []; }
+export function foreverQuest(id: number | undefined): ForeverQuestKnowledge | undefined {
+  if (id === undefined || !current) return undefined;
+  const quest = current.quest(id);
+  if (!quest) return undefined;
+  return {
+    id, name: quest.name, level: quest.level, reqLevel: quest.reqLevel,
+    zone: current.zoneName(quest.zone), summary: quest.text,
+    xpByLevel: quest.xp !== undefined && quest.level !== undefined ? { [quest.level]: quest.xp } : {},
+    xpConfidence: "CLASSIC_SEED_UNVERIFIED",
+    reputation: (quest.rep ?? []).map(([faction, amount]) => ({ faction: FACTION_NAMES[faction] ?? `faction ${faction}`, amount })),
+    rewardItemIds: quest.rewardItems ?? [],
+    source: "QuestieDB Forever",
+    sourceUrl: `https://www.wowhead.com/forever/quest=${id}`,
+  };
+}
 export function foreverSystemFact(key: string): ForeverSystemFact | undefined { return FOREVER_SYSTEM_FACTS.find((fact) => fact.key === key); }
 
 // ---------------------------------------------------------------------------------------------
@@ -207,9 +219,7 @@ export function parseSpellTooltip(id: number, payload: { name?: string; tooltip?
   const toolsBlock = /Tools:<br \/>([\s\S]*?)(?:Reagents:|<div class="q">|<\/td>)/.exec(html)?.[1] ?? "";
   const tools = [...toolsBlock.matchAll(/>([^<>]+)<\/a>/g)].map((match) => decode(match[1]).trim());
   const reagentsBlock = /Reagents:<br \/>([\s\S]*?)(?:<br \/>|<div class="q">)/.exec(html)?.[1] ?? "";
-  const reagents = [...reagentsBlock.matchAll(/item=(\d+)\/[^"]*">([^<]+)<\/a><\/div>|item=(\d+)\/[^"]*">([^<]+)<\/a>&nbsp;\((\d+)\)<\/div>/g)].map((match) => (
-    match[1] ? { itemId: Number(match[1]), name: decode(match[2]), quantity: 1 } : { itemId: Number(match[3]), name: decode(match[4]), quantity: Number(match[5]) }
-  ));
+  const reagents = [...reagentsBlock.matchAll(/item=(\d+)\/[^"]*">([^<]+)<\/a>(?:&nbsp;\((\d+)\))?/g)].map((match) => ({ itemId: Number(match[1]), name: decode(match[2]), quantity: match[3] ? Number(match[3]) : 1 }));
   const created = /<span class="q\d"><a href="\/forever\/item=(\d+)\/[^"]*">[^<]+<\/a><\/span>(?: \((\d+)\))?/.exec(html);
   const description = /<div class="q">([\s\S]*?)<\/div>/.exec(html)?.[1];
   return {
@@ -221,52 +231,6 @@ export function parseSpellTooltip(id: number, payload: { name?: string; tooltip?
     createsMarker: created?.[2] ? Number(created[2]) : undefined,
     description: description ? stripTags(description) : undefined,
     sourceUrl: `https://www.wowhead.com/forever/spell=${id}`,
-    retrievedAt,
-  };
-}
-
-export function parseQuestPage(id: number, html: string, retrievedAt: string): ForeverQuestKnowledge | undefined {
-  const description = /<meta name="description" content="([^"]*)"/.exec(html)?.[1];
-  const title = /<meta property="og:title" content="([^"]*)"/.exec(html)?.[1] ?? /<title>([^<]*)<\/title>/.exec(html)?.[1];
-  if (!description || !title) return undefined;
-  const name = decode(decode(title)).replace(/ - Quest - Forever.*$/, "").replace(/ - Wowhead$/, "").trim();
-  const meta = decode(description);
-  const rewardsJson = /Rewards\((\{[\s\S]*?\})\);/.exec(html)?.[1];
-  let xpByLevel: Record<string, number> = {};
-  let coinByLevel: Record<string, number> = {};
-  if (rewardsJson) {
-    try {
-      const parsed = JSON.parse(rewardsJson) as { xp?: { levels?: Record<string, number> }; coin?: { levels?: Record<string, number> } };
-      xpByLevel = parsed.xp?.levels ?? {};
-      coinByLevel = parsed.coin?.levels ?? {};
-    } catch { /* leave empty: unknown, not zero */ }
-  }
-  const reputation = [...meta.matchAll(/\+(\d+) reputation with ([A-Za-z' -]+?)(?= \+|$)/g)].map((match) => ({ faction: match[2].trim(), amount: Number(match[1]) }));
-  const levelZone = /A level (\d+) (?:(.+?) )?Quest\./.exec(meta);
-  const start = html.indexOf("Rewards</h2>");
-  const end = start >= 0 ? html.indexOf("<h2", start + 12) : -1;
-  const rewardSection = start >= 0 ? html.slice(start, end > start ? end : start + 4_000) : "";
-  const vendorBuyPrices: ForeverQuestKnowledge["vendorBuyPrices"] = [];
-  for (const [, json] of html.matchAll(/WH\.Gatherer\.addData\(3, \d+, (\{[\s\S]*?\})\);/g)) {
-    try {
-      for (const [itemId, entry] of Object.entries(JSON.parse(json) as Record<string, { name_enus?: string; jsonequip?: { buyprice?: number } }>)) {
-        if (typeof entry.jsonequip?.buyprice === "number" && entry.name_enus) vendorBuyPrices.push({ itemId: Number(itemId), name: entry.name_enus, buyPriceCopper: entry.jsonequip.buyprice });
-      }
-    } catch { /* not parseable: no prices */ }
-  }
-  const rewardItemIds = [...new Set([...rewardSection.matchAll(/\/forever\/item=(\d+)/g)].map((match) => Number(match[1])))];
-  return {
-    id,
-    name,
-    level: levelZone ? Number(levelZone[1]) : undefined,
-    zone: levelZone?.[2],
-    summary: meta.replace(/ A level \d+.*$/, "").trim() || undefined,
-    xpByLevel,
-    coinByLevel,
-    reputation,
-    rewardItemIds,
-    vendorBuyPrices,
-    sourceUrl: `https://www.wowhead.com/forever/quest=${id}`,
     retrievedAt,
   };
 }

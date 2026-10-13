@@ -1,192 +1,204 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { answerForeverCopilot, understandObjective, type CopilotAnswer } from "../src/foreverCopilot.ts";
-import { foreverItem, foreverQuest, foreverSpell, parseItemTooltip, parseQuestPage, parseSpellTooltip } from "../src/foreverKnowledge.ts";
+import { ForeverKnowledgeIndex, type ForeverKnowledgeBundle } from "../src/foreverKnowledgeBundle.ts";
+import { ForeverKnowledgeStore } from "../src/foreverKnowledgeStore.ts";
+import { parseItemTooltip, parseSpellTooltip, foreverItem, useForeverKnowledge } from "../src/foreverKnowledge.ts";
+import { extractForeverTrainerVisit } from "../src/foreverTrainer.ts";
+import { luaArray, parseLuaLiteral, parseQuestieDataBlock } from "../src/luaLiteral.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 
-// Real fixtures: the exact import payloads (WOWSYNC text + structured sidecars) the SavedVariables
-// bridge sent for these Forever 1.60.1/70338 characters on 2026-10-11/12.
+// Real fixtures: the exact import payloads (WOWSYNC text + structured sidecars) the SavedVariables bridge
+// sent for these Forever 1.60.1/70338 characters. The knowledge fixture holds real Wowhead Forever
+// tooltip facts for the items/recipes these tests touch and synthetic quest/NPC rows (IDs 99xxxx).
 const FIXTURE_DIR = new URL("./fixtures/forever/", import.meta.url);
 const payload = (name: string) => JSON.parse(readFileSync(new URL(`copilot-${name}.import.json`, FIXTURE_DIR), "utf8")) as { text: string; [key: string]: unknown };
-const NOW = 1_791_840_000;
-const SCENARIO_A = "I'm playing Rordin. Look at my character, account, and the game. What are the most valuable things I could do to improve this character, including things I haven't considered?";
-const SCENARIO_B = "Look at my Forever stable and tell me how I can make gold using the characters, professions, and resources I actually have.";
+const knowledgeJson = readFileSync(new URL("knowledge-fixture.json", FIXTURE_DIR), "utf8");
+const KNOWLEDGE = new ForeverKnowledgeIndex(JSON.parse(knowledgeJson) as ForeverKnowledgeBundle);
+const NOW = 1_791_870_000;
+const SCENARIO_RORDIN = "I'm playing Rordin. Look at my character, accessible account resources, and the wider Forever game. What are the most valuable things I could do to improve this character, including upgrades, quests, crafting, training, and opportunities I haven't encountered?";
+const SCENARIO_HALLO = "I'm playing Hallo the druid on the PvE realm. Look at my character, my accessible faction resources, and the wider Forever game. What are the best equipment upgrades, profession choices, quests, and class improvements I should pursue over the next five levels? Compare alternatives, including opportunities I haven't encountered yet.";
+const SCENARIO_GOLD = "Look at my Forever stable and tell me how I can make gold using my actual characters, professions, and resources, plus profitable opportunities available in the wider Forever game that I haven't discovered yet.";
 
-function importPayload(store: SqliteSnapshotStore, name: string) {
-  const { text, ...extras } = payload(name);
-  store.importSnapshot(text, extras);
-}
-
-function realStable(extra?: (store: SqliteSnapshotStore) => void) {
+function stable(names: string[], extra?: (store: SqliteSnapshotStore) => void) {
   const store = new SqliteSnapshotStore(":memory:");
-  for (const name of ["rordin", "hallo-pvp2", "fizzwick"]) importPayload(store, name);
+  for (const name of names) { const { text, ...extras } = payload(name); store.importSnapshot(text, extras); }
   extra?.(store);
   return { store, read: new DashboardReadModel(store, () => NOW) };
 }
+const ALL = ["rordin", "hallo-pvp2", "fizzwick", "hallo-pve", "natokni", "bramm", "nibwick"];
+const evidenceOf = (answer: CopilotAnswer) => answer.recommendations.flatMap((rec) => rec.evidence);
 
-const otherRealmMiner = (store: SqliteSnapshotStore) => store.importSnapshot(buildWowSyncExport({
-  generatedAt: NOW - 600,
-  character: { name: "Bramm", realm: "Classic Beta PvE", class: "SHAMAN", race: "Dwarf", faction: "Alliance", level: 11, moneyCopper: 319, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" },
-  bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2770::::::::11:1489:::::::::", name: "Copper Ore", qty: 500 }, { itemRef: "item:2318::::::::11:1489:::::::::", name: "Light Leather", qty: 7 }] }] },
-  bank: { unknown: true },
-  professions: { entries: [{ name: "Leatherworking", skill: 36, maxSkill: 75 }, { name: "Skinning", skill: 78, maxSkill: 150 }] },
-}));
-
-const allEvidence = (answer: CopilotAnswer) => answer.recommendations.flatMap((rec) => rec.evidence);
-
-test("Scenario A (real Rordin data): equipping owned upgrades outranks crafting them, with provenance", () => {
-  const { store, read } = realStable();
+test("Scenario Rordin: owned upgrades still lead, and external discovery adds training and trainer recipes", () => {
+  const { store, read } = stable(["rordin", "hallo-pvp2", "fizzwick"]);
   try {
-    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A });
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN, limit: 20 }, KNOWLEDGE);
     assert.equal(answer.status, "ANSWERED");
     assert.equal(answer.subject?.name, "Rordin");
-    assert.ok(answer.objective.objectives.includes("GEAR") && answer.objective.objectives.includes("DEVELOP_PROFESSIONS"), "improve is broader than gear");
-    const [first] = answer.recommendations;
-    assert.equal(first.category, "EQUIP_OWNED_ITEM");
-    assert.equal(first.feasibility, "READY_NOW");
-    assert.match(first.title, /Rough Copper Vest/);
-    assert.ok(first.evidence.some((line) => line.kind === "OBSERVED" && /holds Rough Copper Vest x1 in bags/.test(line.statement)));
-    assert.ok(first.evidence.some((line) => line.kind === "EXTERNAL" && line.source === "https://www.wowhead.com/forever/item=10421"));
-    assert.ok(first.evidence.some((line) => line.kind === "DERIVED" && /\+77 Armor/.test(line.statement)));
-    assert.ok(answer.recommendations.some((rec) => rec.id === "equip-2853"), "Copper Bracers in bags are found too");
-    assert.ok(!answer.recommendations.some((rec) => rec.category === "CRAFT_UPGRADE" && /Copper (Bracers|Vest)/.test(rec.title)), "never recommends crafting an item already owned");
-    assert.ok(answer.challenges.some((challenge) => /already carrying 2 better items/.test(challenge)), "challenges the premise");
-
-    const turnIns = answer.recommendations.find((rec) => rec.id === "quest-turn-ins");
-    assert.ok(turnIns, "ready quests are recommended");
-    assert.match(turnIns!.why, /250 XP/);
-    assert.equal(turnIns!.feasibility, "READY_NOW");
-
-    // An active quest's objective items held (last-seen) by a same-realm character become a mail, not a farm.
-    const ribs = answer.recommendations.find((rec) => rec.id === "quest-384");
-    assert.ok(ribs, "Beer Basted Boar Ribs is promoted because the stable already holds the ribs");
-    assert.equal(ribs!.feasibility, "NEEDS_TRANSFER");
-    assert.match(ribs!.what, /Hallo already has Crag Boar Rib x7 \(last seen, not confirmed current\)/);
-    assert.ok(ribs!.costs.some((line) => /Rhapsody Malt: 50c/.test(line)), "vendor cost comes from the Forever database");
-    assert.ok(ribs!.nextActions.includes("Get Rhapsody Malt."));
-
-    // Cross-character opportunities stay player-controlled and never claim to move anything.
-    const cloak = answer.recommendations.find((rec) => rec.id === "transfer-4658");
-    assert.equal(cloak?.feasibility, "NEEDS_TRANSFER");
-    assert.ok(cloak!.nextActions.some((action) => /You run this; WoWSync never moves items/.test(action)));
-    assert.match(answer.playerControl, /never plays, buys, sells, mails, or moves items/);
-    // Hallo needs her own Mining Pick: it is not treated as a spare.
-    const pick = [...answer.recommendations].find((rec) => rec.id === "tool-mining-pick");
-    if (pick) assert.doesNotMatch(pick.what, /Send Hallo/);
-
-    // Missing evidence is surfaced, not filled in.
-    assert.ok(answer.limitations.some((line) => /Rordin's bank has never been observed/.test(line)));
-    assert.ok(answer.limitations.some((line) => /trainer/i.test(line)));
-    for (const line of allEvidence(answer)) {
-      assert.ok(["OBSERVED", "DERIVED", "LAST_SEEN", "EXTERNAL", "UNKNOWN"].includes(line.kind));
-      if (line.kind === "EXTERNAL") assert.match(line.source, /^https:\/\/(www\.wowhead\.com\/forever\/|us\.forums\.blizzard|blizzardwatch|kami-labs|lfcarry|getboost|classicwowforever|www\.mmoexp|www\.zockify|www\.iggm)/);
-    }
-    assert.ok(answer.markdown.includes("### 1. Equip the Rough Copper Vest"));
+    assert.equal(answer.recommendations[0].id, "equip-10421", "free immediate upgrade is not obscured by discoveries");
+    assert.ok(answer.limitations.some((line) => /No class trainer visit has been captured/.test(line)), "Rordin's only trainer capture is Blacksmithing");
+    assert.ok(answer.recommendations.some((rec) => rec.id === "equip-2853"));
+    assert.ok(answer.challenges.some((line) => /already carrying 2 better items/.test(line)));
+    const trainer = answer.recommendations.concat().find((rec) => rec.id === "profession-trainer-blacksmithing");
+    assert.ok(trainer, "Blacksmithing trainer recipes observed in the client are offered");
+    assert.match(trainer!.what, /Copper Chain Pants at Blacksmithing 15 for 50c/);
+    assert.ok(trainer!.evidence.some((line) => line.kind === "OBSERVED" && /trainer window/.test(line.statement)));
+    assert.equal(answer.knowledge.available, true);
   } finally { store.close(); }
 });
 
-test("Scenario B (real stable): realm-scoped goldmaking with vendor floors, buckets, and no invented market prices", () => {
-  const { store, read } = realStable(otherRealmMiner);
+test("Scenario Hallo: Horde druid discovery respects faction, race zones, completed quests and class", () => {
+  const { store, read } = stable(ALL);
   try {
-    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_B });
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_HALLO }, KNOWLEDGE);
     assert.equal(answer.status, "ANSWERED");
-    assert.equal(answer.subject, undefined);
-    assert.ok(answer.objective.objectives.includes("MAKE_GOLD"));
-    assert.deepEqual([...answer.scope.realms].sort(), ["Classic Beta PvE", "Classic Beta PvP 2"]);
-    assert.ok(answer.challenges.some((line) => /October 21, 2026/.test(line) && /expected to be deleted/.test(line)), "challenges beta goldmaking with the wipe expectation");
-    assert.ok(answer.challenges.some((line) => /Auction House value is UNKNOWN/.test(line)));
-    for (const rec of answer.recommendations) assert.ok(rec.goldBucket, `${rec.id} has a gold bucket`);
+    assert.equal(answer.subject?.realm, "Classic Beta PvE", "'the druid on the PvE realm' disambiguates the two Hallos");
+    assert.equal(answer.subject?.faction, "Horde");
+    const text = JSON.stringify(answer);
+    // Quest discovery.
+    assert.match(text, /Synthetic Plains Errand/, "an unseen Horde quest in her zone is discovered");
+    assert.doesNotMatch(text, /Synthetic Alliance Errand/, "Alliance-only quests are excluded");
+    assert.doesNotMatch(text, /Synthetic Valley Chore/, "another race's starting zone is not suggested at level 6");
+    assert.doesNotMatch(text, /"The Hunt Begins"/, "a quest in her completed history is never offered again");
+    assert.doesNotMatch(text, /Turn in .*The Hunt Begins/, "carried LAST_SEEN quest rows are not treated as active");
+    // Gear from a discovered quest reward, with the proficiency baseline labelled.
+    const mainHand = answer.recommendations.find((rec) => rec.id === "discover-gear-main-hand");
+    assert.ok(mainHand, "a quest-reward weapon upgrade is found");
+    assert.match(mainHand!.what, /Synthetic Plains Errand/);
+    assert.ok(mainHand!.evidence.some((line) => /Classic Era class rules, not verified for Forever/.test(line.statement)));
+    assert.ok(mainHand!.prerequisites.some((line) => /weapon skill/.test(line)));
+    // Class training from the observed Forever trainer window.
+    const training = answer.recommendations.find((rec) => rec.id === "class-training");
+    assert.ok(training);
+    assert.doesNotMatch(training!.what, /Wrath Rank 2/, "a rank trained since (Wrath 2, trained 03:49) is not offered again");
+    assert.match(training!.what, /Level 8: Entangling Roots Rank 1 \(2s 0c\), Healing Touch Rank 2 \(2s 0c\)/);
+    assert.match(training!.what, /Level 10: .*Nature's Grasp Rank 1 \(3s 0c\)/);
+    assert.match(training!.why, /You have 1s 52c; the next five levels of training cost 19s 0c, so you are short by 17s 48c/);
+    // Class quest chain toward Bear Form.
+    const classQuest = answer.recommendations.find((rec) => rec.category === "CLASS_QUEST");
+    assert.ok(classQuest);
+    assert.match(classQuest!.title, /Synthetic Druid Calling -> Synthetic Great Bear Spirit/);
+    // Profession choice: Alliance professionals on her realm are never counted as suppliers.
+    const professions = answer.recommendations.find((rec) => rec.id === "profession-choice");
+    assert.ok(professions);
+    assert.match(professions!.title, /Skinning \+ Leatherworking/);
+    assert.match(professions!.what, /Bramm has Leatherworking but is Alliance \(you are Horde\), so it cannot supply you by mail/);
+    assert.match(professions!.what, /Nibwick has Herbalism but is Alliance/);
+    assert.ok(professions!.evidence.some((line) => /Bramm is Alliance on the same realm: ordinary mail to Hallo \(Horde\) is not possible/.test(line.statement)));
+    // Five-level plan.
+    assert.equal(answer.plan.length, 6);
+    assert.equal(answer.plan[0].level, 6);
+    assert.ok(answer.plan.find((step) => step.level === 10)!.milestones.some((line) => /Synthetic Druid Calling/.test(line)));
+    assert.ok(answer.markdown.includes("**Level plan (6 to 11)**"));
+    for (const line of evidenceOf(answer)) assert.ok(["OBSERVED", "DERIVED", "LAST_SEEN", "EXTERNAL", "UNKNOWN"].includes(line.kind));
+  } finally { store.close(); }
+});
 
-    const smelt = answer.recommendations.find((rec) => rec.id === "convert-2657" && rec.realm === "Classic Beta PvP 2");
-    assert.ok(smelt, "converting the stable's ore is found");
-    assert.ok(smelt!.evidence.some((line) => line.kind === "LAST_SEEN" && /Copper Ore x48 in bank/.test(line.statement)), "last-seen bank stock stays last-seen");
-    assert.ok(smelt!.evidence.some((line) => line.kind === "DERIVED" && /at vendor prices/.test(line.statement)));
-    assert.ok(smelt!.unknowns.includes("Auction House prices."));
-
-    // Realm isolation: the PvE character's 500 Copper Ore never feeds a PvP 2 recommendation.
-    for (const rec of answer.recommendations.filter((entry) => entry.realm === "Classic Beta PvP 2")) {
-      assert.ok(!rec.evidence.some((line) => /Bramm/.test(line.statement)), `${rec.id} does not use another realm's evidence`);
-      assert.doesNotMatch(rec.what, /\b5\d\d Copper Ore/);
+test("Scenario stable gold: economies are realm + faction; inaccessible resources never become inputs", () => {
+  const { store, read } = stable(ALL);
+  try {
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_GOLD }, KNOWLEDGE);
+    assert.equal(answer.status, "ANSWERED");
+    const economies = new Set(answer.recommendations.map((rec) => rec.realm));
+    assert.ok(economies.has("Classic Beta PvE, Horde") && economies.has("Classic Beta PvE, Alliance"), "the PvE realm splits into two faction economies");
+    for (const rec of answer.recommendations.filter((entry) => entry.realm === "Classic Beta PvE, Horde")) {
+      assert.ok(!rec.evidence.some((line) => /\b(Bramm|Nibwick|Tirilanin)\b/.test(line.statement)), `${rec.id} uses no Alliance evidence`);
+      assert.doesNotMatch(rec.nextActions.join(" "), /\b(Bramm|Nibwick)\b/);
     }
-    assert.ok(answer.recommendations.some((rec) => rec.id.startsWith("capture-recipes-forever::classic beta pve::bramm")), "a crafting skill without captured recipes becomes an evidence-gap action");
-    // Holder first: Rordin's own vest upgrade is never routed to someone else.
-    assert.ok(!answer.recommendations.some((rec) => /Give Rough Copper Vest/.test(rec.title)));
-    // No market price is ever stated as a number.
+    for (const rec of answer.recommendations.filter((entry) => entry.realm === "Classic Beta PvE, Alliance")) assert.ok(!rec.evidence.some((line) => /Hallo \(Classic Beta PvE\)|Natokni/.test(line.statement)), `${rec.id} uses no Horde evidence`);
+    assert.ok(answer.recommendations.every((rec) => rec.goldBucket));
+    assert.ok(answer.challenges.some((line) => /Auction House value is UNKNOWN/.test(line)));
     assert.doesNotMatch(answer.markdown, /auction (price|value)[^.]*\d+[gsc]\b/i);
+    assert.ok(answer.recommendations.concat().some((rec) => rec.category === "GATHERING_DISCOVERY") || answer.otherOpportunities.some((other) => /materials worth gathering/.test(other.title)), "gathering discovery uses Forever knowledge");
   } finally { store.close(); }
 });
 
-test("version isolation: non-Forever versions are refused and Forever answers never read other versions", () => {
-  const { store, read } = realStable((s) => s.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 100, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "WARRIOR", level: 60, clientFamily: "Classic", clientVersion: "1.15.7", clientBuild: "60000", interface: "11507" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:12640::::::::60:::::::::", name: "Lionheart Helm", qty: 1 }] }] } })));
+test("without a knowledge bundle the co-pilot answers from account evidence only and says so", () => {
+  const { store, read } = stable(["rordin", "hallo-pvp2"]);
   try {
-    const refused = answerForeverCopilot(read, { version: "retail", question: SCENARIO_A });
-    assert.equal(refused.status, "UNSUPPORTED_VERSION");
-    assert.equal(refused.recommendations.length, 0);
-    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A });
-    assert.equal(answer.subject?.level, 6, "the Forever Rordin, not the Classic Era level 60");
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN });
+    assert.equal(answer.knowledge.available, false);
+    assert.match(answer.knowledge.source, /No Forever knowledge bundle/);
+    assert.ok(!answer.recommendations.some((rec) => rec.category.startsWith("DISCOVERED")));
+    assert.ok(answer.recommendations.some((rec) => rec.id === "quest-turn-ins"), "account-only advice still works");
+    assert.ok(answer.recommendations.every((rec) => rec.evidence.every((line) => line.kind !== "EXTERNAL" || !/wowhead|QuestieDB/.test(line.source))), "no external facts without a bundle");
+  } finally { store.close(); }
+});
+
+test("version isolation and ambiguity", () => {
+  const { store, read } = stable(["rordin", "hallo-pvp2", "hallo-pve"], (s) => s.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 100, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "WARRIOR", level: 60, clientFamily: "Classic", clientVersion: "1.15.7", clientBuild: "60000", interface: "11507" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:12640::::::::60:::::::::", name: "Lionheart Helm", qty: 1 }] }] } })));
+  try {
+    assert.equal(answerForeverCopilot(read, { version: "retail", question: SCENARIO_RORDIN }, KNOWLEDGE).status, "UNSUPPORTED_VERSION");
+    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN }, KNOWLEDGE);
+    assert.equal(answer.subject?.level, 6);
     assert.ok(!JSON.stringify(answer).includes("Lionheart Helm"));
+    assert.equal(answerForeverCopilot(read, { version: "forever", question: "How can Hallo improve?" }, KNOWLEDGE).status, "CHARACTER_AMBIGUOUS");
+    assert.equal(answerForeverCopilot(read, { version: "forever", question: "How can Hallo the hunter improve?" }, KNOWLEDGE).subject?.realm, "Classic Beta PvP 2");
   } finally { store.close(); }
 });
 
-test("ambiguous and unknown characters are reported instead of guessed", () => {
-  const { store, read } = realStable((s) => s.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 50, character: { name: "Hallo", realm: "Classic Beta PvE", class: "DRUID", level: 1, faction: "Horde", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } })));
+test("preferences move ranking and explicit objectives override", () => {
+  const { store, read } = stable(["rordin", "hallo-pvp2", "fizzwick"]);
   try {
-    assert.equal(answerForeverCopilot(read, { version: "forever", question: "How can Hallo improve?" }).status, "CHARACTER_AMBIGUOUS");
-    assert.equal(answerForeverCopilot(read, { version: "forever", question: "How can Hallo improve?", realm: "Classic Beta PvP 2" }).subject?.class, "HUNTER");
-    assert.equal(answerForeverCopilot(read, { version: "forever", question: "x", character: { name: "Nobody" } }).status, "CHARACTER_NOT_FOUND");
-  } finally { store.close(); }
-});
-
-test("preferences change ranking: self-sufficiency lifts profession work, immediate power lifts gear", () => {
-  const { store, read } = realStable();
-  try {
-    const self = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A, preferences: { emphasis: "SELF_SUFFICIENCY" }, limit: 20 });
-    const power = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A, preferences: { emphasis: "IMMEDIATE_POWER" }, limit: 20 });
     const score = (answer: CopilotAnswer, id: string) => answer.recommendations.find((rec) => rec.id === id)?.score.total ?? 0;
+    const self = answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN, preferences: { emphasis: "SELF_SUFFICIENCY" }, limit: 20 }, KNOWLEDGE);
+    const power = answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN, preferences: { emphasis: "IMMEDIATE_POWER" }, limit: 20 }, KNOWLEDGE);
     assert.ok(score(self, "tool-blacksmith-hammer") > score(power, "tool-blacksmith-hammer"));
     assert.ok(score(power, "transfer-4658") > score(self, "transfer-4658"));
-    const avoid = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A, preferences: { avoidSpending: true }, limit: 20 });
-    for (const rec of avoid.recommendations) assert.ok(rec.score.basis.length > 0);
-    const explicit = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A, objectives: ["MAKE_GOLD"] });
-    assert.deepEqual(explicit.objective.objectives, ["MAKE_GOLD"]);
+    assert.deepEqual(answerForeverCopilot(read, { version: "forever", question: SCENARIO_RORDIN, objectives: ["MAKE_GOLD"] }, KNOWLEDGE).objective.objectives, ["MAKE_GOLD"]);
+    assert.ok(self.recommendations.every((rec) => rec.score.confidence > 0 && rec.score.basis.includes("evidence confidence")));
   } finally { store.close(); }
 });
 
-test("recorded goals come from existing ERP projects, never a second store", () => {
-  const { store, read } = realStable();
+test("objective understanding", () => {
+  assert.deepEqual(understandObjective({ version: "forever", question: "how do I make gold with my professions" }).objectives, ["MAKE_GOLD", "DEVELOP_PROFESSIONS"]);
+  assert.ok(understandObjective({ version: "forever", question: "hmm" }).objectives.includes("GEAR"));
+});
+
+test("trainer evidence: Hallo's Forever class trainer capture parses with level, cost and status", () => {
+  const { store } = stable(["hallo-pve"]);
   try {
-    const answer = answerForeverCopilot(read, { version: "forever", question: SCENARIO_A, preferences: { goals: ["Be self-sufficient in copper gear"] } });
-    assert.deepEqual(answer.playerGoals.map((goal) => goal.source), ["this request"]);
+    const snapshot = store.listSnapshots("forever::classic beta pve::hallo")[0]!;
+    const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id)!;
+    assert.equal(visit.kind, "CLASS");
+    assert.equal(visit.serviceCount, 177);
+    const roots = visit.services.find((service) => service.name === "Entangling Roots" && service.rank === "Rank 1")!;
+    assert.deepEqual([roots.level, roots.costCopper, roots.statusAtVisit], [8, 200, "unavailable"]);
+    const bash = visit.services.find((service) => service.name === "Bash" && service.rank === "Rank 1")!;
+    assert.deepEqual([bash.level, bash.costCopper, bash.requires], [14, 900, ["Bear Form (Shapeshift)"]]);
   } finally { store.close(); }
 });
 
-test("objective understanding is deterministic and explains itself", () => {
-  const gold = understandObjective({ version: "forever", question: "how do I make gold with my professions" });
-  assert.deepEqual(gold.objectives, ["MAKE_GOLD", "DEVELOP_PROFESSIONS"]);
-  assert.match(gold.basis, /DERIVED/);
-  const vague = understandObjective({ version: "forever", question: "hmm" });
-  assert.ok(vague.objectives.includes("IMPROVE_CHARACTER") && vague.objectives.includes("GEAR"));
-});
-
-test("knowledge parsers read Forever tooltips and quest pages; the committed dataset is Forever-only", () => {
-  const bracers = parseItemTooltip(2853, { name: "Copper Bracers", quality: 1, tooltip: "<table><tr><td><b class=\"q1\">Copper Bracers</b><span class=\"q\"><br>Item Level <!--ilvl-->7</span><!--bo--><table width=\"100%\"><tr><td>Wrist</td><th><!--scstart4:3--><span class=\"q1\">Mail</span><!--scend--></th></tr></table><!--rf--><span><!--amr-->35 Armor</span><br>Durability 20 / 20</td></tr></table><table><tr><td>Requires Level <!--rlvl-->2<br><div class=\"whtt-sellprice\">Sell Price: <span class=\"moneycopper\">17</span></div></td></tr></table>" }, "2026-10-13T00:00:00Z");
+test("knowledge parsers, Lua literal reader, and the bundle store", () => {
+  const bracers = parseItemTooltip(2853, { name: "Copper Bracers", quality: 1, tooltip: "<span class=\"q\"><br>Item Level <!--ilvl-->7</span><table width=\"100%\"><tr><td>Wrist</td><th><!--scstart4:3--><span class=\"q1\">Mail</span><!--scend--></th></tr></table><span><!--amr-->35 Armor</span><br>Requires Level <!--rlvl-->2<br><div class=\"whtt-sellprice\">Sell Price: <span class=\"moneycopper\">17</span></div>" }, "t");
   assert.deepEqual([bracers?.itemLevel, bracers?.slot, bracers?.subtype, bracers?.armor, bracers?.requiredLevel, bracers?.sellPriceCopper], [7, "Wrist", "Mail", 35, 2, 17]);
-  const recipe = parseSpellTooltip(2663, { name: "Copper Bracers", tooltip: "<table><tr><td>Tools:<br /><div class=\"indent q1\"><a href=\"/forever/items?filter=91;162;0\">Blacksmith Hammer</a></div>Reagents:<br /><div class=\"indent q1\"><a href=\"/forever/item=2840/copper-bar\">Copper Bar</a>&nbsp;(2)</div><br /><span class=\"q1\"><a href=\"/forever/item=2853/copper-bracers\">Copper Bracers</a></span> (2)</td></tr></table>" }, "2026-10-13T00:00:00Z");
-  assert.deepEqual(recipe?.tools, ["Blacksmith Hammer"]);
-  assert.deepEqual(recipe?.reagents, [{ itemId: 2840, name: "Copper Bar", quantity: 2 }]);
-  assert.equal(recipe?.createsItemId, 2853);
-  const quest = parseQuestPage(384, "<title>Beer Basted Boar Ribs - Quest - Forever</title><meta name=\"description\" content=\"Ragnar Thunderbrew in Kharanos wants 6 Crag Boar Ribs and a mug of Rhapsody Malt. A level 7 Quest. +100 reputation with Ironforge +100 reputation with Gnomeregan Exiles\"><h2 class=\"heading-size-3\">Rewards</h2>You will receive: <a href=\"/forever/item=2888/beer-basted-boar-ribs\">x</a><h2>Gains</h2><script>WH.Gatherer.addData(3, 16, {\"2894\":{\"name_enus\":\"Rhapsody Malt\",\"jsonequip\":{\"avgbuyout\":20,\"buyprice\":50,\"sellprice\":12}}});</script><script>Rewards({\"xp\":{\"levels\":{\"7\":630}},\"coin\":{\"levels\":{\"7\":175}}});</script>", "2026-10-13T00:00:00Z");
-  assert.deepEqual([quest?.level, quest?.xpByLevel["7"], quest?.coinByLevel["7"], quest?.rewardItemIds], [7, 630, 175, [2888]]);
-  assert.deepEqual(quest?.reputation, [{ faction: "Ironforge", amount: 100 }, { faction: "Gnomeregan Exiles", amount: 100 }]);
-  assert.deepEqual(quest?.vendorBuyPrices, [{ itemId: 2894, name: "Rhapsody Malt", buyPriceCopper: 50 }], "vendor buy price is kept; auction avgbuyout is never ingested");
-  assert.ok(!JSON.stringify(quest).includes("avgbuyout"));
-  // Committed dataset: values the client also observed agree (Copper Bracers 35 Armor; Rough Copper Vest 108 Armor + 1 Stamina).
-  assert.equal(foreverItem(2853)?.armor, 35);
-  assert.deepEqual([foreverItem(10421)?.armor, foreverItem(10421)?.stats], [108, [{ stat: "Stamina", value: 1 }]]);
-  assert.deepEqual(foreverSpell(2575)?.tools, ["Mining Pick"]);
-  assert.equal(Object.values(foreverQuest(384)?.xpByLevel ?? {})[0], 630);
-  for (const url of [foreverItem(2853)!.sourceUrl, foreverSpell(2663)!.sourceUrl, foreverQuest(384)!.sourceUrl]) assert.match(url, /^https:\/\/www\.wowhead\.com\/forever\//);
+  const boots = parseSpellTooltip(2149, { name: "Handstitched Leather Boots", tooltip: "Reagents:<br /><div class=\"indent q1\"><a href=\"/forever/item=2318/light-leather\">Light Leather</a>&nbsp;(2), <a href=\"/forever/item=2320/coarse-thread\">Coarse Thread</a></div><br /><span class=\"q1\"><a href=\"/forever/item=2307/handstitched-leather-boots\">Handstitched Leather Boots</a></span> (2)" }, "t");
+  assert.deepEqual(boots?.reagents, [{ itemId: 2318, name: "Light Leather", quantity: 2 }, { itemId: 2320, name: "Coarse Thread", quantity: 1 }]);
+  assert.equal(boots?.createsItemId, 2307);
+
+  const parsed = parseQuestieDataBlock("QuestieDB.questData = [[return {\n[384] = {\"Beer Basted Boar Ribs\",{{1267}},nil,5,7,4294967373,nil,{'text'},nil,{nil,nil,{{2886},{2894}}}},\n}]]", "QuestieDB.questData");
+  const row = luaArray(parsed["384"]);
+  assert.equal(row[0], "Beer Basted Boar Ribs");
+  assert.equal(row[2], null, "nil holes keep their position");
+  assert.equal(row[5], 4294967373);
+  assert.throws(() => parseLuaLiteral("{ os.execute('x') }"), /unexpected token/, "code is never evaluated");
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wowsync-knowledge-"));
+  try {
+    const store = new ForeverKnowledgeStore(path.join(dir, "forever-knowledge.json"));
+    assert.equal(store.status().installed, false);
+    assert.throws(() => store.install(JSON.stringify({ schema: 2, version: "retail" })), /Forever knowledge bundle/);
+    const status = store.install(knowledgeJson);
+    assert.equal(status.installed, true);
+    assert.ok(store.get() instanceof ForeverKnowledgeIndex);
+    writeFileSync(path.join(dir, "forever-knowledge.json"), "{not json");
+    assert.equal(store.get(), undefined, "a corrupt file is reported, not used");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  useForeverKnowledge(KNOWLEDGE, () => assert.equal(foreverItem(2853)?.armor, 35));
+  assert.equal(foreverItem(2853), undefined, "knowledge is scoped to the request");
 });

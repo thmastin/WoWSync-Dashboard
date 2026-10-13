@@ -1,6 +1,7 @@
 // Focused, provider-neutral, read-only domain queries. This layer calls the
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
+import { extractForeverTrainerVisit, type ForeverTrainerVisit } from "./foreverTrainer.ts";
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
@@ -2035,6 +2036,24 @@ export class DashboardReadModel {
     const character = candidates[0];
     const snapshots = this.store.listSnapshots(character.identityKey);
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
+  }
+
+  /** Newest raw Forever trainer-window capture per trainer frame, scanning the character's history. */
+  getForeverTrainerVisits(query: CharacterQuery): CharacterResolution<ForeverTrainerVisit[]> {
+    requireVersion(query.version);
+    if (query.version !== "forever") return { status: "FOUND", value: [] };
+    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    const visits = new Map<string, ForeverTrainerVisit>();
+    for (const snapshot of this.store.listSnapshots(candidates[0]!.identityKey)) {
+      const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id);
+      if (!visit) continue;
+      const key = visit.kind;
+      const existing = visits.get(key);
+      if (!existing || (visit.observedAt ?? 0) > (existing.observedAt ?? 0)) visits.set(key, visit);
+    }
+    return { status: "FOUND", value: [...visits.values()] };
   }
 
   private resolveSelectedSnapshot<T>(query: CharacterSnapshotQuery, build: (character: StoredCharacterSummary, snapshot: StoredSnapshot | undefined) => T): CharacterResolution<T> {

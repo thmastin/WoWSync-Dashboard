@@ -25,7 +25,7 @@ test("MCP ask_forever_copilot answers both acceptance questions from real Foreve
     }
   } finally { writer.close(); }
   const client = new Client({ name: "copilot-test", version: "0.0.0" });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json") }, stderr: "pipe" });
   try {
     await client.connect(transport);
     const tool = (await client.listTools()).tools.find((entry) => entry.name === "ask_forever_copilot");
@@ -44,7 +44,7 @@ test("MCP ask_forever_copilot answers both acceptance questions from real Foreve
     const compact = b.structuredContent as { status: string; markdown: string };
     assert.equal(compact.status, "ANSWERED");
     assert.match(compact.markdown, /Supported by resources you already have/);
-    assert.match(compact.markdown, /Smelt Copper/);
+    assert.match(compact.markdown, /Economy: Classic Beta PvP 2, Alliance/);
 
     const wrongVersion = await client.callTool({ name: "ask_forever_copilot", arguments: { version: "retail", question: "x" } });
     assert.equal(wrongVersion.isError, true, "schema refuses non-Forever versions");

@@ -14,13 +14,18 @@
 // - Player control: recommendations never execute anything. Moving items is described as
 //   player-run steps; /bankx transfers always need the player to run each move.
 import type { DashboardReadModel } from "./readModel.ts";
+import type { ForeverTrainerVisit } from "./foreverTrainer.ts";
+import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
+import { discoveryDrafts, goldDiscoveryDrafts, proficiencyBaseline, type LevelPlanStep } from "./foreverDiscovery.ts";
 import { formatCopper } from "./currency.ts";
 import {
   FOREVER_SYSTEM_FACTS,
+  useForeverKnowledge,
+  currentForeverKnowledge,
   foreverItem,
-  foreverKnowledgeDataset,
   foreverQuest,
   foreverSpell,
+  foreverSpells,
   type ForeverItemKnowledge,
   type ForeverSystemFact,
 } from "./foreverKnowledge.ts";
@@ -70,7 +75,7 @@ export interface CopilotRecommendation {
   tradeoffs: string[];
   unknowns: string[];
   nextActions: string[];
-  score: { total: number; value: number; feasibility: number; objectiveFit: number; costPenalty: number; basis: string };
+  score: { total: number; value: number; feasibility: number; objectiveFit: number; confidence: number; costPenalty: number; basis: string };
 }
 
 export interface CopilotCharacterBrief {
@@ -102,7 +107,10 @@ export interface CopilotAnswer {
   recommendations: CopilotRecommendation[];
   otherOpportunities: Array<{ title: string; reason: string }>;
   limitations: string[];
-  knowledge: { source: string; refreshedAt?: string; systemFacts: ForeverSystemFact[] };
+  knowledge: { source: string; refreshedAt?: string; available: boolean; sources: Array<{ name: string; url: string; usage: string; confidence: string }>; systemFacts: ForeverSystemFact[] };
+  /** Level-by-level plan for the subject when external knowledge is available. */
+  plan: LevelPlanStep[];
+  discovery?: { questsConsidered: number; gearCandidates: number; professionOptions: number };
   playerControl: string;
   message?: string;
   markdown: string;
@@ -113,14 +121,14 @@ export interface CopilotAnswer {
 
 // The read model's projections are large discriminated unions; the co-pilot reads a stable subset.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Loose = Record<string, any>;
+export type Loose = Record<string, any>;
 
-interface HeldItem { itemId: number; name: string; qty: number; bound: boolean; storage: "bags" | "bank"; state: EvidenceKind; observedAt?: number; snapshotId?: number }
-interface EquippedItem { slotName: string; itemId?: number; name?: string; empty: boolean; itemLevel?: number }
-interface LearnedRecipe { recipeID: number; name: string; profession: string; outputItemID?: number; outputQuantity?: number; reagents: Array<{ itemId: number; quantity: number }>; canSkillUp?: boolean; numSkillUps?: number; state: EvidenceKind; sourceSnapshotId?: number }
-interface QuestRow { questID: number; title: string; readyForTurnIn: boolean | undefined; isComplete: boolean | undefined; objectives: Array<{ text: string; finished?: boolean; numFulfilled?: number; numRequired?: number }>; state: EvidenceKind; observedAt?: number }
+export interface HeldItem { itemId: number; name: string; qty: number; bound: boolean; storage: "bags" | "bank"; state: EvidenceKind; observedAt?: number; snapshotId?: number }
+export interface EquippedItem { slotName: string; itemId?: number; name?: string; empty: boolean; itemLevel?: number }
+export interface LearnedRecipe { recipeID: number; name: string; profession: string; outputItemID?: number; outputQuantity?: number; reagents: Array<{ itemId: number; quantity: number }>; canSkillUp?: boolean; numSkillUps?: number; state: EvidenceKind; sourceSnapshotId?: number }
+export interface QuestRow { questID: number; title: string; readyForTurnIn: boolean | undefined; isComplete: boolean | undefined; objectives: Array<{ text: string; finished?: boolean; numFulfilled?: number; numRequired?: number }>; state: EvidenceKind; observedAt?: number }
 
-interface CharacterEvidence {
+export interface CharacterEvidence {
   brief: CopilotCharacterBrief;
   query: { version: "forever"; name: string; realm: string };
   xp?: { xp: number; xpMax: number };
@@ -136,6 +144,13 @@ interface CharacterEvidence {
   quests: QuestRow[];
   questState: EvidenceKind;
   questObservedAt?: number;
+  /** Quest IDs the client returned as completed (OBSERVED or carried LAST_SEEN; both mean completed at some point). */
+  completedQuests: Set<number>;
+  completedState: EvidenceKind;
+  /** Every recipe row the client enumerated for a captured profession, learned or not. */
+  catalog: LearnedRecipe[];
+  trainerVisits: ForeverTrainerVisit[];
+  zone?: string;
   snapshotId?: number;
 }
 
@@ -170,10 +185,13 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
   const recipeKnowledge = professionsRead.recipeKnowledge ?? {};
   const recipeState = kindOf(recipeKnowledge.evidence?.state);
   const recipes: LearnedRecipe[] = [];
+  const catalog: LearnedRecipe[] = [];
   for (const profession of (recipeKnowledge.data?.professions ?? []) as Loose[]) {
     for (const recipe of (profession.recipes ?? []) as Loose[]) {
-      if (recipe.learnedState !== "OBSERVED_TRUE" || typeof recipe.recipeID !== "number") continue;
-      recipes.push({
+      if (typeof recipe.recipeID !== "number") continue;
+      const target = recipe.learnedState === "OBSERVED_TRUE" ? recipes : recipe.learnedState === "OBSERVED_FALSE" ? catalog : undefined;
+      if (!target) continue;
+      target.push({
         recipeID: recipe.recipeID,
         name: String(recipe.name ?? recipe.recipeID),
         profession: String(profession.professionName ?? profession.name ?? "Unknown profession"),
@@ -189,7 +207,11 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
   }
   const questResolution = readModel.getForeverQuestObservation(query) as Loose;
   const questData = valueOf(questResolution);
-  const quests: QuestRow[] = ((questData?.active ?? []) as Loose[]).map((quest) => ({
+  const history = questData?.completedHistory as Loose | undefined;
+  const completedQuests = new Set<number>(((history?.questIDs ?? []) as unknown[]).filter((id): id is number => typeof id === "number"));
+  // Only rows the latest refresh actually returned are active; a carried LAST_SEEN row or an ID in the
+  // completed history is not an open quest.
+  const quests: QuestRow[] = ((questData?.active ?? []) as Loose[]).filter((quest) => quest.rowEvidence === "OBSERVED" && !completedQuests.has(Number(quest.questID))).map((quest) => ({
     questID: Number(quest.questID),
     title: String(quest.title ?? quest.questID),
     readyForTurnIn: quest.turnInReadinessState === "OBSERVED" ? Boolean(quest.readyForTurnIn) : undefined,
@@ -198,6 +220,8 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
     state: kindOf(quest.rowEvidence ?? questData?.state),
     observedAt: questData?.observedAt,
   }));
+  const trainerResolution = readModel.getForeverTrainerVisits(query);
+  const trainerVisits = trainerResolution.status === "FOUND" ? trainerResolution.value : [];
   const professionsSection = state.professions ?? {};
   const brief: CopilotCharacterBrief = {
     name: query.name,
@@ -231,6 +255,11 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
     quests,
     questState: kindOf(questData?.state),
     questObservedAt: questData?.observedAt,
+    completedQuests,
+    completedState: kindOf(history?.state),
+    catalog: [...recipes, ...catalog],
+    trainerVisits,
+    zone: state.location?.zone,
     snapshotId: state.provenance?.snapshotId,
   };
 }
@@ -278,6 +307,15 @@ function resolveSubject(request: CopilotRequest, characters: Loose[]): { status:
     const realm = request.realm?.toLowerCase();
     const onRealm = realm ? mentioned.filter((character) => String(character.realm).toLowerCase() === realm) : [];
     if (onRealm.length === 1) return { status: "FOUND", summary: onRealm[0] };
+    // Same name on several realms: use class, race and realm words in the question ("Hallo the druid on the PvE realm").
+    const question = request.question.toLowerCase();
+    const realmWords = (realmName: string) => realmName.toLowerCase().replace(/^classic beta\s*/, "").trim();
+    const scored = mentioned.map((character) => {
+      const realmWord = realmWords(String(character.realm));
+      const score = (character.class && question.includes(String(character.class).toLowerCase()) ? 1 : 0) + (character.race && question.includes(String(character.race).toLowerCase()) ? 1 : 0) + (realmWord && new RegExp(`\\b${realmWord.replace(/[^a-z0-9 ]/g, "")}\\b`).test(question) ? 2 : 0);
+      return { character, score };
+    }).sort((a, b) => b.score - a.score);
+    if (scored[0].score > 0 && scored[0].score > (scored[1]?.score ?? -1)) return { status: "FOUND", summary: scored[0].character };
     return { status: "AMBIGUOUS", message: `${mentioned[0].name} exists on several Forever realms (${mentioned.map((match) => match.realm).join(", ")}). Name the realm.` };
   }
   return { status: "NONE" };
@@ -295,7 +333,7 @@ const SLOT_MAP: Record<string, string[]> = {
 const TOOL_ITEM_IDS = new Set([2901, 5956, 7005, 6219, 6256]);
 const ARMOR_TYPES = ["Cloth", "Leather", "Mail", "Plate"];
 
-interface Comparison {
+export interface Comparison {
   slotName: string;
   equipped?: EquippedItem;
   equippedKnowledge?: ForeverItemKnowledge;
@@ -313,7 +351,7 @@ function statMap(item: ForeverItemKnowledge): Map<string, number> {
   return map;
 }
 
-function compareToEquipped(candidate: ForeverItemKnowledge, character: CharacterEvidence): Comparison | undefined {
+export function compareToEquipped(candidate: ForeverItemKnowledge, character: CharacterEvidence): Comparison | undefined {
   if (!candidate.slot || TOOL_ITEM_IDS.has(candidate.id)) return undefined;
   const slots = SLOT_MAP[candidate.slot];
   if (!slots) return undefined;
@@ -362,7 +400,7 @@ function wearsArmorType(character: CharacterEvidence, subtype: string): boolean 
   return character.equipment.some((slot) => slot.itemId !== undefined && foreverItem(slot.itemId)?.subtype === subtype);
 }
 
-function eligibility(candidate: ForeverItemKnowledge, character: CharacterEvidence): { blocked?: string; prerequisites: string[]; evidence: EvidenceLine[] } {
+export function eligibility(candidate: ForeverItemKnowledge, character: CharacterEvidence): { blocked?: string; prerequisites: string[]; evidence: EvidenceLine[] } {
   const prerequisites: string[] = [];
   const evidence: EvidenceLine[] = [];
   const level = character.brief.level;
@@ -385,9 +423,10 @@ function eligibility(candidate: ForeverItemKnowledge, character: CharacterEviden
 // ---------------------------------------------------------------------------------------------
 // Recommendation construction and ranking
 
-const FEASIBILITY_SCORE: Record<Feasibility, number> = { READY_NOW: 1, NEEDS_TRANSFER: 0.75, NEEDS_INPUTS: 0.55, NEEDS_PROGRESSION: 0.35, UNCERTAIN: 0.3 };
+export const FEASIBILITY_SCORE: Record<Feasibility, number> = { READY_NOW: 1, NEEDS_TRANSFER: 0.75, NEEDS_INPUTS: 0.55, NEEDS_PROGRESSION: 0.35, UNCERTAIN: 0.3 };
 
-interface Draft extends Omit<CopilotRecommendation, "score"> { value: number; goldCost?: number; costUnknown?: boolean; objectives: CopilotObjective[] }
+/** confidence: 1 for account observations, lower for community or Classic-seeded external knowledge. */
+export interface Draft extends Omit<CopilotRecommendation, "score"> { value: number; goldCost?: number; costUnknown?: boolean; objectives: CopilotObjective[]; confidence?: number }
 
 function objectiveFit(draft: Draft, objective: CopilotAnswer["objective"]): number {
   const overlap = draft.objectives.filter((value) => objective.objectives.includes(value)).length;
@@ -410,12 +449,13 @@ function finalize(draft: Draft, objective: CopilotAnswer["objective"], available
     else { costPenalty = Math.min(0.25, draft.goldCost / Math.max(1, availableCopper) * 0.25); costBasis = `costs ${formatCopper(draft.goldCost)} of ${formatCopper(availableCopper)} observed`; }
     if (avoidSpending) costPenalty = Math.min(0.6, costPenalty + 0.2);
   } else if (draft.costUnknown) { costPenalty = 0.1; costBasis = "a cost exists but is not known"; }
-  const total = Math.round((draft.value * 0.45 + feasibility * 0.35 + fit * 0.2) * (1 - costPenalty) * 1000) / 1000;
-  const { value, goldCost: _goldCost, costUnknown: _costUnknown, objectives: _objectives, ...rest } = draft;
-  return { ...rest, score: { total, value: Math.round(value * 1000) / 1000, feasibility, objectiveFit: Math.round(fit * 1000) / 1000, costPenalty: Math.round(costPenalty * 1000) / 1000, basis: `0.45 x value + 0.35 x feasibility (${draft.feasibility}) + 0.20 x objective fit, reduced by cost penalty (${costBasis}).` } };
+  const confidence = draft.confidence ?? 1;
+  const total = Math.round((draft.value * 0.4 + feasibility * 0.3 + fit * 0.15 + confidence * 0.15) * (1 - costPenalty) * 1000) / 1000;
+  const { value, goldCost: _goldCost, costUnknown: _costUnknown, objectives: _objectives, confidence: _confidence, ...rest } = draft;
+  return { ...rest, score: { total, value: Math.round(value * 1000) / 1000, feasibility, objectiveFit: Math.round(fit * 1000) / 1000, confidence, costPenalty: Math.round(costPenalty * 1000) / 1000, basis: `0.40 x value + 0.30 x feasibility (${draft.feasibility}) + 0.15 x objective fit + 0.15 x evidence confidence, reduced by cost penalty (${costBasis}).` } };
 }
 
-function heldEvidence(item: HeldItem, owner: CharacterEvidence): EvidenceLine {
+export function heldEvidence(item: HeldItem, owner: CharacterEvidence): EvidenceLine {
   return {
     kind: item.state === "LAST_SEEN" ? "LAST_SEEN" : item.state === "OBSERVED" ? "OBSERVED" : "UNKNOWN",
     statement: `${label(owner)} ${item.state === "LAST_SEEN" ? "was last seen holding" : "holds"} ${item.name} x${item.qty} in ${item.storage}${item.bound ? " (soulbound)" : ""}${item.state === "LAST_SEEN" ? " (not confirmed current)" : ""}.`,
@@ -424,16 +464,16 @@ function heldEvidence(item: HeldItem, owner: CharacterEvidence): EvidenceLine {
   };
 }
 
-const externalItem = (item: ForeverItemKnowledge, statement?: string): EvidenceLine => ({ kind: "EXTERNAL", statement: statement ?? describeItem(item), source: item.sourceUrl });
+export const externalItem = (item: ForeverItemKnowledge, statement?: string): EvidenceLine => ({ kind: "EXTERNAL", statement: statement ?? describeItem(item), source: item.sourceUrl });
 
-function describeItem(item: ForeverItemKnowledge): string {
+export function describeItem(item: ForeverItemKnowledge): string {
   const parts = [item.slot, item.subtype].filter(Boolean).join(" ");
   const stats = [item.armor ? `${item.armor} Armor` : "", item.dps ? `${item.dps} DPS (${item.damageMin}-${item.damageMax}, ${item.speed} speed)` : "", ...item.stats.map((stat) => `${stat.value > 0 ? "+" : ""}${stat.value} ${stat.stat}`)].filter(Boolean).join(", ");
   return `Forever: ${item.name}${parts ? ` (${parts}` : ""}${item.itemLevel ? `${parts ? ", " : " ("}item level ${item.itemLevel}` : ""}${parts || item.itemLevel ? ")" : ""}${stats ? `: ${stats}` : ""}${item.requiredLevel ? `; requires level ${item.requiredLevel}` : ""}${item.useText ? `; Use: ${item.useText}` : ""}.`;
 }
 
 const labels = new Map<CharacterEvidence, string>();
-const label = (character: CharacterEvidence) => labels.get(character) ?? character.brief.name;
+export const label = (character: CharacterEvidence) => labels.get(character) ?? character.brief.name;
 function assignLabels(characters: CharacterEvidence[]) {
   labels.clear();
   for (const character of characters) {
@@ -442,7 +482,7 @@ function assignLabels(characters: CharacterEvidence[]) {
   }
 }
 
-const sameRealmFaction = (a: CharacterEvidence, b: CharacterEvidence) => a.brief.realm === b.brief.realm && a.brief.faction !== undefined && a.brief.faction === b.brief.faction;
+export const sameRealmFaction = (a: CharacterEvidence, b: CharacterEvidence) => a.brief.realm === b.brief.realm && a.brief.faction !== undefined && a.brief.faction === b.brief.faction;
 
 function sourcesOf(itemId: number, characters: CharacterEvidence[], subject?: CharacterEvidence): Array<{ owner: CharacterEvidence; item: HeldItem }> {
   const result: Array<{ owner: CharacterEvidence; item: HeldItem }> = [];
@@ -453,7 +493,7 @@ function sourcesOf(itemId: number, characters: CharacterEvidence[], subject?: Ch
   return result;
 }
 
-function transferSteps(owner: CharacterEvidence, recipient: CharacterEvidence, item: HeldItem, quantity?: number): string[] {
+export function transferSteps(owner: CharacterEvidence, recipient: CharacterEvidence, item: HeldItem, quantity?: number): string[] {
   const stacks = quantity === undefined ? owner.held.filter((held) => held.itemId === item.itemId && !held.bound) : [item];
   const bank = stacks.filter((held) => held.storage === "bank");
   const total = quantity ?? stacks.reduce((sum, held) => sum + held.qty, 0);
@@ -479,6 +519,8 @@ function generateOwnedGear(subject: CharacterEvidence, characters: CharacterEvid
     if (!comparison || comparison.verdict === "NOT_BETTER" || comparison.verdict === "UNKNOWN") continue;
     const check = eligibility(knowledge, subject);
     if (check.blocked) continue;
+    const baseline = proficiencyBaseline(knowledge, subject);
+    if (baseline && !baseline.allowed) continue;
     seen.add(item.itemId);
     const equippedName = comparison.equipped?.empty ? "an empty slot" : comparison.equipped?.name ?? "the current item";
     const evidence: EvidenceLine[] = [heldEvidence(item, owner), externalItem(knowledge)];
@@ -516,7 +558,8 @@ function generateQuests(subject: CharacterEvidence, characters: CharacterEvidenc
   const remainingXp = subject.xp ? subject.xp.xpMax - subject.xp.xp : undefined;
   const ready = subject.quests.filter((quest) => quest.readyForTurnIn === true);
   if (ready.length) {
-    let xp = 0, coin = 0, unknownRewards = 0;
+    let xp = 0, unknownRewards = 0;
+    const coin = 0;
     const reputation = new Map<string, number>();
     const evidence: EvidenceLine[] = [];
     for (const quest of ready) {
@@ -524,11 +567,9 @@ function generateQuests(subject: CharacterEvidence, characters: CharacterEvidenc
       const knowledge = foreverQuest(quest.questID);
       if (!knowledge) { unknownRewards += 1; continue; }
       const questXp = Object.values(knowledge.xpByLevel)[0];
-      const questCoin = Object.values(knowledge.coinByLevel)[0];
       if (questXp !== undefined) xp += questXp; else unknownRewards += 1;
-      if (questCoin !== undefined) coin += questCoin;
       for (const rep of knowledge.reputation) reputation.set(rep.faction, (reputation.get(rep.faction) ?? 0) + rep.amount);
-      evidence.push({ kind: "EXTERNAL", statement: `Forever quest ${knowledge.name}: ${questXp ?? "?"} XP, ${questCoin !== undefined ? formatCopper(questCoin) : "coin unknown"}${knowledge.reputation.length ? `, ${knowledge.reputation.map((rep) => `+${rep.amount} ${rep.faction}`).join(", ")}` : ""}.`, source: knowledge.sourceUrl });
+      evidence.push({ kind: "EXTERNAL", statement: `Forever quest ${knowledge.name}: ${questXp ?? "?"} XP (Classic-seeded XP table)${knowledge.reputation.length ? `, ${knowledge.reputation.map((rep) => `+${rep.amount} ${rep.faction}`).join(", ")}` : ""}.`, source: `${knowledge.source} (${knowledge.sourceUrl})` });
     }
     const share = remainingXp ? xp / remainingXp : 0;
     if (remainingXp) evidence.push({ kind: "DERIVED", statement: `${xp} XP is ${Math.round(share * 100)}% of the ${remainingXp} XP ${label(subject)} needs for the next level.`, source: "observed XP + Forever quest records" });
@@ -554,17 +595,13 @@ function generateQuests(subject: CharacterEvidence, characters: CharacterEvidenc
   for (const quest of subject.quests.filter((row) => row.readyForTurnIn === false && row.isComplete !== true)) {
     const knowledge = foreverQuest(quest.questID);
     const questXp = knowledge ? Object.values(knowledge.xpByLevel)[0] : undefined;
-    const questCoin = knowledge ? Object.values(knowledge.coinByLevel)[0] : undefined;
+    const questCoin: number | undefined = undefined;
     const open = quest.objectives.filter((objective) => objective.finished === false);
     const evidence: EvidenceLine[] = [{ kind: quest.state === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED", statement: `Active quest "${quest.title}": ${open.map((objective) => objective.text).join("; ") || "objectives not reported"}.`, source: "Forever C_QuestLog sidecar", observedAt: quest.observedAt }];
     const costs: string[] = [];
     let goldCost: number | undefined;
     if (knowledge) {
-      evidence.push({ kind: "EXTERNAL", statement: `Forever quest ${knowledge.name}${knowledge.level ? ` (level ${knowledge.level})` : ""}: ${questXp ?? "?"} XP, ${questCoin !== undefined ? formatCopper(questCoin) : "coin unknown"}${knowledge.reputation.length ? `, ${knowledge.reputation.map((rep) => `+${rep.amount} ${rep.faction}`).join(", ")}` : ""}${knowledge.rewardItemIds.length ? `; rewards ${knowledge.rewardItemIds.map((id) => foreverItem(id)?.name ?? `item ${id}`).join(", ")}` : ""}.`, source: knowledge.sourceUrl });
-      for (const objective of open) {
-        const priced = knowledge.vendorBuyPrices.find((price) => objective.text.toLowerCase().includes(price.name.toLowerCase()));
-        if (priced) { goldCost = (goldCost ?? 0) + priced.buyPriceCopper; costs.push(`${priced.name}: ${formatCopper(priced.buyPriceCopper)} from a vendor (Forever database).`); }
-      }
+      evidence.push({ kind: "EXTERNAL", statement: `Forever quest ${knowledge.name}${knowledge.level ? ` (level ${knowledge.level})` : ""}: ${questXp ?? "?"} XP (Classic-seeded XP table)${knowledge.reputation.length ? `, ${knowledge.reputation.map((rep) => `+${rep.amount} ${rep.faction}`).join(", ")}` : ""}${knowledge.rewardItemIds.length ? `; rewards ${knowledge.rewardItemIds.map((id) => foreverItem(id)?.name ?? `item ${id}`).join(", ")}` : ""}.`, source: `${knowledge.source} (${knowledge.sourceUrl})` });
       const rewardFood = knowledge.rewardItemIds.map((id) => foreverItem(id)).find((item) => item?.useText && /well fed/i.test(item.useText));
       if (rewardFood) evidence.push(externalItem(rewardFood));
     }
@@ -697,7 +734,7 @@ function generateCrafting(subject: CharacterEvidence, characters: CharacterEvide
         transfers.push(...transferSteps(others[0].owner, subject, others[0].item, recipe.canSkillUp ? undefined : Math.max(reagent.quantity - mine, 1)));
       } else {
         // Precursor chain: e.g. Copper Bar <- Smelt Copper <- Copper Ore.
-        const smelt = Object.values(foreverKnowledgeDataset().spells).find((candidate) => candidate.createsItemId === reagent.itemId && candidate.reagents.length > 0);
+        const smelt = foreverSpells().find((candidate) => candidate.createsItemId === reagent.itemId && candidate.reagents.length > 0);
         const precursor = smelt?.reagents[0];
         const precursorSources = precursor ? sourcesOf(precursor.itemId, characters, subject).filter((source) => !source.item.bound) : [];
         const canMakePrecursor = smelt && subject.spells.some((spellName) => /smelting/i.test(spellName) && /smelt/i.test(smelt.name));
@@ -876,8 +913,9 @@ function generateGoldConstraint(subject: CharacterEvidence): Draft[] {
 // Generators: goldmaking (realm-scoped)
 
 function generateGoldmaking(characters: CharacterEvidence[], realm: string): Draft[] {
+  // characters is one economy (same realm and faction, or a single character of unknown faction); realm is its label.
   const drafts: Draft[] = [];
-  const onRealm = characters.filter((character) => character.brief.realm === realm);
+  const onRealm = characters;
   // 1. Vendor floor: grey items that have no use, one line per character.
   const greyRows = onRealm.map((character) => ({ character, greys: character.held.filter((item) => !item.bound && foreverItem(item.itemId)?.quality === 0 && (foreverItem(item.itemId)?.sellPriceCopper ?? 0) > 0) })).filter((row) => row.greys.length);
   if (greyRows.length) {
@@ -904,8 +942,8 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
   }
   // 2. Material conversion: owned reagents + a recipe someone on the realm knows, valued at vendor floor.
   const conversions: Array<{ spellId: number; who: CharacterEvidence[]; why: string }> = [];
-  for (const spell of Object.values(foreverKnowledgeDataset().spells)) {
-    if (!spell.createsItemId || spell.reagents.length !== 1) continue;
+  for (const spell of foreverSpells()) {
+    if (!spell.createsItemId || spell.reagents.length !== 1 || !foreverItem(spell.createsItemId)) continue;
     const input = spell.reagents[0];
     const holders = onRealm.flatMap((owner) => owner.held.filter((item) => item.itemId === input.itemId && !item.bound).map((item) => ({ owner, item })));
     if (!holders.length) continue;
@@ -1026,7 +1064,7 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
   for (const crafter of onRealm) {
     for (const recipe of crafter.recipes) {
       for (const reagent of recipe.reagents) {
-        const chain = Object.values(foreverKnowledgeDataset().spells).find((spell) => spell.createsItemId === reagent.itemId && spell.reagents.length === 1);
+        const chain = foreverSpells().find((spell) => spell.createsItemId === reagent.itemId && spell.reagents.length === 1);
         const rawId = chain?.reagents[0].itemId ?? reagent.itemId;
         const holders = onRealm.filter((owner) => owner !== crafter && sameRealmFaction(owner, crafter)).flatMap((owner) => owner.held.filter((item) => item.itemId === rawId && !item.bound).map((item) => ({ owner, item })));
         if (!holders.length || drafts.some((draft) => draft.id === `allocate-${rawId}-${label(crafter)}`)) continue;
@@ -1092,7 +1130,8 @@ function recipeEvidenceGaps(characters: CharacterEvidence[]): Draft[] {
 }
 
 function goldBucket(rec: CopilotRecommendation): GoldBucket {
-  if (rec.category === "EVIDENCE_GAP") return "NEEDS_INPUTS_OR_PROGRESSION";
+  if (rec.category === "EVIDENCE_GAP" || rec.category === "PROFESSION_INVESTMENT") return "NEEDS_INPUTS_OR_PROGRESSION";
+  if (rec.category === "GATHERING_DISCOVERY") return "MARKET_DEPENDENT";
   if (rec.category === "SELL_ON_MARKET") return "MARKET_DEPENDENT";
   if (rec.category === "GATHERING") return "NEEDS_INPUTS_OR_PROGRESSION";
   if (rec.feasibility === "NEEDS_INPUTS" || rec.feasibility === "NEEDS_PROGRESSION" || rec.feasibility === "UNCERTAIN") return "NEEDS_INPUTS_OR_PROGRESSION";
@@ -1104,10 +1143,62 @@ function goldBucket(rec: CopilotRecommendation): GoldBucket {
 
 const PLAYER_CONTROL = "Read-only advice. WoWSync never plays, buys, sells, mails, or moves items. Every transfer or /bankx move is yours to run, one move at a time.";
 
-export function answerForeverCopilot(readModel: DashboardReadModel, request: CopilotRequest): CopilotAnswer {
+const TOPIC_CATEGORIES: Record<string, string[]> = {
+  gear: ["EQUIP_OWNED_ITEM", "TRANSFER_OWNED_ITEM", "DISCOVERED_GEAR", "CRAFT_UPGRADE"],
+  professions: ["PROFESSION_CHOICE", "PROFESSION_TRAINING", "PROFESSION_TOOL", "CRAFT_ENHANCEMENT", "SECONDARY_PROFESSION", "CONVERT_MATERIALS"],
+  quests: ["QUEST_TURN_IN", "DISCOVERED_QUESTS", "QUEST_PROGRESS"],
+  class: ["CLASS_TRAINING", "CLASS_QUEST"],
+};
+
+function topicsFor(objective: CopilotAnswer["objective"], question: string): string[] {
+  const topics = new Set<string>();
+  if (objective.objectives.includes("GEAR")) topics.add("gear");
+  if (objective.objectives.includes("DEVELOP_PROFESSIONS")) topics.add("professions");
+  if (objective.objectives.includes("LEVELING")) topics.add("quests");
+  if (objective.objectives.includes("IMPROVE_CHARACTER") || /\b(class|train|training|abilit|spell|talent|form)\b/i.test(question)) topics.add("class");
+  return [...topics];
+}
+
+/** Top recommendations, but every requested topic keeps its best item (and gear keeps up to three). */
+function selectWithCoverage(ranked: CopilotRecommendation[], limit: number, topics: string[]): CopilotRecommendation[] {
+  const selected = ranked.slice(0, limit);
+  for (const topic of topics) {
+    const categories = TOPIC_CATEGORIES[topic] ?? [];
+    const want = topic === "gear" ? 3 : topic === "class" ? 2 : 1;
+    const present = selected.filter((rec) => categories.includes(rec.category)).length;
+    const missing = ranked.filter((rec) => categories.includes(rec.category) && !selected.includes(rec)).slice(0, Math.max(0, want - present));
+    selected.push(...missing);
+  }
+  return selected.sort((a, b) => b.score.total - a.score.total);
+}
+
+/** Economies: same realm and same known faction can mail; unknown faction stands alone. */
+export function economiesOf(characters: CharacterEvidence[]): Array<{ key: string; label: string; members: CharacterEvidence[] }> {
+  const map = new Map<string, { key: string; label: string; members: CharacterEvidence[] }>();
+  for (const character of characters) {
+    const faction = character.brief.faction;
+    const key = faction ? `${character.brief.realm}|${faction}` : `${character.brief.realm}|unknown:${character.brief.identityKey}`;
+    const entry = map.get(key) ?? { key, label: faction ? `${character.brief.realm}, ${faction}` : `${character.brief.realm}, faction unknown (${character.brief.name})`, members: [] };
+    entry.members.push(character);
+    map.set(key, entry);
+  }
+  return [...map.values()];
+}
+
+export function answerForeverCopilot(readModel: DashboardReadModel, request: CopilotRequest, knowledgeIndex?: ForeverKnowledgeIndex): CopilotAnswer {
+  return useForeverKnowledge(knowledgeIndex, () => answerWithKnowledge(readModel, request, knowledgeIndex));
+}
+
+function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequest, knowledgeIndex: ForeverKnowledgeIndex | undefined): CopilotAnswer {
   const objective = understandObjective(request);
-  const knowledge = { source: `${foreverKnowledgeDataset().source} (${foreverKnowledgeDataset().sourceBaseUrl})`, refreshedAt: foreverKnowledgeDataset().refreshedAt, systemFacts: [...FOREVER_SYSTEM_FACTS] };
-  const base = { version: request.version, question: request.question, objective, scope: { realms: [], characters: [], note: "" }, playerGoals: [], challenges: [], recommendations: [], otherOpportunities: [], limitations: [], knowledge, playerControl: PLAYER_CONTROL };
+  const knowledge = {
+    source: knowledgeIndex ? knowledgeIndex.bundle.sources.map((source) => source.name).join("; ") : "No Forever knowledge bundle is installed: answers use account evidence only.",
+    refreshedAt: knowledgeIndex?.bundle.builtAt,
+    available: knowledgeIndex !== undefined,
+    sources: (knowledgeIndex?.bundle.sources ?? []).map(({ name, url, usage, confidence }) => ({ name, url, usage, confidence })),
+    systemFacts: [...FOREVER_SYSTEM_FACTS],
+  };
+  const base = { version: request.version, question: request.question, objective, scope: { realms: [], characters: [], note: "" }, playerGoals: [], challenges: [], recommendations: [], otherOpportunities: [], limitations: [], knowledge, playerControl: PLAYER_CONTROL, plan: [] };
   if (request.version !== "forever") {
     const answer: CopilotAnswer = { ...base, status: "UNSUPPORTED_VERSION", message: `The co-pilot answers Forever questions only. "${request.version}" data is never mixed in.`, markdown: "" };
     return { ...answer, markdown: renderCopilotMarkdown(answer) };
@@ -1132,19 +1223,48 @@ export function answerForeverCopilot(readModel: DashboardReadModel, request: Cop
   const drafts: Draft[] = [];
   const wantsCharacter = subject !== undefined;
   const wantsGold = objective.objectives.includes("MAKE_GOLD");
+  let plan: LevelPlanStep[] = [];
+  let discoveryStats: CopilotAnswer["discovery"];
+  if (subject && knowledgeIndex) {
+    const discovered = discoveryDrafts(knowledgeIndex, subject, characters);
+    drafts.push(...discovered.drafts.map((draft) => ({ ...draft, realm: subject.brief.realm })));
+    plan = discovered.plan;
+    discoveryStats = { questsConsidered: discovered.quests.length, gearCandidates: discovered.gear.length, professionOptions: discovered.professions.length };
+  }
   if (subject) {
     drafts.push(...[...generateOwnedGear(subject, characters), ...generateQuests(subject, characters), ...generateProfessionTools(subject, characters), ...generateCrafting(subject, characters), ...generateConsumables(subject, characters), ...generateSecondaryProfessions(subject), ...generateGoldConstraint(subject)].map((draft) => ({ ...draft, realm: subject.brief.realm })));
   }
-  if (wantsGold || !wantsCharacter) for (const realm of realms) drafts.push(...generateGoldmaking(characters, realm));
-  if (subject && objective.objectives.some((value) => value === "SELF_SUFFICIENCY" || value === "DEVELOP_PROFESSIONS")) drafts.push(...generateGoldmaking(characters, subject.brief.realm).filter((draft) => draft.category === "ALLOCATE_RESOURCES" && draft.id.endsWith(subject.brief.name)));
+  const economies = economiesOf(characters);
+  if (wantsGold || !wantsCharacter) for (const economy of economies) {
+    drafts.push(...generateGoldmaking(economy.members, economy.label));
+    if (knowledgeIndex) drafts.push(...goldDiscoveryDrafts(knowledgeIndex, economy.members, economy.label));
+  }
+  if (subject && objective.objectives.some((value) => value === "SELF_SUFFICIENCY" || value === "DEVELOP_PROFESSIONS")) {
+    const own = economies.find((economy) => economy.members.includes(subject));
+    if (own) drafts.push(...generateGoldmaking(own.members, own.label).filter((draft) => draft.category === "ALLOCATE_RESOURCES" && draft.id.endsWith(subject.brief.name)).map((draft) => ({ ...draft, realm: subject.brief.realm })));
+  }
 
+  // Minor active quests collapse into one item so they do not crowd out other topics.
+  const progress = drafts.filter((draft) => draft.category === "QUEST_PROGRESS").sort((a, b) => b.value - a.value);
+  const keepProgress = new Set(progress.filter((draft) => draft.feasibility === "NEEDS_TRANSFER").concat(progress.slice(0, 1)).map((draft) => draft.id));
+  const minor = progress.filter((draft) => !keepProgress.has(draft.id));
+  const compacted = drafts.filter((draft) => draft.category !== "QUEST_PROGRESS" || keepProgress.has(draft.id));
+  if (minor.length > 1) compacted.push({
+    id: "quest-progress-others", category: "QUEST_PROGRESS", realm: minor[0].realm,
+    title: `Keep working the ${minor.length} other quests in your log`,
+    what: minor.map((draft) => `${draft.title.replace(/^Finish /, "")}: ${draft.what.replace(/^Complete: /, "")}`).join(" "),
+    why: "They are already accepted; finishing them while you pass through their areas is the cheapest XP.",
+    supports: "IMMEDIATE_POWER", feasibility: "NEEDS_INPUTS", evidence: minor.flatMap((draft) => draft.evidence.slice(0, 1)), prerequisites: [], costs: ["Time."], alternatives: [], tradeoffs: [], unknowns: [], nextActions: minor.slice(0, 3).flatMap((draft) => draft.nextActions.slice(0, 1)),
+    value: Math.max(...minor.map((draft) => draft.value)), objectives: ["LEVELING", "IMPROVE_CHARACTER"],
+  });
+  else compacted.push(...minor);
   const unique = new Map<string, Draft>();
-  for (const draft of drafts) if (!unique.has(draft.id)) unique.set(draft.id, draft);
+  for (const draft of compacted) if (!unique.has(draft.id)) unique.set(draft.id, draft);
   const available = subject ? subject.brief.gold.copper : undefined;
   const ranked = [...unique.values()].map((draft) => finalize(draft, objective, available, request.preferences?.avoidSpending === true)).map((rec) => wantsGold ? { ...rec, goldBucket: goldBucket(rec) } : rec).sort((a, b) => b.score.total - a.score.total || a.id.localeCompare(b.id));
   const limit = Math.max(1, Math.min(request.limit ?? 10, 20));
   // Stable-wide answers keep realms apart: each realm gets its own top list.
-  const selected = subject ? ranked.slice(0, limit) : realms.flatMap((realm) => ranked.filter((rec) => rec.realm === realm).slice(0, limit));
+  const selected = subject ? selectWithCoverage(ranked, limit, topicsFor(objective, request.question)) : economies.flatMap((economy) => ranked.filter((rec) => rec.realm === economy.label).slice(0, limit));
   const rest = ranked.filter((rec) => !selected.includes(rec));
 
   // Player goals: existing ERP projects are the durable goal store; the co-pilot reads them, never writes.
@@ -1177,7 +1297,8 @@ export function answerForeverCopilot(readModel: DashboardReadModel, request: Cop
     if (character.brief.bankState === "LAST_SEEN") limitations.push(`${label(character)}'s bank is last-seen, not current.`);
     if (character.brief.snapshotFreshness === "stale") limitations.push(`${label(character)}'s latest export is stale (generated ${isoDay(character.brief.generatedAt)}).`);
   }
-  if (subject) limitations.push("Class trainer offers and costs for Forever are not captured (trainer evidence UNKNOWN), so new abilities are not ranked.", "Talents and reputation standings are not captured for Forever.");
+  if (subject && !subject.trainerVisits.some((visit) => visit.kind === "CLASS")) limitations.push("No class trainer visit has been captured for this character, so training costs are unknown: open the class trainer once and /reload.");
+  if (subject) limitations.push("Talents and reputation standings are not captured for Forever.");
   limitations.push("Auction House prices are unavailable; no recommendation depends on an invented price.", "Crafting station locations and quest-giver locations are not in the knowledge base.");
   const otherRealms = [...new Set(summaries.map((summary) => String(summary.realm)))].filter((realm) => !realms.includes(realm));
   const scopeNote = otherRealms.length ? `Realms are separate economies; ${otherRealms.join(", ")} ${otherRealms.length > 1 ? "were" : "was"} not mixed in.` : realms.length > 1 ? `${realms.length} realms, analysed separately: gold, materials and mail never cross realms.` : "All imported Forever characters are on this realm.";
@@ -1196,6 +1317,8 @@ export function answerForeverCopilot(readModel: DashboardReadModel, request: Cop
     limitations: [...new Set(limitations)],
     knowledge,
     playerControl: PLAYER_CONTROL,
+    plan,
+    discovery: discoveryStats,
     markdown: "",
   };
   return { ...answer, markdown: renderCopilotMarkdown(answer) };
@@ -1222,13 +1345,27 @@ export function renderCopilotMarkdown(answer: CopilotAnswer): string {
     lines.push("**Before you start**");
     for (const challenge of answer.challenges) lines.push(`- ${challenge}`);
   }
+  if (answer.plan.length) {
+    lines.push("");
+    lines.push(`**Level plan (${answer.plan[0].level} to ${answer.plan[answer.plan.length - 1].level})**`);
+    for (const step of answer.plan) {
+      const parts = [
+        step.training.length ? `train ${step.training.join(", ")}` : "",
+        step.milestones.length ? step.milestones.join("; ") : "",
+        step.quests.length ? `quests ${step.quests.join(", ")}` : "",
+        step.gear.length ? `gear ${step.gear.join("; ")}` : "",
+      ].filter(Boolean);
+      lines.push(`- **Level ${step.level}:** ${parts.join(" | ") || "keep questing"}${step.goldNeeded ? ` (training so far: ${formatCopper(step.goldNeeded)})` : ""}`);
+    }
+  }
   const BUCKET_TITLES: Record<GoldBucket, string> = { SUPPORTED_NOW: "Supported by resources you already have", NEEDS_INPUTS_OR_PROGRESSION: "Needs more inputs, time, or progression", MARKET_DEPENDENT: "Depends on unknown market prices" };
   const groups: Array<{ heading: string; recs: CopilotRecommendation[] }> = [];
   const realmScore = (realm: string) => answer.recommendations.filter((rec) => (rec.realm ?? "") === realm).reduce((sum, rec) => sum + rec.score.total, 0);
   const realmsInAnswer = [...new Set(answer.recommendations.map((rec) => rec.realm ?? ""))].sort((a, b) => realmScore(b) - realmScore(a));
   for (const realm of realmsInAnswer) {
     const realmRecs = answer.recommendations.filter((rec) => (rec.realm ?? "") === realm);
-    const realmHeading = realmsInAnswer.length > 1 ? `Realm: ${realm} (${answer.scope.characters.filter((character) => character.realm === realm).map((character) => character.name).join(", ")})` : "Recommendations";
+    const members = answer.scope.characters.filter((character) => character.realm === realm || `${character.realm}, ${character.faction}` === realm || realm.endsWith(`(${character.name})`) && realm.startsWith(character.realm));
+    const realmHeading = realmsInAnswer.length > 1 ? `${realm.includes(",") ? "Economy" : "Realm"}: ${realm}${realm.endsWith(")") ? "" : ` (${members.map((character) => character.name).join(", ")})`}` : "Recommendations";
     if (realmRecs.some((rec) => rec.goldBucket)) {
       for (const bucket of ["SUPPORTED_NOW", "NEEDS_INPUTS_OR_PROGRESSION", "MARKET_DEPENDENT"] as GoldBucket[]) {
         const recs = realmRecs.filter((rec) => rec.goldBucket === bucket);
@@ -1265,6 +1402,6 @@ export function renderCopilotMarkdown(answer: CopilotAnswer): string {
   lines.push("**What WoWSync could not establish**");
   for (const limitation of answer.limitations) lines.push(`- ${limitation}`);
   lines.push("");
-  lines.push(`*Game knowledge:* ${answer.knowledge.source}${answer.knowledge.refreshedAt ? `, refreshed ${answer.knowledge.refreshedAt.slice(0, 10)}` : ""}. ${answer.playerControl}`);
+  lines.push(`*Game knowledge:* ${answer.knowledge.source}${answer.knowledge.refreshedAt ? `, built ${answer.knowledge.refreshedAt.slice(0, 10)}` : ""}${answer.discovery ? ` (${answer.discovery.questsConsidered} quests and ${answer.discovery.gearCandidates} gear candidates checked against this character)` : ""}. ${answer.playerControl}`);
   return lines.join("\n");
 }
