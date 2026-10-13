@@ -568,32 +568,46 @@ function generateQuests(subject: CharacterEvidence, characters: CharacterEvidenc
       const rewardFood = knowledge.rewardItemIds.map((id) => foreverItem(id)).find((item) => item?.useText && /well fed/i.test(item.useText));
       if (rewardFood) evidence.push(externalItem(rewardFood));
     }
+    // Objective items another same-realm character already holds turn a farming task into a mail.
+    const supplied: string[] = [];
+    const supplySteps: string[] = [];
+    let coveredObjectives = 0;
     for (const objective of open) {
       const objectiveItem = /\d+\/\d+ (.+)$/.exec(objective.text)?.[1];
       if (!objectiveItem) continue;
+      const needed = Math.max(1, (objective.numRequired ?? 1) - (objective.numFulfilled ?? 0));
       for (const owner of characters) {
         if (owner === subject || !sameRealmFaction(owner, subject)) continue;
-        const match = owner.held.find((item) => item.name.toLowerCase() === objectiveItem.toLowerCase() && !item.bound);
-        if (match) evidence.push(heldEvidence(match, owner));
+        const stacks = owner.held.filter((item) => item.name.toLowerCase() === objectiveItem.toLowerCase() && !item.bound);
+        if (!stacks.length) continue;
+        for (const stack of stacks) evidence.push(heldEvidence(stack, owner));
+        const total = stacks.reduce((sum, stack) => sum + stack.qty, 0);
+        if (total >= needed) {
+          coveredObjectives += 1;
+          supplied.push(`${label(owner)} already has ${objectiveItem} x${total}${stacks.every((stack) => stack.state === "LAST_SEEN") ? " (last seen, not confirmed current)" : stacks.some((stack) => stack.state === "LAST_SEEN") ? " (partly last-seen)" : ""}`);
+          supplySteps.push(...transferSteps(owner, subject, stacks[0], stacks.length === 1 ? needed : undefined));
+          break;
+        }
       }
     }
     const share = subject.xp && questXp ? questXp / (subject.xp.xpMax - subject.xp.xp) : 0;
+    const remainingObjectives = open.filter((objective) => !supplied.some((line) => line.includes(/\d+\/\d+ (.+)$/.exec(objective.text)?.[1] ?? "\u0000")));
     drafts.push({
       id: `quest-${quest.questID}`,
       category: "QUEST_PROGRESS",
-      title: `Finish "${quest.title}"`,
-      what: open.length ? `Complete: ${open.map((objective) => objective.text).join("; ")}.` : `Finish "${quest.title}".`,
+      title: supplied.length ? `Finish "${quest.title}" with items your stable already has` : `Finish "${quest.title}"`,
+      what: `${supplied.length ? `${supplied.join("; ")}: mail it instead of farming. ` : ""}${remainingObjectives.length ? `Complete: ${remainingObjectives.map((objective) => objective.text).join("; ")}.` : "Then turn it in."}`,
       why: knowledge ? `${questXp ?? "?"} XP${questCoin ? `, ${formatCopper(questCoin)}` : ""}${knowledge.reputation.length ? ", reputation" : ""}${knowledge.rewardItemIds.length ? `, and ${knowledge.rewardItemIds.map((id) => foreverItem(id)?.name ?? `item ${id}`).join(" + ")}` : ""}.` : "Rewards are not in the Forever knowledge base.",
       supports: "IMMEDIATE_POWER",
-      feasibility: open.length ? "NEEDS_INPUTS" : "UNCERTAIN",
+      feasibility: open.length === 0 ? "UNCERTAIN" : coveredObjectives > 0 ? "NEEDS_TRANSFER" : "NEEDS_INPUTS",
       evidence,
       prerequisites: knowledge?.level && subject.brief.level !== undefined && knowledge.level > subject.brief.level + 1 ? [`Quest level ${knowledge.level} is above ${label(subject)}'s level ${subject.brief.level}; expect harder enemies.`] : [],
       costs: costs.length ? costs : ["Time; no purchase identified."],
       alternatives: [],
       tradeoffs: [],
       unknowns: knowledge ? [] : ["Quest rewards unknown."],
-      nextActions: open.map((objective) => objective.text).slice(0, 3),
-      value: Math.min(0.9, 0.25 + share * 1.1),
+      nextActions: [...supplySteps, ...remainingObjectives.map((objective) => { const item = /\d+\/\d+ (.+)$/.exec(objective.text)?.[1]; return item ? `Get ${item}${objective.numRequired && objective.numRequired > 1 ? ` x${objective.numRequired - (objective.numFulfilled ?? 0)}` : ""}.` : objective.text; }).slice(0, 3), ...(supplied.length ? [`Turn in "${quest.title}".`] : [])],
+      value: Math.min(0.9, 0.25 + share * 1.1 + (coveredObjectives > 0 ? 0.15 : 0)),
       goldCost,
       objectives: ["LEVELING", "IMPROVE_CHARACTER"],
     });
@@ -1049,7 +1063,12 @@ function recipeEvidenceGaps(characters: CharacterEvidence[]): Draft[] {
     const missing = character.brief.professions.filter((entry) => CRAFTING_PROFESSIONS.includes(entry.name) && entry.skill >= 10 && !character.recipes.some((recipe) => recipe.profession === entry.name));
     if (!missing.length) continue;
     const names = missing.map((profession) => `${profession.name} ${profession.skill}/${profession.maxSkill}`).join(", ");
-    const materials = character.held.filter((item) => !item.bound && foreverItem(item.itemId)?.craftingReagent);
+    const byItem = new Map<number, HeldItem>();
+    for (const item of character.held.filter((held) => !held.bound && foreverItem(held.itemId)?.craftingReagent)) {
+      const existing = byItem.get(item.itemId);
+      byItem.set(item.itemId, existing ? { ...existing, qty: existing.qty + item.qty, state: existing.state === "OBSERVED" && item.state === "OBSERVED" ? "OBSERVED" : "LAST_SEEN" } : item);
+    }
+    const materials = [...byItem.values()];
     drafts.push({
       id: `capture-recipes-${character.brief.identityKey}`,
       category: "EVIDENCE_GAP",

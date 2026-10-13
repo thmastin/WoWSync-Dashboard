@@ -60,6 +60,14 @@ test("Scenario A (real Rordin data): equipping owned upgrades outranks crafting 
     assert.match(turnIns!.why, /250 XP/);
     assert.equal(turnIns!.feasibility, "READY_NOW");
 
+    // An active quest's objective items held (last-seen) by a same-realm character become a mail, not a farm.
+    const ribs = answer.recommendations.find((rec) => rec.id === "quest-384");
+    assert.ok(ribs, "Beer Basted Boar Ribs is promoted because the stable already holds the ribs");
+    assert.equal(ribs!.feasibility, "NEEDS_TRANSFER");
+    assert.match(ribs!.what, /Hallo already has Crag Boar Rib x7 \(last seen, not confirmed current\)/);
+    assert.ok(ribs!.costs.some((line) => /Rhapsody Malt: 50c/.test(line)), "vendor cost comes from the Forever database");
+    assert.ok(ribs!.nextActions.includes("Get Rhapsody Malt."));
+
     // Cross-character opportunities stay player-controlled and never claim to move anything.
     const cloak = answer.recommendations.find((rec) => rec.id === "transfer-4658");
     assert.equal(cloak?.feasibility, "NEEDS_TRANSFER");
