@@ -124,6 +124,9 @@ export function extractForeverClassSpells(parsed: unknown, snapshotId: number): 
   if (!section || !data || data.futureSpellType !== "OBSERVED") return undefined;
   const entries = list(data.entries).map(object).flatMap((row) => row && typeof row.spellID === "number" && typeof row.name === "string"
     ? [{ spellID: row.spellID, name: row.name, ...(typeof row.levelLearned === "number" ? { levelLearned: row.levelLearned } : {}), ...(typeof row.skillLineName === "string" ? { skillLineName: row.skillLineName } : {}) }] : []);
+  // An empty list is not "nothing left to learn": the Forever 1.60.1 spellbook lists no unlearned abilities at all
+  // (observed on Bramm, 2026-10-13), so an empty capture carries no information.
+  if (!entries.length) return undefined;
   return { observedAt: typeof section.observedAt === "number" ? section.observedAt : undefined, snapshotId, entries };
 }
 

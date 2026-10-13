@@ -71,7 +71,8 @@ Main files:
 - Recipes: Classic seed IDs plus every recipe in the account's captured profession catalogs (learned or not); each
   kept only if the Forever database has it. Professions nobody on the account has opened (e.g. Enchanting) stay uncovered.
 - Class abilities: GearExport `classSpellCatalog` records spellbook entries not yet learned with the level the client
-  reports; answers list them with Forever tooltip text; costs come from trainer visits.
+  reports. Forever 1.60.1 lists none (observed 2026-10-13), so in practice upcoming abilities, ranks and costs come
+  from one class trainer visit per character; an empty catalog is treated as UNKNOWN.
 
 ## Rules the engine enforces
 
