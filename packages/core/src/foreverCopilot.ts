@@ -572,13 +572,13 @@ function generateQuests(subject: CharacterEvidence, characters: CharacterEvidenc
       evidence.push({ kind: "EXTERNAL", statement: `Forever quest ${knowledge.name}: ${questXp ?? "?"} XP (Classic-seeded XP table)${knowledge.reputation.length ? `, ${knowledge.reputation.map((rep) => `+${rep.amount} ${rep.faction}`).join(", ")}` : ""}.`, source: `${knowledge.source} (${knowledge.sourceUrl})` });
     }
     const share = remainingXp ? xp / remainingXp : 0;
-    if (remainingXp) evidence.push({ kind: "DERIVED", statement: `${xp} XP is ${Math.round(share * 100)}% of the ${remainingXp} XP ${label(subject)} needs for the next level.`, source: "observed XP + Forever quest records" });
+    if (remainingXp && xp) evidence.push({ kind: "DERIVED", statement: `${xp} XP is ${Math.round(share * 100)}% of the ${remainingXp} XP ${label(subject)} needs for the next level.`, source: "observed XP + Forever quest records" });
     drafts.push({
       id: "quest-turn-ins",
       category: "QUEST_TURN_IN",
       title: `Turn in ${ready.length} finished quest${ready.length > 1 ? "s" : ""}`,
       what: `Hand in ${ready.map((quest) => quest.title).join(", ")}.`,
-      why: `Finished work that pays out ${xp} XP${coin ? ` and ${formatCopper(coin)}` : ""}${reputation.size ? `, plus ${[...reputation].map(([faction, amount]) => `${amount} ${faction} reputation`).join(", ")}` : ""}${unknownRewards ? ` (rewards unknown for ${unknownRewards})` : ""}. Turning in also unlocks follow-up quests.`,
+      why: `Finished work${xp ? ` that pays out ${xp} XP` : ""}${coin ? ` and ${formatCopper(coin)}` : ""}${reputation.size ? `, plus ${[...reputation].map(([faction, amount]) => `${amount} ${faction} reputation`).join(", ")}` : ""}${unknownRewards ? ` (rewards unknown for ${unknownRewards})` : ""}. Turning in also unlocks follow-up quests.`,
       supports: "IMMEDIATE_POWER",
       feasibility: "READY_NOW",
       evidence,
@@ -902,7 +902,7 @@ function generateGoldConstraint(subject: CharacterEvidence): Draft[] {
     costs: [],
     alternatives: [],
     tradeoffs: [],
-    unknowns: ["Forever class-training costs are not captured (trainer evidence is UNKNOWN)."],
+    unknowns: subject.trainerVisits.some((visit) => visit.kind === "CLASS") ? [] : ["Forever class-training costs are not captured for this character (no class trainer visit)."],
     nextActions: [junk.length ? `Vendor grey items (${formatCopper(junkValue)}).` : "Turn in quests for coin.", "Open the class trainer at your next even level so GearExport records abilities and costs."],
     value: 0.35,
     objectives: ["IMPROVE_CHARACTER", "MAKE_GOLD", "LEVELING"],

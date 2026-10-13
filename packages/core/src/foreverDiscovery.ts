@@ -127,6 +127,9 @@ export function discoverQuests(index: ForeverKnowledgeIndex, subject: CharacterE
     const classQuest = isSingleClass(quest.classes);
     const xpShare = quest.xp && subject.xp ? quest.xp / subject.xp.xpMax : undefined;
     const sameZone = zone !== undefined && subject.zone !== undefined && zone === subject.zone;
+    // A quest that starts from a dropped item is only available once that item is in the bags.
+    const needsDrop = quest.startItem !== undefined && !subject.held.some((item) => item.itemId === quest.startItem);
+    if (needsDrop) missing.push(-quest.startItem!);
     const available = missing.length === 0 && reqLevel <= level;
     results.push({
       id, quest, zone, starter, starterLocation: index.npcLocation(starter), available, missingPrerequisites: missing, classQuest, xpShare, rewardUpgrades: [],
@@ -199,7 +202,7 @@ export function discoverGear(index: ForeverKnowledgeIndex, subject: CharacterEvi
   for (const quest of quests) {
     for (const itemId of index.questRewards(quest.id)) {
       const before = out.length;
-      add(itemId, { kind: "QUEST_REWARD", questId: quest.id, detail: `reward from "${quest.quest.name}"${quest.zone ? ` (${quest.zone})` : ""}` }, [{ kind: "EXTERNAL", statement: `QuestieDB lists ${foreverItem(itemId)?.name ?? itemId} as a reward of "${quest.quest.name}" (quest ${quest.id}, level ${quest.quest.level ?? "?"}${quest.starterLocation ? `, from ${quest.starterLocation}` : ""}); it may be one of several choices.`, source: "QuestieDB Forever" }], quest.available ? [] : [`First complete: ${quest.missingPrerequisites.map((id) => index.quest(id)?.name ?? `quest ${id}`).join(", ")}${(quest.quest.reqLevel ?? 0) > (subject.brief.level ?? 0) ? `; requires level ${quest.quest.reqLevel}` : ""}.`]);
+      add(itemId, { kind: "QUEST_REWARD", questId: quest.id, detail: `reward from "${quest.quest.name}"${quest.zone ? ` (${quest.zone})` : ""}` }, [{ kind: "EXTERNAL", statement: `QuestieDB lists ${foreverItem(itemId)?.name ?? itemId} as a reward of "${quest.quest.name}" (quest ${quest.id}, level ${quest.quest.level ?? "?"}${quest.starterLocation ? `, from ${quest.starterLocation}` : ""}); it may be one of several choices.`, source: "QuestieDB Forever" }], quest.available ? [] : [`First complete: ${quest.missingPrerequisites.map((id) => id < 0 ? `loot ${index.item(-id)?.name ?? "the quest-starting item"} (the quest starts from a dropped item)` : index.quest(id)?.name ?? `quest ${id}`).join(", ")}${(quest.quest.reqLevel ?? 0) > (subject.brief.level ?? 0) ? `; requires level ${quest.quest.reqLevel}` : ""}.`]);
       if (out.length > before) quest.rewardUpgrades.push(out[out.length - 1]);
     }
   }
@@ -422,15 +425,15 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
       objectives: ["LEVELING", "IMPROVE_CHARACTER"],
     });
   }
-  const chainQuests = quests.filter((quest) => !quest.available && quest.missingPrerequisites.length && quest.rewardUpgrades.length);
+  const chainQuests = quests.filter((quest) => !quest.available && quest.missingPrerequisites.some((id) => id > 0) && quest.rewardUpgrades.length);
   for (const quest of chainQuests.slice(0, 2)) drafts.push({
     id: `discover-chain-${quest.id}`, category: "DISCOVERED_QUESTS",
     title: `Quest chain toward "${quest.quest.name}"`,
-    what: `Complete ${quest.missingPrerequisites.map((id) => `"${index.quest(id)?.name ?? id}"`).join(", ")} to unlock "${quest.quest.name}"${quest.zone ? ` in ${quest.zone}` : ""}.`,
+    what: `Complete ${quest.missingPrerequisites.map((id) => id < 0 ? `(loot ${index.item(-id)?.name ?? "the starting item"})` : `"${index.quest(id)?.name ?? id}"`).join(", ")} to unlock "${quest.quest.name}"${quest.zone ? ` in ${quest.zone}` : ""}.`,
     why: `Its rewards include ${quest.rewardUpgrades.map((upgrade) => `${upgrade.item.name} (${upgrade.comparison.deltas.join(", ")})`).join("; ")}.`,
     supports: "IMMEDIATE_POWER", feasibility: "NEEDS_PROGRESSION",
     evidence: quest.rewardUpgrades[0].evidence, prerequisites: quest.rewardUpgrades[0].prerequisites, costs: ["Time."], alternatives: [], tradeoffs: [], unknowns: ["Reward may be a choice."],
-    nextActions: [`Start with "${index.quest(quest.missingPrerequisites[0])?.name ?? quest.missingPrerequisites[0]}".`], value: 0.4, confidence: 0.7, objectives: ["LEVELING", "GEAR"],
+    nextActions: [quest.missingPrerequisites[0] < 0 ? `Loot ${index.item(-quest.missingPrerequisites[0])?.name ?? "the starting item"} to start the chain.` : `Start with "${index.quest(quest.missingPrerequisites[0])?.name ?? quest.missingPrerequisites[0]}".`], value: 0.4, confidence: 0.7, objectives: ["LEVELING", "GEAR"],
   });
 
   // Class quests (milestones such as the level 10 druid chain).
@@ -616,7 +619,8 @@ export function buildLevelPlan(index: ForeverKnowledgeIndex, subject: CharacterE
     cumulative += cost;
     const questsHere = quests.filter((quest) => !quest.classQuest && (quest.quest.level ?? 0) === lvl && (quest.quest.reqLevel ?? 0) <= lvl).sort((a, b) => b.score - a.score).slice(0, 4);
     const gearHere = gear.filter((candidate) => (lvl === level ? candidate.reqLevel <= level : candidate.reqLevel === lvl)).slice(0, 3);
-    const milestoneQuests = quests.filter((quest) => quest.classQuest && (quest.quest.reqLevel ?? 0) === lvl && quest.missingPrerequisites.length === 0);
+    const chainFollowers = new Set(quests.filter((quest) => quest.classQuest && quest.quest.next !== undefined).map((quest) => quest.quest.next!));
+    const milestoneQuests = quests.filter((quest) => quest.classQuest && (quest.quest.reqLevel ?? 0) === lvl && quest.missingPrerequisites.length === 0 && !chainFollowers.has(quest.id));
     const milestones = [...new Map(milestoneQuests.sort((a, b) => (a.zone === subject.zone ? -1 : 0) - (b.zone === subject.zone ? -1 : 0)).map((quest) => [quest.quest.name, `Class quest "${quest.quest.name}"${quest.starterLocation ? ` (${quest.starterLocation})` : ""}`] as [string, string])).values()];
     steps.push({
       level: lvl,
