@@ -556,7 +556,7 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
     drafts.push({
       id: "talents", category: "CLASS_TALENTS",
       title: talents.unspentPoints ? `Spend ${talents.unspentPoints} unspent talent point${talents.unspentPoints > 1 ? "s" : ""}` : `Talents: ${spent} point${spent === 1 ? "" : "s"} spent`,
-      what: talents.trees.map((tree) => `${tree.name} ${tree.pointsSpent ?? "?"}${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).length ? ` (${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).map((talent) => `${talent.name} ${talent.currentRank}/${talent.maxRank ?? "?"}`).join(", ")})` : ""}`).join("; ") + ".",
+      what: talents.trees.map((tree) => `${/^Talent tree \d+$/.test(tree.name) ? "Points spent:" : `${tree.name}:`} ${tree.pointsSpent ?? "?"}${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).length ? ` (${tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0).map((talent) => `${talent.name} ${talent.currentRank}/${talent.maxRank ?? "?"}`).join(", ")})` : ""}`).join("; ") + ".",
       why: talents.unspentPoints ? "Unspent talent points are free power." : "Your observed talent choices, for reference when planning gear and abilities.",
       supports: "IMMEDIATE_POWER", feasibility: "READY_NOW",
       evidence: [{ kind: "OBSERVED", statement: `Forever talent trees observed${talents.observedAt ? ` ${new Date(talents.observedAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} (${talents.completeness ?? "completeness unknown"}).`, source: `Forever talents section (snapshot ${talents.snapshotId})` }],
