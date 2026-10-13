@@ -1096,6 +1096,8 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
   const knowledgeIndex = currentForeverKnowledge();
   for (const profession of new Set(onRealm.flatMap((character) => character.brief.professions.map((entry) => entry.name)))) {
     for (const id of knowledgeIndex?.bundle.recipesByProfession[profession] ?? []) for (const reagent of foreverSpell(id)?.reagents ?? []) usedByCrafters.add(reagent.itemId);
+    // Recipe items (patterns, plans, recipes) for a profession someone here has are worth learning, not selling.
+    for (const [id, recipeItem] of Object.entries(knowledgeIndex?.bundle.recipeItems ?? {})) if (recipeItem.profession === profession) usedByCrafters.add(Number(id));
   }
   const surplus = onRealm.flatMap((owner) => owner.held.filter((item) => !item.bound && !TOOL_ITEM_IDS.has(item.itemId) && !foreverItem(item.itemId)?.slot && foreverItem(item.itemId)?.quality !== 0 && !usedByCrafters.has(item.itemId))
     .flatMap((item) => { const market = marketPrice(item.itemId, owner.brief.realm, owner.brief.faction); const vendor = foreverItem(item.itemId)?.sellPriceCopper ?? 0; return market && market.unit! > vendor * 1.5 && (market.price.salesPerDay ?? 0) >= 1 ? [{ owner, item, market, total: market.unit! * item.qty, vendor }] : []; }))
