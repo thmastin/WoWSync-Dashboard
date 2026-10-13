@@ -1,5 +1,13 @@
 # Current WoWSync ERP state — Operations platform source checkpoint (2026-10-11)
 
+**Forever Co-Pilot DEV deployment (2026-10-13, 03:15Z):** guarded promote of `1625aff670889dbc91a95b57ce9080cb2efc0cf1` (`feature/forever-copilot`) from `a11067c` (from `f5dc309`).
+- New: `answerForeverCopilot` (core), MCP `ask_forever_copilot`, REST `POST /api/versions/forever/copilot`, Forever-tab Co-Pilot dialog, Wowhead Forever knowledge dataset and refresh tool. See [`FOREVER_COPILOT.md`](FOREVER_COPILOT.md).
+- Also carries the earlier unpushed fix `578ee6b` (stat explanations within label evidence).
+- Backups integrity ok; schema unchanged; Dashboard and MCP healthy; Herdr untouched.
+- Tests: core 879, MCP 12, server 254 + 2 skips, web 317, typecheck, web build, browser 25/25 (one timing flake on first run).
+- Live: both acceptance questions HTTP 200 on DEV; Retail 422; Rordin project revision 5 unchanged. Connected ChatGPT MCP call pending.
+- Rollback: `wowsync-dev-deploy rollback f5dc309eb29c97205991d859cf2dcda8dc2750fe`.
+
 **DEV deployment (2026-10-12, 20:48Z):** guarded promote of `f5dc309eb29c97205991d859cf2dcda8dc2750fe` from `b5609a5` (GearExport 2c5e9b3 integration).
 - Backup: `/var/lib/wowsync-dev/backups/deploy/20261012T204749.314Z-12884349-b5609a55…-to-f5dc309e….sqlite`, integrity ok. Schema plan `none`; schema unchanged. Dashboard (`/`, `/api/versions`, `/api/account-context` 200) and MCP healthy; Herdr untouched; no journal warnings.
 - Pre-deploy: typecheck 0; core 871, server 253 + 1 skip, MCP 11, web 317, browser e2e 25, deploy-tool 92 all pass; release rebuilt and tested by the deploy tool.
