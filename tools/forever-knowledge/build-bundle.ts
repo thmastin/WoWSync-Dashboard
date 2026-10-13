@@ -1,16 +1,18 @@
 // Builds the private Forever knowledge bundle used by the co-pilot at runtime.
 //
 //   node tools/forever-knowledge/build-bundle.ts --questie <QuestieDB checkout> --out <bundle.json>
-//        [--db <wowsync.sqlite> | --observed-url <Dashboard origin>] [--cache <dir>] [--max-req-level 22] [--offline]
+//        [--db <wowsync.sqlite> | --observed-url <Dashboard origin>] [--cache <dir>] [--max-req-level 60]
+//        [--cache-max-days 14] [--offline]
 //
 // Inputs and their terms:
 //   - QuestieDB (https://github.com/Questie/QuestieDB) data/Forever and support/Forever. The repository
 //     publishes no license, so the output is a private runtime cache: do not commit or redistribute it.
 //   - Wowhead Forever tooltip API (nether.wowhead.com/forever/tooltip/...), one ID per request,
-//     ~3 requests/second, cached under --cache so reruns only fetch new IDs. www.wowhead.com pages are
+//     ~3 requests/second, cached under --cache; entries older than --cache-max-days are refetched so
+//     Forever changes (and launch) reach the bundle. www.wowhead.com pages are
 //     not fetched (its robots policy excludes AI agents). Auction prices are never stored.
 //   - Optional: a WoWSync database (read-only) to add every ID the account has observed.
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { DashboardReadModel, SqliteSnapshotReadStore, collectForeverObservedIds } from "../../packages/core/src/index.ts";
 import { luaArray, parseQuestieDataBlock, type LuaTable, type LuaValue } from "../../packages/core/src/luaLiteral.ts";
@@ -22,7 +24,8 @@ const questieRoot = arg("--questie");
 const out = arg("--out");
 if (!questieRoot || !out) throw new Error("--questie <QuestieDB checkout> and --out <bundle.json> are required");
 const cacheDir = arg("--cache") ?? path.join(path.dirname(out), "forever-tooltip-cache");
-const maxReqLevel = Number(arg("--max-req-level") ?? 22);
+const maxReqLevel = Number(arg("--max-req-level") ?? 60);
+const cacheMaxDays = Number(arg("--cache-max-days") ?? 14);
 const offline = process.argv.includes("--offline");
 mkdirSync(cacheDir, { recursive: true });
 
@@ -120,11 +123,16 @@ const spellTargets = new Set<number>(Object.values(RECIPE_SEEDS).flat());
 for (const id of [2934, 783, 2318, 4232, 2319, 4234, 2770, 2835, 2771, 2836, 2775, 774, 1210, 818, 2840, 2841, 3576, 2447, 765, 2449, 785, 2450, 2452, 2453, 3820, 3355, 2589, 2592, 2320, 2321, 3371, 2324, 4340, 2880, 6260, 2901, 5956, 7005]) itemTargets.add(id);
 for (const [id, item] of Object.entries(items)) {
   if ((item.cls === 2 || item.cls === 4) && (item.reqLevel ?? 0) <= maxReqLevel && (item.questRewards || item.vendors || (item.dropNpcs && item.dropNpcs.length <= 12))) itemTargets.add(Number(id));
-  if (item.cls === 9 && (item.ilvl ?? 0) <= 40) itemTargets.add(Number(id));
+  if (item.cls === 9 && (item.ilvl ?? 0) <= 65) itemTargets.add(Number(id));
 }
 const dbPath = arg("--db");
 const observedUrl = arg("--observed-url");
-const addObserved = (ids: { items: number[]; spells: number[]; quests: number[] }) => { for (const id of ids.items) itemTargets.add(id); for (const id of ids.spells) spellTargets.add(id); };
+const observedRecipes = new Map<string, Set<number>>();
+const addObserved = (ids: { items: number[]; spells: number[]; quests: number[]; recipes?: Record<string, number[]> }) => {
+  for (const id of ids.items) itemTargets.add(id);
+  for (const id of ids.spells) spellTargets.add(id);
+  for (const [profession, list] of Object.entries(ids.recipes ?? {})) for (const id of list) observedRecipes.set(profession, (observedRecipes.get(profession) ?? new Set()).add(id));
+};
 if (dbPath) {
   const store = new SqliteSnapshotReadStore(dbPath);
   try { addObserved(collectForeverObservedIds(new DashboardReadModel(store) as never)); } finally { store.close(); }
@@ -132,15 +140,17 @@ if (dbPath) {
 if (observedUrl) {
   const response = await fetch(new URL("/api/versions/forever/knowledge/observed-ids", observedUrl), { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`observed-ids request failed: HTTP ${response.status}`);
-  addObserved(await response.json() as { items: number[]; spells: number[]; quests: number[] });
+  addObserved(await response.json() as { items: number[]; spells: number[]; quests: number[]; recipes?: Record<string, number[]> });
 }
 
 // ---- Fetch with cache
-let fetched = 0, cached = 0, missing = 0;
+let fetched = 0, cached = 0, missing = 0, expired = 0;
 async function tooltip(kind: "item" | "spell", id: number): Promise<{ name?: string; quality?: number; tooltip?: string } | undefined> {
   const file = path.join(cacheDir, `${kind}-${id}.json`);
-  if (existsSync(file)) { cached += 1; const text = readFileSync(file, "utf8"); return text === "null" ? undefined : JSON.parse(text); }
+  const fresh = existsSync(file) && (offline || Date.now() - statSync(file).mtimeMs < cacheMaxDays * 86_400_000);
+  if (fresh) { cached += 1; const text = readFileSync(file, "utf8"); return text === "null" ? undefined : JSON.parse(text); }
   if (offline) return undefined;
+  if (existsSync(file)) expired += 1;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await fetch(`https://nether.wowhead.com/forever/tooltip/${kind}/${id}`, { headers: { "user-agent": "Mozilla/5.0 (WoWSync personal knowledge cache)" }, signal: AbortSignal.timeout(20_000) });
@@ -173,11 +183,15 @@ for (const id of itemTargets) {
   const parsed = payload ? parseItemTooltip(id, payload, retrievedAt) : undefined;
   if (parsed) tooltipItems[id] = parsed;
   progress += 1;
-  if (progress % 200 === 0) console.log(`  items ${progress}/${itemTargets.size} (fetched ${fetched}, cached ${cached}, missing ${missing})`);
+  if (progress % 200 === 0) console.log(`  items ${progress}/${itemTargets.size} (fetched ${fetched}, cached ${cached}, refetched ${expired}, missing ${missing})`);
 }
 
 const recipesByProfession: Record<string, number[]> = {};
-for (const [profession, ids] of Object.entries(RECIPE_SEEDS)) recipesByProfession[profession] = ids.filter((id) => tooltipSpells[id]);
+for (const profession of new Set([...Object.keys(RECIPE_SEEDS), ...observedRecipes.keys()])) {
+  // Seeds plus every recipe the account's own profession catalogs list; kept only when Forever's database has it.
+  const ids = new Set([...(RECIPE_SEEDS[profession] ?? []), ...(observedRecipes.get(profession) ?? [])]);
+  recipesByProfession[profession] = [...ids].filter((id) => tooltipSpells[id]).sort((a, b) => a - b);
+}
 const recipeItems: ForeverKnowledgeBundle["recipeItems"] = {};
 for (const [id, item] of Object.entries(tooltipItems)) {
   const source = items[id];

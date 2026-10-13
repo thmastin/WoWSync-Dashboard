@@ -110,6 +110,23 @@ export function extractForeverTalents(parsed: unknown, snapshotId: number): Fore
   };
 }
 
+export interface ForeverClassSpells {
+  observedAt?: number;
+  snapshotId: number;
+  /** Abilities the spellbook lists as not yet learned, with the level the client reports. */
+  entries: Array<{ spellID: number; name: string; levelLearned?: number; skillLineName?: string }>;
+}
+
+/** Forever spellbook future entries (GearExport classSpellCatalog). Undefined when not captured or unsupported. */
+export function extractForeverClassSpells(parsed: unknown, snapshotId: number): ForeverClassSpells | undefined {
+  const section = object(object(object(parsed)?.foreverGearObservation)?.classSpellCatalog);
+  const data = object(section?.data);
+  if (!section || !data || data.futureSpellType !== "OBSERVED") return undefined;
+  const entries = list(data.entries).map(object).flatMap((row) => row && typeof row.spellID === "number" && typeof row.name === "string"
+    ? [{ spellID: row.spellID, name: row.name, ...(typeof row.levelLearned === "number" ? { levelLearned: row.levelLearned } : {}), ...(typeof row.skillLineName === "string" ? { skillLineName: row.skillLineName } : {}) }] : []);
+  return { observedAt: typeof section.observedAt === "number" ? section.observedAt : undefined, snapshotId, entries };
+}
+
 /** Forever reputation section as a captured domain, so the Classic visible-row view can present it. */
 export function extractForeverReputationDomain(parsed: unknown): { domain: CapturedCharacterDomain; snapshotObservedAt?: number } | undefined {
   const section = object(object(object(parsed)?.foreverGearObservation)?.reputation);

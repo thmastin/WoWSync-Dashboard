@@ -17,6 +17,7 @@ export interface ForeverStructuredObservation {
   quests?: Record<string, unknown>;
   talents?: Record<string, unknown>;
   reputation?: Record<string, unknown>;
+  classSpellCatalog?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
   itemEvidence?: Record<string, unknown>;
   professionRecipes?: { status: { state: "OBSERVED"; completeness: "partial"; observedAt: number }; completeness: "partial"; observedAt: number; data: Record<string, unknown> };
@@ -73,6 +74,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("quests") ? { quests: section("quests") } : {}),
     ...(section("talents") ? { talents: section("talents") } : {}),
     ...(section("reputation") ? { reputation: section("reputation") } : {}),
+    ...(section("classSpellCatalog") ? { classSpellCatalog: section("classSpellCatalog") } : {}),
     ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
     ...(validRecipes ? { professionRecipes: {
       status: { state: "OBSERVED" as const, completeness: "partial" as const, observedAt: recipeSection!.observedAt as number },
@@ -277,7 +279,7 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
     conflict = true;
   }
   if (incoming.sourceCharacterGuidConflict || existing.sourceCharacterGuidConflict) value.sourceCharacterGuidConflict = true;
-  for (const key of ["equipment", "bags", "bank", "quests", "talents", "reputation"] as const) {
+  for (const key of ["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog"] as const) {
     const before = existing[key]; const next = incoming[key];
     if (!next) continue;
     if (!before) { value[key] = next; updated = true; continue; }

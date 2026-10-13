@@ -166,7 +166,13 @@ export class ForeverKnowledgeIndex {
 }
 
 /** IDs the account has actually observed on Forever: equipped/bag/bank items, recipe outputs and reagents, learned recipes, active quests, talent spells. */
-export interface ForeverObservedIds { items: number[]; spells: number[]; quests: number[] }
+export interface ForeverObservedIds {
+  items: number[];
+  spells: number[];
+  quests: number[];
+  /** Every recipe in a captured profession catalog (learned or not), by profession name. */
+  recipes: Record<string, number[]>;
+}
 
 // Structural view of the read-model methods used, so this module does not import the read model.
 interface ObservedIdReader {
@@ -181,6 +187,7 @@ interface ObservedIdReader {
 export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverObservedIds {
   type Loose = Record<string, any>;
   const items = new Set<number>(), spells = new Set<number>(), quests = new Set<number>();
+  const recipes = new Map<string, Set<number>>();
   const data = (resolution: unknown): Loose | undefined => (resolution as Loose)?.status === "FOUND" ? (resolution as Loose).value?.data : undefined;
   const ref = (value: unknown) => { const match = typeof value === "string" ? /^item:(\d+)/.exec(value) : null; if (match) items.add(Number(match[1])); };
   for (const character of readModel.listCharacters({ version: "forever" })) {
@@ -190,7 +197,12 @@ export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverO
     for (const profession of (data(readModel.getCharacterProfessions(query))?.recipeKnowledge?.data?.professions ?? []) as Loose[]) {
       for (const recipe of (profession.recipes ?? []) as Loose[]) {
         if (typeof recipe.outputItemID === "number") items.add(recipe.outputItemID);
-        if (recipe.learnedState === "OBSERVED_TRUE" && typeof recipe.recipeID === "number") spells.add(recipe.recipeID);
+        // The client catalog lists unlearned recipes too: fetch them all so the bundle covers what can be learned next.
+        if (typeof recipe.recipeID === "number") {
+          spells.add(recipe.recipeID);
+          const name = String(profession.professionName ?? profession.name ?? "");
+          if (name) recipes.set(name, (recipes.get(name) ?? new Set()).add(recipe.recipeID));
+        }
         for (const slot of (recipe.reagentSlots ?? []) as Loose[]) for (const reagent of (slot.reagents ?? []) as Loose[]) if (typeof reagent.itemID === "number") items.add(reagent.itemID);
       }
     }
@@ -198,7 +210,10 @@ export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverO
     // Talent spells, so the bundle carries their Forever tooltip descriptions.
     const talents = (readModel.getForeverSkillsAndTalents?.(query) as Loose | undefined)?.value?.talents as Loose | undefined;
     for (const tree of (talents?.trees ?? []) as Loose[]) for (const talent of (tree.talents ?? []) as Loose[]) if (typeof talent.spellID === "number") spells.add(talent.spellID);
+    // Upcoming class abilities from the spellbook catalog, for their Forever tooltip text.
+    const classSpells = (readModel.getForeverSkillsAndTalents?.(query) as Loose | undefined)?.value?.classSpells as Loose | undefined;
+    for (const entry of (classSpells?.entries ?? []) as Loose[]) if (typeof entry.spellID === "number") spells.add(entry.spellID);
   }
   const sorted = (set: Set<number>) => [...set].sort((a, b) => a - b);
-  return { items: sorted(items), spells: sorted(spells), quests: sorted(quests) };
+  return { items: sorted(items), spells: sorted(spells), quests: sorted(quests), recipes: Object.fromEntries([...recipes].map(([name, ids]) => [name, sorted(ids)])) };
 }

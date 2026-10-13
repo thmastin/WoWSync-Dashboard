@@ -497,6 +497,29 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
     });
   }
 
+  // Class abilities from the spellbook's future entries (exact for this Forever client), with Forever tooltip text.
+  const catalog = subject.classSpells?.entries.filter((entry) => entry.levelLearned !== undefined && entry.levelLearned <= level + 5) ?? [];
+  if (catalog.length) {
+    const visitServices = subject.trainerVisits.find((entry) => entry.kind === "CLASS")?.services ?? [];
+    const costOf = (name: string) => visitServices.find((service) => service.name === name)?.costCopper;
+    const describe = (entry: { spellID: number; name: string }) => { const text = index.tooltipSpell(entry.spellID)?.description; const cost = costOf(entry.name); return `${entry.name}${cost !== undefined ? ` (${formatCopper(cost)})` : ""}${text ? `: ${text.length > 140 ? `${text.slice(0, 137)}...` : text}` : ""}`; };
+    const now = catalog.filter((entry) => entry.levelLearned! <= level);
+    const later = [...new Set(catalog.filter((entry) => entry.levelLearned! > level).map((entry) => entry.levelLearned!))].sort((a, b) => a - b);
+    drafts.push({
+      id: "class-abilities", category: "CLASS_TRAINING",
+      title: now.length ? `New abilities you can learn now: ${now.map((entry) => entry.name).join(", ")}` : `New abilities in the next 5 levels: ${catalog.map((entry) => entry.name).join(", ")}`,
+      what: [now.length ? `Now: ${now.map(describe).join("; ")}.` : "", ...later.map((lvl) => `Level ${lvl}: ${catalog.filter((entry) => entry.levelLearned === lvl).map(describe).join("; ")}.`)].filter(Boolean).join(" "),
+      why: "These abilities are listed in your spellbook as not yet learned, at the level the Forever client reports. New abilities usually matter more than new ranks.",
+      supports: "IMMEDIATE_POWER", feasibility: now.length ? "READY_NOW" : "NEEDS_PROGRESSION",
+      evidence: [{ kind: "OBSERVED", statement: `Spellbook future entries observed${subject.classSpells?.observedAt ? ` ${new Date(subject.classSpells.observedAt * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : ""} (${subject.classSpells!.entries.length} not yet learned).`, source: `Forever C_SpellBook future spells (snapshot ${subject.classSpells!.snapshotId})` },
+        ...(catalog.some((entry) => index.tooltipSpell(entry.spellID)?.description) ? [{ kind: "EXTERNAL" as const, statement: "Ability text is Forever tooltip rank 1 text.", source: "Wowhead Forever tooltips" }] : [])],
+      prerequisites: [], costs: [catalog.some((entry) => costOf(entry.name) !== undefined) ? "Costs shown where a trainer visit recorded them." : "Training cost unknown until you open the class trainer."], alternatives: [], tradeoffs: [],
+      unknowns: catalog.some((entry) => costOf(entry.name) === undefined) ? ["Training cost for abilities not seen at a trainer."] : [],
+      nextActions: now.length ? ["Visit your class trainer and learn the new abilities."] : [`Plan a trainer visit at level ${later[0]}.`],
+      value: now.length ? 0.78 : 0.45, confidence: 1, objectives: ["IMPROVE_CHARACTER", "LEVELING"],
+    });
+  }
+
   // Quest route: hubs in travel order for the next levels.
   const routeQuests = quests.filter((quest) => !quest.classQuest && !quest.dungeon && (quest.available || quest.missingPrerequisites.every((id) => id > 0)) && (quest.quest.level ?? 0) <= level + 5);
   const hubs = questHubs(routeQuests.map((quest) => ({ zone: quest.zone, coord: quest.starter?.coord, giver: quest.starter?.name, item: quest })))
@@ -729,9 +752,11 @@ export function buildLevelPlan(index: ForeverKnowledgeIndex, subject: CharacterE
     const chainFollowers = new Set(quests.filter((quest) => quest.classQuest && quest.quest.next !== undefined).map((quest) => quest.quest.next!));
     const milestoneQuests = quests.filter((quest) => quest.classQuest && (quest.quest.reqLevel ?? 0) === lvl && quest.missingPrerequisites.length === 0 && !chainFollowers.has(quest.id));
     const milestones = [...new Map(milestoneQuests.sort((a, b) => (a.zone === subject.zone ? -1 : 0) - (b.zone === subject.zone ? -1 : 0)).map((quest) => [quest.quest.name, `Class quest "${quest.quest.name}"${quest.starterLocation ? ` (${quest.starterLocation})` : ""}`] as [string, string])).values()];
+    const trained = new Set(services.map((service) => service.name));
+    const newAbilities = (subject.classSpells?.entries ?? []).filter((entry) => (lvl === level ? (entry.levelLearned ?? 99) <= level : entry.levelLearned === lvl) && !trained.has(entry.name));
     steps.push({
       level: lvl,
-      training: services.map((service) => `${service.name}${service.rank ? ` ${service.rank}` : ""} (${service.costCopper !== undefined ? formatCopper(service.costCopper) : "?"})`),
+      training: [...services.map((service) => `${service.name}${service.rank ? ` ${service.rank}` : ""} (${service.costCopper !== undefined ? formatCopper(service.costCopper) : "?"})`), ...newAbilities.map((entry) => `${entry.name} (new ability, cost unknown)`)],
       quests: questsHere.map((quest) => `"${quest.quest.name}"${quest.zone ? ` (${quest.zone})` : ""}`),
       gear: gearHere.map((candidate) => `${candidate.item.name} for ${candidate.comparison.slotName} (${candidate.source.detail})`),
       milestones,

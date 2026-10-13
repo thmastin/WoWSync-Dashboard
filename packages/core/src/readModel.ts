@@ -2,7 +2,7 @@
 // SnapshotStore directly; it is intentionally not an HTTP wrapper and has no
 // provider, filesystem, SQL, or mutation primitive in its public API.
 import { extractForeverTrainerVisit, type ForeverTrainerVisit } from "./foreverTrainer.ts";
-import { extractForeverReputationDomain, extractForeverSkillLines, extractForeverTalents, type ForeverSkillLines, type ForeverTalent, type ForeverTalents } from "./foreverSkills.ts";
+import { extractForeverClassSpells, extractForeverReputationDomain, extractForeverSkillLines, extractForeverTalents, type ForeverClassSpells, type ForeverSkillLines, type ForeverTalent, type ForeverTalents } from "./foreverSkills.ts";
 import { buildSharedStorageResponse, type SharedStorageResponse } from "./sharedStorageApi.ts";
 import { allocationForItem, projectAccountOwnedEvidenceMap, type AllocationResult } from "./allocation.ts";
 import { buildAllocationReview, filterUnallocatedByQuery, itemNameForItem, type DispositionCounts, type UnallocatedInventoryEntry, type UnallocatedItemStringIdentityCounts, type UnresolvedStorageScope } from "./allocationReview.ts";
@@ -2041,7 +2041,7 @@ export class DashboardReadModel {
   }
 
   /** Forever reputation (visible rows) and full talent capture, each from the newest snapshot that carries it (or from snapshotId and older). */
-  private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView }>> {
+  private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView; upcomingAbilities?: unknown }>> {
     const candidates = this.store.listCharacters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
@@ -2054,9 +2054,11 @@ export class DashboardReadModel {
     }
     const newestId = snapshots[0]?.id;
     let talents: ForeverTalents | undefined;
+    let classSpells: ForeverClassSpells | undefined;
     let reputation: { domain: Parameters<typeof buildClassicReputationView>[0]; snapshotId: number } | undefined;
     for (const snapshot of snapshots) {
       talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
+      classSpells ??= extractForeverClassSpells(snapshot.parsed, snapshot.id);
       if (!reputation) { const found = extractForeverReputationDomain(snapshot.parsed); if (found) reputation = { domain: found.domain, snapshotId: snapshot.id }; }
       if (talents && reputation) break;
     }
@@ -2066,11 +2068,11 @@ export class DashboardReadModel {
     const talentView = foreverTalentView(talents, this.now(), { includeTalents: query.includeTalents === true, carried: carried(talents?.snapshotId) });
     const states = [reputationView.state, talentView.state];
     const overall: ReadState = states.every((value) => value === "UNKNOWN") ? "UNKNOWN" : states.includes("LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
-    return { status: "FOUND", value: { data: { version: "forever", reputation: reputationView, talents: talentView }, provenance: { state: overall, version: "forever", identityKey: character.identityKey, ...(newestId !== undefined ? { snapshotId: newestId } : {}), source: "Forever reputation and talent sections (GearExport WoWSyncDB, C_Reputation and C_ClassTalents/C_Traits)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character; /wowsync and /reload with a current GearExport." } : {}) } } };
+    return { status: "FOUND", value: { data: { version: "forever", reputation: reputationView, talents: talentView, upcomingAbilities: classSpells ? { state: carried(classSpells.snapshotId) ? "LAST_SEEN" : "OBSERVED", observedAt: classSpells.observedAt, sourceSnapshotId: classSpells.snapshotId, entries: classSpells.entries, semantics: "Spellbook future entries with the level the Forever client reports; training cost comes from trainer visits (get_character_trainer)." } : { state: "UNKNOWN", entries: [], semantics: "Not captured (needs GearExport with the class catalog, then /wowsync and /reload)." } }, provenance: { state: overall, version: "forever", identityKey: character.identityKey, ...(newestId !== undefined ? { snapshotId: newestId } : {}), source: "Forever reputation and talent sections (GearExport WoWSyncDB, C_Reputation and C_ClassTalents/C_Traits)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character; /wowsync and /reload with a current GearExport." } : {}) } } };
   }
 
   /** Newest observed Forever skill lines and talents, each from the newest snapshot that carries it. */
-  getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents }> {
+  getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents; classSpells?: ForeverClassSpells }> {
     requireVersion(query.version);
     if (query.version !== "forever") return { status: "FOUND", value: {} };
     const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
@@ -2078,12 +2080,14 @@ export class DashboardReadModel {
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     let skills: ForeverSkillLines | undefined;
     let talents: ForeverTalents | undefined;
+    let classSpells: ForeverClassSpells | undefined;
     for (const snapshot of this.store.listSnapshots(candidates[0]!.identityKey)) {
       skills ??= extractForeverSkillLines(snapshot.parsed, snapshot.id);
       talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
-      if (skills && talents) break;
+      classSpells ??= extractForeverClassSpells(snapshot.parsed, snapshot.id);
+      if (skills && talents && classSpells) break;
     }
-    return { status: "FOUND", value: { skills, talents } };
+    return { status: "FOUND", value: { skills, talents, classSpells } };
   }
 
   /** Newest raw Forever trainer-window capture per trainer frame, scanning the character's history. */

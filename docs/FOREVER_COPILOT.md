@@ -64,6 +64,15 @@ Main files:
   `install-host-timer.sh` as a per-user systemd timer on the DEV host) updates QuestieDB, builds with the
   deployed Dashboard SHA's builder, and installs only when content changed. Answers report bundle age.
 
+## Knowledge coverage (2026-10-13)
+
+- Gear tooltips cover weapons and armor up to required level 60 (was 22) that have a quest, vendor or drop source.
+- Cached tooltips older than 14 days are refetched (`--cache-max-days`), so Forever changes and launch reach the bundle.
+- Recipes: Classic seed IDs plus every recipe in the account's captured profession catalogs (learned or not); each
+  kept only if the Forever database has it. Professions nobody on the account has opened (e.g. Enchanting) stay uncovered.
+- Class abilities: GearExport `classSpellCatalog` records spellbook entries not yet learned with the level the client
+  reports; answers list them with Forever tooltip text; costs come from trainer visits.
+
 ## Rules the engine enforces
 
 - **Version isolation.** Only Forever; every read uses version `forever`; the bundle is Forever-only.

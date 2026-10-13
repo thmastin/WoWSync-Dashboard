@@ -16,7 +16,7 @@ const bundle = JSON.parse(readFileSync(new URL("knowledge-fixture.json", FIXTURE
 bundle.tooltips.spells["16178"] = { id: 16178, name: "Purification", tools: [], reagents: [], description: "Increases the effectiveness of your healing spells by 10%.", sourceUrl: "https://www.wowhead.com/forever/spell=16178", retrievedAt: "2026-10-13T11:20:00Z" };
 const KNOWLEDGE = new ForeverKnowledgeIndex(bundle);
 
-function brammWith(talentsData: Record<string, unknown>, unspent = 0) {
+function brammWith(talentsData: Record<string, unknown>, unspent = 0, classSpellCatalog?: Record<string, unknown>) {
   const { text, foreverGearObservation, ...rest } = JSON.parse(readFileSync(new URL("copilot-bramm.import.json", FIXTURE_DIR), "utf8"));
   const observedAt = foreverGearObservation.generatedAt;
   const talents = { observedAt, changedAt: observedAt, completeness: "complete", data: { formatVersion: 2, source: "C_ClassTalents/C_Traits", unspentPoints: unspent, specialization: { id: 263, name: "Enhancement" }, ...talentsData } };
@@ -24,7 +24,7 @@ function brammWith(talentsData: Record<string, unknown>, unspent = 0) {
     { name: "Ironforge", factionID: 47, standingID: 5, barMin: 3000, barMax: 9000, barValue: 4200, parentCategory: "Alliance", evidence: "OBSERVED", ownerScope: "CHARACTER" },
   ], majorFactions: [] } };
   const store = new SqliteSnapshotStore(":memory:");
-  store.importSnapshot(text, { ...rest, foreverGearObservation: { ...foreverGearObservation, talents, reputation } });
+  store.importSnapshot(text, { ...rest, foreverGearObservation: { ...foreverGearObservation, talents, reputation, ...(classSpellCatalog ? { classSpellCatalog: { observedAt, changedAt: observedAt, completeness: "complete", data: classSpellCatalog } } : {}) } });
   return { store, read: new DashboardReadModel(store, () => NOW) };
 }
 
@@ -108,4 +108,26 @@ test("lookup_forever_knowledge finds items, quests, NPCs, spells and zones with 
   const zone = lookupForeverKnowledge(KNOWLEDGE, { kind: "zone", name: "Mulgore" }) as { results: Array<{ questCount: number }> };
   assert.ok(zone.results[0]!.questCount >= 2);
   assert.equal(lookupForeverKnowledge(KNOWLEDGE, { kind: "quest", name: "no such quest anywhere" }).status, "NOT_FOUND");
+});
+
+test("Spellbook future entries become a class ability catalog in answers, plan and MCP progression", () => {
+  const catalog = { futureSpellType: "OBSERVED", observedAt: 0, entries: [
+    { spellID: 16178, name: "Purification", levelLearned: 1, evidence: "OBSERVED" },
+    { spellID: 8042, name: "Earth Shock", levelLearned: 4, evidence: "OBSERVED" },
+    { spellID: 324, name: "Lightning Shield", levelLearned: 8, evidence: "OBSERVED" },
+    { spellID: 2484, name: "Earthbind Totem", levelLearned: 40, evidence: "OBSERVED" },
+  ] };
+  const { store, read } = brammWith(TREE, 0, catalog);
+  try {
+    const answer = answerForeverCopilot(read, { version: "forever", question: "Bramm: what should I do over the next five levels?", limit: 20 }, KNOWLEDGE);
+    const abilities = answer.recommendations.find((rec) => rec.id === "class-abilities");
+    assert.ok(abilities, "class ability recommendation present");
+    assert.ok(!/Earthbind Totem/.test(abilities!.what), "abilities beyond the 5-level window are not listed");
+    assert.match(abilities!.what, /healing spells by 10%/, "Forever tooltip text included");
+    assert.ok(abilities!.evidence.some((line) => line.kind === "OBSERVED" && /future entries/.test(line.statement)));
+    const progression = read.getCharacterProgression({ version: "forever", name: "Bramm" }) as unknown as { value: { data: { upcomingAbilities: { state: string; entries: unknown[] } } } };
+    assert.equal(progression.value.data.upcomingAbilities.state, "OBSERVED");
+    assert.equal(progression.value.data.upcomingAbilities.entries.length, 4);
+    assert.ok(collectForeverObservedIds(read).spells.includes(2484), "catalog spells feed the knowledge refresh");
+  } finally { store.close(); }
 });

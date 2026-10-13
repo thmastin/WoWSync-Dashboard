@@ -15,7 +15,7 @@
 //   player-run steps; /bankx transfers always need the player to run each move.
 import type { DashboardReadModel } from "./readModel.ts";
 import type { ForeverTrainerVisit } from "./foreverTrainer.ts";
-import { requiredSkillFor, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
+import { requiredSkillFor, type ForeverClassSpells, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
 import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
 import { discoveryDrafts, goldDiscoveryDrafts, proficiencyBaseline, type LevelPlanStep } from "./foreverDiscovery.ts";
 import { formatCopper } from "./currency.ts";
@@ -154,6 +154,7 @@ export interface CharacterEvidence {
   trainerVisits: ForeverTrainerVisit[];
   skills?: ForeverSkillLines;
   talents?: ForeverTalents;
+  classSpells?: ForeverClassSpells;
   zone?: string;
   snapshotId?: number;
 }
@@ -267,6 +268,7 @@ function gatherCharacter(readModel: DashboardReadModel, summary: Loose): Charact
     trainerVisits,
     skills: skillsAndTalents.skills,
     talents: skillsAndTalents.talents,
+    classSpells: skillsAndTalents.classSpells,
     zone: state.location?.zone,
     snapshotId: state.provenance?.snapshotId,
   };
