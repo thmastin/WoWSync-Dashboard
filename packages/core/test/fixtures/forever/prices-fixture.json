@@ -3,7 +3,7 @@
  "version": "forever",
  "source": "AHledger",
  "attribution": "Prices from AHledger (https://ahledger.com), crowd-sourced player scans",
- "fetchedAt": "2026-10-13T12:45:00.000Z",
+ "fetchedAt": "2026-10-13T12:51:25.693Z",
  "markets": {
   "forever.pvp.alliance.us": {
    "label": "PvP Alliance US",
@@ -30,32 +30,48 @@
      "observedAt": "2026-10-13T09:43:00.000Z"
     },
     "2589": {
-     "median": 22,
-     "minBuyout": 15,
-     "quantity": 19529,
+     "median": 28,
+     "minBuyout": 22,
+     "quantity": 21311,
+     "median7d": 35,
+     "median30d": 62,
+     "low30d": 11,
+     "high30d": 108,
      "salesPerDay": 19266.6,
-     "observedAt": "2026-10-13T09:43:00.000Z"
+     "observedAt": "2026-10-13T12:50:03.000Z"
     },
     "2770": {
-     "median": 153,
-     "minBuyout": 150,
-     "quantity": 1619,
+     "median": 399,
+     "minBuyout": 300,
+     "quantity": 2016,
+     "median7d": 161,
+     "median30d": 158,
+     "low30d": 12,
+     "high30d": 370,
      "salesPerDay": 6962.5,
-     "observedAt": "2026-10-13T09:43:00.000Z"
+     "observedAt": "2026-10-13T12:50:03.000Z"
     },
     "2835": {
-     "median": 12,
-     "minBuyout": 10,
-     "quantity": 4495,
+     "median": 10,
+     "minBuyout": 6,
+     "quantity": 2842,
+     "median7d": 11,
+     "median30d": 10,
+     "low30d": 2,
+     "high30d": 49,
      "salesPerDay": 8684.4,
-     "observedAt": "2026-10-13T09:43:00.000Z"
+     "observedAt": "2026-10-13T12:50:03.000Z"
     },
     "2840": {
-     "median": 199,
-     "minBuyout": 198,
-     "quantity": 988,
+     "median": 790,
+     "minBuyout": 364,
+     "quantity": 1598,
+     "median7d": 181,
+     "median30d": 166,
+     "low30d": 25,
+     "high30d": 368,
      "salesPerDay": 6731.5,
-     "observedAt": "2026-10-13T09:43:00.000Z"
+     "observedAt": "2026-10-13T12:50:03.000Z"
     },
     "2934": {
      "median": 20,

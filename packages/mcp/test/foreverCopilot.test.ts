@@ -69,10 +69,10 @@ test("MCP lookup_forever_knowledge and Forever get_character_progression are rea
     const tools = (await client.listTools()).tools;
     assert.equal(tools.find((entry) => entry.name === "lookup_forever_knowledge")?.annotations?.readOnlyHint, true);
     assert.equal(tools.find((entry) => entry.name === "get_forever_market_prices")?.annotations?.readOnlyHint, true);
-    const priced = (await client.callTool({ name: "get_forever_market_prices", arguments: { version: "forever", character: { name: "Rordin" }, items: [2770, 2840, 999999] } })).structuredContent as { status: string; market: string; attribution: string; prices: Array<{ itemId?: number; status: string; median?: number }> };
+    const priced = (await client.callTool({ name: "get_forever_market_prices", arguments: { version: "forever", character: { name: "Rordin" }, items: [2770, 2840, 999999] } })).structuredContent as { status: string; market: string; attribution: string; prices: Array<{ itemId?: number; status: string; median?: number; median7d?: number }> };
     assert.equal(priced.status, "FOUND");
     assert.equal(priced.market, "forever.pvp.alliance.us", "Rordin's PvP realm and Alliance faction pick the market");
-    assert.equal(priced.prices[0]!.median, 153);
+    assert.equal(priced.prices[0]!.median7d, 161);
     assert.ok(["OBSERVED_EXTERNAL", "STALE"].includes(priced.prices[0]!.status));
     assert.equal(priced.prices[2]!.status, "UNKNOWN", "an unpriced item is UNKNOWN, not zero");
     assert.match(priced.attribution, /ahledger\.com/);

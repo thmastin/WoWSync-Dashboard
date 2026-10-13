@@ -15,6 +15,8 @@ export interface ForeverMarketPrice {
   quantity?: number;
   median7d?: number;
   median30d?: number;
+  low30d?: number;
+  high30d?: number;
   salesPerDay?: number;
   /** ISO time of the scan that produced the latest price. */
   observedAt?: string;
@@ -51,7 +53,7 @@ export interface PriceLookup {
   price: ForeverMarketPrice;
   ageHours?: number;
   fresh: boolean;
-  /** Best single per-unit market value: median, else min buyout. */
+  /** Value used for margins: the 7-day median (steadier than one scan), else the latest median, else the lowest buyout. */
   unit?: number;
 }
 
@@ -67,10 +69,10 @@ export class ForeverPriceIndex {
   lookup(market: string | undefined, itemId: number | undefined): PriceLookup | undefined {
     if (!market || itemId === undefined) return undefined;
     const price = this.bundle.markets[market]?.prices[String(itemId)];
-    if (!price || (price.median === undefined && price.minBuyout === undefined)) return undefined;
+    if (!price || (price.median === undefined && price.minBuyout === undefined && price.median7d === undefined)) return undefined;
     const observed = price.observedAt ? Date.parse(price.observedAt) : NaN;
     const ageHours = Number.isFinite(observed) ? Math.max(0, (this.now() - observed) / 3_600_000) : undefined;
-    return { market, price, ageHours, fresh: ageHours !== undefined && ageHours <= PRICE_FRESH_HOURS, unit: price.median ?? price.minBuyout };
+    return { market, price, ageHours, fresh: ageHours !== undefined && ageHours <= PRICE_FRESH_HOURS, unit: price.median7d ?? price.median ?? price.minBuyout };
   }
 }
 
@@ -87,7 +89,7 @@ export function foreverPriceTargets(
   const markets = new Set<string>(), unmapped = new Set<string>();
   for (const character of characters) {
     const market = foreverMarketFor(character.realm, character.faction ?? undefined, marketRegion);
-    if (market) markets.add(market); else unmapped.add(character.realm);
+    if (market) markets.add(market); else unmapped.add(`${character.realm} (${rulesetOfRealm(character.realm) ? "faction unknown" : "ruleset unknown"})`);
   }
   const items = new Set(observedItems);
   for (const spell of recipeSpells) {
@@ -116,7 +118,8 @@ export function marketPrice(itemId: number | undefined, realm: string | undefine
 export function describePrice(name: string, found: PriceLookup): string {
   const p = found.price;
   const parts = [
-    p.median !== undefined ? `median ${formatCopper(p.median)}` : undefined,
+    p.median7d !== undefined ? `7-day median ${formatCopper(p.median7d)}` : undefined,
+    p.median !== undefined ? `latest scan median ${formatCopper(p.median)}` : undefined,
     p.minBuyout !== undefined ? `lowest ${formatCopper(p.minBuyout)}` : undefined,
     p.quantity !== undefined ? `${p.quantity} listed` : undefined,
     p.salesPerDay !== undefined ? `about ${Math.round(p.salesPerDay)} sold/day (AHledger estimate)` : undefined,

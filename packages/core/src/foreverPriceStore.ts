@@ -19,7 +19,7 @@ export function validateForeverPriceBundle(value: unknown): ForeverPriceBundle {
     if (!/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/.test(market)) throw new TypeError(`Unexpected market id ${market}.`);
     if (!entry || typeof entry.prices !== "object") throw new TypeError(`Market ${market} has no prices.`);
     for (const price of Object.values(entry.prices)) {
-      for (const key of ["median", "minBuyout", "quantity", "median7d", "median30d", "salesPerDay"] as const) {
+      for (const key of ["median", "minBuyout", "quantity", "median7d", "median30d", "low30d", "high30d", "salesPerDay"] as const) {
         const v = price[key];
         if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) throw new TypeError(`Invalid ${key} in ${market}.`);
       }

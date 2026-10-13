@@ -8,7 +8,8 @@ import { ForeverKnowledgeIndex, type ForeverKnowledgeBundle } from "../src/forev
 import { ForeverPriceIndex, foreverMarketFor, foreverPriceTargets, rulesetOfRealm, type ForeverPriceBundle } from "../src/foreverPrices.ts";
 import { validateForeverPriceBundle } from "../src/foreverPriceStore.ts";
 
-// Real AHledger medians for forever.pvp.alliance.us scanned 2026-10-13 09:43 UTC (Copper Ore 153c, Copper Bar 199c, ...).
+// Real AHledger values for forever.pvp.alliance.us: price table as of 2026-10-13 12:50 UTC (Copper Ore latest 3s 99c,
+// 7-day 1s 61c; Copper Bar latest 7s 90c, 7-day 1s 81c) and earlier tooltip rows for the rest.
 const FIXTURE_DIR = new URL("./fixtures/forever/", import.meta.url);
 const PRICES = JSON.parse(readFileSync(new URL("prices-fixture.json", FIXTURE_DIR), "utf8")) as ForeverPriceBundle;
 const KNOWLEDGE = new ForeverKnowledgeIndex(JSON.parse(readFileSync(new URL("knowledge-fixture.json", FIXTURE_DIR), "utf8")) as ForeverKnowledgeBundle);
@@ -29,13 +30,13 @@ test("Markets come from realm ruleset and faction; unknown stays unknown", () =>
   assert.equal(foreverMarketFor("Classic Beta PvE", "Horde", "eu"), "forever.normal.horde.eu");
   assert.equal(foreverMarketFor("Classic Beta PvE", undefined), undefined, "unknown faction has no market");
   const targets = foreverPriceTargets([{ realm: "Classic Beta PvP 2", faction: "Alliance" }, { realm: "Mystery Realm", faction: "Horde" }], [2770], [{ reagents: [{ itemId: 2770 }], createsItemId: 2840 }]);
-  assert.deepEqual(targets, { markets: ["forever.pvp.alliance.us"], items: [2770, 2840], unmapped: ["Mystery Realm"] });
+  assert.deepEqual(targets, { markets: ["forever.pvp.alliance.us"], items: [2770, 2840], unmapped: ["Mystery Realm (ruleset unknown)"] });
 });
 
 test("Prices are fresh for 72 hours and then stale; the bundle validator rejects odd markets and values", () => {
   const fresh = new ForeverPriceIndex(PRICES, () => NOW_MS);
   const copper = fresh.lookup("forever.pvp.alliance.us", 2770)!;
-  assert.equal(copper.unit, 153);
+  assert.equal(copper.unit, 161, "margins use the 7-day median, not one volatile scan");
   assert.equal(copper.fresh, true);
   assert.equal(new ForeverPriceIndex(PRICES, () => NOW_MS + 80 * 3_600_000).lookup("forever.pvp.alliance.us", 2770)!.fresh, false);
   assert.equal(fresh.lookup("forever.normal.horde.us", 2770), undefined);
@@ -51,9 +52,9 @@ test("Stable gold uses AHledger medians as EXTERNAL evidence with attribution, k
     const smelt = answer.recommendations.find((rec) => rec.id === "convert-2657")!;
     assert.ok(smelt, "copper smelting is still recommended");
     const market = smelt.evidence.filter((line) => line.kind === "EXTERNAL" && /forever\.pvp\.alliance\.us/.test(line.statement));
-    assert.ok(market.some((line) => /Copper Ore.*median 1s 53c|Copper Ore.*median 153c/.test(line.statement)), market.map((line) => line.statement).join(" | "));
+    assert.ok(market.some((line) => /Copper Ore.*7-day median 1s 61c.*latest scan median 3s 99c/.test(line.statement)), market.map((line) => line.statement).join(" | "));
     assert.ok(market.every((line) => /ahledger\.com/.test(line.source)), "every price credits AHledger");
-    assert.ok(smelt.evidence.some((line) => line.kind === "DERIVED" && /At market medians/.test(line.statement) && /not deducted/.test(line.statement)));
+    assert.ok(smelt.evidence.some((line) => line.kind === "DERIVED" && /At market values \(7-day median where known\)/.test(line.statement) && /not deducted/.test(line.statement)));
     assert.match(smelt.why, /On the Auction House the Copper Bar is worth .* more than the raw Copper Ore/);
     assert.ok(smelt.evidence.some((line) => /vendor/.test(line.statement)), "vendor floor kept");
     assert.ok(answer.challenges.some((text) => /AHledger \(https:\/\/ahledger\.com\) for forever\.pvp\.alliance\.us/.test(text)));

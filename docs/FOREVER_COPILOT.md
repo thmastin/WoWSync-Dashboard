@@ -102,11 +102,13 @@ scans per market (ruleset, faction, region: `forever.pvp.alliance.us`) and offer
 require crediting AHledger wherever prices are shown and honoring cache headers.
 
 - `tools/forever-prices/refresh-prices.ts` reads `GET /api/versions/forever/prices/targets` (the account's
-  markets from realm ruleset + faction, and items: observed items plus known recipe reagents/products), calls
-  AHledger's `/v1/tooltip/{market}` (100 items per request, paced, Retry-After honored) and installs
+  markets from realm ruleset + faction, and items: observed items plus known recipe reagents/products), reads
+  AHledger's `/v1/pricetable/{market}` (the whole market in one request; Retry-After honored) and installs
   `forever-prices.json` with `PUT /api/versions/forever/prices`. Only market and item ids are sent.
 - On DEV, `install-host-timer.sh` adds the per-user `wowsync-forever-prices.timer` (hourly).
-- The co-pilot uses medians for material conversions (convert vs sell raw), unused gear, and a
+- Margins use the 7-day median (one scan can swing several-fold; e.g. Copper Bar latest 7s 90c vs 7-day 1s 81c on
+  2026-10-13), with the latest scan shown beside it.
+- The co-pilot uses these values for material conversions (convert vs sell raw), unused gear, and a
   "sell surplus materials" recommendation; MCP `get_forever_market_prices` returns prices per item.
 - Region defaults to `us` (`WOWSYNC_FOREVER_REGION`). Launch is realmless: the market is derived from the
   realm name's ruleset, which needs a check against the launch client's realm/ruleset naming.
