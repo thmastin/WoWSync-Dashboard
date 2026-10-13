@@ -1032,7 +1032,7 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
         prerequisites: [...(hasTool ? [] : [`Get a ${tool}.`]), ...(nearCap ? [`Train the next ${profession.name} rank (requirements and cost not in the knowledge base).`] : [])],
         costs: nearCap ? ["Next-rank training fee (unknown)."] : [],
         alternatives: [],
-        tradeoffs: ["Raw materials sold at vendor are worth little; their value is feeding your own crafters or the Auction House (prices unknown)."],
+        tradeoffs: [currentForeverPrices() ? "Raw materials sold at vendor are worth little; their value is feeding your own crafters or the Auction House (see market values in the gathering item)." : "Raw materials sold at vendor are worth little; their value is feeding your own crafters or the Auction House (prices unknown)."],
         unknowns: ["Node locations by zone are not in the knowledge base."],
         nextActions: [nearCap ? `Train the next ${profession.name} rank on ${label(character)}.` : `Keep ${profession.name} tracking on while questing with ${label(character)}.`],
         value: 0.2 + Math.min(0.2, profession.skill / 300) + (nearCap ? 0.05 : 0),
@@ -1092,6 +1092,11 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
   }
   // 4b. Surplus trade goods with a real market: worth listing rather than vendoring, unless a crafter here uses them.
   const usedByCrafters = new Set(onRealm.flatMap((crafter) => crafter.recipes.flatMap((recipe) => recipe.reagents.map((reagent) => reagent.itemId))));
+  // Professions whose recipe lists were never captured still use their materials: count every known recipe of an owned profession.
+  const knowledgeIndex = currentForeverKnowledge();
+  for (const profession of new Set(onRealm.flatMap((character) => character.brief.professions.map((entry) => entry.name)))) {
+    for (const id of knowledgeIndex?.bundle.recipesByProfession[profession] ?? []) for (const reagent of foreverSpell(id)?.reagents ?? []) usedByCrafters.add(reagent.itemId);
+  }
   const surplus = onRealm.flatMap((owner) => owner.held.filter((item) => !item.bound && !TOOL_ITEM_IDS.has(item.itemId) && !foreverItem(item.itemId)?.slot && foreverItem(item.itemId)?.quality !== 0 && !usedByCrafters.has(item.itemId))
     .flatMap((item) => { const market = marketPrice(item.itemId, owner.brief.realm, owner.brief.faction); const vendor = foreverItem(item.itemId)?.sellPriceCopper ?? 0; return market && market.unit! > vendor * 1.5 && (market.price.salesPerDay ?? 0) >= 1 ? [{ owner, item, market, total: market.unit! * item.qty, vendor }] : []; }))
     .sort((a, b) => b.total - a.total).slice(0, 6);
@@ -1099,11 +1104,11 @@ function generateGoldmaking(characters: CharacterEvidence[], realm: string): Dra
     const total = surplus.reduce((sum, entry) => sum + entry.total, 0);
     drafts.push({
       id: `sell-materials-${realm.toLowerCase().replace(/\W+/g, "-")}`, category: "SELL_ON_MARKET",
-      title: `Sell surplus materials on the Auction House (about ${formatCopper(total)} at market medians)`,
+      title: `Sell surplus materials on the Auction House (about ${formatCopper(total)} at 7-day medians)`,
       what: surplus.map((entry) => `${label(entry.owner)}: ${entry.item.name} x${entry.item.qty} near ${formatCopper(entry.market.unit!)} each (vendor ${formatCopper(entry.vendor)})`).join("; ") + ".",
-      why: "No crafter in this economy uses these, they sell steadily, and the market pays well above vendor.",
+      why: "No profession in this economy uses these, they sell steadily, and the market pays well above vendor.",
       supports: "GOLD", feasibility: surplus.every((entry) => entry.item.state === "OBSERVED") ? "READY_NOW" : "UNCERTAIN",
-      evidence: surplus.flatMap((entry) => [heldEvidence(entry.item, entry.owner), priceEvidence(entry.item.name, entry.market)]),
+      evidence: [...surplus.map((entry) => heldEvidence(entry.item, entry.owner)), ...[...new Map(surplus.map((entry) => [entry.item.itemId, entry])).values()].map((entry) => priceEvidence(entry.item.name, entry.market))],
       prerequisites: [], costs: ["Auction deposits (rates unverified for Forever)."], alternatives: ["Keep them if you plan to pick up a profession that uses them."],
       tradeoffs: ["Medians move; a large stack can push the price down."], unknowns: ["Auction House cut and deposit rates for Forever."],
       nextActions: [...new Set(surplus.map((entry) => entry.owner))].map((owner) => `On ${label(owner)}, list ${surplus.filter((entry) => entry.owner === owner).map((entry) => entry.item.name).join(", ")} after checking the lowest current listing.`),

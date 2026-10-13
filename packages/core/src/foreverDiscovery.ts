@@ -9,6 +9,7 @@ import { ARMOR_SUBCLASS, CLASS_BITS, ITEM_CLASS, NPC_FLAG, RACE_BITS, hasBit, ty
 import { foreverItem, foreverSpell, type ForeverItemKnowledge } from "./foreverKnowledge.ts";
 import type { ForeverTrainerService } from "./foreverTrainer.ts";
 import { hubLabel, questHubs, zoneDistance, ZONE_ADJACENCY_NOTE } from "./foreverRouting.ts";
+import { AHLEDGER_ATTRIBUTION, describePrice, marketPrice } from "./foreverPrices.ts";
 import { compareToEquipped, describeItem, eligibility, externalItem, label, sameRealmFaction, type CharacterEvidence, type Comparison, type Draft, type EvidenceLine } from "./foreverCopilot.ts";
 
 const ALLIANCE_RACE_BITS = [1, 4, 8, 64];
@@ -651,23 +652,26 @@ export function goldDiscoveryDrafts(index: ForeverKnowledgeIndex, members: Chara
   for (const [profession, gatherers] of owned) {
     const materials = (GATHERED_MATERIALS[profession] ?? []).map((id) => ({ id, item: foreverItem(id) })).filter((entry): entry is { id: number; item: ForeverItemKnowledge } => !!entry.item);
     if (!materials.length) continue;
+    const realm = members[0]?.brief.realm, faction = members[0]?.brief.faction;
     const lines = materials.map((entry) => {
       const demand = recipeDemand(index, entry.id);
+      const market = marketPrice(entry.id, realm, faction);
       const where = profession === "Herbalism" ? Object.values(index.bundle.objects).filter((object) => object.name === entry.item.name).flatMap((object) => (object.zones ?? []).map((zone) => index.zoneName(zone))).filter((zone): zone is string => !!zone && gatherers.some((character) => zonePlausible(zone, character))) : [];
-      return { name: entry.item.name, sell: entry.item.sellPriceCopper, demand, where: [...new Set(where)].slice(0, 3) };
-    });
+      return { name: entry.item.name, sell: entry.item.sellPriceCopper, demand, where: [...new Set(where)].slice(0, 3), market };
+    }).sort((a, b) => (b.market?.unit ?? -1) - (a.market?.unit ?? -1));
+    const priced = lines.filter((line) => line.market);
     const ownCrafters = [...owned.keys()].filter((name) => !GATHERING.has(name) && PRIMARY_PROFESSIONS.includes(name));
     drafts.push({
       id: `gold-gather-${profession.toLowerCase()}-${economyLabel}`, category: "GATHERING_DISCOVERY",
       title: `${profession} materials worth gathering (${gatherers.map((character) => label(character)).join(", ")})`,
-      what: lines.map((line) => `${line.name}${line.sell !== undefined ? ` (vendor ${formatCopper(line.sell)})` : ""}${line.demand.length ? `, used by ${[...new Set(line.demand.map((use) => use.profession))].join("/")} (${line.demand.length} recipes)` : ""}${line.where.length ? `, grows in ${line.where.join(", ")}` : ""}`).join("; ") + ".",
-      why: `Vendor prices are the guaranteed floor. Materials with many recipe uses are the ones crafters buy, so they are the best Auction House candidates, but their price is unknown.${ownCrafters.length ? ` In this economy, ${ownCrafters.join(" and ")} can use some of them directly.` : " Nobody in this faction economy crafts with them yet."}`,
+      what: lines.map((line) => `${line.name}${line.market ? ` (market about ${formatCopper(line.market.unit!)}, ${Math.round(line.market.price.salesPerDay ?? 0)} sold/day; vendor ${line.sell !== undefined ? formatCopper(line.sell) : "?"})` : line.sell !== undefined ? ` (vendor ${formatCopper(line.sell)})` : ""}${line.demand.length ? `, used by ${[...new Set(line.demand.map((use) => use.profession))].join("/")} (${line.demand.length} recipes)` : ""}${line.where.length ? `, grows in ${line.where.join(", ")}` : ""}`).join("; ") + ".",
+      why: `${priced.length ? `Best Auction House value first: ${priced.slice(0, 2).map((line) => `${line.name} about ${formatCopper(line.market!.unit!)}`).join(", ")} (7-day medians). Vendor prices remain the guaranteed floor.` : "Vendor prices are the guaranteed floor. Materials with many recipe uses are the ones crafters buy, so they are the best Auction House candidates, but their price is unknown."}${ownCrafters.length ? ` In this economy, ${ownCrafters.join(" and ")} can use some of them directly.` : " Nobody in this faction economy crafts with them yet."}`,
       supports: "GOLD", feasibility: "READY_NOW",
-      evidence: [...gatherers.map((character) => ({ kind: character.brief.professionsState, statement: `${label(character)} has ${profession} ${character.brief.professions.find((entry) => entry.name === profession)?.skill ?? "?"}.`, source: "observed professions" })), ...lines.slice(0, 4).map((line) => ({ kind: "EXTERNAL" as const, statement: `${line.name}: vendor ${line.sell !== undefined ? formatCopper(line.sell) : "unknown"}; ${line.demand.length} known recipe uses${line.demand.length ? ` (e.g. ${line.demand[0].recipe})` : ""}.`, source: "Wowhead Forever tooltips + QuestieDB Forever" }))],
+      evidence: [...gatherers.map((character) => ({ kind: character.brief.professionsState, statement: `${label(character)} has ${profession} ${character.brief.professions.find((entry) => entry.name === profession)?.skill ?? "?"}.`, source: "observed professions" })), ...lines.slice(0, 4).map((line) => ({ kind: "EXTERNAL" as const, statement: `${line.name}: vendor ${line.sell !== undefined ? formatCopper(line.sell) : "unknown"}; ${line.demand.length} known recipe uses${line.demand.length ? ` (e.g. ${line.demand[0].recipe})` : ""}.`, source: "Wowhead Forever tooltips + QuestieDB Forever" })), ...priced.slice(0, 3).map((line) => ({ kind: "EXTERNAL" as const, statement: describePrice(line.name, line.market!), source: AHLEDGER_ATTRIBUTION }))],
       prerequisites: [], costs: ["Time while questing."], alternatives: [], tradeoffs: ["Selling raw gives up crafting value; keep what your own crafters use."],
-      unknowns: ["Auction House prices.", "Node and creature density per zone."],
+      unknowns: [...(priced.length < lines.length ? [priced.length ? "Auction House prices for some materials." : "Auction House prices."] : []), "Node and creature density per zone."],
       nextActions: [`Keep ${profession} tracking on; vendor anything with no recipe use.`],
-      value: 0.35, confidence: 0.8, objectives: ["MAKE_GOLD", "SELF_SUFFICIENCY"],
+      value: 0.35 + (priced.length ? Math.min(0.2, (priced[0].market!.unit ?? 0) / 2_000) : 0), confidence: 0.8, objectives: ["MAKE_GOLD", "SELF_SUFFICIENCY"],
     });
   }
   // 2. Profession investment: an unowned crafting profession that turns this economy's own materials into guaranteed vendor profit.
@@ -680,21 +684,26 @@ export function goldDiscoveryDrafts(index: ForeverKnowledgeIndex, members: Chara
       const output = foreverItem(spell.createsItemId);
       const inputValue = spell.reagents.reduce((sum, reagent) => sum + (foreverItem(reagent.itemId)?.sellPriceCopper ?? Number.NaN) * reagent.quantity, 0);
       const available = spell.reagents.every((reagent) => held.has(reagent.itemId) || gatherable.has(reagent.itemId));
-      return { spell, output, margin: output?.sellPriceCopper !== undefined && Number.isFinite(inputValue) ? output.sellPriceCopper - inputValue : undefined, available };
-    }).filter((entry) => entry.available && entry.margin !== undefined && entry.margin > 0).sort((a, b) => b.margin! - a.margin!);
+      const realm = members[0]?.brief.realm, faction = members[0]?.brief.faction;
+      const outputMarket = marketPrice(spell.createsItemId, realm, faction);
+      const inputMarket = spell.reagents.reduce((sum, reagent) => sum + (marketPrice(reagent.itemId, realm, faction)?.unit ?? Number.NaN) * reagent.quantity, 0);
+      const marketMargin = outputMarket?.unit !== undefined && Number.isFinite(inputMarket) ? outputMarket.unit - inputMarket : undefined;
+      return { spell, output, margin: output?.sellPriceCopper !== undefined && Number.isFinite(inputValue) ? output.sellPriceCopper - inputValue : undefined, marketMargin, outputMarket, available };
+    }).filter((entry) => entry.available && ((entry.margin !== undefined && entry.margin > 0) || (entry.marketMargin !== undefined && entry.marketMargin > 0)))
+      .sort((a, b) => (b.marketMargin ?? b.margin ?? 0) - (a.marketMargin ?? a.margin ?? 0));
     if (!margins.length) continue;
     const best = margins.slice(0, 3);
     drafts.push({
       id: `gold-invest-${profession.toLowerCase()}-${economyLabel}`, category: "PROFESSION_INVESTMENT",
-      title: `${profession} would turn ${economyLabel}'s own materials into vendor profit`,
-      what: best.map((entry) => `${entry.spell.name}: ${entry.spell.reagents.map((reagent) => `${reagent.name} x${reagent.quantity}`).join(", ")} -> ${entry.output?.name} (+${formatCopper(entry.margin!)} per craft at vendor prices)`).join("; ") + ".",
-      why: "Every input is held or gathered inside this faction economy, and the product vendors for more than the inputs. It also builds your own supply chain instead of selling raw.",
+      title: `${profession} would turn ${economyLabel}'s own materials into ${best.some((entry) => entry.marketMargin !== undefined) ? "profit" : "vendor profit"}`,
+      what: best.map((entry) => `${entry.spell.name}: ${entry.spell.reagents.map((reagent) => `${reagent.name} x${reagent.quantity}`).join(", ")} -> ${entry.output?.name} (${[entry.marketMargin !== undefined ? `${entry.marketMargin >= 0 ? "+" : "-"}${formatCopper(Math.abs(entry.marketMargin))} per craft at 7-day market medians` : undefined, entry.margin !== undefined ? `${entry.margin >= 0 ? "+" : "-"}${formatCopper(Math.abs(entry.margin))} at vendor prices` : undefined].filter(Boolean).join("; ")})`).join("; ") + ".",
+      why: `Every input is held or gathered inside this faction economy, and the product ${best.some((entry) => entry.marketMargin !== undefined) ? "sells for more than its inputs" : "vendors for more than the inputs"}. It also builds your own supply chain instead of selling raw.`,
       supports: "BOTH", feasibility: "NEEDS_PROGRESSION",
-      evidence: best.map((entry) => ({ kind: "EXTERNAL" as const, statement: `Forever recipe ${entry.spell.name}: ${entry.spell.reagents.map((reagent) => `${reagent.name} x${reagent.quantity} (vendor ${foreverItem(reagent.itemId)?.sellPriceCopper !== undefined ? formatCopper(foreverItem(reagent.itemId)!.sellPriceCopper!) : "?"})`).join(", ")} -> ${entry.output?.name} (vendor ${entry.output?.sellPriceCopper !== undefined ? formatCopper(entry.output.sellPriceCopper) : "?"}).`, source: entry.spell.sourceUrl })),
+      evidence: [...best.map((entry) => ({ kind: "EXTERNAL" as const, statement: `Forever recipe ${entry.spell.name}: ${entry.spell.reagents.map((reagent) => `${reagent.name} x${reagent.quantity} (vendor ${foreverItem(reagent.itemId)?.sellPriceCopper !== undefined ? formatCopper(foreverItem(reagent.itemId)!.sellPriceCopper!) : "?"})`).join(", ")} -> ${entry.output?.name} (vendor ${entry.output?.sellPriceCopper !== undefined ? formatCopper(entry.output.sellPriceCopper) : "?"}).`, source: entry.spell.sourceUrl })), ...best.flatMap((entry) => entry.outputMarket && entry.output ? [{ kind: "EXTERNAL" as const, statement: describePrice(entry.output.name, entry.outputMarket), source: AHLEDGER_ATTRIBUTION }] : [])],
       prerequisites: [`Learn ${profession} (training cost unknown) and reach the recipe's skill.`], costs: ["Training fee unknown."],
       alternatives: [], tradeoffs: ["Uses a primary profession slot."], unknowns: ["Recipe skill requirements unless trainer-observed."],
       nextActions: [`Decide which character in ${economyLabel} has a free profession slot, then learn ${profession}.`],
-      value: Math.min(0.5, 0.25 + best[0].margin! / 200), confidence: 0.8, objectives: ["MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY"],
+      value: Math.min(0.55, 0.25 + (best[0].marketMargin ?? best[0].margin ?? 0) / (best[0].marketMargin !== undefined ? 1_000 : 200)), confidence: 0.8, objectives: ["MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY"],
     });
   }
   return drafts.map((draft) => ({ ...draft, realm: economyLabel }));
