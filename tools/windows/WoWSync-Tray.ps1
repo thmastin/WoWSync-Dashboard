@@ -73,7 +73,13 @@ $Icons = @{
 function Read-Json([string]$Name) {
     $path = Join-Path $AppDir $Name
     if (-not (Test-Path -LiteralPath $path)) { return $null }
-    try { return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { return $null }
+    # Share read/write/delete so the collector can replace the file while we read it; a plain read
+    # blocks its rename on Windows and used to crash the watcher (EPERM).
+    try {
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]'ReadWrite, Delete')
+        try { $text = (New-Object IO.StreamReader($stream)).ReadToEnd() } finally { $stream.Dispose() }
+        return $text | ConvertFrom-Json
+    } catch { return $null }
 }
 function Age-Seconds($When) {
     if (-not $When) { return $null }
@@ -158,8 +164,8 @@ $startStopItem = $menu.Items.Add('Stop collector')
 $startStopItem.add_Click({
     if ($script:lastHealth -and $script:lastHealth.Running) {
         $answer = [System.Windows.Forms.MessageBox]::Show('Stop capturing? Exports will not reach the Dashboard until you start it again (it also restarts at next sign-in).', 'WoWSync', 'YesNo', 'Question')
-        if ($answer -eq 'Yes') { Invoke-Capture 'Stop' }
-    } else { Invoke-Capture 'Start' }
+        if ($answer -eq 'Yes') { $script:userStopped = $true; Invoke-Capture 'Stop' }
+    } else { $script:userStopped = $false; Invoke-Capture 'Start' }
 })
 $logsItem = $menu.Items.Add('Open logs folder')
 $logsItem.add_Click({ Start-Process explorer.exe $AppDir })
@@ -171,6 +177,8 @@ $tray.add_DoubleClick({ $detailsItem.PerformClick() })
 
 $script:lastHealth = $null
 $script:lastState = $null
+$script:userStopped = $false
+$script:lastAutoStart = [DateTime]::MinValue
 function Update-Tray {
     $health = Get-Health
     $script:lastHealth = $health
@@ -188,6 +196,13 @@ function Update-Tray {
         elseif ($health.State -eq 'Green' -and $script:lastState -in @('Red', 'Amber')) { $tray.ShowBalloonTip(3000, 'WoWSync', 'Capturing again', 'Info') }
     }
     $script:lastState = $health.State
+    # The logon task only restarts on a failed exit; if the collector stops on its own, start it again
+    # (never when the user chose Stop here), at most once every two minutes.
+    if ($health.State -eq 'Red' -and -not $health.Running -and -not $script:userStopped -and ((Get-Date) - $script:lastAutoStart).TotalSeconds -ge 120) {
+        $script:lastAutoStart = Get-Date
+        Invoke-Capture 'Start'
+        $tray.ShowBalloonTip(4000, 'WoWSync', 'The collector stopped on its own; starting it again.', 'Warning')
+    }
 }
 
 $timer = New-Object System.Windows.Forms.Timer

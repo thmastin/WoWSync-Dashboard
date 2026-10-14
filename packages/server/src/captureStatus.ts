@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { CaptureStatusEvent } from "./watchSaved.ts";
 
@@ -44,11 +44,25 @@ export function createCaptureStatusWriter(file: string, now: () => Date = () => 
     }
   } catch { /* first run or an interrupted earlier write: start with a clean status record */ }
 
+  // The status file is advisory. On Windows a reader (tray icon, antivirus, indexer) holding status.json
+  // open makes the replace fail with EPERM/EBUSY for a moment; retry briefly, then skip this update.
+  // A status write must never stop capture.
   function write(patch: Partial<CaptureAgentStatus> = {}): void {
     current = { ...current, ...patch, heartbeatAt: now().toISOString() };
     const temporary = `${destination}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    renameSync(temporary, destination);
+    try {
+      writeFileSync(temporary, `${JSON.stringify(current, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      for (let attempt = 0; ; attempt += 1) {
+        try { renameSync(temporary, destination); return; } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (attempt >= 5 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+        }
+      }
+    } catch (error) {
+      try { unlinkSync(temporary); } catch { /* already gone */ }
+      process.stderr.write(`capture status not updated (${(error as NodeJS.ErrnoException).code ?? "error"}); capture continues\n`);
+    }
   }
 
   function apply(event: CaptureStatusEvent): void {
