@@ -23,6 +23,7 @@ import { buildErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erp
 import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
 import { ForeverKnowledgeStore, foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
 import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboard/core/foreverKnowledgeLookup.ts";
+import { recipeLearnSkills } from "@wowsync-dashboard/core/foreverRecipeLearning.ts";
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS } from "@wowsync-dashboard/core/foreverPrices.ts";
@@ -547,12 +548,24 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     return textResult(answer);
   });
   const professionsWithCaptureIssue = (query: { version: VersionOrUnknown; name: string; realm?: string }, result: unknown) => {
-    const issue = query.version === "forever" ? readModel.getForeverRecipeCaptureIssue(query as never) : undefined;
-    return issue ? { ...(result as object), latestRecipeCapture: { state: "FAILED", error: issue.error, at: issue.at, snapshotId: issue.snapshotId, note: "Recipe rows are from the last successful capture (LAST_SEEN). Reopen the profession window, then /wowsync and /reload." } } : result;
+    if (query.version !== "forever") return result;
+    const issue = readModel.getForeverRecipeCaptureIssue(query as never);
+    const visits = readModel.getForeverTrainerVisits(query as never);
+    const trainerVisits = visits.status === "FOUND" ? visits.value : [];
+    const index = foreverKnowledge.get();
+    // Add learnSkill to each recipe row: trainer window (OBSERVED) or pattern tooltip (EXTERNAL, matched by name).
+    const withLearn = JSON.parse(JSON.stringify(result)) as { value?: { data?: { recipeKnowledge?: { data?: { professions?: Array<{ professionName?: string; name?: string; recipes?: Array<{ recipeID: number; name?: string; learnSkill?: unknown }> }> } } } } };
+    for (const profession of withLearn.value?.data?.recipeKnowledge?.data?.professions ?? []) {
+      const name = profession.professionName ?? profession.name;
+      if (!name || !profession.recipes) continue;
+      const learn = recipeLearnSkills(name, profession.recipes.flatMap((recipe) => typeof recipe.name === "string" ? [{ recipeID: recipe.recipeID, name: recipe.name }] : []), trainerVisits, index);
+      for (const recipe of profession.recipes) { const source = learn.get(recipe.recipeID); if (source) recipe.learnSkill = source; }
+    }
+    return issue ? { ...withLearn, latestRecipeCapture: { state: "FAILED", error: issue.error, at: issue.at, snapshotId: issue.snapshotId, note: "Recipe rows are from the last successful capture (LAST_SEEN). Reopen the profession window, then /wowsync and /reload." } } : withLearn;
   };
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
-    description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. Recipe sources: Retail C_TradeSkillUI captures, Forever structured captures (any well-formed build; unverified builds are labelled), and Classic Era / TBC rows from a profession window the player opened (TradeSkill rows are the character's own learned list; Craft-window rows such as Enchanting are visible with learnedState UNKNOWN; Enchanting outputs are enchant identities, not items). Candidate recipe coverage is partial; absence does not mean unlearned. For Forever, latestRecipeCapture FAILED means the newest export could not refresh the recipe list (reason included) and rows are from the last successful capture; and an earlier observation is labelled LAST_SEEN with its source snapshot. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",
+    description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. Recipe sources: Retail C_TradeSkillUI captures, Forever structured captures (any well-formed build; unverified builds are labelled), and Classic Era / TBC rows from a profession window the player opened (TradeSkill rows are the character's own learned list; Craft-window rows such as Enchanting are visible with learnedState UNKNOWN; Enchanting outputs are enchant identities, not items). Candidate recipe coverage is partial; absence does not mean unlearned. For Forever, each recipe may carry learnSkill { rank, basis TRAINER_OBSERVED (trainer window, with cost) or PATTERN_TOOLTIP (pattern item tooltip, matched by name; item and where it comes from) }; recipes without it have no known learn skill yet. latestRecipeCapture FAILED means the newest export could not refresh the recipe list (reason included) and rows are from the last successful capture; and an earlier observation is labelled LAST_SEEN with its source snapshot. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(professionsWithCaptureIssue(query, readModel.getCharacterProfessions(query))));

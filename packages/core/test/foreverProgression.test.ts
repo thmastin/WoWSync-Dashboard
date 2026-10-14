@@ -157,3 +157,20 @@ test("A failed latest recipe capture is surfaced in answers and in the read mode
   const clean = brammWith(TREE);
   try { assert.equal(clean.read.getForeverRecipeCaptureIssue({ version: "forever", name: "Bramm" }), undefined, "no issue when the export reports none"); } finally { clean.store.close(); }
 });
+
+test("Recipe learn skill comes from observed trainer services first, then pattern tooltips matched by name", async () => {
+  const { recipeLearnSkills } = await import("../src/foreverRecipeLearning.ts");
+  const bundle = JSON.parse(readFileSync(new URL("knowledge-fixture.json", FIXTURE_DIR), "utf8")) as ForeverKnowledgeBundle;
+  bundle.items["4293"] = { name: "Pattern: Hillman's Leather Vest", cls: 9, vendors: [990101] };
+  bundle.tooltips.items["4293"] = { id: 4293, name: "Pattern: Hillman's Leather Vest", stats: [], requiresSkill: { name: "Leatherworking", level: 100 }, sourceUrl: "https://www.wowhead.com/forever/item=4293", retrievedAt: "2026-10-14T00:00:00Z" };
+  bundle.recipeItems["4293"] = { profession: "Leatherworking", skill: 100, teaches: "Hillman's Leather Vest" };
+  bundle.recipeItems["9999001"] = { profession: "Tailoring", skill: 50, teaches: "Handstitched Leather Belt" };
+  const index = new ForeverKnowledgeIndex(bundle);
+  const recipes = [{ recipeID: 1, name: "Hillman's Leather Vest" }, { recipeID: 2, name: "Handstitched Leather Belt" }, { recipeID: 3, name: "Light Armor Kit" }];
+  const visits = [{ kind: "Leatherworking", observedAt: 1791900000, serviceCount: 1, services: [{ name: "Light Armor Kit", skillRequirement: { skill: "Leatherworking", rank: 1 }, costCopper: 50 }] }] as never;
+  const learn = recipeLearnSkills("Leatherworking", recipes, visits, index);
+  assert.deepEqual(learn.get(1), { rank: 100, basis: "PATTERN_TOOLTIP", item: { id: 4293, name: "Pattern: Hillman's Leather Vest" }, obtainedFrom: ["sold by Synthetic Plainswalker in Mulgore (47.0, 60.0) (Horde)"] });
+  assert.equal(learn.get(2), undefined, "a pattern of another profession is not matched");
+  assert.equal(learn.get(3)?.basis, "TRAINER_OBSERVED");
+  assert.equal(learn.get(3)?.costCopper, 50);
+});

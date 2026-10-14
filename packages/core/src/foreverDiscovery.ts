@@ -10,6 +10,7 @@ import { foreverItem, foreverSpell, type ForeverItemKnowledge } from "./foreverK
 import type { ForeverTrainerService } from "./foreverTrainer.ts";
 import { hubLabel, questHubs, zoneDistance, ZONE_ADJACENCY_NOTE } from "./foreverRouting.ts";
 import { AHLEDGER_ATTRIBUTION, describePrice, marketPrice } from "./foreverPrices.ts";
+import { recipeLearnSkills } from "./foreverRecipeLearning.ts";
 import { compareToEquipped, describeItem, eligibility, externalItem, label, sameRealmFaction, type CharacterEvidence, type Comparison, type Draft, type EvidenceLine } from "./foreverCopilot.ts";
 
 const ALLIANCE_RACE_BITS = [1, 4, 8, 64];
@@ -618,6 +619,43 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
       prerequisites: [`Raise ${visit.kind} from ${skill} to the listed skill.`], costs: [`Training ${formatCopper(reachable.slice(0, 8).reduce((sum, entry) => sum + (entry.service.costCopper ?? 0), 0))} for the listed recipes, plus materials.`],
       alternatives: [], tradeoffs: [], unknowns: [], nextActions: [`Level ${visit.kind} with the recipes you know, then train the next recipe.`],
       value: upgrades.length ? 0.5 : 0.3, confidence: 0.95, objectives: ["DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY", "GEAR"],
+    });
+  }
+
+  // Recipes to learn next, per profession: learn skill from trainer windows or pattern tooltips, and where to get them.
+  const learnedIds = new Set(subject.recipes.map((recipe) => recipe.recipeID));
+  for (const profession of subject.brief.professions) {
+    const catalog = subject.catalog.filter((recipe) => recipe.profession === profession.name);
+    if (!catalog.length) continue;
+    const unlearned = catalog.filter((recipe) => !learnedIds.has(recipe.recipeID));
+    const learn = recipeLearnSkills(profession.name, catalog, subject.trainerVisits, index);
+    const known = unlearned.flatMap((recipe) => { const source = learn.get(recipe.recipeID); return source ? [{ recipe, source }] : []; });
+    const reach = known.filter((entry) => entry.source.rank <= profession.skill + 25).sort((a, b) => a.source.rank - b.source.rank);
+    if (!reach.length) continue;
+    const describe = (entry: (typeof reach)[number]) => {
+      const price = entry.source.item ? marketPrice(entry.source.item.id, subject.brief.realm, subject.brief.faction) : undefined;
+      const how = entry.source.basis === "TRAINER_OBSERVED" ? `trainer${entry.source.costCopper !== undefined ? ` ${formatCopper(entry.source.costCopper)}` : ""}` : `${entry.source.item!.name}${price ? `, market about ${formatCopper(price.unit!)}` : ""}${entry.source.obtainedFrom?.length ? `, ${entry.source.obtainedFrom[0]}` : ""}`;
+      return `${entry.recipe.name} at ${entry.source.rank} (${how})`;
+    };
+    const now = reach.filter((entry) => entry.source.rank <= profession.skill);
+    const soon = reach.filter((entry) => entry.source.rank > profession.skill);
+    const unknownCount = unlearned.length - known.length;
+    drafts.push({
+      id: `profession-learn-${profession.name.toLowerCase().replace(/\W+/g, "-")}`, category: "PROFESSION_TRAINING",
+      title: `${profession.name} recipes to learn next (skill ${profession.skill}): ${now.length} now, ${soon.length} within 25 points`,
+      what: [now.length ? `Learnable now: ${now.slice(0, 6).map(describe).join("; ")}.` : "", soon.length ? `Next: ${soon.slice(0, 6).map(describe).join("; ")}.` : ""].filter(Boolean).join(" "),
+      why: "These are recipes you have not learned whose learn skill is known, with where to get them. Learning the cheapest ones at your skill keeps skill-ups coming.",
+      supports: "BOTH", feasibility: now.length ? "READY_NOW" : "NEEDS_PROGRESSION",
+      evidence: [
+        { kind: "OBSERVED", statement: `${profession.name} catalog from the client: ${catalog.length} recipes, ${unlearned.length} not learned; skill ${profession.skill}/${profession.maxSkill}.`, source: "Forever C_TradeSkillUI catalog" },
+        ...(reach.some((entry) => entry.source.basis === "TRAINER_OBSERVED") ? [{ kind: "OBSERVED" as const, statement: "Trainer recipes: skill and cost from the profession trainer window.", source: "Forever trainer window (GetTrainerServiceSkillReq)" }] : []),
+        ...(reach.some((entry) => entry.source.basis === "PATTERN_TOOLTIP") ? [{ kind: "EXTERNAL" as const, statement: "Pattern recipes: learn skill from the Forever item tooltip; pattern matched to the recipe by name in the same profession (DERIVED); sources from QuestieDB.", source: "Wowhead Forever tooltips + QuestieDB Forever" }] : []),
+      ],
+      prerequisites: soon.length ? [`Raise ${profession.name} to ${soon[0].source.rank} for the next one.`] : [], costs: ["Training fees or pattern prices; materials."],
+      alternatives: [], tradeoffs: [],
+      unknowns: unknownCount > 0 ? [`${unknownCount} unlearned ${profession.name} recipes have no known learn skill yet (trainer tiers not seen): open the ${profession.name} trainer to record them.`] : [],
+      nextActions: now.length ? [`Learn ${now[0].recipe.name}${now[0].source.basis === "TRAINER_OBSERVED" ? " at the trainer" : ` (${now[0].source.item!.name})`}.`] : [`Level ${profession.name} to ${soon[0].source.rank}.`],
+      value: 0.3 + Math.min(0.15, now.length * 0.03), confidence: 0.85, objectives: ["DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY"],
     });
   }
 
