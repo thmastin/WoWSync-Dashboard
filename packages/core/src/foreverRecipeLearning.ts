@@ -26,8 +26,17 @@ export function recipeLearnSkills(
   recipes: Array<{ recipeID: number; name: string }>,
   trainerVisits: ForeverTrainerVisit[],
   index?: ForeverKnowledgeIndex,
+  /** "Alliance" or "Horde": vendors and quests of the other faction are not offered as sources. */
+  faction?: string,
 ): Map<number, RecipeLearnSource> {
   const result = new Map<number, RecipeLearnSource>();
+  const side = faction?.toUpperCase().startsWith("H") ? "H" : faction?.toUpperCase().startsWith("A") ? "A" : undefined;
+  const allianceBits = [1, 4, 8, 64], hordeBits = [2, 16, 32, 128];
+  const questUsable = (races: number | undefined) => {
+    if (!side || !races) return true;
+    const bits = side === "A" ? allianceBits : hordeBits;
+    return bits.some((bit) => Math.floor(races / bit) % 2 === 1);
+  };
   const byName = new Map<string, number[]>();
   for (const recipe of recipes) byName.set(norm(recipe.name), [...(byName.get(norm(recipe.name)) ?? []), recipe.recipeID]);
 
@@ -40,10 +49,17 @@ export function recipeLearnSkills(
       const recipeIds = candidates.flatMap((name) => byName.get(norm(name)) ?? []);
       if (!recipeIds.length || !itemName) continue;
       const bundleItem = index.item(itemId);
+      // Sources the character's faction can use; other-faction vendors and quests are summarized, not offered.
+      const vendors = bundleItem?.vendors ?? [];
+      const usableVendors = vendors.filter((npc) => { const friendly = index.npc(npc)?.friendly; return !side || !friendly || friendly.includes(side); });
+      const quests = bundleItem?.questRewards ?? [];
+      const usableQuests = quests.filter((quest) => questUsable(index.quest(quest)?.races));
       const obtainedFrom = [
-        ...(bundleItem?.vendors ?? []).slice(0, 3).map((npc) => { const n = index.npc(npc); return `sold by ${index.npcLocation(n) ?? `npc ${npc}`}${n?.friendly ? ` (${n.friendly.replace("A", "Alliance ").replace("H", "Horde").trim()})` : ""}`; }),
+        ...usableVendors.slice(0, 3).map((npc) => `sold by ${index.npcLocation(index.npc(npc)) ?? `npc ${npc}`}`),
         ...(bundleItem?.dropNpcs ?? []).slice(0, 3).map((npc) => { const n = index.npc(npc); return `drops from ${n?.name ?? `npc ${npc}`}${n?.zone ? ` in ${index.zoneName(n.zone)}` : ""}`; }),
-        ...(bundleItem?.questRewards ?? []).slice(0, 2).map((quest) => `reward from "${index.quest(quest)?.name ?? `quest ${quest}`}"`),
+        ...usableQuests.slice(0, 2).map((quest) => `reward from "${index.quest(quest)?.name ?? `quest ${quest}`}"`),
+        ...((vendors.length > usableVendors.length || quests.length > usableQuests.length) && !usableVendors.length && !usableQuests.length && !(bundleItem?.dropNpcs ?? []).length
+          ? ["other faction only (Auction House or a cross-faction trade)"] : []),
       ];
       for (const recipeID of new Set(recipeIds)) {
         const existing = result.get(recipeID);

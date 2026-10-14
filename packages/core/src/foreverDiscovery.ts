@@ -628,7 +628,7 @@ export function discoveryDrafts(index: ForeverKnowledgeIndex, actual: CharacterE
     const catalog = subject.catalog.filter((recipe) => recipe.profession === profession.name);
     if (!catalog.length) continue;
     const unlearned = catalog.filter((recipe) => !learnedIds.has(recipe.recipeID));
-    const learn = recipeLearnSkills(profession.name, catalog, subject.trainerVisits, index);
+    const learn = recipeLearnSkills(profession.name, catalog, subject.trainerVisits, index, subject.brief.faction ?? undefined);
     const known = unlearned.flatMap((recipe) => { const source = learn.get(recipe.recipeID); return source ? [{ recipe, source }] : []; });
     const reach = known.filter((entry) => entry.source.rank <= profession.skill + 25).sort((a, b) => a.source.rank - b.source.rank);
     if (!reach.length) continue;

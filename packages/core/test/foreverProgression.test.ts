@@ -169,7 +169,9 @@ test("Recipe learn skill comes from observed trainer services first, then patter
   const recipes = [{ recipeID: 1, name: "Hillman's Leather Vest" }, { recipeID: 2, name: "Handstitched Leather Belt" }, { recipeID: 3, name: "Light Armor Kit" }];
   const visits = [{ kind: "Leatherworking", observedAt: 1791900000, serviceCount: 1, services: [{ name: "Light Armor Kit", skillRequirement: { skill: "Leatherworking", rank: 1 }, costCopper: 50 }] }] as never;
   const learn = recipeLearnSkills("Leatherworking", recipes, visits, index);
-  assert.deepEqual(learn.get(1), { rank: 100, basis: "PATTERN_TOOLTIP", item: { id: 4293, name: "Pattern: Hillman's Leather Vest" }, obtainedFrom: ["sold by Synthetic Plainswalker in Mulgore (47.0, 60.0) (Horde)"] });
+  assert.deepEqual(learn.get(1), { rank: 100, basis: "PATTERN_TOOLTIP", item: { id: 4293, name: "Pattern: Hillman's Leather Vest" }, obtainedFrom: ["sold by Synthetic Plainswalker in Mulgore (47.0, 60.0)"] });
+  assert.deepEqual(recipeLearnSkills("Leatherworking", recipes, [], index, "Alliance").get(1)?.obtainedFrom, ["other faction only (Auction House or a cross-faction trade)"], "Horde-only vendor is not offered to Alliance");
+  assert.deepEqual(recipeLearnSkills("Leatherworking", recipes, [], index, "Horde").get(1)?.obtainedFrom, ["sold by Synthetic Plainswalker in Mulgore (47.0, 60.0)"], "same-faction vendor offered");
   assert.equal(learn.get(2), undefined, "a pattern of another profession is not matched");
   assert.equal(learn.get(3)?.basis, "TRAINER_OBSERVED");
   assert.equal(learn.get(3)?.costCopper, 50);

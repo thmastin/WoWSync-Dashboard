@@ -553,12 +553,13 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const visits = readModel.getForeverTrainerVisits(query as never);
     const trainerVisits = visits.status === "FOUND" ? visits.value : [];
     const index = foreverKnowledge.get();
+    const faction = (readModel.listCharacters({ version: "forever" }).find((entry) => entry.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || entry.realm === query.realm)) as { faction?: string } | undefined)?.faction;
     // Add learnSkill to each recipe row: trainer window (OBSERVED) or pattern tooltip (EXTERNAL, matched by name).
     const withLearn = JSON.parse(JSON.stringify(result)) as { value?: { data?: { recipeKnowledge?: { data?: { professions?: Array<{ professionName?: string; name?: string; recipes?: Array<{ recipeID: number; name?: string; learnSkill?: unknown }> }> } } } } };
     for (const profession of withLearn.value?.data?.recipeKnowledge?.data?.professions ?? []) {
       const name = profession.professionName ?? profession.name;
       if (!name || !profession.recipes) continue;
-      const learn = recipeLearnSkills(name, profession.recipes.flatMap((recipe) => typeof recipe.name === "string" ? [{ recipeID: recipe.recipeID, name: recipe.name }] : []), trainerVisits, index);
+      const learn = recipeLearnSkills(name, profession.recipes.flatMap((recipe) => typeof recipe.name === "string" ? [{ recipeID: recipe.recipeID, name: recipe.name }] : []), trainerVisits, index, faction);
       for (const recipe of profession.recipes) { const source = learn.get(recipe.recipeID); if (source) recipe.learnSkill = source; }
     }
     return issue ? { ...withLearn, latestRecipeCapture: { state: "FAILED", error: issue.error, at: issue.at, snapshotId: issue.snapshotId, note: "Recipe rows are from the last successful capture (LAST_SEEN). Reopen the profession window, then /wowsync and /reload." } } : withLearn;
