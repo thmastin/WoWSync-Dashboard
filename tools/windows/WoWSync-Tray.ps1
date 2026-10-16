@@ -47,6 +47,15 @@ if ($Uninstall) { Uninstall-Tray; return }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+# Errors go to tray-errors.log instead of silently ending the tray. Must be set before any control exists.
+$TrayLog = Join-Path $AppDir 'tray-errors.log'
+function Write-TrayError([string]$Where, $ErrorRecord) {
+    try { Add-Content -LiteralPath $TrayLog -Value ('{0} {1}: {2}' -f (Get-Date -Format o), $Where, $ErrorRecord) -Encoding UTF8 } catch { }
+}
+if (-not $CheckHealth) {
+    [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
+    [System.Windows.Forms.Application]::add_ThreadException({ param($sender, $e) Write-TrayError 'unhandled' $e.Exception })
+}
 
 function New-StatusIcon([System.Drawing.Color]$Color) {
     $bitmap = New-Object System.Drawing.Bitmap 32, 32
@@ -149,13 +158,27 @@ $pendingItem.Enabled = $false
 $dashboardItem = $menu.Items.Add('Open Dashboard')
 $dashboardItem.add_Click({ Start-Process $DashboardUrl })
 $detailsItem = $menu.Items.Add('Status details...')
+# The full status check takes several seconds (network probes); running it on the UI thread froze the
+# icon and Windows closed it as hung. Run it in a hidden process and show the result when it finishes.
+$script:statusProcess = $null
+$script:statusFile = Join-Path $env:TEMP 'WoWSync-tray-status.txt'
+$statusTimer = New-Object System.Windows.Forms.Timer
+$statusTimer.Interval = 500
+$statusTimer.add_Tick({
+    if ($script:statusProcess -and $script:statusProcess.HasExited) {
+        $statusTimer.Stop()
+        $script:statusProcess.Dispose(); $script:statusProcess = $null
+        $text = 'Status unavailable.'
+        try { $text = ([IO.File]::ReadAllText($script:statusFile)).Trim() } catch { }
+        [System.Windows.Forms.MessageBox]::Show($text, 'WoWSync status', 'OK', 'Information') | Out-Null
+    }
+})
 $detailsItem.add_Click({
-    [System.Windows.Forms.Cursor]::Current = [System.Windows.Forms.Cursors]::WaitCursor
-    try {
-        $powershell = (Get-Command powershell.exe).Source
-        $text = (& $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $CaptureScript -Mode Status | Out-String -Width 160).Trim()
-    } catch { $text = "Status failed: $($_.Exception.Message)" }
-    [System.Windows.Forms.MessageBox]::Show($text, 'WoWSync status', 'OK', 'Information') | Out-Null
+    if ($script:statusProcess) { return }
+    $powershell = (Get-Command powershell.exe).Source
+    $command = "& '$CaptureScript' -Mode Status | Out-String -Width 160 | Set-Content -LiteralPath '$($script:statusFile)' -Encoding UTF8"
+    $script:statusProcess = Start-Process -FilePath $powershell -WindowStyle Hidden -PassThru -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+    $statusTimer.Start()
 })
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 $restartItem = $menu.Items.Add('Restart collector')
@@ -207,7 +230,7 @@ function Update-Tray {
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 10000
-$timer.add_Tick({ try { Update-Tray } catch { } })
+$timer.add_Tick({ try { Update-Tray } catch { Write-TrayError 'update' $_ } })
 Update-Tray
 $timer.Start()
 try {
