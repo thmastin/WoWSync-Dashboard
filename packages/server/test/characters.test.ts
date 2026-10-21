@@ -211,7 +211,8 @@ test("snapshot-scoped crafted upgrade assessment REST and AccountContext share R
   }, (store) => { seedRordinSnapshot180(store); });
 });
 
-test("snapshot 180 quest REST and AccountContext expose the canonical quest projection without the gear GUID gate", async () => {
+test("snapshot 180 quest REST and AccountContext expose the canonical quest projection without the gear GUID gate", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: (RORDIN_SNAPSHOT_180.generatedAt + 30) * 1000 });
   await withApp(async (api) => {
     const key = RORDIN_SNAPSHOT_180.identity.identityKey;
     const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests?snapshotId=180`);

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -71,6 +71,11 @@ function digest(pathname: string): string {
 test("the local STDIO MCP server exposes only bounded read tools over the read-only store", async () => {
   const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-"));
   const databasePath = path.join(temporaryDirectory, "fixture.sqlite");
+  const fixedClockModule = path.join(temporaryDirectory, "fixed-clock.mjs");
+  const clockFile = path.join(temporaryDirectory, "clock.txt");
+  const actualNow = Math.floor(Date.now() / 1000);
+  writeFileSync(clockFile, String(actualNow));
+  writeFileSync(fixedClockModule, `import { readFileSync } from "node:fs"; import { fileURLToPath } from "node:url"; const clock = fileURLToPath(new URL("./clock.txt", import.meta.url)); const NativeDate = Date; globalThis.Date = class extends NativeDate { static now() { return Number(readFileSync(clock, "utf8")) * 1000; } };`);
   const writer = new SqliteSnapshotStore(databasePath);
   let operationsContextProjectId = "";
   try {
@@ -158,7 +163,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const client = new Client({ name: "wowsync-mcp-protocol-test", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [entrypoint],
+    args: ["--import", pathToFileURL(fixedClockModule).href, entrypoint],
     cwd: packageRoot,
     env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
     stderr: "pipe",
@@ -387,6 +392,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(foreverQuests.value?.data?.completedHistory.questIDs, [444]);
     assert.equal(foreverQuests.value?.data?.completedHistory.quests?.[0]?.title, "Old MCP Quest");
     assert.equal(foreverQuests.value?.data?.completeness, "partial");
+    writeFileSync(clockFile, String(RORDIN_SNAPSHOT_180.generatedAt + 30));
     const realForeverQuests = structured<{ status: string; value?: { provenance: { identityKey: string; snapshotId: number; state: string }; data?: { active?: Array<{ questID: number; objectiveState: string; objectives?: unknown[] }>; completedHistory: { questIDs?: number[] } } } }>(await client.callTool({ name: "get_forever_character_quests", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
     assert.equal(realForeverQuests.status, "FOUND");
     assert.equal(realForeverQuests.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
@@ -397,10 +403,11 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.deepEqual(realForeverQuests.value?.data?.active?.find((row) => row.questID === 98322)?.objectives, []);
     const questReadStore = new SqliteSnapshotReadStore(databasePath);
     try {
-      const questNow = Math.floor(Date.now() / 1000);
+      const questNow = RORDIN_SNAPSHOT_180.generatedAt + 30;
       const expectedQuestProjection = new DashboardReadModel(questReadStore, () => questNow).getForeverQuestObservation({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: 180 });
       assert.deepEqual(realForeverQuests, expectedQuestProjection, "the registered MCP protocol handler returns the canonical read model result unchanged");
     } finally { questReadStore.close(); }
+    writeFileSync(clockFile, String(actualNow));
     const realCraftedUpgrade = structured<{ status: string; value?: any }>(await client.callTool({ name: "get_forever_crafted_upgrade_assessment", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
     assert.equal(realCraftedUpgrade.status, "FOUND");
     assert.equal(realCraftedUpgrade.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
