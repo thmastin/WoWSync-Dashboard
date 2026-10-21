@@ -57,6 +57,8 @@ export interface WoWSyncMcpConfiguration {
   researchRoot?: string;
   /** Optional process-owned loopback Dashboard origin. Enables planning-record writes through the existing REST validation boundary. */
   planningApiBaseUrl?: string;
+  /** Exposes the bounded Forever-only tool profile selected by process configuration. */
+  profile?: "forever";
 }
 
 export interface WoWSyncMcpServer {
@@ -176,6 +178,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
     },
   );
+  const foreverProfile = configuration.profile === "forever";
   let storeClosed = false;
   const closeStore = () => {
     if (storeClosed) return;
@@ -188,7 +191,25 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   // One stderr line per tool call (name, outcome, duration; never arguments or results) so a host such as
   // the Secure MCP Tunnel leaves verifiable evidence of which tools a connected client actually used.
   const registerTool = server.registerTool.bind(server);
-  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) => registerTool(name, config as never, (async (...args: unknown[]) => {
+  const foreverHandlers = new Map<string, { config: Record<string, unknown>; handler: (...args: unknown[]) => unknown }>();
+  const foreverAliases: Record<string, string> = {
+    list_characters: "list_forever_characters",
+    get_character_storage: "get_forever_items",
+    search_items: "get_forever_items",
+  };
+  const foreverNames = new Set([
+    "list_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation",
+    "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests",
+    "get_character_progression", "lookup_forever_knowledge", "get_forever_market_prices",
+    "find_recipe_crafters", "get_character_trainer", "get_character_storage", "search_items",
+  ]);
+  server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) => {
+    const typedConfig = config as Record<string, unknown>;
+    if (foreverProfile) {
+      if (foreverNames.has(name)) foreverHandlers.set(name, { config: typedConfig, handler });
+      return server;
+    }
+    return registerTool(name, config as never, (async (...args: unknown[]) => {
     const started = Date.now();
     let outcome = "ok";
     try {
@@ -201,7 +222,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     } finally {
       process.stderr.write(`WoWSync MCP tool=${name} outcome=${outcome} ms=${Date.now() - started}\n`);
     }
-  }) as never)) as typeof server.registerTool;
+    }) as never);
+  }) as typeof server.registerTool;
 
   server.registerTool("list_versions", {
     title: "List WoWSync version buckets",
@@ -730,6 +752,31 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const markdown = document.markdown.slice(0, MAX_DOCUMENT_CHARACTERS);
     return textResult({ document: documentMetadata(document), markdown, returnedCharacters: markdown.length, totalCharacters: document.markdown.length, truncated: markdown.length < document.markdown.length, source: "registered research document" });
   });
+
+  if (foreverProfile) {
+    const profileToolNames = ["list_forever_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests", "get_character_progression", "get_forever_items", "lookup_forever_knowledge", "get_forever_market_prices", "find_recipe_crafters", "get_character_trainer"];
+    for (const exposedName of profileToolNames) {
+      const sourceName = exposedName === "list_forever_characters" ? "list_characters" : exposedName === "get_forever_items" ? "get_character_storage" : exposedName;
+      const selected = foreverHandlers.get(sourceName);
+      if (!selected) continue;
+      const config = { ...selected.config };
+      const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
+      const profileShape = { ...shape, version: z.literal("forever") };
+      if (exposedName === "list_forever_characters") config.inputSchema = z.object({ version: z.literal("forever"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
+      else if (exposedName === "get_forever_items") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema.optional(), realm: realmSchema.optional(), storage: z.enum(["bags", "bank"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.query !== undefined && args.name === undefined && args.realm === undefined && args.storage === undefined) || (args.query === undefined && args.name !== undefined && args.realm !== undefined && args.storage !== undefined), "Pass query alone or name, realm, and storage together.");
+      else {
+        if ("realm" in profileShape) profileShape.realm = realmSchema;
+        config.inputSchema = z.object(profileShape).strict();
+      }
+      registerTool(exposedName, config as never, (async (args: Record<string, unknown>) => {
+        let result: unknown;
+        if (exposedName === "get_forever_items") result = "query" in args ? await foreverHandlers.get("search_items")!.handler(args) : await foreverHandlers.get("get_character_storage")!.handler(args);
+        else result = await selected.handler({ ...args, version: "forever" });
+        const serialized = JSON.stringify((result as { structuredContent?: unknown })?.structuredContent ?? result);
+        return serialized.length <= MAX_DOCUMENT_CHARACTERS ? result : textResult({ error: { code: "RESULT_TOO_LARGE", message: "The result exceeds the 40,000-character Forever MCP limit." }, truncated: true });
+      }) as never);
+    }
+  }
 
   return {
     server,
