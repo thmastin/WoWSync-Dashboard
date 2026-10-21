@@ -138,7 +138,7 @@ if (dbPath) {
   try { addObserved(collectForeverObservedIds(new DashboardReadModel(store) as never)); } finally { store.close(); }
 }
 if (observedUrl) {
-  const response = await fetch(new URL("/api/versions/forever/knowledge/observed-ids", observedUrl), { signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(new URL("/api/versions/forever/knowledge/observed-ids", observedUrl), { signal: AbortSignal.timeout(180_000) });
   if (!response.ok) throw new Error(`observed-ids request failed: HTTP ${response.status}`);
   addObserved(await response.json() as { items: number[]; spells: number[]; quests: number[]; recipes?: Record<string, number[]> });
 }

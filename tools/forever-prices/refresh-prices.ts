@@ -19,7 +19,8 @@ const UA = "WoWSync personal price cache (single user, hourly)";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function getJson(url: string, attempt = 0): Promise<unknown> {
-  const response = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+  const timeout = url.startsWith(dashboard) ? 180_000 : 30_000;
+  const response = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" }, signal: AbortSignal.timeout(timeout) });
   if ((response.status === 429 || response.status === 503) && attempt < 4) {
     const wait = Math.min(120, Number(response.headers.get("retry-after")) || 30);
     console.log(`  ${response.status} from ${new URL(url).pathname}; waiting ${wait}s`);
