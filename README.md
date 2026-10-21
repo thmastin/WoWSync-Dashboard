@@ -1,8 +1,6 @@
 # WoWSync Dashboard
 
-A local-first, personal dashboard that imports [WoWSync](../GearExport) `WOWSYNC v1`
-exports and builds a persistent, version-isolated picture of your World of
-Warcraft characters and accounts over time.
+A Forever-first, local dashboard that imports [WoWSync](../GearExport) `WOWSYNC v1` exports and builds persistent, version-isolated character history, with Forever as the primary experience.
 
 This is a **separate project and a separate Git repository** from the
 WoWSync addon (`GearExport`). It consumes WoWSync's text exports; it does

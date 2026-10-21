@@ -2,7 +2,7 @@
   "name": "wowsync-dashboard",
   "private": true,
   "version": "0.1.0",
-  "description": "Local-first dashboard that imports WoWSync v1 exports and builds version-isolated character history for WoW Classic Era, TBC Anniversary, and Retail.",
+  "description": "Forever-first local dashboard for WoWSync exports, with version-isolated character history for Forever, Retail, Classic Era, and TBC Anniversary.",
   "type": "module",
   "workspaces": [
     "packages/core",
