@@ -26,7 +26,7 @@ Tools (13, read-only): `list_forever_characters`, `get_character_state`, `get_fo
 2. Live sites only as a fallback, and label them as external and unverified against the capture.
 
 ## Crafting materials
-- Before advising to sell, vendor, or mail away any crafting material, call `get_character_professions` for the owning character (and consider alts' professions).
+- Before advising to sell, vendor, or mail away any crafting material, call `get_character_professions` for the owning character (and consider alts' professions). Start with its compact profession summary. Request recipe rows only when needed, for one named profession with `includeRecipes:true`, and page with `offset`/`limit`.
 - If a profession on the account uses it, say so and default to keep/mail to that crafter.
 
 ## Errand lists

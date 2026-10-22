@@ -1,6 +1,6 @@
 # MCP Forever-only profile (design)
 
-Status: **design proposal**, nothing implemented. Source: `packages/mcp/src/server.ts` (`createWoWSyncMcpServer`).
+Status: implemented as a read-only profile selected by process configuration in `packages/mcp/src/server.ts` (`createWoWSyncMcpServer`).
 
 A profile is a second tool set registered by the same factory, selected by process configuration (never a tool input). It is read-only: no `SqliteSnapshotStore`, no `planningApiBaseUrl`, so no ERP write route can exist in it.
 
@@ -17,11 +17,11 @@ The original brief capped the profile at 12; 13 is a deliberate decision to keep
 
 | # | Tool | Inputs (all + `version:"forever"`) | Backing function | Output bound |
 |---|------|------|------|------|
-| 1 | `list_forever_characters` | `realm?`, `limit?` | `readModel.listCharacters` | limit ≤100 (default 50), `truncated` |
-| 2 | `get_character_state` | `name`, `realm` | `readModel.getCharacterState` | compact summary †; sections carry provenance and build compatibility verdict |
+| 1 | `list_forever_characters` | `realm?`, `limit?` | `readModel.listCharacters` | limit ≤100 (default 50), `truncated`; race/sex always present, unavailable values are `UNKNOWN` |
+| 2 | `get_character_state` | `name`, `realm` | `readModel.getCharacterState` | compact summary †; sections carry provenance and build compatibility verdict; race/sex are present or `UNKNOWN` |
 | 3 | `get_forever_gear_observation` | `name`, `realm` | `readModel.getForeverGearObservation` | equipped slots + carried items † (absorbs `get_character_equipment`) |
 | 4 | `get_forever_gear_allocation` | `name`, `realm` | `readModel.getForeverGearAllocation` | candidates from observed carried items † |
-| 5 | `get_character_professions` | `name`, `realm` | `readModel.getCharacterProfessions` + `learnSkill` join (existing wrapper `professionsWithCaptureIssue`) | recipe rows † |
+| 5 | `get_character_professions` | `name`, `realm`, optional `profession`, `includeRecipes` (default false), `offset?`, `limit?` | `readModel.getCharacterProfessions` + `learnSkill` join (existing wrapper `professionsWithCaptureIssue`) | compact skill summary by default (name, skill, maxSkill, observedAt/freshness, recipeCount); recipe rows only when `includeRecipes:true` and one profession is named; recipes are paged; shared 40,000-character guard |
 | 6 | `get_recipe_reagent_availability` | `name`, `realm`, exactly one of `recipeID`/`outputItemID`/`recipeName` | `readModel.getRecipeReagentAvailability` | one recipe; ambiguous selectors return candidates |
 | 7 | `get_forever_character_quests` | `name`, `realm`, `snapshotId?` | `readModel.getForeverQuestObservation` | † (`completedQuestIDs` lookup of `get_character_quests` is dropped) |
 | 8 | `get_character_progression` | `name`, `realm`, `snapshotId?`, `factionQuery?`, `includeTalents?` | `readModel.getCharacterProgression` + `describeForeverTalents` | reputation rows + talents (ranked only unless `includeTalents`) † |
@@ -32,6 +32,8 @@ The original brief capped the profile at 12; 13 is a deliberate decision to keep
 | 13 | `get_character_trainer` | `name`, `realm`, `snapshotId?`, `category?`, `status?` (`known`\|`available`\|`unavailable`\|`other`), `query?`, `offset?`, `limit?` | `readModel.getCharacterTrainer` | limit ≤100, paged; `statusAtVisit` verbatim, earlier-export visits `LAST_SEEN` |
 
 Training cost comes from `get_character_trainer` (#13): observed trainer-visit rows only. A service the character never saw at a trainer has cost `UNKNOWN`, and a trainer row is not evidence of current learnability.
+
+Profession workflow: call `get_character_professions` first for the compact profession/skill summary. When recipe details are needed, name one profession and set `includeRecipes:true`; use `offset` and `limit` to page its recipe rows. The recipe catalogue is partial, so missing rows do not establish that a recipe is unknown.
 
 ## Hidden (not registered in the profile)
 

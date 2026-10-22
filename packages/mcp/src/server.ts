@@ -12,6 +12,7 @@ import {
   buildErpProcurementBudgetPortfolioReview,
   buildErpProcurementBuyerPortfolioReview,
   DashboardReadModel,
+  classifyFreshness,
   answerForeverCopilot,
   READ_MODEL_VERSIONS,
   ResearchRegistry,
@@ -75,6 +76,43 @@ function textResult(value: unknown) {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     structuredContent: value,
   };
+}
+
+function compactForeverProfessions(result: unknown, args: Record<string, unknown>): unknown {
+  const wrapper = result as { structuredContent?: unknown };
+  const root = (wrapper?.structuredContent ?? result) as Record<string, any>;
+  const value = root?.value as Record<string, any> | undefined;
+  const data = value?.data as Record<string, any> | undefined;
+  if (!data) return result;
+  const recipeDomain = data.recipeKnowledge as Record<string, any> | undefined;
+  const recipeData = recipeDomain?.data as Record<string, any> | undefined;
+  const recipeProfessions = Array.isArray(recipeData?.professions) ? recipeData.professions as Array<Record<string, any>> : [];
+  const skillEntries = Array.isArray(data.entries) ? data.entries as Array<Record<string, any>> : [];
+  const nameOf = (entry: Record<string, any>) => String(entry.professionName ?? entry.name ?? "");
+  const summaries = skillEntries.map((skill) => {
+    const name = nameOf(skill);
+    const recipe = recipeProfessions.find((row) => nameOf(row).toLowerCase() === name.toLowerCase());
+    const recipes = Array.isArray(recipe?.recipes) ? recipe.recipes as unknown[] : [];
+    const observedAt = data.status?.observedAt ?? value?.provenance?.observedAt ?? recipeDomain?.observedAt ?? recipeDomain?.status?.observedAt;
+    const summary: Record<string, unknown> = {
+      name,
+      ...(skill.skill !== undefined ? { skill: skill.skill } : {}),
+      ...(skill.maxSkill !== undefined ? { maxSkill: skill.maxSkill } : {}),
+      observedAt: typeof observedAt === "number" ? observedAt : "UNKNOWN",
+      freshness: typeof observedAt === "number" ? classifyFreshness(observedAt, Math.floor(Date.now() / 1000)) : "unknown",
+      recipeCount: recipes.length,
+    };
+    if (args.includeRecipes === true && typeof args.profession === "string" && name.toLowerCase() === args.profession.toLowerCase()) {
+      const offset = typeof args.offset === "number" ? args.offset : 0;
+      const limit = typeof args.limit === "number" ? args.limit : 50;
+      const page = recipes.slice(offset, offset + limit);
+      summary.recipes = page;
+      summary.recipePaging = { offset, limit, totalCount: recipes.length, truncated: offset + page.length < recipes.length };
+    }
+    return summary;
+  });
+  const { recipeKnowledge: _discarded, specialization: _specialization, ...rest } = data;
+  return textResult({ ...root, value: { ...value, data: { ...rest, entries: summaries, ...(recipeDomain ? { recipeKnowledge: { status: recipeDomain.status, ...(recipeDomain.evidence ? { evidence: recipeDomain.evidence } : {}), completeness: recipeDomain.completeness } } : {}) } } });
 }
 
 function safeFailure(code: string, message: string) {
@@ -767,6 +805,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
       const profileShape = { ...shape, version: z.literal("forever") };
       if (exposedName === "list_forever_characters") config.inputSchema = z.object({ version: z.literal("forever"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
+      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
       else if (exposedName === "get_forever_items") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema.optional(), realm: realmSchema.optional(), storage: z.enum(["bags", "bank"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.query !== undefined && args.name === undefined && args.realm === undefined && args.storage === undefined) || (args.query === undefined && args.name !== undefined && args.realm !== undefined && args.storage !== undefined), "Pass query alone or name, realm, and storage together.");
       else {
         if ("realm" in profileShape) profileShape.realm = realmSchema;
@@ -775,7 +814,25 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       registerTool(exposedName, config as never, (async (args: Record<string, unknown>) => {
         let result: unknown;
         if (exposedName === "get_forever_items") result = "query" in args ? await foreverHandlers.get("search_items")!.handler(args) : await foreverHandlers.get("get_character_storage")!.handler(args);
+        else if (exposedName === "get_character_professions") result = compactForeverProfessions(await selected.handler({ ...args, version: "forever" }), args);
         else result = await selected.handler({ ...args, version: "forever" });
+        if (exposedName === "list_forever_characters") {
+          const listed = result as { structuredContent?: { characters?: Array<Record<string, unknown>> } };
+          const structured = listed.structuredContent;
+          if (structured?.characters) {
+            const characters = structured.characters.map((character) => ({ ...character, race: character.race || "UNKNOWN", sex: "UNKNOWN" }));
+            result = textResult({ ...structured, characters });
+          }
+        }
+        if (exposedName === "get_character_state") {
+          const stateResult = result as { structuredContent?: Record<string, any> };
+          const state = stateResult.structuredContent;
+          const identity = state?.value?.data?.identity as Record<string, unknown> | undefined;
+          if (identity) {
+            const character = readModel().listCharacters({ version: "forever", realm: String(args.realm) }).find((entry) => entry.name.toLowerCase() === String(args.name).toLowerCase());
+            result = textResult({ ...state!, value: { ...state!.value, data: { ...state!.value.data, identity: { ...identity, race: character?.race || "UNKNOWN", sex: "UNKNOWN" } } } });
+          }
+        }
         const serialized = JSON.stringify((result as { structuredContent?: unknown })?.structuredContent ?? result);
         return serialized.length <= MAX_DOCUMENT_CHARACTERS ? result : textResult({ error: { code: "RESULT_TOO_LARGE", message: "The result exceeds the 40,000-character Forever MCP limit." }, truncated: true });
       }) as never);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,13 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-profile-"));
   const databasePath = path.join(directory, "profile.sqlite");
   // The MCP opens its database read-only and refuses a missing file, so create the (empty) schema first.
-  new SqliteSnapshotStore(databasePath).close();
+  const writer = new SqliteSnapshotStore(databasePath);
+  const fixtureDir = path.join(root, "packages", "core", "test", "fixtures", "forever");
+  const { text, ...extras } = JSON.parse(readFileSync(path.join(fixtureDir, "copilot-hallo-pvp2.import.json"), "utf8"));
+  const observedAt = 1_791_741_120;
+  extras.foreverGearObservation.professionRecipes = { observedAt, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 4 }, professions: [{ baseSkillLineID: 186, skillLineID: 186, professionName: "Mining", evidence: "OBSERVED", observedAt, recipes: [11, 12, 13, 14].map((recipeID) => ({ recipeID, name: `Hallo recipe ${recipeID}`, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt })) }] } };
+  writer.importSnapshot(text, extras);
+  writer.close();
   const connect = async (profile?: string) => {
     const client = new Client({ name: "forever-profile-test", version: "0.1.0" });
     const environment: Record<string, string> = { ...process.env as Record<string, string>, WOWSYNC_MCP_DB_PATH: databasePath };
@@ -53,6 +59,26 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       const serialized = JSON.stringify(result.structuredContent);
       assert.ok(serialized.length <= 40_000, `find_recipe_crafters exceeded the shared result limit (${serialized.length})`);
       assert.equal((result.structuredContent as { truncated?: boolean }).truncated, undefined);
+      const roster = (await forever.client.callTool({ name: "list_forever_characters", arguments: { version: "forever", realm: "Classic Beta PvP 2" } })).structuredContent as { characters: Array<{ name: string; race: string; sex: string }> };
+      const hallo = roster.characters.find((character) => character.name === "Hallo");
+      assert.equal(hallo?.race, "Dwarf");
+      assert.equal(hallo?.sex, "UNKNOWN");
+      const state = (await forever.client.callTool({ name: "get_character_state", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } })).structuredContent as { value: { data: { identity: { race: string; sex: string } } } };
+      assert.equal(state.value.data.identity.race, "Dwarf");
+      assert.equal(state.value.data.identity.sex, "UNKNOWN");
+      const summaryResult = await forever.client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } });
+      const summaryText = JSON.stringify(summaryResult.structuredContent);
+      assert.ok(summaryText.length < 10_000, `Hallo profession summary should stay compact (${summaryText.length} chars)`);
+      const summary = summaryResult.structuredContent as { value?: { data?: { entries?: Array<{ name: string; recipeCount: number; recipes?: unknown[] }> } } };
+      assert.ok(summary.value?.data?.entries?.some((entry) => entry.name === "Mining" && entry.recipeCount === 4), JSON.stringify(summaryResult.structuredContent).slice(0, 1200));
+      assert.ok(summary.value?.data?.entries?.every((entry) => entry.recipes === undefined));
+      const paged = await forever.client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2", profession: "Mining", includeRecipes: true, offset: 1, limit: 2 } });
+      const page = paged.structuredContent as { value?: { data?: { entries?: Array<{ name: string; recipeCount: number; recipes?: unknown[]; recipePaging?: { offset: number; limit: number; totalCount: number } }> } } };
+      const mining = page.value?.data?.entries?.find((entry) => entry.name.toLowerCase() === "mining");
+      assert.equal(mining?.recipes?.length, 2);
+      assert.equal(mining?.recipePaging?.offset, 1);
+      assert.equal(mining?.recipePaging?.totalCount, mining?.recipeCount);
+      assert.equal((await forever.client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2", includeRecipes: true } })).isError, true, "recipe inclusion requires a profession");
     } finally { await forever.client.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
