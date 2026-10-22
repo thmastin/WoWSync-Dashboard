@@ -8,6 +8,7 @@ export interface ForeverStructuredObservation {
   clientProfile: `Forever:${string}`;
   name: string;
   realm: string;
+  race?: string;
   generatedAt: number;
   sourceCharacterGuid?: string;
   sourceCharacterGuidConflict?: boolean;
@@ -72,6 +73,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     });
   return {
     clientProfile: v.clientProfile as ForeverStructuredObservation["clientProfile"], name: v.name, realm: v.realm, generatedAt: v.generatedAt as number,
+    ...(typeof v.race === "string" && v.race.trim() ? { race: v.race.trim() } : {}),
     ...(typeof v.sourceCharacterGuid === "string" && v.sourceCharacterGuid.length > 0 ? { sourceCharacterGuid: v.sourceCharacterGuid } : {}),
     ...(v.sourceCharacterGuidConflict === true ? { sourceCharacterGuidConflict: true } : {}),
     ...(section("equipment") ? { equipment: section("equipment") } : {}),

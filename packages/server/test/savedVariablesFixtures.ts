@@ -9,6 +9,7 @@ export interface SavedRecord {
   guid: string;
   name?: string;
   realm?: string;
+  race?: string;
   /** The export text persisted as latestExport.text; omit for a character with no saved export. */
   text?: string;
   generatedAt?: number;
@@ -35,6 +36,7 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     lines.push(`[${q(r.guid)}] = {`, '["identity"] = {', `["guid"] = ${q(r.guid)},`);
     if (r.name !== undefined) lines.push(`["name"] = ${q(r.name)},`);
     if (r.realm !== undefined) lines.push(`["realm"] = ${q(r.realm)},`);
+    if (r.race !== undefined) lines.push(`["race"] = ${q(r.race)},`);
     lines.push("},", '["sections"] = {');
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
     if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);

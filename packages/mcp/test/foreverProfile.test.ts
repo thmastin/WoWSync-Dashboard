@@ -20,9 +20,11 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
   // The MCP opens its database read-only and refuses a missing file, so create the (empty) schema first.
   const writer = new SqliteSnapshotStore(databasePath);
   const fixtureDir = path.join(root, "packages", "core", "test", "fixtures", "forever");
-  const { text, ...extras } = JSON.parse(readFileSync(path.join(fixtureDir, "copilot-hallo-pvp2.import.json"), "utf8"));
+  const { text: fixtureText, ...extras } = JSON.parse(readFileSync(path.join(fixtureDir, "copilot-hallo-pvp2.import.json"), "utf8"));
+  const text = fixtureText.replace("Race: Dwarf\n", "");
   const observedAt = 1_791_741_120;
   extras.foreverGearObservation.professionRecipes = { observedAt, completeness: "partial", data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 4 }, professions: [{ baseSkillLineID: 186, skillLineID: 186, professionName: "Mining", evidence: "OBSERVED", observedAt, recipes: [11, 12, 13, 14].map((recipeID) => ({ recipeID, name: `Hallo recipe ${recipeID}`, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt })) }] } };
+  extras.foreverGearObservation.race = "Gnome";
   writer.importSnapshot(text, extras);
   writer.close();
   const connect = async (profile?: string) => {
@@ -61,10 +63,10 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       assert.equal((result.structuredContent as { truncated?: boolean }).truncated, undefined);
       const roster = (await forever.client.callTool({ name: "list_forever_characters", arguments: { version: "forever", realm: "Classic Beta PvP 2" } })).structuredContent as { characters: Array<{ name: string; race: string; sex: string }> };
       const hallo = roster.characters.find((character) => character.name === "Hallo");
-      assert.equal(hallo?.race, "Dwarf");
+      assert.equal(hallo?.race, "Gnome");
       assert.equal(hallo?.sex, "UNKNOWN");
       const state = (await forever.client.callTool({ name: "get_character_state", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } })).structuredContent as { value: { data: { identity: { race: string; sex: string } } } };
-      assert.equal(state.value.data.identity.race, "Dwarf");
+      assert.equal(state.value.data.identity.race, "Gnome");
       assert.equal(state.value.data.identity.sex, "UNKNOWN");
       const summaryResult = await forever.client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } });
       const summaryText = JSON.stringify(summaryResult.structuredContent);

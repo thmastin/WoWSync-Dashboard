@@ -795,7 +795,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version, parsed.character);
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
     const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
-    if (normalizedForeverObservation) parsed.foreverGearObservation = normalizedForeverObservation;
+    if (normalizedForeverObservation) {
+      parsed.foreverGearObservation = normalizedForeverObservation;
+      if (!parsed.character.race && normalizedForeverObservation.race) parsed.character.race = normalizedForeverObservation.race;
+    }
     const identity = characterIdentity(version, parsed.character);
     const now = Math.floor(Date.now() / 1000);
 

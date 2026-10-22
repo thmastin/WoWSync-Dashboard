@@ -406,6 +406,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           name: typeof name === "string" ? name : "",
           realm: typeof realm === "string" ? realm : "",
           generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
+          ...(typeof luaGet(identity, "race") === "string" && (luaGet(identity, "race") as string).trim() ? { race: (luaGet(identity, "race") as string).trim() } : {}),
           ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
           ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && typeof luaGet(professionRecipes, "changedAt") === "number"
             ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") } }

@@ -761,6 +761,7 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
   const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
   const record = {
     ...({ guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt } as const),
+    race: "Gnome",
     captureProfile: "Forever:1.60.1:70291:16001",
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } }),
@@ -769,7 +770,7 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
   };
   const [saved] = parseSavedExports(savedVariables([record]), "fixture");
   assert.deepEqual(saved.foreverGearObservation, {
-    clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: "Player-1-HALLO",
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, race: "Gnome", sourceCharacterGuid: "Player-1-HALLO",
     equipment: { observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } },
     bags: { observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } },
     bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} },
@@ -780,6 +781,12 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
   const oldText = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "69913", interface: "16001" } });
   const wrongBuild = parseSavedExports(savedVariables([{ ...record, text: oldText }]), "fixture")[0];
   assert.equal(wrongBuild.foreverGearObservation, undefined);
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(saved.text!, { foreverGearObservation: saved.foreverGearObservation });
+    assert.equal(imported.snapshot.parsed.character.race, "Gnome");
+    assert.equal(imported.character.race, "Gnome");
+  } finally { store.close(); }
 });
 
 test("Forever skill rows do not inherit a timestamp from unrelated fresh item evidence", () => {
