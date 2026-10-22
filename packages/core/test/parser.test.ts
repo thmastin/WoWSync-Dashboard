@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseWowSyncExport, WowSyncParseError } from "../src/parser.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { foreverBuildVerification, foreverCompatibility } from "../src/foreverProfile.ts";
 
 test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   const raw = buildWowSyncExport({
@@ -67,6 +68,25 @@ test("unknown ('?') fields become undefined, never a guessed value", () => {
   const snapshot = parseWowSyncExport(raw);
   assert.equal(snapshot.character.playedSeconds, undefined);
   assert.equal(snapshot.character.levelPlayedSeconds, undefined);
+});
+
+test("Forever 70450 is verified and newer 70999 exports retain build, race, and unverified compatibility", () => {
+  const verified = parseWowSyncExport(buildWowSyncExport({ character: {
+    name: "Hallo", race: "Dwarf", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70450", interface: "16001",
+  } }));
+  assert.equal(verified.character.clientBuild, "70450");
+  assert.equal(foreverBuildVerification(verified.character), "VERIFIED");
+
+  const newer = parseWowSyncExport(buildWowSyncExport({ character: {
+    name: "Hallo", race: "Dwarf", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70999", interface: "16001", compatibility: "UNVERIFIED_BUILD", compatibilityNote: "Forever build 70999 has not been compatibility-tested; each observation remains API-guarded.",
+  } }));
+  assert.equal(newer.character.race, "Dwarf");
+  assert.equal(newer.character.clientBuild, "70999");
+  assert.equal(foreverBuildVerification(newer.character), "UNVERIFIED_BUILD");
+  assert.deepEqual(foreverCompatibility(newer.character), {
+    dashboard: "UNVERIFIED_BUILD", exporter: "UNVERIFIED_BUILD",
+    exporterNote: "Forever build 70999 has not been compatibility-tested; each observation remains API-guarded.", agreement: "AGREE",
+  });
 });
 
 test("partial equipment coverage is preserved, not upgraded to complete", () => {

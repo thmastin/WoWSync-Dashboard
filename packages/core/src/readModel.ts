@@ -498,7 +498,7 @@ export type GearCandidateRecipientScreenResolution =
   | { status: "RECIPIENT_AMBIGUOUS"; version: "retail"; name: string; realm: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> }
   | { status: "FOUND"; value: ReadValue<GearCandidateRecipientScreenRead> };
 export interface CharacterCurrentState {
-  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string; class?: string; faction?: string; level?: number };
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string; class?: string; faction?: string; level?: number; clientVersion?: string; clientBuild?: string; interface?: string };
   provenance: ReadProvenance;
   gold: { copper?: number; provenance: ReadProvenance };
   playtime: { playedSeconds?: number; levelPlayedSeconds?: number; provenance: ReadProvenance };
@@ -995,7 +995,7 @@ export class DashboardReadModel {
       const boundedCurrencies = currencyState === "UNKNOWN" || currencyEntries === null ? undefined : currencyEntries.slice(0, 20).map((entry) => ({ currencyID: entry.currencyID, name: entry.name, quantity: entry.quantity, isAccountWide: entry.isAccountWide }));
       const observedAt = snapshot.generatedAt ?? snapshot.importedAt;
       return { data: {
-        identity: { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm, ...(parsed.character.class ? { class: parsed.character.class } : {}), ...(parsed.character.faction ? { faction: parsed.character.faction } : {}), ...(parsed.character.level !== undefined ? { level: parsed.character.level } : {}) },
+        identity: { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm, ...(parsed.character.class ? { class: parsed.character.class } : {}), ...(parsed.character.faction ? { faction: parsed.character.faction } : {}), ...(parsed.character.level !== undefined ? { level: parsed.character.level } : {}), ...(parsed.character.clientVersion !== undefined ? { clientVersion: parsed.character.clientVersion } : {}), ...(parsed.character.clientBuild !== undefined ? { clientBuild: parsed.character.clientBuild } : {}), ...(parsed.character.interface !== undefined ? { interface: parsed.character.interface } : {}) },
         provenance: sectionProvenance("OBSERVED", observedAt),
         gold: { ...(parsed.character.moneyCopper !== undefined ? { copper: parsed.character.moneyCopper } : {}), provenance: sectionProvenance(parsed.character.moneyCopper !== undefined ? "OBSERVED" : "UNKNOWN", parsed.character.moneyCopper !== undefined ? observedAt : undefined, parsed.character.moneyCopper === undefined ? "Gold was not captured in the latest snapshot." : undefined) },
         playtime: { ...(parsed.character.playedSeconds !== undefined ? { playedSeconds: parsed.character.playedSeconds } : {}), ...(parsed.character.levelPlayedSeconds !== undefined ? { levelPlayedSeconds: parsed.character.levelPlayedSeconds } : {}), provenance: sectionProvenance(parsed.character.playedSeconds !== undefined ? "OBSERVED" : "UNKNOWN", parsed.character.playedSeconds !== undefined ? observedAt : undefined, parsed.character.playedSeconds === undefined ? "Playtime was not captured in the latest snapshot." : undefined) },

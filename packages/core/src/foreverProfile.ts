@@ -10,7 +10,7 @@
  */
 
 /** Builds whose API return shapes were live- or source-verified. */
-export const VERIFIED_FOREVER_BUILDS: readonly string[] = ["70291", "70338"];
+export const VERIFIED_FOREVER_BUILDS: readonly string[] = ["70291", "70338", "70450"];
 
 export type ForeverBuildVerification = "VERIFIED" | "UNVERIFIED_BUILD";
 
@@ -46,7 +46,7 @@ export function isForeverProfile(profile: unknown): profile is `Forever:${string
  * Exact version:build:interface profiles with direct compatibility evidence; mirrors GearExport's
  * VERIFIED_PROFILE table (WoWSyncCompat knownProfiles). A known build on another version or interface is not verified.
  */
-export const VERIFIED_FOREVER_PROFILES: readonly string[] = ["1.60.1:70291:16001", "1.60.1:70338:16001"];
+export const VERIFIED_FOREVER_PROFILES: readonly string[] = ["1.60.1:70291:16001", "1.60.1:70338:16001", "1.60.1:70450:16001"];
 
 /**
  * VERIFIED only for an exact verified profile. Given only a build (legacy callers), the build must be one of
