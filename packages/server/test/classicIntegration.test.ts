@@ -176,10 +176,11 @@ test("CLASSIC HISTORY: a later export without sidecars carries every domain forw
   recreated.sourceCharacterGuid = "Player-4385-0BADF00D";
   delete recreated.professionRecipes; delete recreated.quests; delete recreated.reputation;
   store.importSnapshot(laterExport(record, 1200), { characterState: recreated });
-  const after = read.getCharacterProfessions({ version: "classic-era", name: "Torahn" }) as Obj;
+  const refreshedRead = new DashboardReadModel(store, () => NOW);
+  const after = refreshedRead.getCharacterProfessions({ version: "classic-era", name: "Torahn" }) as Obj;
   assert.equal(after.value.data.recipeKnowledge.status.state, "UNKNOWN", "older recipes are not attributed to a different GUID");
-  assert.equal((read.getCharacterQuests({ version: "classic-era", name: "Torahn" }) as Obj).value.data.state, "UNKNOWN");
-  assert.equal((read.getCharacterProgression({ version: "classic-era", name: "Torahn" }) as Obj).value.data.talents.state, "OBSERVED");
+  assert.equal((refreshedRead.getCharacterQuests({ version: "classic-era", name: "Torahn" }) as Obj).value.data.state, "UNKNOWN");
+  assert.equal((refreshedRead.getCharacterProgression({ version: "classic-era", name: "Torahn" }) as Obj).value.data.talents.state, "OBSERVED");
 }));
 
 test("CLASSIC ISOLATION: Era and TBC sidecars never cross versions, families, or profiles", () => withStore((store, read) => {

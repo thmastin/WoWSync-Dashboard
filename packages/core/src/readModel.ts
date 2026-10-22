@@ -630,6 +630,8 @@ function requireVersion(version: unknown): asserts version is VersionOrUnknown {
 export class DashboardReadModel {
   private readonly store: SnapshotReadStore;
   private readonly now: () => number;
+  private readonly charactersByVersion = new Map<VersionOrUnknown, StoredCharacterSummary[]>();
+  private readonly snapshotsByIdentity = new Map<string, StoredSnapshot[]>();
   constructor(store: SnapshotReadStore, now: () => number = () => Math.floor(Date.now() / 1000)) {
     this.store = store;
     this.now = now;
@@ -638,7 +640,26 @@ export class DashboardReadModel {
   listVersions(): VersionSummary[] { return this.store.listVersions(); }
   listCharacters(query: { version: VersionOrUnknown; realm?: string }): StoredCharacterSummary[] {
     requireVersion(query.version);
-    return this.store.listCharacters(query.version).filter((character) => !query.realm || character.realm === query.realm);
+    return this.characters(query.version).filter((character) => !query.realm || character.realm === query.realm);
+  }
+
+  /** Read caches live only as long as this request-scoped model instance. */
+  private characters(version: VersionOrUnknown): StoredCharacterSummary[] {
+    let characters = this.charactersByVersion.get(version);
+    if (!characters) {
+      characters = this.store.listCharacters(version);
+      this.charactersByVersion.set(version, characters);
+    }
+    return characters;
+  }
+
+  private snapshots(identityKey: string): StoredSnapshot[] {
+    let snapshots = this.snapshotsByIdentity.get(identityKey);
+    if (!snapshots) {
+      snapshots = this.store.listSnapshots(identityKey);
+      this.snapshotsByIdentity.set(identityKey, snapshots);
+    }
+    return snapshots;
   }
 
   /** Durable planning intent plus a fresh evidence projection from each explicitly named character only. */
@@ -646,7 +667,7 @@ export class DashboardReadModel {
     requireVersion(query.version);
     const projects = this.store.listErpProjects(query.version);
     const currencies = this.store.listVersionCurrencies(query.version);
-    const candidateSources = this.store.listCharacters(query.version);
+    const candidateSources = this.characters(query.version);
     const needsSharedStorage = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined));
     const sharedStorage = needsSharedStorage ? this.store.projectSharedStorage() : undefined;
     const needsSharedHistory = query.version === "retail" && projects.some((project) => project.needs.some((need) => need.sourceOwnerKey !== undefined) || project.workOrders.some((order) => order.kind === "RETRIEVE" && order.resourceNeedIds.some((needId) => project.needs.some((need) => need.stableId === needId && need.sourceOwnerKey !== undefined))));
@@ -655,7 +676,7 @@ export class DashboardReadModel {
       const historyEventCount = this.store.countErpProjectHistory(project.stableId);
       const history = this.store.listErpProjectHistory(project.stableId, 50);
       return {
-        ...evaluateErpProject(project, (identityKey) => this.store.listSnapshots(identityKey), projects, this.now(), currencies, sharedStorage, candidateSources, sharedJournal, (identityKey, snapshotId) => this.store.getCharacterCurrenciesForSnapshot(identityKey, snapshotId)),
+        ...evaluateErpProject(project, (identityKey) => this.snapshots(identityKey), projects, this.now(), currencies, sharedStorage, candidateSources, sharedJournal, (identityKey, snapshotId) => this.store.getCharacterCurrenciesForSnapshot(identityKey, snapshotId)),
         history, historyEventCount, historyTruncated: historyEventCount > history.length,
       };
     });
@@ -665,8 +686,8 @@ export class DashboardReadModel {
   getGearCandidateEvidence(query: { version: VersionOrUnknown; offset?: number; limit?: number }): ReadValue<GearCandidateEvidenceRead> {
     requireVersion(query.version);
     if (query.version !== "retail") return { provenance: { state: "UNKNOWN", version: query.version, reason: "Gear Candidates ContractVersion 1 is Retail-only." } };
-    const characters: GearCandidateEvidenceRead["characters"] = this.store.listCharacters("retail").map((character) => {
-      const snapshots = this.store.listSnapshots(character.identityKey);
+    const characters: GearCandidateEvidenceRead["characters"] = this.characters("retail").map((character) => {
+      const snapshots = this.snapshots(character.identityKey);
       const snapshot = snapshots.find((entry) => entry.parsed.gearCandidates !== undefined);
       if (!snapshot) return {
         identity: { version: "retail", identityKey: character.identityKey, name: character.name, realm: character.realm },
@@ -696,15 +717,15 @@ export class DashboardReadModel {
     requireVersion(query.version);
     if (query.version !== "retail") return { status: "UNKNOWN" as const, reason: "Gear allocation rules are Retail-only." };
     if (!Number.isSafeInteger(query.snapshotId) || query.snapshotId <= 0 || !Number.isSafeInteger(query.rowOrdinal) || query.rowOrdinal <= 0) return { status: "INVALID_REFERENCE" as const, reason: "A positive source snapshot ID and one-based row ordinal are required." };
-    const exporter = this.store.listCharacters("retail").find((c) => c.identityKey === query.exporterIdentityKey);
+    const exporter = this.characters("retail").find((c) => c.identityKey === query.exporterIdentityKey);
     if (!exporter) return { status: "EXPORTER_NOT_FOUND" as const };
-    const snapshot = this.store.listSnapshots(exporter.identityKey).find((s) => s.id === query.snapshotId);
+    const snapshot = this.snapshots(exporter.identityKey).find((s) => s.id === query.snapshotId);
     const section = snapshot?.parsed.gearCandidates;
     if (!section) return { status: "CANDIDATE_EVIDENCE_NOT_FOUND" as const, reason: "The selected source snapshot does not contain Retail [GEAR CANDIDATES] evidence." };
     const candidate = section.rows[query.rowOrdinal - 1];
     if (!candidate) return { status: "CANDIDATE_ROW_NOT_FOUND" as const };
-    const characters = this.store.listCharacters("retail").map((c) => {
-      const latest = this.store.listSnapshots(c.identityKey)[0];
+    const characters = this.characters("retail").map((c) => {
+      const latest = this.snapshots(c.identityKey)[0];
       const state = latest?.parsed.character;
       return { identityKey: c.identityKey, name: c.name, realm: c.realm, class: state?.class, level: state?.level, characterState: state?.status.state ?? "UNKNOWN", latestSnapshotId: latest?.id, observations: this.store.listEquipmentObservations(c.identityKey) };
     });
@@ -717,7 +738,7 @@ export class DashboardReadModel {
     if (query.version !== "retail") return { status: "UNSUPPORTED_VERSION", version: query.version };
     const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
 
-    const resolveExact = (name: string, realm: string) => this.store.listCharacters("retail").filter((character) =>
+    const resolveExact = (name: string, realm: string) => this.characters("retail").filter((character) =>
       character.name.toLocaleLowerCase() === name.toLocaleLowerCase() && character.realm.toLocaleLowerCase() === realm.toLocaleLowerCase());
     const exporterMatches = resolveExact(query.exporterName, query.exporterRealm);
     if (exporterMatches.length === 0) return { status: "EXPORTER_NOT_FOUND", version: "retail", name: query.exporterName, realm: query.exporterRealm };
@@ -730,9 +751,9 @@ export class DashboardReadModel {
     const recipient = recipientMatches[0]!;
     const exporterIdentity = { version: "retail" as const, identityKey: exporter.identityKey, name: exporter.name, realm: exporter.realm };
     const recipientIdentity = { version: "retail" as const, identityKey: recipient.identityKey, name: recipient.name, realm: recipient.realm };
-    const exporterSnapshots = this.store.listSnapshots(exporter.identityKey);
+    const exporterSnapshots = this.snapshots(exporter.identityKey);
     const candidateSnapshot = exporterSnapshots.find((snapshot) => snapshot.parsed.gearCandidates !== undefined);
-    const recipientSnapshot = this.store.listSnapshots(recipient.identityKey)[0];
+    const recipientSnapshot = this.snapshots(recipient.identityKey)[0];
     const recipientCharacter = recipientSnapshot?.parsed.character;
     const recipientObservedAt = recipientSnapshot ? snapshotObservedAt(recipientSnapshot.generatedAt, recipientSnapshot.importedAt) : undefined;
     const recipientSectionState = recipientCharacter?.status.state ?? "UNKNOWN";
@@ -918,7 +939,7 @@ export class DashboardReadModel {
     const realmScoped = query.version !== "retail";
     if (realmScoped && !query.realm) throw new TypeError("realm is required for currencies in realm-partitioned or unrecognized WoW versions");
     if (!realmScoped && query.realm) throw new TypeError("realm filtering is not supported for Retail account currency reads");
-    const characters = this.store.listCharacters(query.version).filter((character) => !realmScoped || character.realm === query.realm);
+    const characters = this.characters(query.version).filter((character) => !realmScoped || character.realm === query.realm);
     if (realmScoped && characters.length === 0) throw new TypeError(`No characters exist in realm "${query.realm}" for version "${query.version}"`);
     const currencies = realmScoped
       ? buildAccountCurrencies(query.version, characters.map((character) => this.store.getCharacterCurrencies(character.identityKey)!).filter(Boolean))
@@ -994,7 +1015,7 @@ export class DashboardReadModel {
     const out: NonNullable<CharacterCurrentState["structuredObservations"]> = {};
     if (version === "forever" && isForeverClient(snapshot.parsed.character)) out.clientCompatibility = foreverCompatibility(snapshot.parsed.character);
     if (supportsRecipeCapture(version)) {
-      const resolution = resolveRecipeEvidence(version, this.store.listSnapshots(identityKey), snapshot);
+      const resolution = resolveRecipeEvidence(version, this.snapshots(identityKey), snapshot);
       const professions = Array.isArray((resolution.section?.data as Record<string, unknown> | undefined)?.professions) ? ((resolution.section!.data as Record<string, unknown>).professions as Record<string, unknown>[]).map((row) => typeof row.professionName === "string" ? row.professionName : typeof row.name === "string" ? row.name : undefined).filter((name): name is string => !!name) : [];
       out.recipes = { state: resolution.state, ...(resolution.sourceSnapshotId !== undefined ? { sourceSnapshotId: resolution.sourceSnapshotId } : {}), ...(professions.length ? { professions } : {}) };
     }
@@ -1021,7 +1042,7 @@ export class DashboardReadModel {
       if (!isForeverClient(profile)) {
         return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires a well-formed Forever client profile (family, version, build, interface)." } };
       }
-      const snapshots = this.store.listSnapshots(character.identityKey);
+      const snapshots = this.snapshots(character.identityKey);
       const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
       if (sourceGuids.some((guid) => !guid) || snapshots.some((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuidConflict) || new Set(sourceGuids).size > 1) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "The Dashboard version/realm/name history contains missing or conflicting WoWSyncDB character GUIDs; the observation cannot safely be resolved to one source character." } };
       const data = buildForeverGearObservation({
@@ -1087,7 +1108,7 @@ export class DashboardReadModel {
       if (!isForeverClient(profile)) {
         return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "This assessment requires a well-formed Forever client profile (family, version, build, interface)." } };
       }
-      const recipeEvidence = resolveRecipeEvidence("forever", this.store.listSnapshots(character.identityKey), snapshot);
+      const recipeEvidence = resolveRecipeEvidence("forever", this.snapshots(character.identityKey), snapshot);
       if (!snapshot.parsed.foreverGearObservation && recipeEvidence.state === "UNKNOWN") return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: `This snapshot has no structured Forever item evidence sidecar, and no compatible recipe observation was found. ${recipeEvidence.reason}` } };
       const data = buildForeverCraftedUpgradeAssessment({ identity: { identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), realm: character.realm }, snapshot, now: this.now(), recipeEvidence });
       const observedAt = snapshot.generatedAt ?? recipeEvidence.observedAt;
@@ -1118,9 +1139,9 @@ export class DashboardReadModel {
     if (resolved.status !== "FOUND") return resolved;
     if (!resolved.value.data) return { status: "FOUND", value: { provenance: { ...resolved.value.provenance, state: "UNKNOWN", reason: resolved.value.provenance.reason ?? "The recipient has no safely resolved Forever 70291 observation; allocation cannot be evaluated." } } };
     const recipientData = resolved.value.data;
-    const recipientCharacter = this.store.listCharacters("forever").find((c) => c.identityKey === recipientData.identity.identityKey);
+    const recipientCharacter = this.characters("forever").find((c) => c.identityKey === recipientData.identity.identityKey);
     if (!recipientCharacter) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    const recipientSnapshot = this.store.listSnapshots(recipientCharacter.identityKey)[0];
+    const recipientSnapshot = this.snapshots(recipientCharacter.identityKey)[0];
     const profile = recipientSnapshot?.parsed.character;
     const recipientObservedAt = recipientSnapshot?.generatedAt ?? recipientSnapshot?.importedAt;
     const recipientFreshness = recipientObservedAt === undefined ? "unknown" as const : classifyFreshness(recipientObservedAt, this.now());
@@ -1146,7 +1167,7 @@ export class DashboardReadModel {
     };
     const candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"] }> = [];
     const exclusions: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; state: string; reason: string }> = [];
-    for (const sourceCharacter of this.store.listCharacters("forever")) {
+    for (const sourceCharacter of this.characters("forever")) {
       const observation = this.getForeverGearObservation({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
       if (observation.status !== "FOUND" || !observation.value.data) {
         exclusions.push({ character: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, ...(sourceCharacter.surname ? { surname: sourceCharacter.surname } : {}), realm: sourceCharacter.realm }, state: observation.status, reason: observation.status === "FOUND" ? observation.value.provenance.reason ?? "Observation data unavailable." : "Source identity or 70291 evidence could not be safely resolved." });
@@ -1318,10 +1339,10 @@ export class DashboardReadModel {
     // Evaluate each observed source candidate against every Dashboard-known
     // Forever character. Cross-character results are screening/fit evidence;
     // the exporter set is not treated as a shared WoW account or transfer route.
-    const foreverRoster = this.store.listCharacters("forever").flatMap((character) => {
+    const foreverRoster = this.characters("forever").flatMap((character) => {
       const resolvedObservation = this.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm });
       if (resolvedObservation.status !== "FOUND" || !resolvedObservation.value.data) return [];
-      const snapshot = this.store.listSnapshots(character.identityKey)[0];
+      const snapshot = this.snapshots(character.identityKey)[0];
       const profile = snapshot?.parsed.character;
       const at = profile?.status.observedAt ?? snapshot?.generatedAt ?? snapshot?.importedAt;
       const recent = at !== undefined && classifyFreshness(at, this.now()) === "recent" && profile?.status.state === "OBSERVED";
@@ -1488,7 +1509,7 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const value = snapshot.parsed.professions;
       const captured = snapshot.parsed.characterState?.professionSpecializations;
-      const resolution = supportsRecipeCapture(query.version) ? resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot) : undefined;
+      const resolution = supportsRecipeCapture(query.version) ? resolveRecipeEvidence(query.version, this.snapshots(character.identityKey), snapshot) : undefined;
       const recipeKnowledge = resolution
         ? resolution.section
           ? { ...resolution.section, evidence: { state: resolution.state, sourceSnapshotId: resolution.sourceSnapshotId, selectedSnapshotId: resolution.selectedSnapshotId, excludedScopes: resolution.excludedScopes, reason: resolution.reason } }
@@ -1508,7 +1529,7 @@ export class DashboardReadModel {
   }
 
   private characterHistories(version: VersionOrUnknown): CharacterHistory[] {
-    return this.store.listCharacters(version).map((character) => ({ character, snapshots: this.store.listSnapshots(character.identityKey) })).filter((entry) => entry.snapshots.length > 0);
+    return this.characters(version).map((character) => ({ character, snapshots: this.snapshots(character.identityKey) })).filter((entry) => entry.snapshots.length > 0);
   }
 
   /** Characters in one explicit version with captured evidence for a recipe or its output item. */
@@ -1530,7 +1551,7 @@ export class DashboardReadModel {
     return this.resolve(query, (character, snapshot) => {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       if (!supportsRecipeCapture(query.version)) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: `Structured recipe reagent capture is not supported for ${query.version}.` } };
-      const snapshots = this.store.listSnapshots(character.identityKey);
+      const snapshots = this.snapshots(character.identityKey);
       const resolution = resolveRecipeEvidence(query.version, snapshots, snapshot);
       const name = query.recipeName?.trim().toLowerCase();
       const candidates = knowledgeRows(resolution).filter((row) => name !== undefined ? row.name?.trim().toLowerCase() === name : matchesRecipeFilter(row, { recipeID: query.recipeID, recipeKey: query.recipeKey, outputItemID: query.outputItemID, enchantID: query.enchantID }));
@@ -1639,7 +1660,7 @@ export class DashboardReadModel {
       const section = snapshot.parsed.trainer;
       const status = section.status.state;
       // Trainer offers joined to this character's captured recipe rows (Forever/Retail only).
-      const recipeRows = supportsRecipeCapture(query.version) ? knowledgeRows(resolveRecipeEvidence(query.version, this.store.listSnapshots(character.identityKey), snapshot)) : [];
+      const recipeRows = supportsRecipeCapture(query.version) ? knowledgeRows(resolveRecipeEvidence(query.version, this.snapshots(character.identityKey), snapshot)) : [];
       const selectedCategories = [...section.categories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
       const categoryRead = selectedCategories.map((category) => {
         const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
@@ -1676,7 +1697,7 @@ export class DashboardReadModel {
   getCharacterSnapshotHistory(query: HistoryQuery): CharacterResolution<ReadValue<BoundedPage<CharacterSnapshotHistoryRecord>>> {
     return this.resolve(query, (character) => {
       const bounds = pageBounds(query.offset ?? 0, query.limit ?? 20);
-      const allSnapshots = this.store.listSnapshots(character.identityKey);
+      const allSnapshots = this.snapshots(character.identityKey);
       if (allSnapshots.length === 0) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshots exist for this character." } };
       const snapshots = allSnapshots.slice(bounds.offset, bounds.offset + bounds.limit);
       const newest = allSnapshots[0];
@@ -1707,7 +1728,7 @@ export class DashboardReadModel {
   getCharacterChanges(query: CharacterChangesQuery): CharacterResolution<ReadValue<CharacterChangesRead>> {
     if ((query.fromSnapshotId === undefined) !== (query.toSnapshotId === undefined)) throw new TypeError("fromSnapshotId and toSnapshotId must be supplied together.");
     return this.resolve(query, (character) => {
-      const snapshots = this.store.listSnapshots(character.identityKey);
+      const snapshots = this.snapshots(character.identityKey);
       let from: StoredSnapshot | undefined;
       let to: StoredSnapshot | undefined;
       if (query.fromSnapshotId !== undefined && query.toSnapshotId !== undefined) {
@@ -1804,7 +1825,7 @@ export class DashboardReadModel {
       const value = /^\d+$/.test(item.itemKey) ? metadata.get(Number(item.itemKey)) : undefined;
       const scopedLocations = query.storage ? item.locations.filter((location) => location.storage === query.storage) : item.locations;
       const locations: InventorySearchLocation[] = scopedLocations.flatMap((location) => {
-        const snapshots = this.store.listSnapshots(location.identityKey);
+        const snapshots = this.snapshots(location.identityKey);
         const snapshot = snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0]);
         const section = snapshot?.parsed[location.storage];
         if (!snapshot || !section || section.status.state === "UNKNOWN") return [];
@@ -1815,7 +1836,7 @@ export class DashboardReadModel {
       return { item: scopedItem, metadataState: value ? "KNOWN" as const : "UNKNOWN" as const, ...(value ? { metadata: value } : {}) };
     });
     const describeUnknown = (entry: AccountFacts["inventory"]["unknownBags"][number], storage: StorageLocation) => {
-      const snapshot = this.store.listSnapshots(entry.identityKey)[0];
+      const snapshot = this.snapshots(entry.identityKey)[0];
       return { ...entry, ...(snapshot ? { snapshotId: snapshot.id, reason: snapshot.parsed[storage].status.reason } : {}) };
     };
     const allUnknownBags = query.storage === "bank" ? [] : facts.inventory.unknownBags;
@@ -1905,7 +1926,7 @@ export class DashboardReadModel {
 
   /**
    * Azeroth ERP Vertical Slice 1: the deterministic allocation decision for one explicit-version
-   * commodity (base item id) against its currently active STOCK_TARGET demand, if any. Always DERIVED —
+   * commodity (base item id) against its currently active STOCK_TARGET demand, if any. Always DERIVED â€”
    * recomputed on every read from the current demand plus current character-storage and shared-storage
    * evidence; nothing about the decision itself is persisted. Allocation/demand are Retail-only in this
    * slice, matching getSharedStorage.
@@ -1932,7 +1953,7 @@ export class DashboardReadModel {
   /**
    * Azeroth ERP Vertical Slice 2: the account-wide allocation review for one explicit version. Partitions
    * the account's base items into `demanded` (every ACTIVE STOCK_TARGET demand, each evaluated exactly as
-   * getItemAllocation evaluates it — same projection, same buildAllocationResult) and `unallocated`
+   * getItemAllocation evaluates it â€” same projection, same buildAllocationResult) and `unallocated`
    * (account-owned holdings with no active demand; never surplus, never given a disposition). Both lists
    * are paged independently over a deterministic order; the evidence is projected once per read, never once
    * per item. Retail-only, matching getItemAllocation. Item metadata enriches unallocated entries after
@@ -2032,21 +2053,21 @@ export class DashboardReadModel {
 
   private resolve<T>(query: CharacterQuery, build: (character: StoredCharacterSummary, latest: StoredSnapshot | undefined) => T): CharacterResolution<T> {
     requireVersion(query.version);
-    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const character = candidates[0];
-    const snapshots = this.store.listSnapshots(character.identityKey);
+    const snapshots = this.snapshots(character.identityKey);
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
   }
 
   /** Forever reputation (visible rows) and full talent capture, each from the newest snapshot that carries it (or from snapshotId and older). */
   private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView; upcomingAbilities?: unknown }>> {
-    const candidates = this.store.listCharacters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const character = candidates[0]!;
-    let snapshots = this.store.listSnapshots(character.identityKey);
+    let snapshots = this.snapshots(character.identityKey);
     if (query.snapshotId !== undefined) {
       const at = snapshots.findIndex((snapshot) => snapshot.id === query.snapshotId);
       if (at < 0) return { status: "FOUND", value: { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, reason: `Snapshot ${query.snapshotId} does not belong to this character.` } } };
@@ -2075,13 +2096,13 @@ export class DashboardReadModel {
   getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents; classSpells?: ForeverClassSpells }> {
     requireVersion(query.version);
     if (query.version !== "forever") return { status: "FOUND", value: {} };
-    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     let skills: ForeverSkillLines | undefined;
     let talents: ForeverTalents | undefined;
     let classSpells: ForeverClassSpells | undefined;
-    for (const snapshot of this.store.listSnapshots(candidates[0]!.identityKey)) {
+    for (const snapshot of this.snapshots(candidates[0]!.identityKey)) {
       skills ??= extractForeverSkillLines(snapshot.parsed, snapshot.id);
       talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
       classSpells ??= extractForeverClassSpells(snapshot.parsed, snapshot.id);
@@ -2093,9 +2114,9 @@ export class DashboardReadModel {
   /** Whether the character's latest export reports a failed profession-recipe capture (only the newest snapshot counts). */
   getForeverRecipeCaptureIssue(query: CharacterQuery): { error: string; at?: number; snapshotId: number } | undefined {
     if (query.version !== "forever") return undefined;
-    const candidates = this.store.listCharacters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length !== 1) return undefined;
-    const latest = this.store.listSnapshots(candidates[0]!.identityKey)[0];
+    const latest = this.snapshots(candidates[0]!.identityKey)[0];
     const issue = latest ? extractForeverRecipeCaptureIssue(latest.parsed) : undefined;
     return issue && latest ? { ...issue, snapshotId: latest.id } : undefined;
   }
@@ -2104,11 +2125,11 @@ export class DashboardReadModel {
   getForeverTrainerVisits(query: CharacterQuery): CharacterResolution<ForeverTrainerVisit[]> {
     requireVersion(query.version);
     if (query.version !== "forever") return { status: "FOUND", value: [] };
-    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const visits = new Map<string, ForeverTrainerVisit>();
-    for (const snapshot of this.store.listSnapshots(candidates[0]!.identityKey)) {
+    for (const snapshot of this.snapshots(candidates[0]!.identityKey)) {
       const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id);
       if (!visit) continue;
       const key = visit.kind;
@@ -2121,11 +2142,11 @@ export class DashboardReadModel {
   private resolveSelectedSnapshot<T>(query: CharacterSnapshotQuery, build: (character: StoredCharacterSummary, snapshot: StoredSnapshot | undefined) => T): CharacterResolution<T> {
     requireVersion(query.version);
     if (query.snapshotId !== undefined && (!Number.isSafeInteger(query.snapshotId) || query.snapshotId < 1)) throw new TypeError("snapshotId must be a positive integer");
-    const candidates = this.store.listCharacters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
+    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
     const character = candidates[0]!;
-    const snapshots = this.store.listSnapshots(character.identityKey);
+    const snapshots = this.snapshots(character.identityKey);
     const snapshot = query.snapshotId === undefined ? snapshots[0] : snapshots.find((entry) => entry.id === query.snapshotId);
     if (query.snapshotId !== undefined && !snapshot) throw new TypeError("snapshotId must belong to the resolved character in the requested WoW version");
     return { status: "FOUND", value: build(character, snapshot && resolveSnapshotView(query.version, snapshots, snapshot)) };

@@ -30,6 +30,39 @@ test("read model requires a version and cannot leak a same-named Classic charact
   } finally { store.close(); }
 });
 
+test("read model reuses roster and snapshots only within its instance", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(retail("Cache", "Cairne"));
+    let characterReads = 0;
+    let snapshotReads = 0;
+    const listCharacters = store.listCharacters.bind(store);
+    const listSnapshots = store.listSnapshots.bind(store);
+    store.listCharacters = (version) => { characterReads++; return listCharacters(version); };
+    store.listSnapshots = (identityKey) => { snapshotReads++; return listSnapshots(identityKey); };
+
+    const firstReadModel = new DashboardReadModel(store, () => NOW);
+    const query = { version: "retail", name: "Cache", realm: "Cairne" } as const;
+    const first = firstReadModel.getCharacterEquipment(query);
+    const repeated = firstReadModel.getCharacterEquipment(query);
+    assert.equal(first.status, "FOUND");
+    assert.equal(repeated.status, "FOUND");
+    if (first.status === "FOUND" && repeated.status === "FOUND") {
+      assert.equal(first.value.data?.slots[0]?.itemRef, "item:1");
+      assert.equal(repeated.value.data?.slots[0]?.itemRef, "item:1");
+    }
+    assert.equal(characterReads, 1, "the roster is loaded once for one read-model instance");
+    assert.equal(snapshotReads, 1, "the character snapshot history is loaded once for one read-model instance");
+
+    store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Cache", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" }, equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: "item:2", name: "Newer Helm", itemLevel: 280 }] } }));
+    const fresh = new DashboardReadModel(store, () => NOW).getCharacterEquipment(query);
+    assert.equal(fresh.status, "FOUND");
+    if (fresh.status === "FOUND") assert.equal(fresh.value.data?.slots[0]?.itemRef, "item:2", "a new instance reads the newer import");
+    assert.equal(characterReads, 2, "a new instance loads a fresh roster");
+    assert.equal(snapshotReads, 2, "a new instance loads fresh snapshot history");
+  } finally { store.close(); }
+});
+
 test("same-name realm matches are ambiguity, never a silent choice", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
@@ -381,8 +414,8 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
     const exporterText = exportWithCandidates("Exporter", "Cairne", 90, [row("91", "OBSERVED", "no", "yes"), row("0", "OBSERVED", "no", "yes"), row("?", "LAST_SEEN"), row("91"), row("90")], NOW - 30);
     store.importSnapshot(exporterText);
     store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Recipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", level: 90 } }));
-    const read = new DashboardReadModel(store, () => NOW);
-    const result = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 0, limit: 10 });
+    const read = () => new DashboardReadModel(store, () => NOW);
+    const result = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 0, limit: 10 });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND") return;
     const screen = result.value.data!;
@@ -417,7 +450,7 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
 
     const duplicateRows = exportWithCandidates("DuplicateExporter", "Cairne", 90, [row("89"), row("89")], NOW - 10);
     store.importSnapshot(duplicateRows);
-    const duplicate = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "DuplicateExporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 1, limit: 1 });
+    const duplicate = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "DuplicateExporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 1, limit: 1 });
     assert.equal(duplicate.status, "FOUND");
     if (duplicate.status === "FOUND") {
       assert.equal(duplicate.value.data?.candidateEvidence.totalCount, 2);
@@ -429,13 +462,13 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
 
     const zeroLevelText = exportWithCandidates("ZeroCandidate", "Cairne", 90, [row("0")], NOW - 7);
     store.importSnapshot(zeroLevelText);
-    const zeroCandidate = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "ZeroCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const zeroCandidate = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "ZeroCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(zeroCandidate.status, "FOUND");
     if (zeroCandidate.status === "FOUND") assert.equal(zeroCandidate.value.data?.candidateEvidence.rows?.[0]?.result, "NOT_RULED_OUT_BY_CHECKED_RULES", "known requiredLevel zero remains a real passing value");
 
     const emptyText = exportWithCandidates("EmptyCandidate", "Cairne", 90, [], NOW - 3);
     store.importSnapshot(emptyText);
-    const empty = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "EmptyCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const empty = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "EmptyCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(empty.status, "FOUND");
     if (empty.status === "FOUND") {
       assert.equal(empty.value.data?.candidateEvidence.captured, true);
@@ -443,7 +476,7 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
       assert.equal(empty.value.data?.candidateEvidence.totalCount, 0);
     }
 
-    const unavailable = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Recipient", exporterRealm: "Cairne", recipientName: "Exporter", recipientRealm: "Cairne" });
+    const unavailable = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Recipient", exporterRealm: "Cairne", recipientName: "Exporter", recipientRealm: "Cairne" });
     assert.equal(unavailable.status, "FOUND");
     if (unavailable.status === "FOUND") {
       assert.equal(unavailable.value.data?.candidateEvidence.captured, false);
@@ -451,12 +484,12 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
       assert.match(unavailable.value.data?.candidateEvidence.reason ?? "", /unavailable, not an empty/);
     }
 
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "classic-era", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "classic-era", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION");
     for (const version of ["tbc-anniversary", "forever", "unknown-version"] as const) {
-      assert.equal(read.getGearCandidateRecipientScreen({ version, exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION", `${version} must remain outside the Retail-only recipient screen`);
+      assert.equal(read().getGearCandidateRecipientScreen({ version, exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION", `${version} must remain outside the Retail-only recipient screen`);
     }
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "missing", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_NOT_FOUND");
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "missing", recipientRealm: "Cairne" }).status, "RECIPIENT_NOT_FOUND");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "missing", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_NOT_FOUND");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "missing", recipientRealm: "Cairne" }).status, "RECIPIENT_NOT_FOUND");
   } finally { store.close(); }
 });
 
@@ -471,15 +504,15 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
     store.importSnapshot(recipient);
     const originalSnapshots = store.listSnapshots.bind(store);
     store.listSnapshots = (identityKey) => originalSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::recipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, status: { ...snapshot.parsed.character.status, state: "LAST_SEEN" } } } } : snapshot);
-    const read = new DashboardReadModel(store, () => NOW);
-    const historicalLevel = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const read = () => new DashboardReadModel(store, () => NOW);
+    const historicalLevel = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(historicalLevel.status, "FOUND");
     if (historicalLevel.status === "FOUND") {
       assert.deepEqual(historicalLevel.value.data?.recipientLevel.evidence, { state: "UNKNOWN", value: 90, sectionState: "LAST_SEEN", reason: "Recipient character level provenance is LAST_SEEN; only OBSERVED level evidence is used for this screen." });
       assert.equal(historicalLevel.value.data?.candidateEvidence.rows?.[0]?.result, "UNKNOWN");
     }
     store.listSnapshots = (identityKey) => originalSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::recipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, level: undefined } } } : snapshot);
-    const unknownLevel = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const unknownLevel = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(unknownLevel.status, "FOUND");
     if (unknownLevel.status === "FOUND") {
       assert.equal(unknownLevel.value.data?.recipientLevel.evidence.state, "UNKNOWN");
@@ -492,13 +525,13 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
       const duplicate = chars.find((character) => character.name === "Exporter")!;
       return [...chars, { ...duplicate, identityKey: `${duplicate.identityKey}::duplicate` }];
     };
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_AMBIGUOUS");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_AMBIGUOUS");
     store.listCharacters = (version) => {
       const chars = originals(version);
       const duplicate = chars.find((character) => character.name === "Recipient")!;
       return [...chars, { ...duplicate, identityKey: `${duplicate.identityKey}::duplicate` }];
     };
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "RECIPIENT_AMBIGUOUS");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "RECIPIENT_AMBIGUOUS");
   } finally { store.close(); }
 });
 

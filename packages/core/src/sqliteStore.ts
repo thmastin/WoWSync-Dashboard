@@ -1435,9 +1435,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
     if (!row) return undefined;
     const latest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterId);
     const count = one<{ n: number }>(this.stmts.snapshotCountForCharacter, characterId)!.n;
-    const surname = latest ? toStoredSnapshot(latest).parsed.character.surname : undefined;
-    const surnameSource = latest ? toStoredSnapshot(latest).parsed.character.surnameSource : undefined;
-    const race = latest ? toStoredSnapshot(latest).parsed.character.race : undefined;
+    const latestCharacter = latest ? toStoredSnapshot(latest).parsed.character : undefined;
+    const surname = latestCharacter?.surname;
+    const surnameSource = latestCharacter?.surnameSource;
+    const race = latestCharacter?.race;
     return {
       id: row.id,
       version: row.version as VersionOrUnknown,
