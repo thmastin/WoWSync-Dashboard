@@ -1,6 +1,36 @@
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
+import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
+
+function validatePortfolioNeedDependencies(projects: readonly ErpProject[]): void {
+  const byId = new Map(projects.map((project) => [project.stableId, project]));
+  const graph = new Map<string, string[]>();
+  const node = (projectId: string, needId: string) => JSON.stringify([projectId, needId]);
+  for (const project of projects) for (const order of project.workOrders) {
+    const dependencies = (order.portfolioPrerequisites ?? []).map((reference) => {
+      const prerequisite = byId.get(reference.projectId);
+      if (!prerequisite || prerequisite.version !== project.version || !prerequisite.needs.some((need) => need.stableId === reference.needId)) throw new ErpProjectConflictError("PORTFOLIO_PREREQUISITE_STALE", "A portfolio prerequisite must refer to a current need in the same game version.");
+      return node(reference.projectId, reference.needId);
+    });
+    for (const needId of order.resourceNeedIds) {
+      const key = node(project.stableId, needId);
+      graph.set(key, [...(graph.get(key) ?? []), ...dependencies]);
+    }
+  }
+  const visiting = new Set<string>(); const visited = new Set<string>();
+  const hasCycle = (key: string): boolean => {
+    if (visiting.has(key)) return true;
+    if (visited.has(key)) return false;
+    visiting.add(key);
+    for (const dependency of graph.get(key) ?? []) if (hasCycle(dependency)) return true;
+    visiting.delete(key); visited.add(key); return false;
+  };
+  if ([...graph.keys()].some(hasCycle)) throw new ErpProjectConflictError("PORTFOLIO_DEPENDENCY_CYCLE", "Portfolio prerequisite needs cannot form a dependency cycle.");
+}
 import {
   DemandConflictError,
   storedDemandToExplicitDemand,
@@ -13,12 +43,22 @@ import {
   type UpdateDemandInput,
 } from "./demand.ts";
 import { buildAccountFacts, type AccountFacts } from "./accountFacts.ts";
+import { snapshotRecipeSection } from "./recipeEvidence.ts";
+import { CARRIED_SECTIONS, resolveSnapshotView } from "./snapshotEvidence.ts";
 import { buildAccountContext as buildAccountContextPure, type AccountContext } from "./accountContext.ts";
 import { SNAPSHOTS_NEWEST_FIRST_SQL, normalizeExportText, snapshotObservedAt } from "./chronology.ts";
 import { characterIdentity } from "./identity.ts";
 import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
+import { mergeForeverStructuredObservation, normalizeForeverStructuredObservation } from "./foreverGearObservation.ts";
+import { DashboardReadModel } from "./readModel.ts";
+import {
+  canonicalJson,
+  evaluateEquipmentPolicy,
+  normalizeEquipmentObservation,
+  type EquipmentNormalizationOutcome,
+} from "./equipmentObservation.ts";
 import {
   ITEM_FACETS,
   ITEM_METADATA_SOURCES,
@@ -74,6 +114,7 @@ import type {
   SnapshotReadStore,
   SnapshotStore,
   StoredCharacterSummary,
+  StoredEquipmentObservation,
   StoredSnapshot,
   VersionSummary,
 } from "./store.ts";
@@ -230,6 +271,22 @@ CREATE TABLE IF NOT EXISTS snapshot_currencies (
 );
 CREATE INDEX IF NOT EXISTS idx_snapshot_currencies_character ON snapshot_currencies(character_id, currency_id);
 
+-- Retail equipment-envelope observations (GearExport sections.equipment, optionally with
+-- specEquipmentObservation). Append-only evidence: identity is the character-scoped
+-- canonical tuple, NOT the snapshot row. snapshot_id records the row the evidence arrived with.
+CREATE TABLE IF NOT EXISTS snapshot_equipment_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  character_id INTEGER NOT NULL REFERENCES characters(id),
+  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+  observed_at INTEGER NOT NULL,
+  capture INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  completeness TEXT NOT NULL CHECK (completeness IN ('complete', 'partial')),
+  evidence_json TEXT NOT NULL,
+  stored_at INTEGER NOT NULL,
+  UNIQUE (character_id, observed_at, capture, revision)
+);
+
 -- Explicit Demand (see demand.ts): the one new durable domain concept for Azeroth ERP Vertical Slice 1.
 -- Demand is USER INTENT, not a WoW observation: persistence represents CURRENT intent (mutable status/
 -- quantity/purpose), never an audit/event history, and there is deliberately no reference to characters
@@ -251,6 +308,38 @@ CREATE TABLE IF NOT EXISTS demands (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_demands_active_key
   ON demands(game_version, demand_type, base_item_id) WHERE status = 'ACTIVE';
+
+-- User-authored ERP planning state. This is intent and manual execution state, never observed game state.
+-- Aggregate JSON keeps work orders, explicit resource needs, and reservations transactionally versioned.
+CREATE TABLE IF NOT EXISTS erp_projects (
+  stable_id TEXT PRIMARY KEY,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  project_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_erp_projects_version_status ON erp_projects(game_version, updated_at DESC);
+CREATE TABLE IF NOT EXISTS erp_project_events (
+  event_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  occurred_at INTEGER NOT NULL,
+  event_json TEXT NOT NULL,
+  UNIQUE(project_id, revision)
+);
+CREATE INDEX IF NOT EXISTS idx_erp_project_events_project_revision ON erp_project_events(project_id, revision DESC);
+-- Remote conversational planning requests are inert until an explicit Dashboard approval.
+CREATE TABLE IF NOT EXISTS erp_change_proposals (
+  proposal_id TEXT PRIMARY KEY,
+  game_version TEXT NOT NULL CHECK (game_version IN ('classic-era','tbc-anniversary','retail','forever')),
+  status TEXT NOT NULL CHECK (status IN ('PENDING','APPROVED','REJECTED','COMMITTING','COMMITTED','FAILED')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  proposal_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_erp_change_proposals_version_status ON erp_change_proposals(game_version, status, created_at DESC);
 `;
 
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
@@ -500,8 +589,12 @@ const READ_ONLY_REQUIRED_TABLES = [
   "shared_owner_clears",
   "snapshot_currency_sections",
   "snapshot_currencies",
+  "snapshot_equipment_observations",
   "item_metadata_evidence",
   "demands",
+  "erp_projects",
+  "erp_project_events",
+  "erp_change_proposals",
 ] as const;
 
 export class SqliteSnapshotStore implements SnapshotStore {
@@ -548,6 +641,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
       allCharacters: this.db.prepare("SELECT * FROM characters ORDER BY version, name"),
       snapshotsForCharacter: this.db.prepare(
         `SELECT * FROM snapshots WHERE character_id = ? ORDER BY ${SNAPSHOTS_NEWEST_FIRST_SQL}`,
+      ),
+      equipmentObservationsForCharacter: this.db.prepare(
+        "SELECT snapshot_id, observed_at, capture, revision, completeness, evidence_json FROM snapshot_equipment_observations WHERE character_id = ? ORDER BY observed_at DESC, capture DESC, revision DESC",
       ),
       snapshotById: this.db.prepare("SELECT * FROM snapshots WHERE id = ?"),
       updateParsedSnapshot: this.db.prepare("UPDATE snapshots SET parsed_json = ? WHERE id = ?"),
@@ -628,6 +724,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
       currenciesForSnapshot: this.db.prepare("SELECT * FROM snapshot_currencies WHERE snapshot_id = ? ORDER BY list_order, currency_id"),
       deleteCurrenciesForCharacter: this.db.prepare("DELETE FROM snapshot_currencies WHERE character_id = ?"),
       deleteCurrencySectionsForCharacter: this.db.prepare("DELETE FROM snapshot_currency_sections WHERE character_id = ?"),
+      equipmentObservationForTuple: this.db.prepare(
+        "SELECT completeness, evidence_json FROM snapshot_equipment_observations WHERE character_id = ? AND observed_at = ? AND capture = ? AND revision = ?",
+      ),
+      insertEquipmentObservation: this.db.prepare(
+        "INSERT INTO snapshot_equipment_observations (character_id, snapshot_id, observed_at, capture, revision, completeness, evidence_json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ),
+      deleteEquipmentObservationsForCharacter: this.db.prepare("DELETE FROM snapshot_equipment_observations WHERE character_id = ?"),
       insertDemand: this.db.prepare(
         `INSERT INTO demands (stable_id, game_version, demand_type, base_item_id, required_quantity, purpose, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
@@ -689,8 +792,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
     // Parse first: a malformed export throws before anything is written.
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
-    const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version);
+    const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version, parsed.character);
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
+    const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
+    if (normalizedForeverObservation) {
+      parsed.foreverGearObservation = normalizedForeverObservation;
+      if (!parsed.character.race && normalizedForeverObservation.race) parsed.character.race = normalizedForeverObservation.race;
+    }
     const identity = characterIdentity(version, parsed.character);
     const now = Math.floor(Date.now() / 1000);
 
@@ -725,6 +833,21 @@ export class SqliteSnapshotStore implements SnapshotStore {
             }
             characterStateOutcome = normalizedCharacterState ? "recorded" : "invalid-or-unsupported";
           }
+          const equipmentObservation =
+            extras.equipmentObservation === undefined ? undefined : this.recordEquipmentObservation(characterRow.id, existing.id, version, extras.equipmentObservation, now);
+          let foreverGearOutcome: ImportResult["foreverGearObservation"];
+          if (extras.foreverGearObservation !== undefined) {
+            const existingParsed = toStoredSnapshot(existing).parsed;
+            if (!normalizedForeverObservation) foreverGearOutcome = "invalid-or-unsupported";
+            else {
+              const merged = mergeForeverStructuredObservation(existingParsed.foreverGearObservation, normalizedForeverObservation);
+              if (!existingParsed.character.race && normalizedForeverObservation.race) existingParsed.character.race = normalizedForeverObservation.race;
+              existingParsed.foreverGearObservation = merged.value;
+              existing.parsed_json = JSON.stringify(existingParsed);
+              this.stmts.updateParsedSnapshot.run(existing.parsed_json, existing.id);
+              foreverGearOutcome = merged.outcome;
+            }
+          }
           const duplicateSnapshot = toStoredSnapshot(existing);
           return {
             character: this.summarize(characterRow.id)!,
@@ -737,6 +860,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
             sharedStorage: [],
             ...(currencies ? { currencies } : {}),
             ...(characterStateOutcome ? { characterState: characterStateOutcome } : {}),
+            ...(equipmentObservation ? { equipmentObservation } : {}),
+            ...(foreverGearOutcome ? { foreverGearObservation: foreverGearOutcome } : {}),
           };
         }
       } else {
@@ -771,7 +896,9 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const index = rows.findIndex((row) => row.id === newId);
       const isLatest = index === 0;
       const predecessorRow = rows[index + 1];
-      if (isLatest && predecessorRow) {
+      // Classic sidecars are not copied into later snapshots: GearExport already keeps per-row
+      // LAST_SEEN history, and read-time resolution (snapshotEvidence.ts) carries absent domains.
+      if (isLatest && predecessorRow && parsed.characterState?.clientFamily !== "Classic" && toStoredSnapshot(predecessorRow).parsed.characterState?.clientFamily !== "Classic") {
         const predecessor = toStoredSnapshot(predecessorRow).parsed.characterState;
         const merged = mergeCharacterState(predecessor, parsed.characterState);
         if (merged) {
@@ -824,6 +951,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
       const currencies =
         extras.currencies === undefined ? undefined : this.recordCurrencies(characterRow.id, newId, version, extras.currencies, now, false);
 
+      // The structured equipment observation (if the bridge sent one) joins this snapshot in the same transaction.
+      const equipmentObservation =
+        extras.equipmentObservation === undefined ? undefined : this.recordEquipmentObservation(characterRow.id, newId, version, extras.equipmentObservation, now);
+
       return {
         character: this.summarize(characterRow.id)!,
         snapshot,
@@ -834,6 +965,8 @@ export class SqliteSnapshotStore implements SnapshotStore {
         isLatest,
         sharedStorage,
         ...(currencies ? { currencies } : {}),
+        ...(equipmentObservation ? { equipmentObservation } : {}),
+        ...(extras.foreverGearObservation !== undefined ? { foreverGearObservation: normalizedForeverObservation ? "recorded" : "invalid-or-unsupported" } : {}),
         ...(extras.characterState !== undefined ? { characterState: normalizedCharacterState ? "recorded" : "invalid-or-unsupported" } : {}),
       };
     });
@@ -917,6 +1050,72 @@ export class SqliteSnapshotStore implements SnapshotStore {
       carried: carriedReason !== undefined,
       ...(carriedReason ? { carriedReason } : {}),
     };
+  }
+
+  /** Attaches a validated equipment observation to one snapshot. Never alters the snapshot; a bad observation is a skip, not an error. */
+  private recordEquipmentObservation(
+    characterId: number,
+    snapshotId: number,
+    version: VersionOrUnknown,
+    input: unknown,
+    now: number
+  ): ImportResult["equipmentObservation"] {
+    // Step 1: Normalize and validate envelope structure
+    const normalized = normalizeEquipmentObservation(input, version);
+    if (!normalized.ok) {
+      return normalized.outcome as EquipmentNormalizationOutcome;
+    }
+
+    const observation = normalized.value;
+    const projection = (input as Record<string, unknown> | undefined)?.projection;
+
+    // Step 2: Evaluate policy A-E
+    const policyResult = evaluateEquipmentPolicy(observation, projection);
+    if (!policyResult.ok) {
+      return policyResult.outcome;
+    }
+
+    // Step 3: Check for existing observation with the same tuple
+    const existing = one<{ completeness: string; evidence_json: string }>(
+      this.stmts.equipmentObservationForTuple,
+      characterId,
+      observation.observedAt,
+      observation.capture,
+      observation.revision
+    );
+
+    // Step 4: Build evidence JSON (canonical, key-sorted)
+    const evidenceValue = {
+      slots: observation.slots,
+      ...(observation.reason !== undefined ? { reason: observation.reason } : {}),
+      ...(observation.source !== undefined ? { source: observation.source } : {}),
+      ...(observation.changedAt !== undefined ? { changedAt: observation.changedAt } : {}),
+      ...(observation.specEquipmentObservation !== undefined ? { specEquipmentObservation: observation.specEquipmentObservation } : {}),
+    };
+    const evidenceJson = canonicalJson(evidenceValue);
+
+    if (existing) {
+      // Check if evidence is identical
+      if (existing.completeness === observation.completeness && existing.evidence_json === evidenceJson) {
+        return "already-recorded";
+      }
+      // Different evidence for the same tuple: conflict
+      return "conflict";
+    }
+
+    // Step 5: Insert new row
+    this.stmts.insertEquipmentObservation.run(
+      characterId,
+      snapshotId,
+      observation.observedAt,
+      observation.capture,
+      observation.revision,
+      observation.completeness,
+      evidenceJson,
+      now
+    );
+
+    return "recorded";
   }
 
   private resolveCurrencies(row: CharacterRow): CharacterCurrencies {
@@ -1222,6 +1421,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return this.inTransaction(() => {
       this.stmts.deleteCurrenciesForCharacter.run(row.id);
       this.stmts.deleteCurrencySectionsForCharacter.run(row.id);
+      this.stmts.deleteEquipmentObservationsForCharacter.run(row.id);
       const snapshotsDeleted = Number(this.stmts.deleteSnapshotsForCharacter.run(row.id).changes);
       this.stmts.deleteCharacterById.run(row.id);
       return {
@@ -1239,11 +1439,18 @@ export class SqliteSnapshotStore implements SnapshotStore {
     if (!row) return undefined;
     const latest = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, characterId);
     const count = one<{ n: number }>(this.stmts.snapshotCountForCharacter, characterId)!.n;
+    const latestCharacter = latest ? toStoredSnapshot(latest).parsed.character : undefined;
+    const surname = latestCharacter?.surname;
+    const surnameSource = latestCharacter?.surnameSource;
+    const race = latestCharacter?.race;
     return {
       id: row.id,
       version: row.version as VersionOrUnknown,
       realm: row.realm,
       name: row.name,
+      ...(surname ? { surname } : {}),
+      ...(surnameSource ? { surnameSource } : {}),
+      ...(race ? { race } : {}),
       identityKey: row.identity_key,
       class: row.class ?? undefined,
       faction: row.faction ?? undefined,
@@ -1318,6 +1525,15 @@ export class SqliteSnapshotStore implements SnapshotStore {
     return rows.map(toStoredSnapshot);
   }
 
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[] {
+    const row = one<CharacterRow>(this.stmts.findCharacterByKey, identityKey);
+    if (!row || row.version !== "retail") return [];
+    return many<{ snapshot_id: number; observed_at: number; capture: number; revision: number; completeness: "complete" | "partial"; evidence_json: string }>(this.stmts.equipmentObservationsForCharacter, row.id).map((entry) => ({
+      snapshotId: entry.snapshot_id, observedAt: entry.observed_at, capture: entry.capture, revision: entry.revision,
+      completeness: entry.completeness, evidence: JSON.parse(entry.evidence_json) as Record<string, unknown>,
+    }));
+  }
+
   getSnapshot(id: number): StoredSnapshot | undefined {
     const row = one<SnapshotRow>(this.stmts.snapshotById, id);
     return row ? toStoredSnapshot(row) : undefined;
@@ -1376,7 +1592,13 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const latestParsed = new Map<string, ParsedSnapshot>();
     for (const character of characters) {
       const latestRow = one<SnapshotRow>(this.stmts.latestSnapshotForCharacter, character.id);
-      if (latestRow) latestParsed.set(character.identityKey, toStoredSnapshot(latestRow).parsed);
+      if (!latestRow) continue;
+      const latest = toStoredSnapshot(latestRow);
+      // Only pay for history when the latest export left a section unobserved.
+      const needsHistory = CARRIED_SECTIONS.some((key) => latest.parsed[key].status.state === "UNKNOWN") || ((version === "forever" || version === "retail" || version === "classic-era" || version === "tbc-anniversary") && !snapshotRecipeSection(version, latest))
+        || (version === "retail" && (!latest.parsed.characterState?.combatSpecialization || !latest.parsed.characterState?.reputation?.character))
+        || ((version === "classic-era" || version === "tbc-anniversary") && (!latest.parsed.characterState?.quests || !latest.parsed.characterState?.talents || !latest.parsed.characterState?.reputation?.character));
+      latestParsed.set(character.identityKey, needsHistory ? resolveSnapshotView(version, this.listSnapshots(character.identityKey), latest, { recipes: true }).parsed : latest.parsed);
     }
     const allDiffs = this.allDiffs(version);
     const diffs = new Map(allDiffs.map((d) => [d.identityKey, d.diff]));
@@ -1387,6 +1609,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
   buildAccountContext(now: number = Math.floor(Date.now() / 1000)): AccountContext {
     const versionFacts = {} as Record<WowVersion, AccountFacts>;
     const characterSnapshots = new Map<string, ReturnType<typeof this.listSnapshots>>();
+    const foreverGearObservations = new Map<string, ReturnType<DashboardReadModel["getForeverGearObservation"]>>();
+    const foreverQuestObservations = new Map<string, ReturnType<DashboardReadModel["getForeverQuestObservation"]>>();
+    const foreverCraftedUpgradeAssessments = new Map<string, ReturnType<DashboardReadModel["getForeverCraftedUpgradeAssessment"]>>();
+    const foreverGearAllocations = new Map<string, ReturnType<DashboardReadModel["getForeverGearAllocation"]>>();
     for (const version of WOW_VERSIONS) {
       const facts = this.buildAccountFacts(version, now);
       versionFacts[version] = facts;
@@ -1394,7 +1620,15 @@ export class SqliteSnapshotStore implements SnapshotStore {
         characterSnapshots.set(character.identityKey, this.listSnapshots(character.identityKey));
       }
     }
-    return buildAccountContextPure({ now, versionFacts, characterSnapshots });
+    const readModel = new DashboardReadModel(this, () => now);
+    for (const character of versionFacts.forever.characters) {
+      foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
+      foreverQuestObservations.set(character.identityKey, readModel.getForeverQuestObservation({ version: "forever", name: character.name, realm: character.realm }));
+      foreverCraftedUpgradeAssessments.set(character.identityKey, readModel.getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm }));
+      foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm }));
+    }
+    const erpProjects = WOW_VERSIONS.flatMap((version) => readModel.getErpProjects({ version }));
+    return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverQuestObservations, foreverGearAllocations, foreverCraftedUpgradeAssessments, erpProjects });
   }
 
   // --- Explicit Demand (see demand.ts) -----------------------------------------------------------------
@@ -1406,6 +1640,333 @@ export class SqliteSnapshotStore implements SnapshotStore {
   listDemands(version: VersionOrUnknown): ExplicitDemand[] {
     if (version !== "retail") return [];
     return many<DemandRow>(this.stmts.demandsForVersion, version).map((row) => storedDemandToExplicitDemand(toStoredDemand(row)));
+  }
+
+  listErpProjects(version: VersionOrUnknown): ErpProject[] {
+    if (version === "unknown-version") return [];
+    const rows = many<{ project_json: string }>(this.db.prepare("SELECT project_json FROM erp_projects WHERE game_version = ? ORDER BY updated_at DESC, stable_id"), version);
+    return rows.map((row) => JSON.parse(row.project_json) as ErpProject);
+  }
+
+  listErpProjectHistory(stableId: string, limit = 50): ErpProjectEvent[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new RangeError("ERP project history limit must be between 1 and 200.");
+    const rows = many<{ event_json: string }>(this.db.prepare("SELECT event_json FROM erp_project_events WHERE project_id = ? ORDER BY revision DESC LIMIT ?"), stableId, limit);
+    return rows.map((row) => JSON.parse(row.event_json) as ErpProjectEvent);
+  }
+
+  countErpProjectHistory(stableId: string): number {
+    const row = one<{ event_count: number }>(this.db.prepare("SELECT COUNT(*) AS event_count FROM erp_project_events WHERE project_id = ?"), stableId);
+    return row?.event_count ?? 0;
+  }
+
+  private recordErpProjectEvent(project: ErpProject, kind: ErpProjectEvent["kind"], changedFields: string[], fromStatus?: ErpProject["status"], workOrderStatusChanges?: ErpProjectEvent["workOrderStatusChanges"], rationale?: string): void {
+    const event: ErpProjectEvent = {
+      eventId: `project_event_${randomUUID()}`, projectId: project.stableId, version: project.version,
+      revision: project.revision, occurredAt: project.updatedAt, kind, changedFields,
+      ...(rationale !== undefined && rationale.trim() ? { rationale: rationale.trim() } : {}),
+      ...(workOrderStatusChanges !== undefined && workOrderStatusChanges.length > 0 ? { workOrderStatusChanges } : {}),
+      ...(fromStatus !== undefined ? { fromStatus } : {}), toStatus: project.status,
+    };
+    this.db.prepare("INSERT INTO erp_project_events(event_id, project_id, game_version, revision, occurred_at, event_json) VALUES(?,?,?,?,?,?)")
+      .run(event.eventId, event.projectId, event.version, event.revision, event.occurredAt, JSON.stringify(event));
+  }
+
+  getErpProject(stableId: string): ErpProject | undefined {
+    const row = one<{ project_json: string }>(this.db.prepare("SELECT project_json FROM erp_projects WHERE stable_id = ?"), stableId);
+    return row ? JSON.parse(row.project_json) as ErpProject : undefined;
+  }
+
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined {
+    const row = one<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE proposal_id = ?"), proposalId);
+    return row ? JSON.parse(row.proposal_json) as ErpChangeProposal : undefined;
+  }
+
+  listErpChangeProposals(version: WowVersion, includeTerminal = false): ErpChangeProposal[] {
+    const rows = includeTerminal
+      ? many<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE game_version = ? ORDER BY created_at DESC, proposal_id"), version)
+      : many<{ proposal_json: string }>(this.db.prepare("SELECT proposal_json FROM erp_change_proposals WHERE game_version = ? AND status IN ('PENDING','APPROVED','COMMITTING') ORDER BY created_at DESC, proposal_id"), version);
+    return rows.map((row) => JSON.parse(row.proposal_json) as ErpChangeProposal);
+  }
+
+  createErpChangeProposal(proposal: ErpChangeProposal): ErpChangeProposal {
+    if (!/^proposal_[a-f0-9-]{36}$/.test(proposal.proposalId) || proposal.status !== "PENDING" || proposal.expiresAt <= proposal.createdAt || proposal.expiresAt - proposal.createdAt > 3600) throw new TypeError("Invalid ERP change proposal identity or expiry.");
+    return this.inTransaction(() => {
+      const existing = this.getErpChangeProposal(proposal.proposalId);
+      if (existing) {
+        if (existing.digest !== proposal.digest) throw new ErpProjectConflictError("PROPOSAL_ID_REUSED", "This proposal ID already identifies a different exact change.");
+        return existing;
+      }
+      this.db.prepare("INSERT INTO erp_change_proposals(proposal_id, game_version, status, created_at, expires_at, proposal_json) VALUES(?,?,?,?,?,?)")
+        .run(proposal.proposalId, proposal.version, proposal.status, proposal.createdAt, proposal.expiresAt, JSON.stringify(proposal));
+      return proposal;
+    });
+  }
+
+  transitionErpChangeProposal(proposalId: string, version: WowVersion, from: ErpChangeProposalStatus, to: ErpChangeProposalStatus, patch: Partial<Pick<ErpChangeProposal, "approvedAt" | "completedAt" | "result" | "outcome">> = {}): ErpChangeProposal | undefined {
+    return this.inTransaction(() => {
+      const current = this.getErpChangeProposal(proposalId);
+      if (!current || current.version !== version || current.status !== from) return undefined;
+      const next: ErpChangeProposal = { ...current, ...patch, status: to };
+      const result = this.db.prepare("UPDATE erp_change_proposals SET status = ?, proposal_json = ? WHERE proposal_id = ? AND game_version = ? AND status = ?")
+        .run(to, JSON.stringify(next), proposalId, version, from);
+      return Number(result.changes) === 1 ? next : undefined;
+    });
+  }
+
+  createErpProject(input: ErpProjectDraft): ErpProject {
+    const now = Math.floor(Date.now() / 1000);
+    if (input.idempotencyKey !== undefined && (typeof input.idempotencyKey !== "string" || input.idempotencyKey.trim().length < 1 || input.idempotencyKey.length > 256)) throw new TypeError("Project idempotency keys must contain 1–256 characters.");
+    if (input.rationale !== undefined && (typeof input.rationale !== "string" || input.rationale.trim().length < 1 || input.rationale.length > 2_000)) throw new TypeError("Project rationale must contain 1–2,000 characters when provided.");
+    const project: ErpProject = {
+      stableId: input.idempotencyKey === undefined ? `project_${randomUUID()}` : `project_goal_${createHash("sha256").update(input.idempotencyKey).digest("hex")}`,
+      version: input.version, title: input.title.trim(),
+      ...(input.objective !== undefined ? { objective: input.objective.trim() } : {}), status: input.status ?? "ACTIVE", priority: input.priority ?? 3,
+      createdAt: now, updatedAt: now, revision: 1, needs: input.needs ?? [], reservations: input.reservations ?? [], workOrders: input.workOrders ?? [],
+    };
+    validateErpProject(project, (key) => this.getCharacter(key)?.version === project.version);
+    const equivalentCreate = (existing: ErpProject) => existing.version === project.version && existing.title === project.title && existing.objective === project.objective && existing.status === project.status && existing.priority === project.priority && isDeepStrictEqual(existing.needs, project.needs) && isDeepStrictEqual(existing.reservations, project.reservations) && isDeepStrictEqual(existing.workOrders, project.workOrders);
+    return this.inTransaction(() => {
+      if (input.idempotencyKey !== undefined) {
+        const existing = this.getErpProject(project.stableId);
+        if (existing) {
+          if (!equivalentCreate(existing)) throw new ErpProjectConflictError("IDEMPOTENCY_KEY_REUSED", "This project creation key was already used for a different plan.");
+          return existing;
+        }
+      }
+      validatePortfolioNeedDependencies([...this.listErpProjects(project.version), project]);
+      this.db.prepare("INSERT INTO erp_projects(stable_id, game_version, revision, project_json, created_at, updated_at) VALUES(?,?,?,?,?,?)")
+        .run(project.stableId, project.version, project.revision, JSON.stringify(project), project.createdAt, project.updatedAt);
+      this.recordErpProjectEvent(project, "CREATED", ["project"], undefined, undefined, input.rationale);
+      return project;
+    });
+  }
+
+  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch = false, rationale?: string): ErpProject | undefined {
+    if (rationale !== undefined && (typeof rationale !== "string" || rationale.trim().length < 1 || rationale.length > 2_000)) throw new TypeError("Project rationale must contain 1–2,000 characters when provided.");
+    return this.inTransaction(() => {
+      const existing = this.getErpProject(project.stableId);
+      if (!existing) return undefined;
+      if (!Number.isSafeInteger(expectedRevision) || existing.revision !== expectedRevision) throw new ErpProjectConflictError();
+      if (project.version !== existing.version || project.createdAt !== existing.createdAt) throw new TypeError("Project version and creation time are immutable.");
+      for (const previous of existing.workOrders) {
+        if (previous.planningBatch && !project.workOrders.some((order) => order.stableId === previous.stableId)) {
+          throw new ErpProjectConflictError("PLANNING_BATCH_IMMUTABLE", "A saved planning batch task cannot be removed; transition it to a terminal status to preserve its review history.");
+        }
+      }
+      for (const order of project.workOrders) {
+        const previous = existing.workOrders.find((entry) => entry.stableId === order.stableId);
+        if (previous?.planningBatch && JSON.stringify(previous.planningBatch) !== JSON.stringify(order.planningBatch)) throw new ErpProjectConflictError("PLANNING_BATCH_IMMUTABLE", "A saved planning batch's identity and evidence baseline cannot be rewritten.");
+        if (!previous && order.planningBatch && !allowNewPlanningBatch) throw new ErpProjectConflictError("PLANNING_BATCH_SERVER_CREATED", "Planning batch evidence can be added only by the atomic grouped-plan operation.");
+      }
+      const trackedFields = ["title", "objective", "status", "completionNote", "priority", "needs", "reservations", "workOrders"] as const;
+      const changedFields = trackedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(project[field]));
+      const updated: ErpProject = { ...project, updatedAt: Math.floor(Date.now() / 1000), revision: expectedRevision + 1 };
+      validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+      validatePortfolioNeedDependencies(this.listErpProjects(updated.version).map((candidate) => candidate.stableId === updated.stableId ? updated : candidate));
+      // Generic project updates are also used by REST/MCP/UI for edits. Do not let
+      // that path create or increase inventory holds without the same complete,
+      // exact-source evidence required by the dedicated reservation workflow.
+      const projectViews = new DashboardReadModel(this).getErpProjects({ version: updated.version });
+      const currentView = projectViews.find((entry) => entry.stableId === updated.stableId);
+      const increasedByScope = new Map<string, { quantity: number; available: number }>();
+      const beforeReservations = new Map(existing.reservations.map((entry) => [entry.stableId, entry]));
+      for (const reservation of updated.reservations.filter((entry) => entry.status === "ACTIVE")) {
+        const previous = beforeReservations.get(reservation.stableId);
+        const previousNeed = existing.needs.find((entry) => entry.stableId === reservation.needId);
+        const need = updated.needs.find((entry) => entry.stableId === reservation.needId);
+        const sameNeedSemantics = previous && previousNeed && need && previous.needId === reservation.needId && previousNeed.kind === need.kind && previousNeed.resourceKey === need.resourceKey && previousNeed.sourceIdentityKey === need.sourceIdentityKey && previousNeed.sourceOwnerKey === need.sourceOwnerKey && previousNeed.destinationIdentityKey === need.destinationIdentityKey;
+        const unchangedNeedScope = previousNeed && need && previousNeed.kind === need.kind && previousNeed.resourceKey === need.resourceKey && previousNeed.sourceIdentityKey === need.sourceIdentityKey && previousNeed.sourceOwnerKey === need.sourceOwnerKey && previousNeed.destinationIdentityKey === need.destinationIdentityKey;
+        if (previousNeed && need && !unchangedNeedScope) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Change the need's resource, source, or intended recipient separately from adding or reactivating a reservation; refresh the new scope before reserving it.");
+        const previousQuantity = previous?.status === "ACTIVE" && previous.sourceIdentityKey === reservation.sourceIdentityKey && previous.sourceOwnerKey === reservation.sourceOwnerKey && sameNeedSemantics ? previous.quantity : 0;
+        const increase = reservation.quantity - previousQuantity;
+        if (increase <= 0) continue;
+        const evidence = currentView?.needEvidence.find((entry) => entry.needId === reservation.needId);
+        if (!need || need.kind === "PROFESSION" || need.kind === "RECIPE") throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A new or increased reservation requires a current countable need with complete source evidence.");
+        let available: number | undefined;
+        const alternate = reservation.sourceIdentityKey !== need.sourceIdentityKey || reservation.sourceOwnerKey !== need.sourceOwnerKey;
+        if (!alternate && evidence && evidence.freshness === "recent" && evidence.observedQuantity !== undefined && !evidence.unresolvedSections.length && evidence.unknownQuantityRowCount === 0 && evidence.sourceSections.length > 0 && evidence.sourceSections.every((section) => section.state === "OBSERVED" && section.completeness?.toLowerCase() === "complete")) {
+          available = evidence.reservationAssessment?.availableObservedLowerBound;
+        } else if (alternate && reservation.sourceIdentityKey && need.kind === "ITEM_REF" && !need.sourceOwnerKey) {
+          const screen = currentView?.resourceSourceScreens.find((entry) => entry.needId === need.stableId);
+          const candidate = screen?.candidates.find((entry) => entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey);
+          const exact = candidate?.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+          const complete = candidate?.state === "OBSERVED" && candidate.freshness === "recent" && candidate.unresolvedSections.length === 0 && candidate.locations.length === 2 && candidate.locations.every((location) => location.state === "OBSERVED" && location.completeness?.toLowerCase() === "complete" && location.quantity !== undefined);
+          if (complete && exact) available = candidate?.availableObservedLowerBound;
+        }
+        if (available === undefined) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A new or increased reservation requires recent, complete, quantified evidence for its exact source and resource. Existing intent remains unchanged.");
+        const scope = reservation.sourceIdentityKey ? `character:${reservation.sourceIdentityKey}` : reservation.sourceOwnerKey ? `owner:${reservation.sourceOwnerKey}` : undefined;
+        if (!scope) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "A reservation requires an explicit source scope.");
+        const key = JSON.stringify([updated.version, scope, need.kind, need.resourceKey]);
+        const group = increasedByScope.get(key) ?? { quantity: 0, available };
+        if (group.available !== available) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Current evidence disagrees about remaining supply for this exact source scope.");
+        group.quantity += increase;
+        if (group.quantity > available) throw new ErpProjectConflictError("RESERVATION_CAPACITY_EXCEEDED", "Reservation increases exceed the current unreserved observed lower bound.");
+        increasedByScope.set(key, group);
+        const needReservations = updated.reservations.filter((entry) => entry.status === "ACTIVE" && entry.needId === need.stableId && entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.sourceOwnerKey === reservation.sourceOwnerKey).reduce((sum, entry) => sum + entry.quantity, 0);
+        if (needReservations > need.requiredQuantity) throw new ErpProjectConflictError("RESERVATION_NEED_EXCEEDED", "Reservation increases exceed the quantity required by this need.");
+      }
+      const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?")
+        .run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
+      if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
+      const kind = existing.status !== updated.status ? "STATUS_CHANGED" : "UPDATED";
+      const previousWorkOrders = new Map(existing.workOrders.map((order) => [order.stableId, order]));
+      const workOrderStatusChanges = updated.workOrders.flatMap((order) => {
+        const previous = previousWorkOrders.get(order.stableId);
+        if (previous?.status === order.status) return [];
+        return [{ workOrderId: order.stableId, title: order.title, ...(previous ? { fromStatus: previous.status } : {}), toStatus: order.status }];
+      });
+      this.recordErpProjectEvent(updated, kind, changedFields, existing.status !== updated.status ? existing.status : undefined, workOrderStatusChanges, rationale);
+      return updated;
+    });
+  }
+
+  replanErpReservationsAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly reservations: readonly ErpReservation[] }[]): ErpProject[] | undefined {
+    if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10 || new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A reservation review must update 1 to 10 distinct projects.");
+    return this.inTransaction(() => {
+      const existingProjects = updates.map((entry) => this.getErpProject(entry.projectId));
+      if (existingProjects.some((project) => !project)) return undefined;
+      const existing = existingProjects as ErpProject[];
+      const nextProjects: ErpProject[] = [];
+      let changedReservationCount = 0;
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+          if (project.version !== version || (project.status !== "ACTIVE" && project.status !== "PAUSED" && project.status !== "COMPLETED")) throw new TypeError("Reservations can be replanned only in active, paused, or completed projects within one explicit version.");
+        if (!Number.isSafeInteger(entry.expectedRevision) || project.revision !== entry.expectedRevision) throw new ErpProjectConflictError();
+        if (!entry.reservations || entry.reservations.length !== project.reservations.length) throw new TypeError("A reservation review must preserve every existing reservation record.");
+        const proposedById = new Map<string, ErpReservation>(entry.reservations.map((reservation: ErpReservation) => [reservation.stableId, reservation]));
+        if (proposedById.size !== project.reservations.length || project.reservations.some((reservation) => !proposedById.has(reservation.stableId))) throw new TypeError("A reservation review cannot add, remove, or duplicate reservation identities.");
+        const reservations = project.reservations.map((previous) => {
+          const next = proposedById.get(previous.stableId)!;
+          if (next.needId !== previous.needId || next.sourceIdentityKey !== previous.sourceIdentityKey || next.sourceOwnerKey !== previous.sourceOwnerKey || next.createdAt !== previous.createdAt) throw new ErpProjectConflictError("RESERVATION_SCOPE_IMMUTABLE", "A replan may only reduce or release existing intent; changing its need, source, owner, or creation identity requires a separate reviewed plan.");
+          if (previous.status === "RELEASED") {
+            if (next.status !== "RELEASED" || next.quantity !== previous.quantity) throw new ErpProjectConflictError("RESERVATION_REACTIVATION_BLOCKED", "Released reservation history cannot be reactivated or rewritten.");
+          } else if (next.status === "ACTIVE") {
+            if (!Number.isSafeInteger(next.quantity) || next.quantity < 1 || next.quantity > previous.quantity) throw new ErpProjectConflictError("RESERVATION_INCREASE_BLOCKED", "A replan may keep or reduce an active reservation, but cannot increase it.");
+          } else if (next.status !== "RELEASED" || next.quantity !== previous.quantity) {
+            throw new ErpProjectConflictError("INVALID_RESERVATION_REPLAN", "An active reservation may only be reduced or released while preserving its recorded quantity on release.");
+          }
+          if (next.status !== previous.status || next.quantity !== previous.quantity) changedReservationCount++;
+          return { ...previous, quantity: next.quantity, status: next.status, updatedAt: Math.floor(Date.now() / 1000) };
+        });
+          if (!project.reservations.some((previous) => {
+            const next = proposedById.get(previous.stableId)!;
+            return next.status !== previous.status || next.quantity !== previous.quantity;
+          })) throw new TypeError("Each project in a reservation replan must contain at least one explicit change.");
+        const updated: ErpProject = { ...project, reservations, updatedAt: Math.floor(Date.now() / 1000), revision: project.revision + 1 };
+        validateErpProject(updated, (key) => this.getCharacter(key)?.version === updated.version);
+        nextProjects.push(updated);
+      }
+      if (changedReservationCount === 0) throw new TypeError("The reservation review contains no changes.");
+      const replacements = new Map(nextProjects.map((project) => [project.stableId, project]));
+      validatePortfolioNeedDependencies(this.listErpProjects(version).map((project) => replacements.get(project.stableId) ?? project));
+      for (let index = 0; index < nextProjects.length; index++) {
+        const updated = nextProjects[index]!; const previous = existing[index]!; const expectedRevision = updates[index]!.expectedRevision;
+        const result = this.db.prepare("UPDATE erp_projects SET revision = ?, project_json = ?, updated_at = ? WHERE stable_id = ? AND revision = ?").run(updated.revision, JSON.stringify(updated), updated.updatedAt, updated.stableId, expectedRevision);
+        if (Number(result.changes) !== 1) throw new ErpProjectConflictError();
+        this.recordErpProjectEvent(updated, "UPDATED", ["reservations"]);
+        if (updated.version !== previous.version) throw new ErpProjectConflictError();
+      }
+      return nextProjects;
+    });
+  }
+
+  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[]; readonly reservations?: readonly (ErpReservation | undefined)[] }[]): ErpProject[] | undefined {
+    if (!Array.isArray(updates) || updates.length < 1 || updates.length > 10) throw new TypeError("A grouped work-order update must include 1 to 10 projects.");
+    if (new Set(updates.map((entry) => entry.projectId)).size !== updates.length) throw new TypeError("A project can appear only once in a grouped work-order update.");
+    const totalOrders = updates.reduce((sum, entry) => sum + entry.workOrders.length, 0);
+    if (totalOrders < 1 || totalOrders > 20 || updates.some((entry) => entry.workOrders.length < 1 || entry.reviewSnapshots.length !== entry.workOrders.length || (entry.reservations !== undefined && entry.reservations.length !== entry.workOrders.length))) throw new TypeError("A grouped update must append 1 to 20 work orders with aligned review snapshots and optional reservations.");
+    const appendedIds = updates.flatMap((entry) => entry.workOrders.map((order: ErpWorkOrder) => order.stableId));
+    if (new Set(appendedIds).size !== appendedIds.length) throw new TypeError("Grouped work orders require unique stable IDs.");
+    return this.inTransaction(() => {
+      const existingProjects = updates.map((entry) => this.getErpProject(entry.projectId));
+      if (existingProjects.some((project) => !project)) return undefined;
+      const existing = existingProjects as ErpProject[];
+      const currentViews = new Map(new DashboardReadModel(this).getErpProjects({ version }).map((project) => [project.stableId, project]));
+      const portfolioProjects = new Map<string, ErpProject>([...currentViews].map(([id, view]) => [id, view]));
+      for (const entry of updates) {
+        const view = currentViews.get(entry.projectId);
+        if (!view) throw new ErpProjectConflictError("PORTFOLIO_PREREQUISITE_STALE", "A selected project changed before the portfolio plan could be committed.");
+        portfolioProjects.set(entry.projectId, { ...view, workOrders: [...view.workOrders, ...entry.workOrders] });
+      }
+      validatePortfolioNeedDependencies([...portfolioProjects.values()]);
+      const proposed: Array<{ reservation: ErpReservation; review: ErpNeedReviewSnapshot; order: ErpWorkOrder }> = updates.flatMap((entry) => (entry.reservations ?? []).flatMap((reservation: ErpReservation | undefined, index: number) => reservation ? [{ reservation, review: entry.reviewSnapshots[index]!, order: entry.workOrders[index]! }] : []));
+      const allocationGroups = new Map<string, { quantity: number; available: number; needId: string }>();
+      for (const { reservation, review, order } of proposed) {
+        const need = review.need;
+        const evidence = review.evidence;
+        const scope = reservation.sourceIdentityKey ? `character:${reservation.sourceIdentityKey}` : reservation.sourceOwnerKey ? `owner:${reservation.sourceOwnerKey}` : undefined;
+        if (!scope || need.kind === "PROFESSION" || need.kind === "RECIPE" || reservation.needId !== need.stableId || reservation.status !== "ACTIVE" || !Number.isSafeInteger(reservation.quantity) || reservation.quantity < 1) throw new TypeError("A new reservation requires a countable need, matching need ID, explicit source, and positive integer quantity.");
+        const alternate = reservation.sourceIdentityKey !== need.sourceIdentityKey || reservation.sourceOwnerKey !== need.sourceOwnerKey;
+        const candidate = alternate ? review.resourceSourceScreen?.candidates.find((entry) => entry.sourceIdentityKey === reservation.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey) : undefined;
+        const exactAlternateRow = candidate?.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+        if (alternate && (order.kind !== "PROVISION" || need.kind !== "ITEM_REF" || need.sourceOwnerKey || !need.destinationIdentityKey || order.sourceIdentityKey !== reservation.sourceIdentityKey || order.destinationIdentityKey !== need.destinationIdentityKey || !candidate || candidate.state !== "OBSERVED" || candidate.freshness !== "recent" || candidate.reservationState !== "UNRESERVED" || candidate.activeReservationQuantity !== 0 || candidate.unresolvedSections.length || candidate.locations.length !== 2 || candidate.locations.some((location) => location.state !== "OBSERVED" || location.quantity === undefined) || !exactAlternateRow)) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "An alternate-source reservation requires a linked exact-item provisioning plan and recent complete quantified source evidence; existing intent and stock remain unchanged.");
+        if (!alternate && (!evidence || evidence.freshness !== "recent" || evidence.observedQuantity === undefined || evidence.unresolvedSections.length || evidence.unknownQuantityRowCount || !evidence.sourceSections.length || evidence.sourceSections.some((section: NonNullable<ErpNeedReviewSnapshot["evidence"]>["sourceSections"][number]) => section.state !== "OBSERVED" || section.completeness?.toLowerCase() !== "complete"))) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Current complete exact-source observations are required to create a reservation; existing intent and stock remain unchanged.");
+        if (!alternate && (reservation.sourceIdentityKey !== need.sourceIdentityKey || reservation.sourceOwnerKey !== need.sourceOwnerKey)) throw new TypeError("Reservation source must exactly match the reviewed need source.");
+        const available = alternate ? candidate?.availableObservedLowerBound : evidence?.reservationAssessment?.availableObservedLowerBound;
+        const state = alternate ? candidate?.reservationState : evidence?.reservationAssessment?.state;
+        if (available === undefined || (state !== "UNRESERVED" && state !== "WITHIN_OBSERVED_SUPPLY")) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "The reviewed evidence does not establish unreserved observed quantity for this exact source and resource.");
+        const key = JSON.stringify([version, scope, need.kind, need.resourceKey]);
+        const itemId = (candidate: typeof need) => candidate.kind === "ITEM_ID" ? Number(candidate.resourceKey) : candidate.kind === "ITEM_REF" ? Number(candidate.resourceKey.match(/^item:(\d+)(?::|$)/)?.[1]) : undefined;
+        const itemBase = itemId(need);
+        if (itemBase !== undefined) {
+          const overlaps = (candidate: typeof need) => itemId(candidate) === itemBase && (candidate.kind === "ITEM_ID" || need.kind === "ITEM_ID") && !(candidate.kind === need.kind && candidate.resourceKey === need.resourceKey);
+          if (proposed.some(({ reservation: other, review: otherReview }) => other !== reservation && sourceScopeFor(other) === scope && overlaps(otherReview.need))) throw new ErpProjectConflictError("RESERVATION_SCOPE_OVERLAP", "Grouped requests overlap between a base item and its exact variant; review and reserve one scope at a time.");
+          const existingOverlap = [...currentViews.values()].some((project) => project.status !== "CANCELLED" && (project.needs.some((candidate) => !(project.stableId === review.projectId && candidate.stableId === need.stableId) && sourceScopeFor(candidate) === scope && overlaps(candidate)) || project.reservations.some((existingReservation) => sourceScopeFor(existingReservation) === scope && (() => { const candidate = project.needs.find((entry) => entry.stableId === existingReservation.needId); return Boolean(candidate && !(project.stableId === review.projectId && candidate.stableId === need.stableId) && overlaps(candidate)); })())));
+          if (existingOverlap) throw new ErpProjectConflictError("RESERVATION_SCOPE_OVERLAP", "An existing requirement uses an overlapping base-item or exact-variant scope; resolve that ambiguity before adding a reservation.");
+        }
+        const group = allocationGroups.get(key) ?? { quantity: 0, available, needId: need.stableId };
+        if (group.available !== available) throw new ErpProjectConflictError("RESERVATION_EVIDENCE_UNAVAILABLE", "Selected needs disagree about the available quantity for one exact source scope.");
+        group.quantity += reservation.quantity;
+        if (group.quantity > available) throw new ErpProjectConflictError("RESERVATION_CAPACITY_EXCEEDED", "Grouped reservations exceed the current observed lower bound after existing commitments; no work or reservation was saved.");
+        allocationGroups.set(key, group);
+        const alreadyReserved = (currentViews.get(review.projectId)?.reservations ?? []).filter((entry) => entry.status === "ACTIVE" && entry.needId === need.stableId).reduce((sum, entry) => sum + entry.quantity, 0);
+        if (alreadyReserved + reservation.quantity > need.requiredQuantity) throw new ErpProjectConflictError("RESERVATION_NEED_EXCEEDED", "The requested reservation exceeds the remaining quantity on this requirement.");
+      }
+      function sourceScopeFor(need: { sourceIdentityKey?: string; sourceOwnerKey?: string }): string | undefined { return need.sourceIdentityKey ? `character:${need.sourceIdentityKey}` : need.sourceOwnerKey ? `owner:${need.sourceOwnerKey}` : undefined; }
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+        if (project.version !== version || project.status !== "ACTIVE") throw new TypeError("Grouped work can be added only to active projects in one explicit version.");
+        if (project.revision !== entry.expectedRevision) throw new ErpProjectConflictError();
+        const currentView = currentViews.get(project.stableId);
+        const reviewedNeedIds = new Set<string>();
+        if (entry.reviewSnapshots.length !== entry.workOrders.length) throw new TypeError("Each grouped work order requires exactly one reviewed requirement snapshot.");
+        for (const review of entry.reviewSnapshots) {
+          if (review.projectId !== project.stableId || review.version !== version || reviewedNeedIds.has(review.need.stableId)) throw new TypeError("A reviewed requirement must be unique and belong to its project's explicit version.");
+          reviewedNeedIds.add(review.need.stableId);
+          const currentReview = currentView && buildErpNeedReviewSnapshot(currentView, review.need.stableId);
+          if (!currentReview || !isDeepStrictEqual(review, currentReview)) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "Requirement evidence changed while the grouped plan was being saved; refresh and review again.");
+          const order = entry.workOrders[reviewedNeedIds.size - 1];
+          if (order?.investigationSourceLeadIdentityKey && (order.kind !== "INVESTIGATE" || !currentReview.resourceSourceScreen?.candidates.some((candidate) => candidate.sourceIdentityKey === order.investigationSourceLeadIdentityKey))) throw new ErpProjectConflictError("NEED_REVIEW_STALE", "The selected investigation source is no longer a matching same-version observation; refresh and review again.");
+          if (order?.kind === "PROVISION" && order.sourceIdentityKey && order.sourceIdentityKey !== review.need.sourceIdentityKey) {
+            const need = review.need;
+            const candidate = currentReview.resourceSourceScreen?.candidates.find((entry) => entry.needId === need.stableId && entry.sourceIdentityKey === order.sourceIdentityKey && entry.kind === need.kind && entry.resourceKey === need.resourceKey);
+            const exactObservedItem = candidate?.matchingItems.some((item) => item.itemRef === need.resourceKey && item.state === "OBSERVED" && (item.quantity ?? item.knownLowerBound ?? 0) > 0) ?? false;
+            if (need.kind !== "ITEM_REF" || need.sourceOwnerKey !== undefined || !need.destinationIdentityKey || order.destinationIdentityKey !== need.destinationIdentityKey || order.sourceIdentityKey === need.destinationIdentityKey || !candidate || candidate.state !== "OBSERVED" || candidate.freshness !== "recent" || candidate.reservationState !== "UNRESERVED" || candidate.activeReservationQuantity !== 0 || candidate.availableObservedLowerBound === undefined || candidate.availableObservedLowerBound < 1 || !exactObservedItem) {
+              throw new ErpProjectConflictError("PROVISIONING_SOURCE_EVIDENCE_UNAVAILABLE", "The alternative provisioning source no longer has a recent, exact, unreserved observed item row for this same-version recipient; refresh and review again.");
+            }
+          }
+        }
+        if (entry.workOrders.some((order: ErpWorkOrder, orderIndex: number) => order.status !== "PLANNED" || order.resourceNeedIds.length !== 1 || order.resourceNeedIds[0] !== entry.reviewSnapshots[orderIndex]?.need.stableId || order.completionNote !== undefined)) throw new TypeError("A grouped plan can append only unfinished PLANNED work orders, each linked exactly to its reviewed requirement.");
+      }
+      const updated: ErpProject[] = [];
+      for (let index = 0; index < updates.length; index++) {
+        const entry = updates[index]!;
+        const project = existing[index]!;
+        const additions = entry.reservations?.filter((reservation: ErpReservation | undefined): reservation is ErpReservation => reservation !== undefined) ?? [];
+        const result = this.updateErpProject({ ...project, workOrders: [...project.workOrders, ...entry.workOrders], reservations: [...project.reservations, ...additions] }, entry.expectedRevision, true);
+        if (!result) throw new ErpProjectConflictError();
+        updated.push(result);
+      }
+      return updated;
+    });
+  }
+
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number, options: { completionNote?: string; rationale?: string } = {}): ErpProject | undefined {
+    const project = this.getErpProject(stableId);
+    if (!project) return undefined;
+    return this.updateErpProject({ ...project, status, ...(options.completionNote !== undefined ? { completionNote: options.completionNote } : {}) }, expectedRevision, false, options.rationale);
   }
 
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
@@ -1474,6 +2035,9 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   projectSharedStorage(): SharedStorageProjection {
     return this.store.projectSharedStorage();
   }
+  loadSharedJournal(): SharedJournal {
+    return this.store.loadSharedJournal();
+  }
   listVersions(): VersionSummary[] {
     return this.store.listVersions();
   }
@@ -1483,11 +2047,32 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
   listSnapshots(identityKey: string): StoredSnapshot[] {
     return this.store.listSnapshots(identityKey);
   }
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[] {
+    return this.store.listEquipmentObservations(identityKey);
+  }
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts {
     return this.store.buildAccountFacts(version, now);
   }
   listDemands(version: VersionOrUnknown): ExplicitDemand[] {
     return this.store.listDemands(version);
+  }
+  listErpProjects(version: VersionOrUnknown): ErpProject[] {
+    return this.store.listErpProjects(version);
+  }
+  listErpProjectHistory(stableId: string, limit = 50): ErpProjectEvent[] {
+    return this.store.listErpProjectHistory(stableId, limit);
+  }
+  countErpProjectHistory(stableId: string): number {
+    return this.store.countErpProjectHistory(stableId);
+  }
+  getErpProject(stableId: string): ErpProject | undefined {
+    return this.store.getErpProject(stableId);
+  }
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined {
+    return this.store.getErpChangeProposal(proposalId);
+  }
+  listErpChangeProposals(version: WowVersion, includeTerminal = false): ErpChangeProposal[] {
+    return this.store.listErpChangeProposals(version, includeTerminal);
   }
   getActiveDemand(version: VersionOrUnknown, demandType: DemandType, baseItemId: number): ExplicitDemand | undefined {
     return this.store.getActiveDemand(version, demandType, baseItemId);

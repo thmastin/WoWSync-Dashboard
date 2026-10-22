@@ -47,8 +47,8 @@ export interface FixtureEquipmentSlot {
 
 export interface FixtureProfession {
   name: string;
-  skill: number;
-  maxSkill: number;
+  skill?: number;
+  maxSkill?: number;
   skillLineID?: number;
   tier?: string;
   expansion?: string;
@@ -94,8 +94,14 @@ export interface FixtureOptions {
   generatedAt?: number;
   character?: {
     name?: string;
+    /** GearExport 2c5e9b3+ Forever exporter claim, rendered as Compatibility/CompatibilityNote after Interface. */
+    compatibility?: string;
+    compatibilityNote?: string;
+    surname?: string;
+    surnameSource?: string;
     realm?: string;
     class?: string;
+    race?: string;
     level?: number;
     faction?: string;
     moneyCopper?: number;
@@ -121,10 +127,13 @@ export interface FixtureOptions {
     slots?: FixtureEquipmentSlot[];
     unknown?: boolean;
     partial?: boolean;
+    observedAt?: number;
   };
   bags?: {
     containers?: FixtureContainer[];
     unknown?: boolean;
+    partial?: boolean;
+    observedAt?: number;
   };
   bank?: {
     containers?: FixtureContainer[];
@@ -133,11 +142,16 @@ export interface FixtureOptions {
     purchasedBagSlots?: number;
     lastSeen?: boolean;
     unknown?: boolean;
+    partial?: boolean;
+    observedAt?: number;
   };
   professions?: {
     entries?: FixtureProfession[];
     retail?: boolean;
     unknown?: boolean;
+    lastSeen?: boolean;
+    partial?: boolean;
+    observedAt?: number;
   };
   spells?: {
     entries?: FixtureSpell[];
@@ -221,9 +235,14 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
     } else {
       out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
       out.push(field("Name", c.name ?? "Fixture"));
+      if (c.clientFamily === "Forever" && ((c.clientVersion === "1.60.1" && ["70291", "70338", "70450"].includes(c.clientBuild ?? "") && c.interface === "16001") || c.surname !== undefined)) {
+        out.push(field("Surname", c.surname));
+        if (c.surname) out.push(field("SurnameSource", c.surnameSource ?? "Fixture API candidate"));
+      }
       out.push(field("Realm", c.realm ?? "TestRealm"));
       out.push(field("Class", c.class ?? "Warrior"));
       out.push(field("Level", c.level ?? 1));
+      if (c.clientFamily === "Forever" && c.clientVersion === "1.60.1" && /^\d+$/.test(c.clientBuild ?? "") && Number(c.clientBuild) >= 70291 && c.interface === "16001") out.push(field("Race", c.race));
       out.push(field("Faction", c.faction ?? "Horde"));
       out.push(field("MoneyCopper", c.moneyCopper));
       out.push(field("PlayedSeconds", c.playedSeconds));
@@ -235,6 +254,10 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       if (c.clientFamily) {
         out.push(field("ClientFamily", c.clientFamily));
         out.push(field("Interface", c.interface ?? "?"));
+        if (c.compatibility) {
+          out.push(field("Compatibility", c.compatibility));
+          if (c.compatibilityNote) out.push(field("CompatibilityNote", c.compatibilityNote));
+        }
       }
     }
     sections.push(out.join("\n"));
@@ -265,12 +288,12 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", `OBSERVED; ${e.partial ? "partial" : "complete"}; observed=` + generatedAt));
+      out.push(field("State", `OBSERVED; ${e.partial ? "partial" : "complete"}; observed=${e.observedAt ?? generatedAt}`));
       out.push(row("slot", "itemRef", "name", "ilvl", "requiredLevel", "effectiveStats"));
       const bySlot = new Map((e.slots ?? []).map((s) => [s.slot, s]));
       for (const [slot, defaultName] of ALL_EQUIP_SLOTS) {
         const item = bySlot.get(slot);
-        const label = `${slot}:${defaultName}`;
+        const label = `${slot}:${item?.slotName ?? defaultName}`;
         if (!item || item.empty) {
           out.push(row(label, "EMPTY"));
         } else {
@@ -289,7 +312,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
+      out.push(field("State", `OBSERVED; ${b.partial ? "partial" : "complete"}; observed=${b.observedAt ?? generatedAt}`));
       out.push(...inventoryBody(b.containers ?? []));
     }
     sections.push(out.join("\n"));
@@ -304,7 +327,7 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("Reason", "Not observed"));
     } else {
       if (bk.snapshotVisit !== undefined) out.push(field("LastVisit", bk.snapshotVisit));
-      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; complete; observed=` + generatedAt));
+      out.push(field("State", `${bk.lastSeen ? "LAST_SEEN" : "OBSERVED"}; ${bk.partial ? "partial" : "complete"}; observed=${bk.observedAt ?? generatedAt}`));
       if (bk.coverage) out.push(field("Coverage", bk.coverage));
       if (bk.snapshotVisit !== undefined) out.push(field("SnapshotVisit", bk.snapshotVisit));
       if (bk.purchasedBagSlots !== undefined) out.push(field("PurchasedBankBagSlots", bk.purchasedBagSlots));
@@ -321,7 +344,8 @@ export function buildWowSyncExport(opts: FixtureOptions = {}): string {
       out.push(field("State", "UNKNOWN"));
       out.push(field("Reason", "Not observed"));
     } else {
-      out.push(field("State", "OBSERVED; complete; observed=" + generatedAt));
+      const professionState = p.lastSeen ? "LAST_SEEN" : "OBSERVED";
+      out.push(field("State", `${professionState}; ${p.partial ? "partial" : "complete"}${p.lastSeen && p.observedAt === undefined ? "" : `; observed=${p.observedAt ?? generatedAt}`}`));
       if (p.retail) {
         out.push(row("profession", "skill", "maxSkill", "skillLineID", "tier", "expansion", "category"));
         for (const e of p.entries ?? []) {

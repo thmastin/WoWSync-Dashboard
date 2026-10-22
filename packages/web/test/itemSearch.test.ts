@@ -72,6 +72,11 @@ describe("itemSearch", () => {
     assert.equal(rows.length, 2);
   });
 
+  it("shows an observed Forever surname on item location labels", () => {
+    const rows = flattenInventoryRows(inventory, [char({ identityKey: "a|r", name: "Alice", surname: "Stormstep", realm: "Silvermoon" })]);
+    assert.equal(rows[0]?.characterName, "Alice Stormstep");
+  });
+
   it("filters by storage bags/bank", () => {
     const bags = searchItemRows(inventory, characters, { q: "strange", storage: "bags", bound: "" });
     assert.equal(bags.totalMatches, 1);

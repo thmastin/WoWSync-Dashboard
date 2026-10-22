@@ -12,9 +12,9 @@ import { DatabaseSync } from "node:sqlite";
 import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { searchInventory } from "../src/accountFacts.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { observation, retailExport } from "./equipmentObservationFixtures.ts";
 
 const dir = fileURLToPath(new URL("fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${dir}${path}`, "utf8");
@@ -310,23 +310,17 @@ test("[REAL] inventory search and version summaries after deletion no longer see
   }
 });
 
-test("[REAL] AccountContext and the Ask-My-Account LLM payload after deletion contain no trace of the deleted character", () => {
+test("[REAL] AccountContext after deletion contains no trace of the deleted character", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     seed(store);
     store.deleteCharacter(VOODAN);
     const ctx = store.buildAccountContext(NOW);
-    const llm = buildLlmContext(ctx);
 
     assert.deepEqual(ctx.versions["tbc-anniversary"].characters.map((c) => c.name), ["Tenivard", "Torahn"]);
     assert.equal(ctx.versions["tbc-anniversary"].facts.characterCount, 2);
     assert.equal(JSON.stringify(ctx).toLowerCase().includes("voodan"), false, "not even in embedded facts, transitions, or inventory");
-    assert.equal(JSON.stringify(llm).toLowerCase().includes("voodan"), false);
 
-    const index = llm.latestTransitionIndex;
-    for (const list of [index.comparable, index.insufficientHistory, index.goldChanged, index.inventoryChanged, index.levelChanged, index.playtimeChanged]) {
-      assert.equal(list.includes(VOODAN), false);
-    }
     // The other characters, including Forever's Hallo, are still fully present.
     assert.equal(ctx.versions["forever"].characters[0].name, "Hallo Emberstone");
     assert.equal(ctx.versions["forever"].characters[0].snapshotHistory.length, 2);
@@ -347,10 +341,6 @@ test("[REAL] a store after deleting X is indistinguishable from one that never i
       withDeletion.deleteCharacter(HALLO);
       seed(never, ["torahn", "tenivard", "bromrik", "ezaller"]);
       assert.equal(JSON.stringify(withDeletion.buildAccountContext(NOW)), JSON.stringify(never.buildAccountContext(NOW)));
-      assert.equal(
-        JSON.stringify(buildLlmContext(withDeletion.buildAccountContext(NOW))),
-        JSON.stringify(buildLlmContext(never.buildAccountContext(NOW))),
-      );
     } finally {
       withDeletion.close();
       never.close();
@@ -438,6 +428,25 @@ test("[SYNTHETIC] deletion is atomic: if removing the character row fails, the s
     h.raw.exec("DROP TRIGGER veto");
     assert.equal(h.store.deleteCharacter(VOODAN)?.snapshotsDeleted, 2);
     assert.deepEqual(h.counts(), { characters: 0, snapshots: 0, orphanSnapshots: 0 });
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("A40 deleting a character removes its equipment observation rows and nobody else's, leaving no orphans", () => {
+  const h = fileStore();
+  try {
+    const obs = (n: number) => ({ equipmentObservation: observation({ tuple: { observedAt: 1_791_375_000 + n, capture: n, revision: 1 } }) });
+    const virek = h.store.importSnapshot(retailExport("Virek", "Cairne"), obs(1));
+    h.store.importSnapshot(retailExport("Virek", "Cairne"), obs(2));
+    h.store.importSnapshot(retailExport("Ciao", "Cairne"), obs(3));
+    const count = (sql: string) => Number((h.raw.prepare(sql).get() as { n: number }).n);
+    assert.equal(count("SELECT COUNT(*) AS n FROM snapshot_equipment_observations"), 3);
+    assert.equal(h.store.deleteCharacter(virek.character.identityKey)?.snapshotsDeleted, 1);
+    assert.equal(count("SELECT COUNT(*) AS n FROM snapshot_equipment_observations"), 1, "Ciao's observation remains");
+    assert.equal(count("SELECT COUNT(*) AS n FROM snapshot_equipment_observations WHERE character_id NOT IN (SELECT id FROM characters) OR snapshot_id NOT IN (SELECT id FROM snapshots)"), 0);
+    const again = h.store.importSnapshot(retailExport("Virek", "Cairne"), obs(1));
+    assert.equal(again.equipmentObservation, "recorded", "a re-imported character starts a fresh observation history");
   } finally {
     h.cleanup();
   }

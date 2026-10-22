@@ -4,6 +4,8 @@ import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { observation } from "./equipmentObservationFixtures.ts";
+import { assertForeverAllocationContract } from "./foreverAllocationContract.ts";
 
 const NOW = 1_800_000_000;
 function retail(name: string, realm: string, moneyCopper?: number) {
@@ -28,6 +30,39 @@ test("read model requires a version and cannot leak a same-named Classic charact
   } finally { store.close(); }
 });
 
+test("read model reuses roster and snapshots only within its instance", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(retail("Cache", "Cairne"));
+    let characterReads = 0;
+    let snapshotReads = 0;
+    const listCharacters = store.listCharacters.bind(store);
+    const listSnapshots = store.listSnapshots.bind(store);
+    store.listCharacters = (version) => { characterReads++; return listCharacters(version); };
+    store.listSnapshots = (identityKey) => { snapshotReads++; return listSnapshots(identityKey); };
+
+    const firstReadModel = new DashboardReadModel(store, () => NOW);
+    const query = { version: "retail", name: "Cache", realm: "Cairne" } as const;
+    const first = firstReadModel.getCharacterEquipment(query);
+    const repeated = firstReadModel.getCharacterEquipment(query);
+    assert.equal(first.status, "FOUND");
+    assert.equal(repeated.status, "FOUND");
+    if (first.status === "FOUND" && repeated.status === "FOUND") {
+      assert.equal(first.value.data?.slots[0]?.itemRef, "item:1");
+      assert.equal(repeated.value.data?.slots[0]?.itemRef, "item:1");
+    }
+    assert.equal(characterReads, 1, "the roster is loaded once for one read-model instance");
+    assert.equal(snapshotReads, 1, "the character snapshot history is loaded once for one read-model instance");
+
+    store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Cache", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0" }, equipment: { slots: [{ slot: 1, slotName: "Head", itemRef: "item:2", name: "Newer Helm", itemLevel: 280 }] } }));
+    const fresh = new DashboardReadModel(store, () => NOW).getCharacterEquipment(query);
+    assert.equal(fresh.status, "FOUND");
+    if (fresh.status === "FOUND") assert.equal(fresh.value.data?.slots[0]?.itemRef, "item:2", "a new instance reads the newer import");
+    assert.equal(characterReads, 2, "a new instance loads a fresh roster");
+    assert.equal(snapshotReads, 2, "a new instance loads fresh snapshot history");
+  } finally { store.close(); }
+});
+
 test("same-name realm matches are ambiguity, never a silent choice", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
@@ -36,6 +71,242 @@ test("same-name realm matches are ambiguity, never a silent choice", () => {
     const result = new DashboardReadModel(store, () => NOW).getCharacterEquipment({ version: "retail", name: "Twin" });
     assert.equal(result.status, "AMBIGUOUS");
     if (result.status === "AMBIGUOUS") assert.deepEqual(result.candidates.map((entry) => entry.realm).sort(), ["Cairne", "Thrall"]);
+  } finally { store.close(); }
+});
+
+test("Forever source character GUID collisions remain unresolved instead of merging account-context observations", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    for (const [generatedAt, guid] of [[NOW - 10, "Player-1-A"], [NOW - 5, "Player-2-B"]] as const) {
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+      store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: guid, equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } } } });
+    }
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.data, undefined);
+      assert.match(result.value.provenance.reason ?? "", /missing or conflicting WoWSyncDB character GUIDs/);
+    }
+  } finally { store.close(); }
+});
+
+test("Forever duplicate text cannot erase a conflicting WoWSyncDB source GUID", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const raw = buildWowSyncExport({ generatedAt: NOW, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+    const observation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW, sourceCharacterGuid: "Player-1-A", equipment: { observedAt: NOW, completeness: "complete", data: { slots: {} } } };
+    store.importSnapshot(raw, { foreverGearObservation: observation });
+    const duplicate = { ...observation, sourceCharacterGuid: "Player-2-B" };
+    assert.equal(store.importSnapshot(raw, { foreverGearObservation: duplicate }).foreverGearObservation, "conflict");
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") assert.equal(result.value.data, undefined);
+  } finally { store.close(); }
+});
+
+test("Forever observation resolves within its version and reports observed variants with explicit UNKNOWN claims", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const raw = buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", qty: 1 }] }] }, bank: { unknown: true } });
+    const sidecar = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW - 5, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: NOW - 4, completeness: "complete", data: { slots: { "16": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 } } } }, bags: { observedAt: NOW - 3, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", count: 1 } } }] } }, bank: { observedAt: NOW - 3, completeness: "unknown", reason: "not observed", data: {} }, itemMetadata: {} };
+    const first = store.importSnapshot(raw, { foreverGearObservation: sidecar });
+    const newer = structuredClone(sidecar);
+    newer.equipment.observedAt = NOW - 1;
+    newer.equipment.data.slots["16"] = { itemID: 43, itemString: "item:43:9", name: "Newer structured observation", itemLevel: 3 };
+    const duplicate = store.importSnapshot(raw, { foreverGearObservation: newer });
+    assert.equal(duplicate.isDuplicate, true);
+    assert.equal(duplicate.foreverGearObservation, "updated");
+    const conflicting = structuredClone(newer);
+    conflicting.equipment.data.slots["16"] = { itemID: 44, itemString: "item:44:8", name: "Same-time conflict", itemLevel: 4 };
+    assert.equal(store.importSnapshot(raw, { foreverGearObservation: conflicting }).foreverGearObservation, "conflict");
+    const read = new DashboardReadModel(store, () => NOW);
+    const result = read.getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.provenance.version, "forever");
+      assert.equal(result.value.data?.equipment.items[0]?.itemRef, "item:43:9");
+      assert.equal(result.value.data?.equipment.items[0]?.provenance, "OBSERVED");
+      assert.equal(result.value.data?.carried?.items?.[0]?.itemRef, "item:42:0:0:0:0:0:0:0:123:0:0:0");
+      assert.equal(result.value.data?.evaluationCandidates.state, "UNKNOWN");
+      assert.equal(result.value.data?.unknowns.transferability, "UNKNOWN");
+      assert.equal(result.value.data?.bank.state, "UNKNOWN");
+      assert.equal(result.value.data?.identity.accountScope, "UNKNOWN");
+    }
+    const wrongVersion = read.getForeverGearObservation({ version: "retail", name: "Hallo", realm: "Hallo" });
+    assert.equal(wrongVersion.status, "FOUND");
+    if (wrongVersion.status === "FOUND") assert.equal(wrongVersion.value.data, undefined);
+    assert.equal(read.getForeverGearObservation({ version: "forever", name: "Nobody", realm: "Hallo" }).status, "NOT_FOUND");
+  } finally { store.close(); }
+});
+
+test("Forever allocation keeps source location, unknown roster membership, and every decision dimension separate", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const carriedRef = "item:2901::::::::8:1485::14:::::::";
+  const equippedRef = "item:900001::::::::8:1485:::::::::";
+  try {
+    const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+    const fact = (id: number, itemRef: string, name: string, subClass: string, equipLoc: string, subClassID: number, dps: number, itemLevel: number, requiredLevel: number, observedAt = NOW - 5) => {
+      const className = "Weapon";
+      const values = [name, `|H${itemRef}|h[${name}]|h`, 1, itemLevel, requiredLevel, className, subClass, 1, equipLoc, 1, 0, 2, subClassID, 0, 0, null, false, ""];
+      return { itemID: id, itemString: itemRef, name, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString: itemRef }, returns: [id, className, subClass, equipLoc, 1, 2, subClassID].map((value) => ({ observation: observed(value) })) },
+        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, returns: [{ observation: observed(true) }] },
+        itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, observedAt, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
+        itemSpecInfo: { api: "C_Item.GetItemSpecInfo", state: "OBSERVED_VALUE", input: { itemString: itemRef }, observedAt, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "1", observation: observed(71) }] } },
+        itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ keyType: "string", key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", observation: observed(dps) }] } } };
+    };
+    const make = (name: string, guid: string, bags: unknown, facts?: unknown[], factsObservedAt = NOW - 5, skillLines?: unknown[], skillLinesObservedAt?: number, equipmentObservedAt?: number, realm = "Classic Beta PvP 2") => {
+      const generatedAt = NOW - 5;
+      const isReceiver = name === "Receiver" || name === "StaleEquipment" || name === "Keeper";
+      const raw = buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: isReceiver ? "MAGE" : "HUNTER", level: isReceiver ? 8 : 9 }, equipment: { slots: isReceiver ? [{ slot: 16, slotName: "Main Hand", itemRef: equippedRef, name: "Observed Knife", itemLevel: 5 }] : [] }, bags: { containers: [] }, bank: { unknown: true } });
+      store.importSnapshot(raw, { foreverGearObservation: {
+        clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: guid,
+        equipment: { observedAt: equipmentObservedAt ?? generatedAt, completeness: "complete", data: { slots: isReceiver ? { "16": { itemID: 900001, itemString: equippedRef, name: "Observed Knife", itemLevel: 5, requiredLevel: 1 } } : {} } },
+        bags: { observedAt: generatedAt, completeness: "complete", data: bags },
+        bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
+        ...(facts ? { itemEvidence: { observedAt: factsObservedAt, completeness: "complete", source: "synthetic 70291 exact-item API fixture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, specialization: { capturedAt: generatedAt, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ observation: observed(1) }] }, activeInfo: { api: "C_SpecializationInfo.GetSpecializationInfo", state: "OBSERVED_VALUE", returns: [{ observation: observed(71) }] } }, ...(skillLines ? { skillLines, ...(skillLinesObservedAt !== undefined ? { skillLinesObservedAt } : {}) } : {}), items: facts } } } : {}),
+      } });
+    };
+    make("Carrier", "Player-1-CARRIER", { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString: carriedRef, count: 1, bound: false, bindingState: "OBSERVED_FALSE" } } }] }, [fact(2901, carriedRef, "Mining Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 1.5, 4, 1)], NOW - 5, [{ name: "Miscellaneous", rank: 1, maxRank: 1 }]);
+    const staleRef = "item:2902::::::::8:1485::14:::::::";
+    make("StaleCarrier", "Player-1-STALE", { containers: [{ id: 0, slots: { "2": { itemID: 2902, itemString: staleRef, count: 1 } } }] }, [fact(2902, staleRef, "Old Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.5, 4, 1, NOW - 4 * 24 * 60 * 60)], NOW - 4 * 24 * 60 * 60);
+    const statsStaleRef = "item:2903::::::::8:1485::14:::::::";
+    const statsStaleFact = fact(2903, statsStaleRef, "Stats Stale Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.75, 4, 1);
+    (statsStaleFact.itemStats as { observedAt?: number }).observedAt = NOW - 4 * 24 * 60 * 60;
+    make("StatsStaleCarrier", "Player-1-STATS-STALE", { containers: [{ id: 0, slots: { "3": { itemID: 2903, itemString: statsStaleRef, count: 1 } } }] }, [statsStaleFact]);
+    const mismatchRef = "item:2904::::::::8:1485::14:::::::";
+    const mismatchFact = fact(2904, mismatchRef, "Mismatch Pick", "Miscellaneous", "INVTYPE_WEAPONMAINHAND", 14, 2.9, 4, 1);
+    const mismatchedLink = mismatchFact.itemInfo.returns[1].observation as { state: string; value?: unknown };
+    mismatchedLink.value = "|Hitem:990004:wrong:variant|h[Mismatch Pick]|h";
+    make("MismatchCarrier", "Player-1-MISMATCH", { containers: [{ id: 0, slots: { "4": { itemID: 2904, itemString: mismatchRef, count: 1 } } }] }, [mismatchFact]);
+    make("Receiver", "Player-1-RECEIVER", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
+    make("StaleEquipment", "Player-1-STALE-EQUIP", { containers: [] }, [fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)], NOW - 5, undefined, undefined, NOW - 4 * 24 * 60 * 60);
+    const keeperRef = "item:2905::::::::8:1485::14:::::::";
+    make("Keeper", "Player-1-KEEPER", { containers: [{ id: 0, slots: { "2": { itemID: 2905, itemString: keeperRef, count: 1 } } }] }, [fact(2905, keeperRef, "Lower Metric Blade", "Daggers", "INVTYPE_WEAPONMAINHAND", 15, 1, 4, 1), fact(900001, equippedRef, "Observed Knife", "Daggers", "INVTYPE_WEAPON", 15, 1.875, 5, 1)]);
+    make("Carrier", "Player-1-CARRIER-OTHER-REALM", { containers: [] }, undefined, NOW - 5, undefined, undefined, undefined, "Other Beta Realm");
+    const unknownMetadataRef = "item:2906::::::::8:1485::14:::::::";
+    make("MetadataMissing", "Player-1-METADATA-MISSING", { containers: [{ id: 0, slots: { "1": { itemID: 2906, itemString: unknownMetadataRef, count: 1 } } }] });
+    const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Receiver", realm: "Classic Beta PvP 2" });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND" || !result.value.data) return;
+    const view = result.value.data;
+    assertForeverAllocationContract(view);
+    assert.equal(view.version, "forever");
+    assert.equal(view.scope.accountMembership, "UNKNOWN");
+    assert.equal(view.recipient.class?.value, "MAGE");
+    assert.equal(view.recipient.level?.value, 8);
+    assert.deepEqual(view.recipient.observedSkillLines, []);
+    const carrierSelf = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
+    assert.equal(carrierSelf.status, "FOUND");
+    if (carrierSelf.status === "FOUND" && carrierSelf.value.data) {
+      assert.equal(carrierSelf.value.data.recipient.observedSkillLines[0]?.provenance, "UNKNOWN", "fresh item facts cannot make a skill row with no skill-specific timestamp observed");
+      assert.equal(carrierSelf.value.data.assessments[0]?.eligibilityChecks.weaponProficiency.state, "UNKNOWN", "untimestamped positive-rank skill rows cannot pass the proficiency hypothesis");
+      assert.ok(carrierSelf.value.data.allocationPlan.some((row) => row.disposition === "EQUIP_CANDIDATE" && row.item.itemRef === carriedRef), "a local candidate is presented only as a review outcome");
+    }
+    const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
+    assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);
+    assert.equal(carrier?.candidates[0]?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
+    assert.equal(carrier?.candidates[0]?.ownership.state, "UNKNOWN");
+    assert.equal(carrier?.candidates[0]?.binding.value, false);
+    assert.equal(carrier?.candidates[0]?.transferability, "UNKNOWN");
+    assert.equal(carrier?.candidates[0]?.transferabilityEvidence.state, "UNKNOWN");
+    assert.equal(view.assessments.length, 5);
+    const currentAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === carriedRef);
+    assert.equal(currentAssessment?.recipient.name, "Receiver");
+    assert.equal(currentAssessment?.eligibility, "UNKNOWN");
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.state, "MET");
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.itemRequiredLevel, 1);
+    assert.equal(currentAssessment?.eligibilityChecks.requiredLevel.recipientLevel, 8);
+    assert.equal(currentAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
+    assert.equal(currentAssessment?.eligibilityChecks.weaponProficiency.state, "UNKNOWN");
+    assert.equal(currentAssessment?.playerCanUseSignal, "UNKNOWN", "synthetic older fixture does not invent a CanUseItem observation");
+    assert.equal(currentAssessment?.bindingAssessment.state, "UNKNOWN", "generic bound=false does not establish a transfer route");
+    assert.equal(currentAssessment?.eligibilityChecks.slotCompatibility.state, "MAPPED", "Forever equip-location mapping finds the occupied main-hand slot despite a different exact token");
+    assert.equal(currentAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact-item and recipient specialization evidence only produces a suitability hint");
+    assert.equal(currentAssessment?.upgradeStatus, "NO_RECORDED_STAT_GAIN");
+    assert.deepEqual(currentAssessment?.rawStatComparisons[0]?.values.find((row) => row.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT"), { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", label: "damage per second", labelState: "KNOWN", labelProvenance: "FOREVER_GLOBALSTRINGS_70205", candidate: 1.5, equipped: 1.875, delta: -0.375 });
+    const staleAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === staleRef);
+    assert.equal(staleAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "stale item metadata cannot establish a current level gate");
+    assert.deepEqual(staleAssessment?.rawStatComparisons, [], "stale item metadata cannot enter raw comparisons");
+    const staleStatsAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === statsStaleRef);
+    assert.equal(staleStatsAssessment?.eligibilityChecks.requiredLevel.state, "MET", "fresh GetItemInfo can support its separate level gate");
+    assert.deepEqual(staleStatsAssessment?.rawStatComparisons, [], "stale GetItemStats cannot enter raw comparisons");
+    const mismatchAssessment = view.assessments.find((assessment) => assessment.candidate.itemRef === mismatchRef);
+    assert.equal(mismatchAssessment?.eligibilityChecks.requiredLevel.state, "UNKNOWN", "a variant mismatch invalidates selected tuple fields");
+    assert.deepEqual(mismatchAssessment?.rawStatComparisons, [], "unvalidated exact-variant contracts cannot enter raw comparisons");
+    assert.equal(currentAssessment?.transferability, "UNKNOWN");
+    assert.equal(currentAssessment?.allocationPriority, "UNRANKED_UNKNOWN_SCOPE");
+    assert.equal(currentAssessment?.decision, "NO_RECOMMENDATION");
+    assert.match(currentAssessment?.missingEvidence.join(" ") ?? "", /account membership/);
+    assert.equal(view.conclusion, "INSUFFICIENT_EVIDENCE");
+    assert.ok(view.allocationPlan.length >= view.assessments.length, "the plan projects assessment evidence for the complete known Forever roster");
+    assert.ok(view.allocationPlan.every((row) => row.item.itemRef?.startsWith("item:") && row.source.identityKey && row.recipient.identityKey), "every plan entry preserves the exact item variant and both character identities");
+    assert.ok(view.allocationPlan.every((row) => row.evidence.provenance === "UNKNOWN" || row.evidence.provenance === "DERIVED" || row.evidence.provenance === "HYPOTHESIS"), "plan conclusions label derived screens separately from hypotheses and unknowns");
+    assert.ok(view.allocationPlan.some((row) => row.disposition === "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" && row.item.itemRef === carriedRef), "recorded worse stats produce a scoped no-gain result");
+    assert.ok(view.allocationPlan.some((row) => row.disposition === "POSSIBLE_OTHER_CHARACTER" && row.source.name === "Carrier" && row.recipient.name !== "Carrier"), "a different character can be surfaced for conditional review without asserting a transfer");
+    assert.ok(view.allocationPlan.every((row) => row.disposition !== "POSSIBLE_OTHER_CHARACTER" || row.evidence.transferability === "UNKNOWN"), "cross-character consideration never promotes unknown transferability");
+    const rosterReview = view.recipientEvaluations.find((row) => row.itemRef === carriedRef && row.source.identityKey === carrier?.source.identityKey);
+    assert.equal(rosterReview?.recipients.length, 9, "candidate is screened against each known Forever character only");
+    assert.equal(rosterReview?.recipients.filter((row) => row.name === "Carrier").length, 2, "same-name Forever characters on different realms remain separate recipients");
+    const unknownMetadataRows = view.allocationPlan.filter((row) => row.item.itemRef === unknownMetadataRef);
+    assert.equal(unknownMetadataRows.length, 9, "an observed carried item without exact item API metadata is preserved for each known recipient");
+    assert.ok(unknownMetadataRows.every((row) => row.disposition === "INSUFFICIENT_EVIDENCE" && row.evidence.provenance === "UNKNOWN"));
+    assert.ok(unknownMetadataRows.every((row) => row.evidence.whatWouldChange.some((fact) => /GetItemInfoInstant/.test(fact))));
+    assert.ok(rosterReview?.recipients.some((row) => row.name === "Receiver" && row.upgradeStatus === "NO_RECORDED_STAT_GAIN"));
+    assert.ok(rosterReview?.recipients.some((row) => row.name === "StaleCarrier" && row.transferability === "UNKNOWN"));
+    assert.ok(rosterReview?.recipients.every((row) => row.fit !== "LOCAL_REVIEW" || row.name === "Carrier"));
+    const staleEquipmentView = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "StaleEquipment", realm: "Classic Beta PvP 2" });
+    assert.equal(staleEquipmentView.status, "FOUND");
+    if (staleEquipmentView.status === "FOUND" && staleEquipmentView.value.data) {
+      const staleComparison = staleEquipmentView.value.data.assessments.find((row) => row.candidate.itemRef === carriedRef);
+      assert.deepEqual(staleComparison?.rawStatComparisons, [], "a recent item/delta call cannot refresh an older equipment snapshot");
+      assert.equal(staleComparison?.upgradeStatus, "UNKNOWN");
+    }
+    const local = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
+    assert.equal(local.status, "FOUND");
+    if (local.status === "FOUND" && local.value.data) {
+      const selfAssessment = local.value.data.assessments.find((assessment) => assessment.source.identityKey === local.value.data?.recipient.identityKey && assessment.candidate.itemRef === carriedRef);
+      assert.equal(selfAssessment?.eligibility, "UNKNOWN", "the direct API signal does not prove full eligibility");
+      assert.equal(selfAssessment?.playerApiSignal, "TRUE");
+      assert.equal(selfAssessment?.eligibilityChecks.classRestriction.state, "UNKNOWN");
+      assert.equal(selfAssessment?.suitability, "OBSERVED_SPEC_TAG_MATCH", "synthetic exact item tags and active specialization are joined only as a suitability hint");
+      assert.equal(selfAssessment?.decision, "REVIEW_LOCAL_CANDIDATE");
+      assert.notEqual(selfAssessment?.decision, "CONSIDER_EQUIPPING_ON_SOURCE");
+    }
+    const keeperPlan = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({ version: "forever", name: "Keeper", realm: "Classic Beta PvP 2" });
+    assert.equal(keeperPlan.status, "FOUND");
+    if (keeperPlan.status === "FOUND" && keeperPlan.value.data) {
+      assert.ok(keeperPlan.value.data.allocationPlan.some((entry) => entry.disposition === "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" && entry.item.itemRef === keeperRef));
+      assert.ok(keeperPlan.value.data.allocationPlan.some((entry) => entry.disposition === "KEEP" && entry.item.itemRef === equippedRef && entry.source.location === "EQUIPPED"));
+    }
+  } finally { store.close(); }
+});
+
+test("Retail candidate analysis integrates SQLite evidence, uppercase WoW class tokens, per-spec equipment, and provenance", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const header = "candidateState\tlocationType\tcontainerID\tslot\titemID\titemString\titemGUID\tequipType\tcurrentItemLevel\trequiredLevel\tclassID\tsubclassID\tbaseEquipLocation\tisBound\tboundToAccountUntilEquip\titemBindToAccount\titemBindToAccountUntilEquip\ttooltipBindingType\ttooltipBindingRawValue\tcurrentCharacterCanUse\tobservationState";
+  const row = ["EQUIPPABLE", "CONTAINER_SLOT", "0", "1", "500", "item:500", "?", "11", "120", "1", "4", "0", "INVTYPE_FINGER", "?", "?", "?", "?", "?", "?", "?", "OBSERVED"].join("\t");
+  const candidateExport = buildWowSyncExport({ generatedAt: NOW - 1, character: { name: "Exporter", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } }).replace("\n\n[END]", `\n\n[GEAR CANDIDATES]\nState: complete; observed=${NOW - 1}\nContractVersion: 1\n${header}\n${row}\n\n[END]`);
+  try {
+    store.importSnapshot(candidateExport);
+    const identity = store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 20, character: { name: "Arms", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } })).character.identityKey;
+    for (const name of ["Exporter", "Arms"]) for (const [index, specID] of [71, 72, 73].entries()) {
+      const observedAt = NOW - 10 + index;
+      const tuple = { observedAt, capture: index + 1, revision: 1 };
+      store.importSnapshot(buildWowSyncExport({ generatedAt: observedAt, character: { name, realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", class: "WARRIOR", level: 90 } }), {
+        equipmentObservation: observation({ tuple, specID, slots: { "11": { itemID: 100, itemLevel: 100 }, "12": { itemID: 101, itemLevel: 105 } } }),
+      });
+    }
+    const exporter = store.listCharacters("retail").find((character) => character.name === "Exporter")!;
+    const sourceSnapshot = store.listSnapshots(exporter.identityKey).find((snapshot) => snapshot.parsed.gearCandidates !== undefined)!;
+    const result = new DashboardReadModel(store, () => NOW).analyzeRetailGearCandidate({ version: "retail", exporterIdentityKey: exporter.identityKey, snapshotId: sourceSnapshot.id, rowOrdinal: 1 });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") throw new Error("Expected candidate analysis");
+    assert.equal(result.value.candidate.validity, "VALID_CANDIDATE");
+    assert.equal(result.value.recommendation, "TIED_BEST_SUPPORTED_UPGRADE");
+    assert.ok(result.value.assessments.every((assessment) => assessment.comparison === "UPGRADE_BY_ITEM_LEVEL" && assessment.deltaItemLevel === 20));
+    assert.ok(result.value.assessments.every((assessment) => assessment.retained.state === "QUALIFIED" && assessment.retained.snapshotId > 0));
+    assert.ok(result.value.assessments.some((assessment) => assessment.character.identityKey === identity));
+    assert.ok(result.value.assessments.some((assessment) => assessment.character.name === "Exporter"));
   } finally { store.close(); }
 });
 
@@ -143,8 +414,8 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
     const exporterText = exportWithCandidates("Exporter", "Cairne", 90, [row("91", "OBSERVED", "no", "yes"), row("0", "OBSERVED", "no", "yes"), row("?", "LAST_SEEN"), row("91"), row("90")], NOW - 30);
     store.importSnapshot(exporterText);
     store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Recipient", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", level: 90 } }));
-    const read = new DashboardReadModel(store, () => NOW);
-    const result = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 0, limit: 10 });
+    const read = () => new DashboardReadModel(store, () => NOW);
+    const result = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 0, limit: 10 });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND") return;
     const screen = result.value.data!;
@@ -179,7 +450,7 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
 
     const duplicateRows = exportWithCandidates("DuplicateExporter", "Cairne", 90, [row("89"), row("89")], NOW - 10);
     store.importSnapshot(duplicateRows);
-    const duplicate = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "DuplicateExporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 1, limit: 1 });
+    const duplicate = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "DuplicateExporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne", offset: 1, limit: 1 });
     assert.equal(duplicate.status, "FOUND");
     if (duplicate.status === "FOUND") {
       assert.equal(duplicate.value.data?.candidateEvidence.totalCount, 2);
@@ -191,13 +462,13 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
 
     const zeroLevelText = exportWithCandidates("ZeroCandidate", "Cairne", 90, [row("0")], NOW - 7);
     store.importSnapshot(zeroLevelText);
-    const zeroCandidate = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "ZeroCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const zeroCandidate = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "ZeroCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(zeroCandidate.status, "FOUND");
     if (zeroCandidate.status === "FOUND") assert.equal(zeroCandidate.value.data?.candidateEvidence.rows?.[0]?.result, "NOT_RULED_OUT_BY_CHECKED_RULES", "known requiredLevel zero remains a real passing value");
 
     const emptyText = exportWithCandidates("EmptyCandidate", "Cairne", 90, [], NOW - 3);
     store.importSnapshot(emptyText);
-    const empty = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "EmptyCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const empty = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "EmptyCandidate", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(empty.status, "FOUND");
     if (empty.status === "FOUND") {
       assert.equal(empty.value.data?.candidateEvidence.captured, true);
@@ -205,7 +476,7 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
       assert.equal(empty.value.data?.candidateEvidence.totalCount, 0);
     }
 
-    const unavailable = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Recipient", exporterRealm: "Cairne", recipientName: "Exporter", recipientRealm: "Cairne" });
+    const unavailable = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Recipient", exporterRealm: "Cairne", recipientName: "Exporter", recipientRealm: "Cairne" });
     assert.equal(unavailable.status, "FOUND");
     if (unavailable.status === "FOUND") {
       assert.equal(unavailable.value.data?.candidateEvidence.captured, false);
@@ -213,12 +484,12 @@ test("Retail gear candidate recipient screen applies checked rules and preserves
       assert.match(unavailable.value.data?.candidateEvidence.reason ?? "", /unavailable, not an empty/);
     }
 
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "classic-era", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "classic-era", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION");
     for (const version of ["tbc-anniversary", "forever", "unknown-version"] as const) {
-      assert.equal(read.getGearCandidateRecipientScreen({ version, exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION", `${version} must remain outside the Retail-only recipient screen`);
+      assert.equal(read().getGearCandidateRecipientScreen({ version, exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "UNSUPPORTED_VERSION", `${version} must remain outside the Retail-only recipient screen`);
     }
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "missing", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_NOT_FOUND");
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "missing", recipientRealm: "Cairne" }).status, "RECIPIENT_NOT_FOUND");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "missing", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_NOT_FOUND");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "missing", recipientRealm: "Cairne" }).status, "RECIPIENT_NOT_FOUND");
   } finally { store.close(); }
 });
 
@@ -233,15 +504,15 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
     store.importSnapshot(recipient);
     const originalSnapshots = store.listSnapshots.bind(store);
     store.listSnapshots = (identityKey) => originalSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::recipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, status: { ...snapshot.parsed.character.status, state: "LAST_SEEN" } } } } : snapshot);
-    const read = new DashboardReadModel(store, () => NOW);
-    const historicalLevel = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const read = () => new DashboardReadModel(store, () => NOW);
+    const historicalLevel = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(historicalLevel.status, "FOUND");
     if (historicalLevel.status === "FOUND") {
       assert.deepEqual(historicalLevel.value.data?.recipientLevel.evidence, { state: "UNKNOWN", value: 90, sectionState: "LAST_SEEN", reason: "Recipient character level provenance is LAST_SEEN; only OBSERVED level evidence is used for this screen." });
       assert.equal(historicalLevel.value.data?.candidateEvidence.rows?.[0]?.result, "UNKNOWN");
     }
     store.listSnapshots = (identityKey) => originalSnapshots(identityKey).map((snapshot) => identityKey === "retail::cairne::recipient" ? { ...snapshot, parsed: { ...snapshot.parsed, character: { ...snapshot.parsed.character, level: undefined } } } : snapshot);
-    const unknownLevel = read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
+    const unknownLevel = read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" });
     assert.equal(unknownLevel.status, "FOUND");
     if (unknownLevel.status === "FOUND") {
       assert.equal(unknownLevel.value.data?.recipientLevel.evidence.state, "UNKNOWN");
@@ -254,13 +525,13 @@ test("recipient screen does not compare against a non-OBSERVED or UNKNOWN recipi
       const duplicate = chars.find((character) => character.name === "Exporter")!;
       return [...chars, { ...duplicate, identityKey: `${duplicate.identityKey}::duplicate` }];
     };
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_AMBIGUOUS");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "EXPORTER_AMBIGUOUS");
     store.listCharacters = (version) => {
       const chars = originals(version);
       const duplicate = chars.find((character) => character.name === "Recipient")!;
       return [...chars, { ...duplicate, identityKey: `${duplicate.identityKey}::duplicate` }];
     };
-    assert.equal(read.getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "RECIPIENT_AMBIGUOUS");
+    assert.equal(read().getGearCandidateRecipientScreen({ version: "retail", exporterName: "Exporter", exporterRealm: "Cairne", recipientName: "Recipient", recipientRealm: "Cairne" }).status, "RECIPIENT_AMBIGUOUS");
   } finally { store.close(); }
 });
 

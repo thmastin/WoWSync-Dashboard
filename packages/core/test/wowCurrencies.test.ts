@@ -12,6 +12,7 @@ import { buildAccountCurrencies, characterCurrenciesView, currencyCarryReason, n
 import { luaToPlain, parseSavedVariables } from "../src/savedVariables.ts";
 import { RETAIL_CURRENCIES, currencySection, currencySectionLua } from "./currencyFixtures.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { observation } from "./equipmentObservationFixtures.ts";
 
 const RETAIL = { clientVersion: "12.1.0", clientFamily: "Retail", interface: "120100" };
 const T0 = 1_789_000_000;
@@ -373,4 +374,24 @@ test("deleting a character removes its currency rows too", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("A29 currency recording is unchanged on both import branches when an equipment observation rides along", () => {
+  const run = (withObservation: boolean) => {
+    const store = new SqliteSnapshotStore(":memory:");
+    try {
+      const extra = (n: number) => (withObservation ? { equipmentObservation: observation({ tuple: { observedAt: T0 + n, capture: n, revision: 1 } }) } : {});
+      const first = store.importSnapshot(retailExport("Virek", T0), { currencies: currencySection({ observedAt: T0 - 60 }), ...extra(1) });
+      const duplicate = store.importSnapshot(retailExport("Virek", T0), { currencies: currencySection({ observedAt: T0 - 60 }), ...extra(2) });
+      const later = store.importSnapshot(retailExport("Virek", T0 + 7200, 2000), extra(3));
+      if (withObservation) assert.deepEqual([first.equipmentObservation, duplicate.equipmentObservation, later.equipmentObservation], ["recorded", "recorded", "recorded"]);
+      return { outcomes: [first.currencies, duplicate.currencies, later.currencies], view: store.getCharacterCurrencies(key("Virek")) };
+    } finally {
+      store.close();
+    }
+  };
+  const plain = run(false);
+  const observed = run(true);
+  assert.deepEqual(observed.outcomes, plain.outcomes);
+  assert.deepEqual(observed.view, plain.view);
 });

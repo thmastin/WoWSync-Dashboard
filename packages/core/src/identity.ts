@@ -18,3 +18,11 @@ export function characterIdentity(version: VersionOrUnknown, character: Characte
   const key = `${version}::${realm}::${name}`.toLowerCase();
   return { version, realm, name, key };
 }
+
+/** Display helper only. Surname never participates in canonical identity. */
+export function characterDisplayName(character: { name?: string; surname?: string }): string {
+  const name = character.name?.trim() ?? "";
+  const surname = character.surname?.trim() ?? "";
+  if (!surname || name.toLocaleLowerCase().endsWith(` ${surname}`.toLocaleLowerCase())) return name;
+  return [name, surname].filter(Boolean).join(" ");
+}

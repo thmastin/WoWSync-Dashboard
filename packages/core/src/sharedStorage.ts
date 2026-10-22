@@ -12,7 +12,7 @@
 // result cannot depend on the order in which exports arrived (tests permute it).
 //
 // Nothing here touches SQLite, the importer, the API, the web app, or any existing
-// projection (AccountFacts / AccountContext / LlmContext / diffs). Character storage
+// projection (AccountFacts / AccountContext / diffs). Character storage
 // ([BANK]) is never admitted: it stays character-owned and outside this module.
 //
 // Trust rules this module enforces:
@@ -632,6 +632,11 @@ export function projectOwner(owner: SharedStorageOwner, entries: readonly Journa
 
 export function projectOwnerFromJournal(journal: SharedJournal, owner: SharedStorageOwner): OwnerProjection | undefined {
   return projectOwner(owner, [...journal.entries.values()]);
+}
+
+/** Owner-key-scoped immutable observation history for read-only ERP comparisons. */
+export function ownerObservationHistoryFromJournal(journal: SharedJournal, key: string): ProjectedObservation[] {
+  return [...journal.entries.values()].filter((entry) => entry.observation.ownerKey === key).map(project).sort(compareNewestFirst);
 }
 
 export interface SharedStorageProjection {

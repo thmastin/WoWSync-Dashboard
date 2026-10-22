@@ -24,6 +24,20 @@ function isKnownVersion(v: string): v is VersionOrUnknown {
 }
 
 export function registerDemandRoutes(app: Express, store: SnapshotStore): void {
+  app.get("/api/versions/:version/gear-candidates", (req, res) => {
+    const { version } = req.params;
+    if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+    res.json(new DashboardReadModel(store).getGearCandidateEvidence({ version }));
+  });
+  app.get("/api/versions/:version/gear-allocation", (req, res) => {
+    const { version } = req.params;
+    if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });
+    const identityKey = req.query.exporterIdentityKey;
+    const snapshotIdRaw = req.query.snapshotId;
+    const rowOrdinalRaw = req.query.rowOrdinal;
+    if (typeof identityKey !== "string" || !identityKey || typeof snapshotIdRaw !== "string" || !/^\d+$/.test(snapshotIdRaw) || typeof rowOrdinalRaw !== "string" || !/^\d+$/.test(rowOrdinalRaw)) return res.status(400).json({ error: "exporterIdentityKey, positive snapshotId, and positive rowOrdinal are required.", code: "INVALID_CANDIDATE_REFERENCE" });
+    res.json(new DashboardReadModel(store).analyzeRetailGearCandidate({ version, exporterIdentityKey: identityKey, snapshotId: Number(snapshotIdRaw), rowOrdinal: Number(rowOrdinalRaw) }));
+  });
   app.get("/api/versions/:version/demands", (req, res) => {
     const { version } = req.params;
     if (!isKnownVersion(version)) return res.status(400).json({ error: `Unknown version "${version}"` });

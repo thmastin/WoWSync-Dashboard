@@ -11,7 +11,6 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildAccountContext } from "../src/accountContext.ts";
 import { formatCopper } from "../src/currency.ts";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { parseWowSyncExport, WowSyncParseError } from "../src/parser.ts";
 import { professionCatalogForVersion, professionEntryIsEvidence } from "../src/professionCatalog.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
@@ -429,7 +428,7 @@ test("[SYNTHETIC] Forever realms are isolated: each realm's gold/playtime/invent
   }
 });
 
-// --- AccountContext / LlmContext ---------------------------------------------
+// --- AccountContext ---------------------------------------------
 
 test("[REAL] AccountContext carries a forever version alongside the others, embedding the same AccountFacts wholesale", () => {
   const store = halloStore();
@@ -452,11 +451,38 @@ test("[REAL] AccountContext carries a forever version alongside the others, embe
     assert.equal(hallo.transitions[0].inventoryChanged, false);
     // Trainer view reuses the existing summarizer; Forever has observed no trainer categories.
     assert.deepEqual(hallo.trainer, []);
-    assert.equal(ctx.schemaVersion, "4");
+    assert.equal(ctx.schemaVersion, "49");
     assert.ok(ctx.currency.note.includes("Copper"));
   } finally {
     store.close();
   }
+});
+
+test("[SYNTHETIC] AccountContext includes the GUID-guarded Forever potential gear view and preserves unknown conclusions", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const generatedAt = NOW_RECENT;
+  const itemString = "item:777:1:2";
+  try {
+    const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed chest", qty: 1 }] }] }, bank: { unknown: true } });
+    store.importSnapshot(text, { foreverGearObservation: {
+      clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
+      equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+      bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 777, itemString, count: 1, name: "Observed chest" } } }] } },
+      itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 777, itemString,
+        itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+        isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
+      }] } },
+    } });
+    const ctx = store.buildAccountContext(generatedAt + 20);
+    const foreverContext = ctx.versions.forever.characters.find((character) => character.name === "Gearcheck");
+    assert.equal(foreverContext?.foreverGearObservation?.status, "FOUND");
+    const view = (foreverContext?.foreverGearObservation as { status: "FOUND"; value: { data: { evaluationCandidates: { items: Array<{ itemRef: string }>; state: string }; unknowns: { eligibility: string; upgradeStatus: string } } } }).value.data;
+    assert.equal(view.evaluationCandidates.state, "OBSERVED");
+    assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+    assert.equal(view.unknowns.eligibility, "UNKNOWN");
+    assert.equal(view.unknowns.upgradeStatus, "UNKNOWN");
+    assert.equal(ctx.versions.retail.characters.some((character) => character.name === "Gearcheck"), false);
+  } finally { store.close(); }
 });
 
 test("[REAL] AccountContext is deterministic with Forever included", () => {
@@ -468,61 +494,13 @@ test("[REAL] AccountContext is deterministic with Forever included", () => {
   }
 });
 
-test("[REAL] LlmContext (Ask My Account's payload) projects Forever with raw + formatted copper and honest UNKNOWNs", () => {
-  const store = halloStore();
-  try {
-    const llm = buildLlmContext(store.buildAccountContext(NOW_RECENT));
-    const fv = llm.versions["forever"];
-    assert.equal(fv.version, "forever");
-    assert.equal(fv.aggregationScope, "realm");
-    // Forever is realm-partitioned: per-realm gold, never a version-wide total.
-    assert.equal(fv.goldSummary.scope, "realm");
-    if (fv.goldSummary.scope !== "realm") throw new Error("unreachable");
-    assert.deepEqual(fv.goldSummary.byRealm.map((r) => r.realm), ["Classic Beta PvP 2"]);
-    const [pvp] = fv.goldSummary.byRealm;
-    assert.equal(pvp.totalKnownCopper, 291);
-    assert.equal(pvp.totalKnownFormatted, formatCopper(291));
-    assert.equal(pvp.totalKnownFormatted, "2s 91c");
-
-    const hallo = fv.characters[0];
-    assert.equal(hallo.goldCopper, 291);
-    assert.equal(hallo.goldFormatted, "2s 91c");
-    assert.equal(hallo.playedSeconds, undefined);
-    assert.equal(hallo.bankStatus, "UNKNOWN");
-    assert.equal(hallo.comparisonStatus, "AVAILABLE");
-    assert.equal(hallo.latestTransition?.goldDeltaCopper, 236);
-    assert.equal(hallo.latestTransition?.previousGoldCopper, 55);
-    assert.equal(hallo.latestTransition?.currentGoldCopper, 291);
-    assert.equal(hallo.latestTransition?.playtimeDeltaSeconds, undefined);
-    assert.equal(hallo.latestTransition?.inventory, undefined, "bags went UNKNOWN -> OBSERVED: no fabricated inventory delta");
-    assert.deepEqual(llm.latestTransitionIndex.goldChanged, [HALLO_KEY]);
-    assert.deepEqual(llm.latestTransitionIndex.levelChanged, [HALLO_KEY]);
-    assert.deepEqual(llm.latestTransitionIndex.inventoryChanged, []);
-    assert.deepEqual(llm.latestTransitionIndex.playtimeChanged, []);
-    // Pure projection: the input context is unchanged by it.
-    const ctx = store.buildAccountContext(NOW_RECENT);
-    const before = JSON.stringify(ctx);
-    buildLlmContext(ctx);
-    assert.equal(JSON.stringify(ctx), before);
-  } finally {
-    store.close();
-  }
-});
-
-test("[SYNTHETIC] with no Forever data at all, AccountContext/LlmContext still carry an empty forever version (present, not absent)", () => {
+test("[SYNTHETIC] with no Forever data at all, AccountContext still carries an empty forever version (present, not absent)", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     store.importSnapshot(read("classic-era/bromrik-1789170870.wowsync.txt"));
     const ctx = store.buildAccountContext(NOW_RECENT);
     assert.equal(ctx.versions["forever"].characters.length, 0);
     assert.deepEqual(ctx.versions["forever"].facts.realms, []);
-    const llm = buildLlmContext(ctx);
-    assert.deepEqual(llm.versions["forever"].characters, []);
-    assert.deepEqual(
-      llm.versions["forever"].goldSummary,
-      { scope: "realm", byRealm: [] },
-      "no Forever realms -> no entries at all; never a '0c' total",
-    );
     // buildAccountContext (pure) stays independent of the store.
     assert.equal(typeof buildAccountContext, "function");
   } finally {
@@ -619,48 +597,4 @@ test("[SYNTHETIC] existing Retail/Classic/TBC data is unaffected by Forever prof
   }
 });
 
-// --- LlmContext profession honesty ------------------------------------------------
-
-test("[REAL] LlmContext flags Forever's 0/0 profession rows as indeterminate and leaves real skills unflagged", () => {
-  const store = halloStore();
-  try {
-    const hallo = buildLlmContext(store.buildAccountContext(NOW_RECENT)).versions["forever"].characters[0];
-    assert.equal(hallo.professionsObservationStatus, "OBSERVED");
-    const byName = new Map(hallo.professions.map((p) => [p.name, p]));
-    assert.deepEqual(byName.get("Engineering"), { name: "Engineering", skill: 20, maxSkill: 75 });
-    assert.deepEqual(byName.get("Mining"), { name: "Mining", skill: 22, maxSkill: 75 });
-    assert.deepEqual(byName.get("Alchemy"), { name: "Alchemy", skill: 0, maxSkill: 0, indeterminate: true });
-    assert.equal(hallo.professions.filter((p) => p.indeterminate).length, 7);
-  } finally {
-    store.close();
-  }
-});
-
-test("[REAL] LlmContext distinguishes a never-observed professions section (UNKNOWN) from an empty one", () => {
-  const store = new SqliteSnapshotStore(":memory:");
-  try {
-    store.importSnapshot(read(LEVEL4));
-    const hallo = buildLlmContext(store.buildAccountContext(NOW_RECENT)).versions["forever"].characters[0];
-    assert.equal(hallo.professionsObservationStatus, "UNKNOWN");
-    assert.deepEqual(hallo.professions, [], "empty list here means never observed, not 'no professions'");
-  } finally {
-    store.close();
-  }
-});
-
-test("[SYNTHETIC] LlmContext never flags non-Forever professions as indeterminate, even at 0/0", () => {
-  const store = new SqliteSnapshotStore(":memory:");
-  try {
-    store.importSnapshot(
-      buildWowSyncExport({
-        character: { name: "Oldtimer", realm: "Dreamscythe", clientVersion: "2.5.6", clientBuild: "69795" },
-        professions: { entries: [{ name: "Alchemy", skill: 0, maxSkill: 0 }] },
-      }),
-    );
-    const c = buildLlmContext(store.buildAccountContext(NOW_RECENT)).versions["tbc-anniversary"].characters[0];
-    assert.deepEqual(c.professions, [{ name: "Alchemy", skill: 0, maxSkill: 0 }]);
-    assert.equal("indeterminate" in c.professions[0], false);
-  } finally {
-    store.close();
-  }
-});
+// --- Profession honesty ------------------------------------------------

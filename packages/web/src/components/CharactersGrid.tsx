@@ -1,5 +1,6 @@
 import { formatCopper, formatPlaytime, formatRelativeTime, formatXpPercent, freshnessLabel } from "../format.ts";
 import type { CharacterFacts } from "../types.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 export default function CharactersGrid({
   characters,
@@ -16,7 +17,7 @@ export default function CharactersGrid({
       {characters.map((c) => (
         <div key={c.identityKey} className="character-card" onClick={() => onOpenCharacter(c.identityKey)}>
           <div className="character-card-top">
-            <div className="character-card-name">{c.name}</div>
+            <div className="character-card-name">{characterDisplayName(c)}</div>
             <span className={`freshness-badge freshness-${c.freshness}`}>{freshnessLabel(c.freshness)}</span>
           </div>
           <div className="character-card-sub muted">

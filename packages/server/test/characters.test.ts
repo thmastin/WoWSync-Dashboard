@@ -11,7 +11,11 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
+import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "../../core/test/fixtures/foreverSnapshot180.ts";
 import { createApp } from "../src/app.ts";
+import { readSavedExports } from "../src/importSaved.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${fixtures}${path}`, "utf8");
@@ -20,8 +24,9 @@ const HALLO = "forever::classic beta pvp 2::hallo emberstone";
 const VOODAN = "tbc-anniversary::dreamscythe::voodan";
 const TORAHN = "tbc-anniversary::dreamscythe::torahn";
 
-async function withApp(run: (api: Api) => Promise<void>) {
+async function withApp(run: (api: Api) => Promise<void>, seedStore?: (store: SqliteSnapshotStore) => void) {
   const store = new SqliteSnapshotStore(":memory:");
+  seedStore?.(store);
   const app = createApp(store, 0);
   const server = await new Promise<http.Server>((resolve) => {
     const s = http.createServer(app);
@@ -40,6 +45,10 @@ async function withApp(run: (api: Api) => Promise<void>) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: read(file) }),
       });
+      return { status: res.status, body: await res.json() };
+    },
+    async importCapture(payload) {
+      const res = await fetch(base + "/api/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       return { status: res.status, body: await res.json() };
     },
     async del(identityKey, body, rawBody) {
@@ -70,6 +79,7 @@ interface Api {
   base: string;
   get(path: string): Promise<{ status: number; body: any }>;
   import(file: string): Promise<{ status: number; body: any }>;
+  importCapture(payload: unknown): Promise<{ status: number; body: any }>;
   del(identityKey: string, body?: unknown, rawBody?: string): Promise<{ status: number; body: Record<string, any> }>;
 }
 
@@ -95,6 +105,258 @@ test("[REAL] a Forever export imports through POST /api/import as a Forever char
     assert.equal(r.body.result.character.version, "forever");
     assert.equal(r.body.result.character.identityKey, HALLO);
     assert.equal(r.body.result.character.latestMoneyCopper, 291);
+  });
+});
+
+test("Forever surname flows through REST and AccountContext as optional display metadata", async () => {
+  const text = buildWowSyncExport({ generatedAt: 1_791_720_000, character: {
+    name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Surname Realm", class: "HUNTER",
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+  } });
+  await withApp(async (api) => {
+    const imported = await api.importCapture({ text });
+    assert.equal(imported.status, 200);
+    assert.equal(imported.body.result.character.surname, "Emberstone");
+    assert.equal(imported.body.result.character.surnameSource, "UnitName[2]+GetUnitName suffix");
+    assert.equal(imported.body.result.character.identityKey, "forever::surname realm::hallo");
+
+    const listed = await api.get("/api/versions/forever/characters");
+    assert.equal(listed.body.characters[0].surname, "Emberstone");
+    const detail = await api.get(`/api/characters/${encodeURIComponent(imported.body.result.character.identityKey)}`);
+    assert.equal(detail.body.character.surname, "Emberstone");
+    const context = await api.get("/api/account-context");
+    const factsCharacter = context.body.versions.forever.facts.characters[0];
+    const contextCharacter = context.body.versions.forever.characters[0];
+    assert.equal(factsCharacter.surname, "Emberstone");
+    assert.equal(factsCharacter.surnameSource, "UnitName[2]+GetUnitName suffix");
+    assert.equal(contextCharacter.surname, "Emberstone");
+    assert.equal(contextCharacter.surnameSource, "UnitName[2]+GetUnitName suffix");
+  });
+});
+
+test("Forever observation REST route preserves the build guard for older captures", async () => {
+  await withApp(async (api) => {
+    await api.import("forever/hallo-1789731867.wowsync.txt");
+    const response = await api.get(`/api/characters/${encodeURIComponent(HALLO)}/forever-gear-observation`);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.status, "FOUND");
+    assert.equal(response.body.value.data, undefined);
+    assert.equal(response.body.value.provenance.state, "UNKNOWN");
+  });
+});
+
+test("Forever potential equipment candidates reach REST and AccountContext with eligibility and upgrade UNKNOWN", async () => {
+  // This HTTP test covers a current observation; keep the exported observation
+  // within the production three-day freshness window regardless of when the
+  // suite runs. Stale and missing Forever evidence are covered separately.
+  const generatedAt = Math.floor(Date.now() / 1000) - 60;
+  const itemString = "item:1777:3:5";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed item", qty: 1 }] }] }, bank: { unknown: true } });
+  await withApp(async (api) => {
+    const key = "forever::forever realm::gearcheck";
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-observation`);
+    assert.equal(rest.body.value.data.evaluationCandidates.state, "OBSERVED");
+    assert.equal(rest.body.value.data.evaluationCandidates.freshness, "recent");
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].itemRef, itemString);
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].eligibility, "UNKNOWN");
+    assert.equal(rest.body.value.data.evaluationCandidates.items[0].upgradeStatus, "UNKNOWN");
+    assert.equal(rest.body.value.data.bank.state, "UNKNOWN");
+    const questRest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests`);
+    assert.equal(questRest.status, 200);
+    assert.equal(questRest.body.value.data.active[0].questID, 800);
+    assert.equal(questRest.body.value.data.active[0].turnInReadinessState, "UNKNOWN");
+    assert.equal(questRest.body.value.data.completedHistory.quests[0].title, "Prior Quest");
+    const context = await api.get("/api/account-context");
+    const accountView = context.body.versions.forever.characters.find((character: any) => character.identityKey === key).foreverGearObservation;
+    assert.deepEqual(accountView.value, rest.body.value, "AccountContext reuses the REST read model result");
+    assert.deepEqual(accountView.value.data.quests.active, questRest.body.value.data.active, "AccountContext and quest REST use the same projection");
+    assert.equal(context.body.versions.retail.characters.some((character: any) => character.identityKey === key), false);
+
+    const retailText = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Retail", clientVersion: "12.0.0" } });
+    const retailImport = await api.importCapture({ text: retailText });
+    assert.equal(retailImport.status, 200);
+    const retailQuest = await api.get("/api/characters/retail%3A%3Aforever%20realm%3A%3Agearcheck/forever-quests");
+    assert.equal(retailQuest.status, 404);
+    assert.equal(retailQuest.body.code, "VERSION_NOT_SUPPORTED");
+  }, (store) => store.importSnapshot(text, { foreverGearObservation: {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Gearcheck", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-GEARCHECK",
+    equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+    bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 1777, itemString, count: 1, name: "Observed item" } } }] } },
+    quests: { observedAt: generatedAt, completeness: "partial", data: { formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: generatedAt, activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, active: [{ questID: 800, title: "Evidence Quest", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }], completedHistory: { state: "PARTIAL", questIDs: [799], quests: [{ questID: 799, title: "Prior Quest", titleState: "OBSERVED" }], returnedCount: 1 }, issues: ["objective data unavailable"] } },
+    itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 1777, itemString,
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [1777, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] },
+    }] } },
+  } }));
+});
+
+test("snapshot-scoped crafted upgrade assessment REST and AccountContext share Rordin's unresolved evidence", async () => {
+  await withApp(async (api) => {
+    const key = RORDIN_SNAPSHOT_180.identity.identityKey;
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-crafted-upgrade-assessment?snapshotId=180`);
+    assert.equal(rest.status, 200, JSON.stringify(rest.body));
+    const value = rest.body.value;
+    assert.equal(value.provenance.identityKey, key);
+    assert.equal(value.provenance.snapshotId, 180);
+    assert.equal(value.data.recipeCoverage.state, "PARTIAL");
+    assert.deepEqual(value.data.candidates.map((candidate: any) => [candidate.recipe.recipeID, candidate.output.itemID, candidate.upgradeConclusion.state]), [[2663, 2853, "UNKNOWN"], [12260, 10421, "UNKNOWN"]]);
+    assert.equal(value.data.bank.state, "UNKNOWN");
+    const context = await api.get("/api/account-context");
+    const contextValue = context.body.versions.forever.characters.find((character: any) => character.identityKey === key).foreverCraftedUpgradeAssessment;
+    assert.deepEqual(contextValue, rest.body, "AccountContext reuses the same core resolution and projection");
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(key)}/forever-crafted-upgrade-assessment?snapshotId=999`)).status, 400);
+    const retail = await api.importCapture({ text: buildWowSyncExport({ generatedAt: Math.floor(Date.now() / 1000), character: { name: "Other", realm: "Classic Beta PvP 2", clientFamily: "Retail", clientVersion: "12.0.0" } }) });
+    const retailKey = retail.body.result.character.identityKey;
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(retailKey)}/forever-crafted-upgrade-assessment`)).status, 404);
+  }, (store) => { seedRordinSnapshot180(store); });
+});
+
+test("snapshot 180 quest REST and AccountContext expose the canonical quest projection without the gear GUID gate", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: (RORDIN_SNAPSHOT_180.generatedAt + 30) * 1000 });
+  await withApp(async (api) => {
+    const key = RORDIN_SNAPSHOT_180.identity.identityKey;
+    const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests?snapshotId=180`);
+    assert.equal(rest.status, 200);
+    assert.equal(rest.body.status, "FOUND");
+    assert.equal(rest.body.value.provenance.identityKey, key);
+    assert.equal(rest.body.value.provenance.snapshotId, 180);
+    assert.equal(rest.body.value.provenance.state, "OBSERVED");
+    assert.deepEqual(rest.body.value.data.active.map((row: any) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+    assert.equal(rest.body.value.data.active.find((row: any) => row.questID === 98322).objectiveState, "OBSERVED");
+    assert.deepEqual(rest.body.value.data.active.find((row: any) => row.questID === 98322).objectives, []);
+    const context = await api.get("/api/account-context");
+    const character = context.body.versions.forever.characters.find((row: any) => row.identityKey === key);
+    assert.deepEqual(character.foreverQuestObservation.value, rest.body.value);
+    assert.equal(context.body.versions.retail.characters.some((row: any) => row.identityKey === key), false);
+    assert.equal((await api.get(`/api/characters/${encodeURIComponent(key)}/forever-quests?snapshotId=999`)).status, 400);
+    const retailText = buildWowSyncExport({ generatedAt: RORDIN_SNAPSHOT_180.generatedAt, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", clientFamily: "Retail", clientVersion: "12.0.0" } });
+    assert.equal((await api.importCapture({ text: retailText })).status, 200);
+    const retail = await api.get("/api/characters/retail%3A%3Aclassic%20beta%20pvp%202%3A%3Arordin/forever-quests");
+    assert.equal(retail.status, 404);
+    assert.equal(retail.body.code, "VERSION_NOT_SUPPORTED");
+  }, (store) => { assert.equal(seedRordinSnapshot180(store), 180); });
+});
+
+test("Forever allocation route exposes separate evidence-gated decisions without cross-version leakage", async () => {
+  const generatedAt = 1_791_549_000;
+  const itemString = "item:2901::::::::8:1485::14:::::::";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Allocator", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: "HUNTER", level: 8 }, bags: { containers: [] }, bank: { unknown: true } });
+  await withApp(async (api) => {
+    const key = "forever::forever realm::allocator";
+    const response = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
+    assert.equal(response.status, 200);
+    const view = response.body.value.data;
+    assertForeverAllocationContract(view);
+    assert.equal(view.version, "forever");
+    assert.equal(view.recipient.class.value, "HUNTER");
+    assert.equal(view.recipient.level.value, 8);
+    assert.equal(view.scope.accountMembership, "UNKNOWN");
+    assert.equal(view.assessments.length, 1);
+    assert.equal(view.assessments[0].candidate.itemRef, itemString);
+    assert.equal(view.assessments[0].source.name, "Allocator");
+    assert.equal(view.assessments[0].eligibility, "UNKNOWN");
+    assert.equal(view.assessments[0].suitability, "UNKNOWN");
+    assert.equal(view.assessments[0].upgradeStatus, "UNKNOWN");
+    assert.equal(view.assessments[0].transferability, "UNKNOWN");
+    assert.equal(view.assessments[0].allocationPriority, "UNRANKED");
+    assert.equal(view.assessments[0].decision, "NO_RECOMMENDATION");
+    assert.equal(view.assessments[0].candidate.binding.value, true);
+    assert.ok(view.allocationPlan.length > 0);
+    assert.ok(view.allocationPlan.every((entry: any) => entry.item.itemRef?.startsWith("item:") && entry.recipient.identityKey), "REST includes exact-variant plan rows with recipient identity");
+    assert.match(view.scope.reason, /WoW account ID/);
+    assert.match(view.assessments[0].missingEvidence.join(" "), /class\/item restriction evidence/);
+    const account = await api.get("/api/account-context");
+    const characterContext = account.body.versions.forever.characters.find((character: any) => character.identityKey === key);
+    assert.deepEqual(characterContext.foreverGearAllocation.value.data, view, "AccountContext carries the same canonical allocation read model");
+    assert.deepEqual(characterContext.foreverGearAllocation.value.data.allocationPlan, view.allocationPlan, "REST and AccountContext expose the identical allocation plan");
+    const retailKey = encodeURIComponent("retail::forever realm::allocator");
+    assert.equal((await api.get(`/api/characters/${retailKey}/forever-gear-allocation`)).body.code, "VERSION_NOT_SUPPORTED");
+  }, (store) => {
+    store.importSnapshot(buildWowSyncExport({ generatedAt, character: { name: "Allocator", realm: "Forever Realm", clientFamily: "Retail", clientVersion: "12.1.0" } }));
+    store.importSnapshot(text, { foreverGearObservation: {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Allocator", realm: "Forever Realm", generatedAt, sourceCharacterGuid: "Player-ALLOCATOR",
+    equipment: { observedAt: generatedAt, completeness: "complete", data: { slots: {} } },
+    bags: { observedAt: generatedAt, completeness: "complete", data: { containers: [{ id: 0, slots: { "7": { itemID: 2901, itemString, count: 1, bound: true, bindingState: "OBSERVED_TRUE" } } }] } },
+    bank: { observedAt: generatedAt, completeness: "unknown", data: {} },
+    itemEvidence: { observedAt: generatedAt, completeness: "complete", source: "fixture API evidence", data: { sourceSections: { bags: { observedAt: generatedAt, state: "complete" } }, items: [{ itemID: 2901, itemString,
+      itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [2901, "Weapon", "Miscellaneous", "INVTYPE_WEAPONMAINHAND"].map((value) => ({ observation: { state: "OBSERVED", type: typeof value, value } })) },
+      isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] } },
+    } });
+  });
+});
+
+const liveForeverSavedVariables = process.env.WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES;
+test("[LIVE REGRESSION] Hallo/Fizzwick 70291 mail-test captures stay evidence-qualified across REST and AccountContext", { skip: !liveForeverSavedVariables && "Set WOWSYNC_FOREVER_LIVE_SAVED_VARIABLES to the read-only Forever GearExport.lua capture." }, async () => {
+  const saved = readSavedExports(liveForeverSavedVariables!);
+  const hallo = saved.find((entry) => entry.name === "Hallo" && entry.realm === "Classic Beta PvP 2") as any;
+  const fizzwick = saved.find((entry) => entry.name === "Fizzwick" && entry.realm === "Classic Beta PvP 2") as any;
+  assert.ok(hallo?.text && hallo.foreverGearObservation, "the real capture contains Hallo's saved export and Forever 70291 sidecar");
+  assert.ok(fizzwick?.text && fizzwick.foreverGearObservation, "the real capture contains Fizzwick's saved export and Forever 70291 sidecar");
+  assert.equal(hallo.sourceCharacterGuid, "Player-4613-007ED867");
+  assert.equal(fizzwick.sourceCharacterGuid, "Player-4613-00B0888B");
+  assert.equal(hallo.foreverGearObservation.clientProfile, "Forever:1.60.1:70291:16001");
+  assert.equal(fizzwick.foreverGearObservation.clientProfile, "Forever:1.60.1:70291:16001");
+  assert.equal(fizzwick.foreverGearObservation.bags.completeness, "complete");
+  const miningPickRef = "item:2901::::::::4:1482::14:::::::";
+  assert.doesNotMatch(hallo.text, /item:2901[^\n]*\tMining Pick\t1\t/, "Hallo's current export no longer lists the Mining Pick in carried inventory");
+  assert.match(fizzwick.text, new RegExp(`${miningPickRef}\\tMining Pick\\t1\\tno`), "Fizzwick's current export observes one unbound Mining Pick in carried inventory");
+  const pick = fizzwick.foreverGearObservation.itemEvidence?.data?.items?.find((item: any) => item.itemString === miningPickRef);
+  assert.ok(pick, "the exact received itemString has a current raw item API observation");
+  assert.equal(pick.playerCanUseItem.returns[0].observation.value, true);
+  assert.equal(pick.isEquippableItem.returns[0].observation.value, true);
+  assert.equal(pick.itemInfoInstant.returns[1].observation.value, "Weapon");
+  assert.equal(pick.itemInfoInstant.returns[2].observation.value, "Miscellaneous");
+  assert.equal(pick.itemInfoInstant.returns[3].observation.value, "INVTYPE_WEAPONMAINHAND");
+  assert.equal(pick.itemInfo.returns[4].observation.value, 1, "the live GetItemInfo tuple reports required level 1");
+  assert.equal(pick.bindingEvidence.itemInfoBindType.observation.value, 0);
+  assert.equal(pick.bindingEvidence.isItemBindToAccount.returns[0].observation.value, false);
+  assert.equal(pick.bindingEvidence.isItemBindToAccountUntilEquip.returns[0].observation.value, false);
+  assert.equal(pick.itemStats.table.entries[0].observation.value, 1.5);
+  const pickDelta = fizzwick.foreverGearObservation.itemEvidence.data.statDeltaComparisons.comparisons.find((row: any) =>
+    row.input?.equippedItemString === "item:35::::::::4:1482::75:::::::" && row.input?.candidateItemString === miningPickRef);
+  assert.ok(pickDelta, "the capture includes a direct candidate-versus-equipped GetItemStatDelta call for Fizzwick");
+  const dpsDelta = pickDelta.table.entries.find((entry: any) => entry.key === "ITEM_MOD_DAMAGE_PER_SECOND_SHORT");
+  assert.ok(Math.abs(dpsDelta.observation.value - (1.5 - 1.379310369491577)) < 1e-9, "the observed delta is candidate DPS minus equipped DPS");
+  await withApp(async (api) => {
+    const imported = await api.importCapture({ text: hallo.text, foreverGearObservation: hallo.foreverGearObservation });
+    assert.equal(imported.status, 200);
+    const otherImport = await api.importCapture({ text: fizzwick.text, foreverGearObservation: fizzwick.foreverGearObservation });
+    assert.equal(otherImport.status, 200);
+    const identities = ["forever::classic beta pvp 2::hallo", "forever::classic beta pvp 2::fizzwick"];
+    const allocations = new Map<string, any>();
+    for (const key of identities) {
+      const allocationResponse = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
+      assert.equal(allocationResponse.status, 200);
+      allocations.set(key, allocationResponse.body.value.data);
+      const allocation = allocationResponse.body.value.data;
+      assertForeverAllocationContract(allocation);
+      assert.equal(allocation.version, "forever");
+      assert.equal(allocation.scope.accountMembership, "UNKNOWN");
+      assert.ok(allocation.candidateSources.every((source: any) => source.bank.state === "UNKNOWN"));
+      assert.ok(allocation.assessments.every((row: any) => row.transferability === "UNKNOWN" || row.source.identityKey === row.recipient.identityKey));
+    }
+    const halloPlan = allocations.get(identities[0]).allocationPlan;
+    const fizzwickPlan = allocations.get(identities[1]).allocationPlan;
+    const crossScreen = halloPlan.find((row: any) => row.item.itemRef === miningPickRef && row.source.identityKey === identities[1] && row.recipient.identityKey === identities[0]);
+    assert.ok(crossScreen, "the exact observed item can be screened against Hallo");
+    assert.equal(crossScreen.disposition, "INSUFFICIENT_EVIDENCE");
+    assert.equal(crossScreen.evidence.transferability, "UNKNOWN");
+    assert.equal(crossScreen.comparison.upgradeStatus, "UNKNOWN", "a lower recorded DPS result is not promoted into an overall upgrade verdict");
+    const fizzwickAssessment = allocations.get(identities[1]).assessments.find((row: any) => row.candidate.itemRef === miningPickRef);
+    assert.equal(fizzwickAssessment.playerApiSignal, "TRUE");
+    assert.equal(fizzwickAssessment.eligibility, "UNKNOWN", "raw use/equippable signals do not erase unresolved weapon proficiency");
+    assert.equal(fizzwickAssessment.upgradeStatus, "UNKNOWN");
+    assert.equal(fizzwickAssessment.decision, "NO_RECOMMENDATION");
+    assert.equal(fizzwickAssessment.statDeltaCalibrations.length, 1, "the exact captured stat-delta pair is carried into evaluation");
+    const pickRecipients = allocations.get(identities[1]).recipientEvaluations.find((row: any) => row.itemRef === miningPickRef).recipients;
+    assert.equal(pickRecipients.find((row: any) => row.identityKey === identities[1]).transferability, "UNKNOWN", "source-local possession does not imply a transferability result");
+    assert.equal(pickRecipients.find((row: any) => row.identityKey === identities[0]).transferability, "UNKNOWN", "cross-character transferability remains unknown despite the observed earlier mail test");
+    assert.ok(fizzwickPlan.some((row: any) => row.item.itemRef === miningPickRef && row.disposition === "INSUFFICIENT_EVIDENCE"));
+    const account = await api.get("/api/account-context");
+    for (const key of identities) {
+      const character = account.body.versions.forever.characters.find((entry: any) => entry.identityKey === key);
+      assert.deepEqual(character.foreverGearAllocation.value.data, allocations.get(key), "the current real capture yields the same plan through REST and AccountContext");
+    }
   });
 });
 

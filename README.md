@@ -1,8 +1,6 @@
 # WoWSync Dashboard
 
-A local-first, personal dashboard that imports [WoWSync](../GearExport) `WOWSYNC v1`
-exports and builds a persistent, version-isolated picture of your World of
-Warcraft characters and accounts over time.
+A Forever-first, local dashboard that imports [WoWSync](../GearExport) `WOWSYNC v1` exports and builds persistent, version-isolated character history, with Forever as the primary experience.
 
 This is a **separate project and a separate Git repository** from the
 WoWSync addon (`GearExport`). It consumes WoWSync's text exports; it does
@@ -18,13 +16,26 @@ the rest of this README if you're navigating the docs rather than just running t
 
 ## What this is (and isn't)
 
-- **Is:** a read-only consumer of WoWSync exports. You paste or drop a
-  `.txt` export; the dashboard parses it, stores a timestamped snapshot,
-  diffs it against the character's previous snapshot, and shows you the
-  result.
+- **Is:** a local consumer of WoWSync exports and player-authored planning
+  records. You paste or drop a `.txt` export; the dashboard parses it, stores
+  a timestamped snapshot, diffs it against the character's previous snapshot,
+  and shows you the result. Planning records are intent only and never run
+  in-game actions.
 - **Isn't:** a WoW automation tool. It never reads WoW process memory,
   injects code, simulates input, or takes any gameplay action. The addon
   captures state; this app only reads what the addon already exported.
+
+- **Retail gear allocation:** the Retail Allocation tab includes a Gear allocation panel for
+  captured candidates. Select a snapshot row to see per-character/spec eligibility, retained
+  equipment provenance, item-level comparison, and explicit UNKNOWN/tie results. The read-only
+  MCP tool `analyze_retail_gear_candidate` exposes the same deterministic facts to connected
+  assistants. See [`docs/RETAIL_GEAR_ALLOCATION.md`](docs/RETAIL_GEAR_ALLOCATION.md) for the
+  evidence contract and decision limits.
+- **Forever gear observations:** Forever character detail shows observed equipped slots and carried
+  items with exact item-string variants and the available capture source/time. It does not identify
+  speculative candidates or claim equipability, suitability, upgrades, or transferability. The
+  MCP tool `get_forever_gear_observation` exposes the same conservative observation view;
+  absent bank data remains UNKNOWN. See [`docs/FOREVER_GEAR_OBSERVATION.md`](docs/FOREVER_GEAR_OBSERVATION.md).
 
 ## Supported WoW versions
 
@@ -57,10 +68,11 @@ The Dashboard itself runs on your machine:
   the storage abstraction it's handed.
 
 The ordinary Dashboard does not synchronize data to a hosted service. Two
-separate, explicitly configured features can send selected information
-outbound: **Ask My Account** sends its request context to the configured LLM
-provider, and the optional read-only MCP integration sends only requested MCP
-tool results through OpenAI Secure MCP Tunnel. The MCP server and Dashboard
+separate, explicitly configured feature can send selected information
+outbound: the optional MCP integration sends only requested MCP tool
+results through OpenAI Secure MCP Tunnel. MCP retrieval is read-only by default;
+opt-in planning tools can write only player-authored ERP intent through the
+loopback Dashboard REST API. The MCP server and Dashboard
 remain local; the tunnel is a separate process and does not expose the
 Dashboard's HTTP API. See [MCP development and operations](docs/MCP_DEVELOPMENT.md).
 
@@ -78,7 +90,7 @@ boundary.
 - [Architecture invariants](docs/ARCHITECTURE_INVARIANTS.md) — the durable rules (observation,
   version, ownership, metadata, ERP, mutation/security); highest authority for design decisions.
 - [System reference](docs/SYSTEM_REFERENCE.md) — current implementation reference, including the
-  two separate read-projection pipelines (Dashboard UI/Ask My Account vs. MCP).
+  two separate read-projection pipelines (Dashboard UI vs. MCP).
 - [Azeroth ERP architecture](docs/AZEROTH_ERP_ARCHITECTURE.md) — demand/allocation semantics and
   the Slice 1, Slice 2, and Slice 3 live-validation records.
 - [Architecture](docs/ARCHITECTURE.md) — the long-form historical/narrative packages, storage,
@@ -277,12 +289,11 @@ are not live balances. Every total says what it is made of:
   window — deliberately not configurable) and how old the oldest one is. A
   stale character's gold is still in the sum; the total just tells you so.
 - **Realms are separate economies** (Classic Era, TBC Anniversary, Forever).
-  The Overview and Economy views scope to one realm at a time. Ask My Account
-  is given gold **per realm** for those versions, with no version-wide total it
-  could mistake for a single balance; Retail, which shares gold account-wide,
-  keeps one total. The developer export (`GET /api/account-context`, schema
-  "3") still contains the cross-realm sums under `facts`, and says in-band
-  (`scopeNote`) that `facts.realms[]` is the per-realm view.
+  The Overview and Economy views scope to one realm at a time; Retail, which
+  shares gold account-wide, keeps one total. The developer export (`GET
+  /api/account-context`, schema "3") still contains the cross-realm sums under
+  `facts`, and says in-band (`scopeNote`) that `facts.realms[]` is the
+  per-realm view.
 - **Shared storage is not in any total.** The Warband Bank and Guild Banks have their own
   [Shared Storage](#shared-storage-warband-and-guild-bank) view; their contents are not added to a character's or the
   account's totals.
@@ -331,7 +342,7 @@ character whose export happened to carry it.
   accounts imported into one Dashboard cannot be told apart. A guild is identified by its exact `GuildClubID` (opaque
   text); the guild name is only a label.
 - **Not part of any total (yet).** Shared storage is not counted in gold or inventory totals, item search, recent
-  changes, the developer export, or Ask My Account.
+  changes, or the developer export.
 - **Clearing history.** Deleting a character never removes shared storage. Each owner has **Clear stored history…**
   (type `Warband` or the guild's exact ID to confirm). **This clears stored shared-storage history. A later WoWSync
   export may add it again**, because the addon keeps carrying what it last saw; importing an export that is already
@@ -386,7 +397,7 @@ item (its type, binding, expansion number and whether it is a crafting reagent).
   can fill in what an earlier one did not know. If two exports disagree about an item, it is shown as unknown rather than
   picking one.
 - **Not used elsewhere (yet).** Item info is not part of gold or inventory totals, item search, recent changes, the developer
-  export or Ask My Account. There is no keep / vendor / mail advice. Blizzard-API lookups are not implemented; the
+  export. There is no keep / vendor / mail advice. Blizzard-API lookups are not implemented; the
   Dashboard still makes no outbound calls for this.
 - **API.** `GET /api/versions/:version/item-metadata`. Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ("Item metadata").
 
@@ -525,7 +536,7 @@ feature) opens a modal with two actions:
 
 This exists so you can hand the dashboard's actual structured state to an
 external LLM conversation (ChatGPT, Claude, etc.) for analysis, without
-screenshots and without waiting for the eventual "Ask My Account" feature.
+screenshots (or connect the WoWSync MCP server instead).
 **It is local-only**: the dashboard itself never contacts any LLM
 provider, never stores an API key, and never transmits your data anywhere
 — clicking Copy or Download is the only thing that happens, and pasting
@@ -540,108 +551,25 @@ JSON the UI copies/downloads, so there is one canonical export, not a
 separate API shape and UI shape. See `docs/ARCHITECTURE.md` for the full
 structure.
 
-## Ask My Account (experimental LLM POC)
+## AI integration: WoWSync MCP
 
-```
-WoWSync addon → Dashboard SQLite → AccountFacts → GET /api/account-context → LLM consumer → Answer
-```
-
-A small **Ask My Account** button in the header (next to Developer)
-opens a box: type a question, click **Ask**, get an answer. This is the
-**first feature in the Dashboard UI** that talks to an external service
-— everything described above (import, overview, economy, Developer
-export) stays local. The separate MCP/Tunnel process is documented below and
-is not used by this UI flow. Treat this feature as an experimental proof of
-concept, not a polished product surface.
-
-**Setup.** Requires an OpenAI API key. Create `.env` at the repo root
-(gitignored, never committed) with:
-
-```
-OPENAI_API_KEY=sk-...
-# Optional overrides:
-# WOWSYNC_LLM_MODEL=gpt-4o-mini        (default)
-# OPENAI_BASE_URL=https://api.openai.com/v1   (Azure/proxy-compatible override)
-```
-
-Restart the server after setting it (`process.loadEnvFile()` reads `.env`
-once at startup). Without a key configured, the button still exists and
-still opens, but asking a question returns a clear "OPENAI_API_KEY is not
-configured" error rather than crashing or silently doing nothing.
-
-**Exact data boundary.** Each request sends exactly three things to the
-configured LLM provider, once, over HTTPS:
-
-1. A fixed system prompt (`packages/server/src/systemPrompt.ts`) defining
-   the assistant's role and grounding rules.
-2. The current `GET /api/account-context` document — the same JSON the
-   Developer export's Copy/Download buttons produce. Nothing more.
-3. Your question, verbatim.
-
-Never sent: filesystem paths, the SQLite file or its location, the
-OpenAI/any API key, machine or OS info, environment variables other than
-what's needed to make the request, source code, or browser state. The
-server also never logs the full account context, the API key, or full
-prompts — only short operational messages on failure (see
-`packages/server/src/app.ts` and `llm.ts`).
-
-**How context retrieval works.** The server handling `POST /api/ask`
-makes a real HTTP call to its own `GET /api/account-context` — the exact
-same code path the Developer export uses — rather than recomputing facts
-a second way. If that call fails, the whole request fails with an error;
-it never silently answers from a stale or partial context.
-
-**Conversation model.** Fully stateless. Each question is answered
-independently with a fresh copy of the current account context; nothing
-is remembered between questions, no history is stored anywhere (not in
-the database, not in the browser), and there's no multi-turn memory.
-
-**Grounding rules.** The system prompt requires the model to:
-
-- Distinguish what was actually **observed** (present in the context)
-  from what's simply **unknown** (never seen) — unknown must never be
-  treated as zero, empty, or absent.
-- Respect realm and WoW-version boundaries exactly as the rest of the
-  dashboard does (Classic Era/TBC Anniversary are realm-scoped; Retail is
-  account-wide).
-- Distinguish an **observed change** (e.g. "gold decreased by 40s
-  between two snapshots") from an **inferred cause** (e.g. "you bought
-  something at auction") — it may speculate about a cause, but only
-  clearly labeled as a guess, never stated as fact.
-- Say what's missing rather than guess when the context doesn't answer
-  the question.
-
-**What this Ask My Account feature is not.** No autonomous agent, no
-tool/function calling in this route, no MCP in this route, no memory, no RAG/vector DB, no scheduled or background jobs, no
-WoW API access, no addon write-back, no gameplay automation. It answers
-one question with one provider call and stops.
-
-**Errors.** Missing/rejected API key, provider timeout/rate-limit/outage,
-a malformed provider response, an empty or oversized question, and a
-failed context fetch all produce a specific, non-leaking error message in
-the UI rather than a generic failure or a stack trace.
-
-**Testing.** `packages/server/test/ask.test.ts` covers the whole
-`/api/ask` route (valid question, empty/oversized question, missing key,
-provider 401/429/5xx, malformed/non-JSON provider response, context-fetch
-failure, and an explicit check that a fake API key never leaks into a
-response body or logged output) against a local mock HTTP server — no
-live OpenAI account is required to run `npm test`. See
-`packages/server/test/README-live-smoke-test.md` for a separate, opt-in
-procedure to exercise this against the real OpenAI API with your own key
-and real imported character data.
+Ask My Account (the in-Dashboard LLM button) was retired on 2026-10-12. The
+supported AI integration is the WoWSync MCP server, which any MCP client
+(for example ChatGPT through the Secure MCP Tunnel) can use without tying the
+Dashboard to one LLM provider. See [MCP operations](docs/MCP_DEVELOPMENT.md).
+The Dashboard no longer reads `OPENAI_API_KEY`.
 
 ## Privacy
 
 - Local-first: your character data lives in a SQLite file on your disk.
 - No analytics, no telemetry.
-- Ask My Account is opt-in per question and sends its documented prompt,
-  account-context JSON, and question to the provider you configure.
 - The optional WoWSync MCP connection is separately opt-in: when the local
   `tunnel-client` runs, it makes outbound HTTPS connections to OpenAI and
-  relays requested, bounded results from the dedicated read-only MCP process.
-  It does not make the Dashboard API public or upload the SQLite database.
-- Without either feature being used, the Dashboard's account data remains on
+  relays requested, bounded results from the MCP process. Retrieval is
+  read-only by default; a separate opt-in enables only player-plan writes via
+  the local loopback REST API. It does not make the Dashboard API public or
+  upload the SQLite database.
+- Without the MCP connection, the Dashboard's account data remains on
   this machine. See [MCP operations](docs/MCP_DEVELOPMENT.md) for the local
   process and trust boundary.
 
@@ -650,8 +578,7 @@ and real imported character data.
 **The server listens on this machine only by default** (`127.0.0.1`).
 WoWSync has no authentication — it is a personal, local-first tool — so
 anything that can reach the port can read your character data, import or
-**delete** characters, and use Ask My Account (spending your
-`OPENAI_API_KEY`). Keeping the server on loopback is the security model.
+**delete** characters. Keeping the server on loopback is the security model.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -674,6 +601,10 @@ is read — never the generic `HOST`/`HOSTNAME` variables.)
 
 The optional WoWSync MCP integration does not require a LAN bind: keep the
 Dashboard on loopback and use its separate outbound Secure MCP Tunnel process.
+MCP planning-write tools remain disabled unless `WOWSYNC_MCP_PLANNING_API_URL`
+is explicitly set to the loopback Dashboard origin. These tools reuse REST
+revision/evidence checks and cannot perform in-game actions; see
+[`docs/MCP_DEVELOPMENT.md`](docs/MCP_DEVELOPMENT.md) before enabling them.
 Do not widen `WOWSYNC_HOST` as a ChatGPT connectivity workaround.
 
 **Upgrading from an older build:** stop any running WoWSync server first. Older

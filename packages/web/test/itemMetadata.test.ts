@@ -163,7 +163,7 @@ test("the item-info column stays out of the empty-filter row width bookkeeping (
 
 test("metadata stays out of every excluded consumer's UI: totals, scoped facts, overview, economy/search, characters grid, Ask, developer export, import", () => {
   const src = (p: string) => readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), "utf8");
-  for (const file of ["totals.ts", "scopedFacts.ts", "components/AccountOverview.tsx", "components/AccountEconomy.tsx", "components/CharactersGrid.tsx", "components/AskAccountModal.tsx", "components/DeveloperExportModal.tsx", "components/ImportModal.tsx", "importOutcome.ts"]) {
+  for (const file of ["totals.ts", "scopedFacts.ts", "components/AccountOverview.tsx", "components/AccountEconomy.tsx", "components/CharactersGrid.tsx", "components/DeveloperExportModal.tsx", "components/ImportModal.tsx", "importOutcome.ts"]) {
     assert.doesNotMatch(src(file), /itemMetadata|useItemInfo|ItemInfo|item-metadata/, `${file} must not read item metadata`);
   }
 });

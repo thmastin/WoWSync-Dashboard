@@ -29,13 +29,25 @@ import { diffSnapshots } from "./diff.ts";
 import { summarizeTrainerCategory, type TrainerCategorySummary } from "./trainerSummary.ts";
 import type { ParsedSnapshot, SectionState, WowVersion } from "./types.ts";
 import type { StoredSnapshot } from "./store.ts";
+import type { CharacterResolution, ReadValue } from "./readModel.ts";
+import type { buildForeverGearObservation } from "./foreverGearObservation.ts";
+import type { ForeverQuestObservation } from "./foreverQuests.ts";
+import type { ForeverCraftedUpgradeAssessment } from "./foreverCraftedUpgrades.ts";
+import type { DashboardReadModel } from "./readModel.ts";
 import { WOW_VERSIONS } from "./version.ts";
+import { buildErpResourceCommitmentSummary, type ErpProjectView, type ErpWorkOrder } from "./erpProjects.ts";
+import { buildErpProcurementBudgetPortfolioReview } from "./erpProcurementPortfolio.ts";
+import { buildErpProcurementBuyerPortfolioReview } from "./erpProcurementBuyerPortfolio.ts";
+import { buildErpNeedObservationChangeReview } from "./erpObservationChanges.ts";
+import { buildErpFulfillmentTriage, buildErpPortfolioFulfillmentReview, buildErpSourceFulfillmentReview, buildErpPortfolioNextActionReview, type ErpFulfillmentTriageSignal, type ErpPortfolioNextAction } from "./erpFulfillmentTriage.ts";
 
 // Bumped to "3" (additive, on top of the v2 changes below): gold/playtime
 // totals gained freshness fields (staleCharactersWith*/oldest*ObservedAt),
 // change summaries gained `observedAt`, realm-partitioned versions gained an
 // in-band `scopeNote`, and the `currency` note now states that a total over
 // zero observed values is not zero.
+// Bumped to "17": project summaries distinguish whether a player quote can be
+// compared to a later gross-gold snapshot after recorded reservations.
 //
 // Bumped to "2": added the `currency` field, renamed the two differently-
 // scoped profession `status` fields to `observationStatus`/`coverageStatus`
@@ -43,7 +55,23 @@ import { WOW_VERSIONS } from "./version.ts";
 // — all identified as concrete gaps by a real LLM-evaluation pass (a model
 // misread 102815 copper as "102.8 gold", contradicted itself on profession
 // coverage, and reported inventory item changes as absent from its context).
-export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "4";
+// Bumped to 21 for linked planned gold needs, 22 for quote-to-budget
+// comparison summaries, 23 for reservation review states, 24 for the
+// cross-domain project fulfillment snapshot, 25 for changed-need review counts,
+// 26 for compact per-version combined fulfillment triage, 27 for dependency-
+// ordered portfolio summaries, 28 for dynamic prerequisite evidence gates,
+// 29 for procurement ceiling reviews, 30 for cross-project buyer reviews,
+// 31 for exact-resource buyer packages, 32 for observed-source leads,
+// 33 for returned package need/provisioning summaries, 34 for source-capacity
+// summaries, 35 for explicit cross-project source-intent summaries, 36 for
+// the version-scoped source fulfillment review queue, and 37 for open selected
+// provisioning-plan counts within that queue, 38 for evidence-qualified
+// per-need fulfillment pathway counts, 39 for persisted pathway context, 40
+// for pathway-review truncation, 43 for saved-plan lineage, 44 for per-requirement saved planning history,
+// 45 for bounded post-review observation interval summaries, 46 for
+// actionable intervening-variation history counts, and 47 for portfolio
+// attention signals sourced from saved requirement history.
+export const ACCOUNT_CONTEXT_SCHEMA_VERSION = "49";
 
 /**
  * Explicit, in-band documentation of the one unit convention this document
@@ -105,6 +133,9 @@ export interface CharacterTrainerCategoryContext {
 export interface CharacterContext {
   identityKey: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
+  race?: string;
   realm: string;
   /** Chronological, oldest first. */
   snapshotHistory: SnapshotHistoryEntry[];
@@ -112,6 +143,14 @@ export interface CharacterContext {
   transitions: AccountChangeSummary[];
   /** From the character's latest snapshot only. */
   trainer: CharacterTrainerCategoryContext[];
+  /** Forever 70291 view from the same GUID-guarded read model used by REST and MCP. */
+  foreverGearObservation?: CharacterResolution<ReadValue<ReturnType<typeof buildForeverGearObservation>>>;
+  /** Forever quest evidence from its canonical versioned snapshot resolver; independent of gear GUID history checks. */
+  foreverQuestObservation?: CharacterResolution<ReadValue<ForeverQuestObservation>>;
+  /** Snapshot-scoped read-only assessment of observed learned Forever equipment recipes against captured gear. */
+  foreverCraftedUpgradeAssessment?: CharacterResolution<ReadValue<ForeverCraftedUpgradeAssessment>>;
+  /** Evidence-gated, cross-character Forever assessment; all unsupported conclusions remain UNKNOWN. */
+  foreverGearAllocation?: ReturnType<DashboardReadModel["getForeverGearAllocation"]>;
 }
 
 export interface VersionContext {
@@ -130,6 +169,8 @@ export interface AccountContext {
   generatedAt: number;
   currency: CurrencyConvention;
   versions: Record<WowVersion, VersionContext>;
+  /** Player-authored ERP intent, separate from observed facts; evidence is summarized by the planning read model. */
+  planning: { projects: Array<{ stableId: string; version: WowVersion; title: string; status: ErpProjectView["status"]; priority: number; revision: number; historyEventCount: number; updatedAt: number; needsCount: number; fulfillment: ErpProjectView["fulfillment"]; workOrderCounts: Record<string, number>; workOrderPathways: Array<{ stableId: string; needIds: readonly string[]; context: NonNullable<ErpWorkOrder["pathwayContext"]> }>; reservationReviewStates: Partial<Record<ErpProjectView["reservationReview"][number]["state"], number>>; workOrderReadinessStates: Partial<Record<ErpProjectView["workOrderReadiness"][number]["state"], number>>; workOrderProgressStates: Partial<Record<ErpProjectView["workOrderProgress"][number]["reconciliation"], number>>; retrievalObservationStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["retrievalObservationReviews"]>[number]["state"], number>>; retrievalRecipientBagObservationStates: Partial<Record<NonNullable<NonNullable<ErpProjectView["workOrderProgress"][number]["retrievalObservationReviews"]>[number]["recipientBagObservation"]>["state"], number>>; retrievalPairedObservationPatternStates: Partial<Record<NonNullable<NonNullable<ErpProjectView["workOrderProgress"][number]["retrievalObservationReviews"]>[number]["pairedObservationPattern"]>["state"], number>>; plannedCraftOutputStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["plannedOutputAssessment"]>["state"], number>>; craftInputObservationStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["craftInputObservationReviews"]>[number]["state"], number>>; sellObservationStates: Partial<Record<NonNullable<ErpProjectView["workOrderProgress"][number]["sellObservationReviews"]>[number]["state"], number>>; procurementReviewStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["reviewState"], number>>; procurementQuoteStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["quoteState"], number>>; procurementQuoteFreshnessStates: Partial<Record<NonNullable<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["playerQuote"]>["freshness"], number>>; procurementGoldReservationStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["recordedGoldReservationState"], number>>; procurementQuoteGoldComparisonStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["quoteVsRecordedGoldState"], number>>; procurementQuotePlannedBudgetStates: Partial<Record<NonNullable<ErpProjectView["workOrderReadiness"][number]["procurementAssessment"]>["quoteVsPlannedBudgetState"], number>>; procurementBudgetNeedStates: Record<string, number>; needStates: Record<string, number>; resourceSourceScreenCounts: { needsScreened: number; possibleSources: number; unresolvedCharacters: number } }>; resourceCommitments: Record<WowVersion, { lineCount: number; linesWithReservations: number; unknownSourceLines: number; overlappingScopeLines: number; truncated: boolean }>; needObservationChangeReviews: Record<WowVersion, { changedNeedCount: number; affectedProjectCount: number; truncated: boolean }>; fulfillmentTriage: Record<WowVersion, { totalCount: number; affectedProjectCount: number; counts: Record<ErpFulfillmentTriageSignal, number>; truncated: boolean }>; portfolioFulfillment: Record<WowVersion, { packageCount: number; stepCount: number; stepsNeedingReview: number; stepsWithPrerequisiteReview: number; savedBatchCount: number; savedBatchReviewStates: Record<string, number>; savedBatchTaskCount: number; replanFollowUpCount: number; replanLineageConflictCount: number; batchesWithFollowUps: number; savedNeedHistoryCount: number; savedNeedHistoryNextReviewCounts: Record<string, number>; savedBatchIntervalSampleCount: number; savedBatchIntervalsWithPartialEvidence: number; savedBatchIntervalsTruncated: number; savedNeedHistoriesTruncated: boolean; savedBatchesTruncated: boolean; pathwayReviewTruncated: boolean; truncated: boolean }>; sourceFulfillment: Record<WowVersion, { sourceCount: number; needCount: number; needsReviewCount: number; nextReviewCounts: Readonly<Record<string, number>>; pathwayStates: Readonly<Record<string, number>>; pathwayOptionKinds: Readonly<Record<string, number>>; groupsWithAlternativeLocations: number; alternativeLocationCount: number; groupsWithIncompleteSourceScan: number; openProvisioningPlanCount: number; truncated: boolean }>; portfolioNextActions: Record<WowVersion, { totalCount: number; counts: Readonly<Record<ErpPortfolioNextAction, number>>; interveningHistoryReviewCount: number; savedHistoryReviewTruncated: boolean; truncated: boolean }>; procurementBudgetReview: Record<WowVersion, { lineCount: number; overPlannedBudget: number; totalOpenCeilingCopper?: number; returnedCeilingsExceedSafeInteger?: true; quoteReviewStates: Record<string, number>; quoteBudgetsAbovePlan: number; quoteBudgetsIncomplete: number; truncated: boolean }>; procurementBuyerReview: Record<WowVersion, { buyerCount: number; returnedBuyerCount: number; returnedQuoteStates: Record<string, number>; returnedQuoteTotalsAboveRecordedRemainder: number; returnedIncompleteQuoteCoverage: number; returnedCrossProjectResourcePackageCount: number; returnedPackagesWithObservedSourceLeads: number; returnedPackagesWithIncompleteSourceReview: number; returnedObservedSourceLeadRows: number; returnedPackageNeedReviewCount: number; returnedPackageNeedReviewStates: Record<string, number>; returnedPackagesWithOpenProvisioningReview: number; returnedPackageSourceCoverageReviewCount: number; returnedPackageSourceCoverageReviewStates: Record<string, number>; returnedSourceCoverageReviewsWithOtherProjectNeeds: number; returnedOtherSourceScopedNeedCount: number; unresolvedBuyerOrderCount: number; truncated: boolean }> };
 }
 
 export interface AccountContextInput {
@@ -138,6 +179,12 @@ export interface AccountContextInput {
   versionFacts: Record<WowVersion, AccountFacts>;
   /** Every stored snapshot for every character appearing in any versionFacts, keyed by identityKey. Newest-first or any order — sorted internally. */
   characterSnapshots: Map<string, StoredSnapshot[]>;
+  /** Precomputed with the canonical read-model version and source-GUID guard. */
+  foreverGearObservations?: Map<string, CharacterContext["foreverGearObservation"]>;
+  foreverQuestObservations?: Map<string, CharacterContext["foreverQuestObservation"]>;
+  foreverCraftedUpgradeAssessments?: Map<string, CharacterContext["foreverCraftedUpgradeAssessment"]>;
+  foreverGearAllocations?: Map<string, CharacterContext["foreverGearAllocation"]>;
+  erpProjects?: readonly ErpProjectView[];
 }
 
 // The one chronology rule (see chronology.ts) - shared with the SQLite
@@ -180,7 +227,7 @@ function toHistoryEntry(parsed: ParsedSnapshot, importedAt: number): SnapshotHis
   };
 }
 
-function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[]): CharacterContext {
+function buildCharacterContext(identityKey: string, name: string, realm: string, snapshots: StoredSnapshot[], surname?: string, surnameSource?: string, race?: string, foreverGearObservation?: CharacterContext["foreverGearObservation"], foreverQuestObservation?: CharacterContext["foreverQuestObservation"], foreverGearAllocation?: CharacterContext["foreverGearAllocation"], foreverCraftedUpgradeAssessment?: CharacterContext["foreverCraftedUpgradeAssessment"]): CharacterContext {
   const chronological = [...snapshots].sort(compareSnapshotsChronologically);
 
   const snapshotHistory = chronological.map((s) => toHistoryEntry(s.parsed, s.importedAt));
@@ -212,7 +259,7 @@ function buildCharacterContext(identityKey: string, name: string, realm: string,
         }))
     : [];
 
-  return { identityKey, name, realm, snapshotHistory, transitions, trainer };
+  return { identityKey, name, ...(surname ? { surname } : {}), ...(surnameSource ? { surnameSource } : {}), ...(race ? { race } : {}), realm, snapshotHistory, transitions, trainer, ...(foreverGearObservation ? { foreverGearObservation } : {}), ...(foreverQuestObservation ? { foreverQuestObservation } : {}), ...(foreverGearAllocation ? { foreverGearAllocation } : {}), ...(foreverCraftedUpgradeAssessment ? { foreverCraftedUpgradeAssessment } : {}) };
 }
 
 export function buildAccountContext(input: AccountContextInput): AccountContext {
@@ -223,7 +270,11 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
     const facts = versionFacts[version];
     const characters = [...facts.characters]
       .sort((a, b) => a.realm.localeCompare(b.realm) || a.name.localeCompare(b.name))
-      .map((c) => buildCharacterContext(c.identityKey, c.name, c.realm, characterSnapshots.get(c.identityKey) ?? []));
+      .map((c) => {
+        const snapshots = characterSnapshots.get(c.identityKey) ?? [];
+        const latest = [...snapshots].sort(compareSnapshotsChronologically).at(-1);
+        return buildCharacterContext(c.identityKey, c.name, c.realm, snapshots, c.surname, c.surnameSource, latest?.parsed.character.race, version === "forever" ? input.foreverGearObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverQuestObservations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverGearAllocations?.get(c.identityKey) : undefined, version === "forever" ? input.foreverCraftedUpgradeAssessments?.get(c.identityKey) : undefined);
+      });
 
     versions[version] = {
       version,
@@ -239,5 +290,40 @@ export function buildAccountContext(input: AccountContextInput): AccountContext 
     generatedAt: now,
     currency: CURRENCY_CONVENTION,
     versions,
+    planning: { projects: [...(input.erpProjects ?? [])].map((p) => ({
+      stableId: p.stableId, version: p.version, title: p.title, status: p.status, priority: p.priority, revision: p.revision, historyEventCount: p.historyEventCount, updatedAt: p.updatedAt,
+      needsCount: p.needs.length,
+      fulfillment: p.fulfillment,
+      workOrderCounts: Object.fromEntries([...new Set(p.workOrders.map((w) => w.status))].sort().map((status) => [status, p.workOrders.filter((w) => w.status === status).length])),
+      workOrderPathways: p.workOrders.flatMap((workOrder) => workOrder.pathwayContext ? [{ stableId: workOrder.stableId, needIds: workOrder.resourceNeedIds, context: workOrder.pathwayContext }] : []),
+      reservationReviewStates: Object.fromEntries([...new Set(p.reservationReview.map((reservation) => reservation.state))].sort().map((state) => [state, p.reservationReview.filter((reservation) => reservation.state === state).length])),
+      workOrderReadinessStates: Object.fromEntries([...new Set(p.workOrderReadiness.map((w) => w.state))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.state === state).length])),
+      workOrderProgressStates: Object.fromEntries([...new Set(p.workOrderProgress.map((w) => w.reconciliation))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.reconciliation === state).length])),
+      retrievalObservationStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.retrievalObservationReviews?.map((review) => review.state) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.retrievalObservationReviews?.filter((review) => review.state === state).length ?? 0), 0)])),
+      retrievalRecipientBagObservationStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.retrievalObservationReviews?.flatMap((review) => review.recipientBagObservation ? [review.recipientBagObservation.state] : []) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.retrievalObservationReviews?.filter((review) => review.recipientBagObservation?.state === state).length ?? 0), 0)])),
+      retrievalPairedObservationPatternStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.retrievalObservationReviews?.flatMap((review) => review.pairedObservationPattern ? [review.pairedObservationPattern.state] : []) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.retrievalObservationReviews?.filter((review) => review.pairedObservationPattern?.state === state).length ?? 0), 0)])),
+      plannedCraftOutputStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.plannedOutputAssessment ? [w.plannedOutputAssessment.state] : []))].sort().map((state) => [state, p.workOrderProgress.filter((w) => w.plannedOutputAssessment?.state === state).length])),
+      craftInputObservationStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.craftInputObservationReviews?.map((review) => review.state) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.craftInputObservationReviews?.filter((review) => review.state === state).length ?? 0), 0)])),
+      sellObservationStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.sellObservationReviews?.map((review) => review.state) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.sellObservationReviews?.filter((review) => review.state === state).length ?? 0), 0)])),
+      gatherObservationStates: Object.fromEntries([...new Set(p.workOrderProgress.flatMap((w) => w.gatherObservationReviews?.map((review) => review.state) ?? []))].sort().map((state) => [state, p.workOrderProgress.reduce((count, w) => count + (w.gatherObservationReviews?.filter((review) => review.state === state).length ?? 0), 0)])),
+      procurementReviewStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.reviewState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.reviewState === state).length])),
+      procurementQuoteStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.quoteState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.quoteState === state).length])),
+      procurementQuoteFreshnessStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment?.playerQuote ? [w.procurementAssessment.playerQuote.freshness] : []))].sort().map((freshness) => [freshness, p.workOrderReadiness.filter((w) => w.procurementAssessment?.playerQuote?.freshness === freshness).length])),
+      procurementGoldReservationStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.recordedGoldReservationState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.recordedGoldReservationState === state).length])),
+      procurementQuoteGoldComparisonStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.quoteVsRecordedGoldState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.quoteVsRecordedGoldState === state).length])),
+      procurementQuotePlannedBudgetStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.quoteVsPlannedBudgetState] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment?.quoteVsPlannedBudgetState === state).length])),
+      procurementBudgetNeedStates: Object.fromEntries([...new Set(p.workOrderReadiness.flatMap((w) => w.procurementAssessment ? [w.procurementAssessment.budgetNeedAssessment?.ceilingCoverage ?? "NO_EXPLICIT_BUDGET_NEED"] : []))].sort().map((state) => [state, p.workOrderReadiness.filter((w) => w.procurementAssessment && (w.procurementAssessment.budgetNeedAssessment?.ceilingCoverage ?? "NO_EXPLICIT_BUDGET_NEED") === state).length])),
+      needStates: Object.fromEntries([...new Set(p.needEvidence.map((n) => n.state))].sort().map((state) => [state, p.needEvidence.filter((n) => n.state === state).length])),
+      resourceSourceScreenCounts: { needsScreened: p.resourceSourceScreens.length, possibleSources: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.candidateCount, 0), unresolvedCharacters: p.resourceSourceScreens.reduce((sum, screen) => sum + screen.unresolvedCharacterCount, 0) },
+    })), resourceCommitments: Object.fromEntries(WOW_VERSIONS.map((version) => {
+      const summary = buildErpResourceCommitmentSummary((input.erpProjects ?? []).filter((project) => project.version === version));
+      return [version, { lineCount: summary.totalCount, linesWithReservations: summary.linesWithReservations, unknownSourceLines: summary.unknownSourceLines, overlappingScopeLines: summary.overlappingScopeLines, truncated: summary.truncated }];
+    })) as AccountContext["planning"]["resourceCommitments"], needObservationChangeReviews: Object.fromEntries(WOW_VERSIONS.map((version) => {
+      const review = buildErpNeedObservationChangeReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200);
+      return [version, { changedNeedCount: review.totalCount, affectedProjectCount: review.affectedProjectCount, truncated: review.truncated }];
+    })) as AccountContext["planning"]["needObservationChangeReviews"], fulfillmentTriage: Object.fromEntries(WOW_VERSIONS.map((version) => {
+      const triage = buildErpFulfillmentTriage((input.erpProjects ?? []).filter((project) => project.version === version), version, 200);
+      return [version, { totalCount: triage.totalCount, affectedProjectCount: triage.affectedProjectCount, counts: triage.counts, truncated: triage.truncated }];
+    })) as AccountContext["planning"]["fulfillmentTriage"], portfolioFulfillment: Object.fromEntries(WOW_VERSIONS.map((version) => { const review = buildErpPortfolioFulfillmentReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200); return [version, { packageCount: review.totalPackageCount, stepCount: review.totalStepCount, stepsNeedingReview: review.stepsNeedingReview, stepsWithPrerequisiteReview: review.stepsWithPrerequisiteReview, savedBatchCount: review.totalSavedPlanningBatchCount, savedBatchReviewStates: Object.fromEntries([...new Set(review.savedPlanningBatches.map((batch) => batch.state))].sort().map((state) => [state, review.savedPlanningBatches.filter((batch) => batch.state === state).length])), savedBatchTaskCount: review.savedPlanningBatches.reduce((sum, batch) => sum + batch.steps.length, 0), replanFollowUpCount: review.savedPlanningBatches.filter((batch) => batch.replanFrom).length, replanLineageConflictCount: review.savedPlanningBatches.filter((batch) => batch.lineageState === "FOLLOW_UP_CONTEXT_CONFLICT").length, batchesWithFollowUps: review.savedPlanningBatches.filter((batch) => batch.followUpBatchIds.length > 0).length, savedNeedHistoryCount: review.totalSavedNeedHistoryCount, savedNeedHistoryNextReviewCounts: Object.fromEntries([...new Set(review.savedNeedHistories.map((history) => history.nextReview))].sort().map((state) => [state, review.savedNeedHistories.filter((history) => history.nextReview === state).length])), savedBatchIntervalSampleCount: review.savedPlanningBatches.reduce((sum, batch) => sum + batch.steps.reduce((stepSum, step) => stepSum + (step.observationInterval?.points.length ?? 0), 0), 0), savedBatchIntervalsWithPartialEvidence: review.savedPlanningBatches.reduce((sum, batch) => sum + batch.steps.filter((step) => step.observationInterval?.points.some((point) => point.sections.some((section) => section.state === "PARTIAL"))).length, 0), savedBatchIntervalsTruncated: review.savedPlanningBatches.reduce((sum, batch) => sum + batch.steps.filter((step) => (step.observationInterval?.state === "HISTORY_TRUNCATED" || (step.observationInterval?.omittedEarlierPointCount ?? 0) > 0)).length, 0), savedNeedHistoriesTruncated: review.savedNeedHistoriesTruncated, savedBatchesTruncated: review.savedPlanningBatchesTruncated, pathwayReviewTruncated: review.pathwayReviewTruncated, truncated: review.truncated }]; })) as AccountContext["planning"]["portfolioFulfillment"], sourceFulfillment: Object.fromEntries(WOW_VERSIONS.map((version) => { const review = buildErpSourceFulfillmentReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200); const pathways = review.sources.flatMap((source) => source.needs.map((need) => need.fulfillmentPathways)); const pathwayStates = Object.fromEntries([...new Set(pathways.map((pathway) => pathway.state))].sort().map((state) => [state, pathways.filter((pathway) => pathway.state === state).length])); const pathwayOptionKinds = Object.fromEntries([...new Set(pathways.flatMap((pathway) => pathway.options.map((option) => option.kind)))].sort().map((kind) => [kind, pathways.reduce((count, pathway) => count + pathway.options.filter((option) => option.kind === kind).length, 0)])); return [version, { sourceCount: review.totalSourceCount, needCount: review.totalNeedCount, needsReviewCount: review.needsReviewCount, nextReviewCounts: review.nextReviewCounts, pathwayStates, pathwayOptionKinds, groupsWithAlternativeLocations: review.groupsWithAlternativeLocations, alternativeLocationCount: review.alternativeLocationCount, groupsWithIncompleteSourceScan: review.groupsWithIncompleteSourceScan, openProvisioningPlanCount: review.openProvisioningPlanCount, truncated: review.truncated }]; })) as AccountContext["planning"]["sourceFulfillment"], portfolioNextActions: Object.fromEntries(WOW_VERSIONS.map((version) => { const review = buildErpPortfolioNextActionReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200); return [version, { totalCount: review.totalCount, counts: review.counts, interveningHistoryReviewCount: review.items.reduce((sum, item) => sum + item.needReferences.filter((reference) => reference.savedHistoryReview !== undefined).length, 0), savedHistoryReviewTruncated: review.savedHistoryReviewTruncated, truncated: review.truncated }]; })) as AccountContext["planning"]["portfolioNextActions"], procurementBudgetReview: Object.fromEntries(WOW_VERSIONS.map((version) => { const review = buildErpProcurementBudgetPortfolioReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200); const quoteReviewStates = Object.fromEntries([...new Set(review.lines.map((line) => line.quoteReview.state))].sort().map((state) => [state, review.lines.filter((line) => line.quoteReview.state === state).length])); const quoteBudgetsAbovePlan = review.lines.filter((line) => line.quoteReview.comparisonToPlannedBudget === "RECENT_QUOTES_ABOVE_PLANNED_BUDGET").length; const quoteBudgetsIncomplete = review.lines.filter((line) => line.quoteReview.state !== "RECENT_QUOTES_COVER_OBSERVED_GAPS").length; const totalOpen = review.lines.reduce((sum, line) => sum + BigInt(line.openCeilingCopper ?? 0), 0n); const returnedCeilingsExceedSafeInteger = review.lines.some((line) => line.openCeilingExceedsSafeInteger) || totalOpen > BigInt(Number.MAX_SAFE_INTEGER); return [version, { lineCount: review.totalLineCount, overPlannedBudget: review.linesOverPlannedBudget, ...(!review.truncated && !returnedCeilingsExceedSafeInteger ? { totalOpenCeilingCopper: Number(totalOpen) } : {}), ...(returnedCeilingsExceedSafeInteger ? { returnedCeilingsExceedSafeInteger: true as const } : {}), quoteReviewStates, quoteBudgetsAbovePlan, quoteBudgetsIncomplete, truncated: review.truncated }]; })) as AccountContext["planning"]["procurementBudgetReview"], procurementBuyerReview: Object.fromEntries(WOW_VERSIONS.map((version) => { const review = buildErpProcurementBuyerPortfolioReview((input.erpProjects ?? []).filter((project) => project.version === version), version, 200); const quoteStates = Object.fromEntries([...new Set(review.buyers.map((line) => line.state))].sort().map((state) => [state, review.buyers.filter((line) => line.state === state).length])); const packageNeedReviews = review.buyers.flatMap((line) => line.resourcePackages.flatMap((pkg) => pkg.needReviews)); const packageNeedReviewStates = Object.fromEntries([...new Set(packageNeedReviews.map((need) => need.state))].sort().map((state) => [state, packageNeedReviews.filter((need) => need.state === state).length])); const packagesWithOpenProvisioningReview = review.buyers.reduce((sum, line) => sum + line.resourcePackages.filter((pkg) => pkg.needReviews.some((need) => need.linkedWorkOrders.some((order) => order.kind === "PROVISION" && order.status !== "COMPLETED" && order.status !== "CANCELLED"))).length, 0); const sourceCoverageReviews = review.buyers.flatMap((line) => line.resourcePackages.flatMap((pkg) => pkg.sourceCoverageReviews)); const sourceCoverageStates = Object.fromEntries([...new Set(sourceCoverageReviews.map((entry) => entry.state))].sort().map((state) => [state, sourceCoverageReviews.filter((entry) => entry.state === state).length])); const sourceCoverageReviewsWithOtherProjectNeeds = sourceCoverageReviews.filter((entry) => entry.otherSourceScopedNeedCount > 0).length; const otherSourceScopedNeedCount = sourceCoverageReviews.reduce((sum, entry) => sum + entry.otherSourceScopedNeedCount, 0); return [version, { buyerCount: review.totalBuyerCount, returnedBuyerCount: review.returnedBuyerCount, returnedQuoteStates: quoteStates, returnedQuoteTotalsAboveRecordedRemainder: review.buyers.filter((line) => line.state === "QUOTES_EXCEED_RECORDED_REMAINDER").length, returnedIncompleteQuoteCoverage: review.buyers.filter((line) => line.state === "QUOTE_COVERAGE_INCOMPLETE").length, returnedCrossProjectResourcePackageCount: review.buyers.reduce((sum, line) => sum + line.resourcePackages.length, 0), returnedPackagesWithObservedSourceLeads: review.buyers.reduce((sum, line) => sum + line.resourcePackages.filter((pkg) => pkg.observedSources.length > 0).length, 0), returnedPackagesWithIncompleteSourceReview: review.buyers.reduce((sum, line) => sum + line.resourcePackages.filter((pkg) => pkg.sourceReviewState === "SOURCE_SCAN_INCOMPLETE" || pkg.sourceReviewState === "POTENTIAL_SOURCES_SCAN_INCOMPLETE" || pkg.sourceReviewState === "SOURCE_REVIEW_UNAVAILABLE").length, 0), returnedObservedSourceLeadRows: review.buyers.reduce((sum, line) => sum + line.resourcePackages.reduce((pkgSum, pkg) => pkgSum + pkg.observedSources.length, 0), 0), returnedPackageNeedReviewCount: packageNeedReviews.length, returnedPackageNeedReviewStates: packageNeedReviewStates, returnedPackagesWithOpenProvisioningReview: packagesWithOpenProvisioningReview, returnedPackageSourceCoverageReviewCount: sourceCoverageReviews.length, returnedPackageSourceCoverageReviewStates: sourceCoverageStates, returnedSourceCoverageReviewsWithOtherProjectNeeds: sourceCoverageReviewsWithOtherProjectNeeds, returnedOtherSourceScopedNeedCount: otherSourceScopedNeedCount, unresolvedBuyerOrderCount: review.unresolvedBuyerOrderCount, truncated: review.truncated }]; })) as AccountContext["planning"]["procurementBuyerReview"] },
   };
 }

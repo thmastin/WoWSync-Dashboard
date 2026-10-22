@@ -1,4 +1,5 @@
-import type { CapturedCharacterDomain, CapturedCharacterState, ParsedSnapshot, VersionOrUnknown } from "./types.ts";
+import { isClassicVersion, mergeClassicCharacterState, normalizeClassicCharacterState } from "./classicState.ts";
+import type { CapturedCharacterDomain, CapturedCharacterState, CharacterSection, ParsedSnapshot, VersionOrUnknown } from "./types.ts";
 
 type Obj = Record<string, unknown>;
 const object = (value: unknown): value is Obj => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -77,13 +78,19 @@ function normalizeRecipeSection(raw: unknown): CapturedCharacterDomain | undefin
   return { status: { state, completeness: "partial", observedAt: raw.observedAt }, formatVersion: 1, observedAt: raw.observedAt, completeness: "partial", data: data as Record<string, unknown> };
 }
 
-/** Validate the Retail-only SavedVariables sidecar and keep each domain separate. Invalid/missing data stays UNKNOWN. */
-export function normalizeCharacterStateSidecar(input: unknown, version: VersionOrUnknown): CapturedCharacterState | undefined {
+/**
+ * Validate a SavedVariables state sidecar for its own version family and keep each domain separate:
+ * Retail state domains for Retail, legacy-UI domains for Classic Era / TBC Anniversary (classicState.ts).
+ * Invalid/missing data stays UNKNOWN; a sidecar is never accepted for another family.
+ */
+export function normalizeCharacterStateSidecar(input: unknown, version: VersionOrUnknown, character?: CharacterSection): CapturedCharacterState | undefined {
+  if (isClassicVersion(version)) return normalizeClassicCharacterState(input, version, character);
   if (version !== "retail" || !object(input) || input.formatVersion !== 1) return undefined;
   const clientFamily = input.clientFamily;
   if (clientFamily !== "Retail") return undefined;
   const reputationInput = object(input.reputation) ? input.reputation : undefined;
   const state: CapturedCharacterState = { formatVersion: 1, clientFamily: "Retail" };
+  if (typeof input.sourceCharacterGuid === "string" && /^Player-\d+-[0-9A-F]+$/i.test(input.sourceCharacterGuid)) state.sourceCharacterGuid = input.sourceCharacterGuid;
   const combat = normalizeSection(input.combatSpecialization, "combat");
   const professions = normalizeSection(input.professionSpecializations, "professions");
   const professionRecipes = normalizeRecipeSection(input.professionRecipes);
@@ -93,7 +100,7 @@ export function normalizeCharacterStateSidecar(input: unknown, version: VersionO
   if (professions) state.professionSpecializations = professions;
   if (professionRecipes) state.professionRecipes = professionRecipes;
   if (characterRep || accountRep) state.reputation = { ...(characterRep ? { character: characterRep } : {}), ...(accountRep ? { account: accountRep } : {}) };
-  return Object.keys(state).length > 2 ? state : undefined;
+  return state.combatSpecialization || state.professionSpecializations || state.professionRecipes || state.reputation ? state : undefined;
 }
 
 const ENTITY_ID: Record<string, string> = {
@@ -134,7 +141,10 @@ function mergeRows(previous: unknown, current: unknown, observedAt: number | und
 
 /** Merge successive sidecars without interpreting omissions as erasure. */
 export function mergeCharacterState(previous: CapturedCharacterState | undefined, current: CapturedCharacterState | undefined): CapturedCharacterState | undefined {
+  if (previous?.clientFamily === "Classic" || current?.clientFamily === "Classic") return mergeClassicCharacterState(previous, current);
   if (!previous) return current;
+  // A recreated character (different WoWSyncDB GUID) never inherits the previous record's state.
+  if (current?.sourceCharacterGuid && previous.sourceCharacterGuid && current.sourceCharacterGuid !== previous.sourceCharacterGuid) return current;
   if (!current) {
     const last = structuredClone(previous);
     const mark = (domain: CapturedCharacterDomain | undefined) => {

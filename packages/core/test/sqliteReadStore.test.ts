@@ -47,6 +47,7 @@ test("[STRUCTURAL] DashboardReadModel's store dependency can be satisfied withou
       assert.equal("importSnapshot" in readOnly, false);
       assert.equal("deleteCharacter" in readOnly, false);
       assert.equal(readOnly.listCharacters("retail").length, 1);
+      assert.equal(readOnly.loadSharedJournal().entries.size, 0, "read-only consumers can inspect an immutable empty shared journal without acquiring mutation methods");
       const model = new DashboardReadModel(readOnly, () => 1_800_000_010);
       assert.equal(model.getCharacterSummary({ version: "retail", name: "Reader", realm: "Cairne" }).status, "FOUND");
     } finally {

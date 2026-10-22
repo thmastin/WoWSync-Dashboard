@@ -23,6 +23,9 @@ import {
   WowSyncParseError,
   characterIdentity,
   detectVersion,
+  foreverProfileOf,
+  isForeverClient,
+  isForeverProfile,
   isLuaTable,
   luaGet,
   luaToPlain,
@@ -209,6 +212,11 @@ export interface SavedExport {
   currencyObservedAt?: number;
   /** Independently persisted structured character domains; reputation carries separate character/account sections. */
   characterState?: unknown;
+  /** Retail equipment observation (sections.equipment + latestExport projection), as plain JSON. Absent when not available. */
+  equipmentObservation?: unknown;
+  /** Forever 70291 equipment/inventory sections with their structured observation timestamps. */
+  foreverGearObservation?: unknown;
+  sourceCharacterGuid?: string;
 }
 
 /**
@@ -235,6 +243,99 @@ export function readSavedExports(filePath: string): SavedExport[] {
     throw new BridgeError(`Cannot read ${filePath}: ${(err as Error).message}`);
   }
   return parseSavedExports(source, filePath);
+}
+
+/**
+ * The fields of GearExport's canonical `sections.equipment` envelope that travel to the Dashboard. The equipment
+ * observation identity is (observedAt, capture, revision); `lastAttemptAt`/`lastAttemptError` are mutable attempt
+ * diagnostics GearExport adds to an unchanged envelope, so they are deliberately not carried.
+ */
+const EQUIPMENT_ENVELOPE_FIELDS = ["observedAt", "capture", "revision", "completeness", "reason", "source", "changedAt", "data", "specEquipmentObservation"] as const;
+
+/** True only for an export whose own text says it is Retail (the same rule the store applies); anything unreadable is not. */
+function isRetailExportText(text: string): boolean {
+  try {
+    return detectVersion(parseWowSyncExport(text).character) === "retail";
+  } catch {
+    return false;
+  }
+}
+
+/** True only for a Classic Era / TBC Anniversary export (no ClientFamily; 1.x or 2.x client), by the store's own routing. */
+function isClassicExportText(text: string): boolean {
+  try {
+    const version = detectVersion(parseWowSyncExport(text).character);
+    return version === "classic-era" || version === "tbc-anniversary";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GearExport section envelope fields that travel for Classic domains. `lastAttemptAt`/`lastAttemptError` are
+ * mutable attempt diagnostics and are not carried; `lastAttemptStale` is kept because it means the stored data
+ * is no longer current.
+ */
+const CLASSIC_ENVELOPE_FIELDS = ["data", "observedAt", "changedAt", "revision", "completeness", "reason", "source", "lastAttemptStale"] as const;
+
+/**
+ * Classic Era / TBC legacy-UI observations (GearExport 2c5e9b3+): open-window recipes, quest log, visible
+ * reputation rows, talents. Sent as a separate "Classic" state family; the store validates each domain against
+ * the export's own version and drops anything else. Undefined when the record has none of them.
+ */
+function classicCharacterState(sections: LuaValue | undefined, guid: string | undefined): Record<string, unknown> | undefined {
+  const envelope = (key: string): Record<string, unknown> | undefined => {
+    const section = luaGet(sections, key);
+    if (!isLuaTable(section) || !isLuaTable(luaGet(section, "data"))) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const field of CLASSIC_ENVELOPE_FIELDS) {
+      const value = luaGet(section, field);
+      if (value !== undefined) out[field] = luaToPlain(value);
+    }
+    return out;
+  };
+  const professionRecipes = envelope("professionRecipes");
+  const quests = envelope("quests");
+  const reputation = envelope("reputation");
+  const talents = envelope("talents");
+  if (!professionRecipes && !quests && !reputation && !talents) return undefined;
+  return {
+    formatVersion: 1,
+    clientFamily: "Classic",
+    ...(guid ? { sourceCharacterGuid: guid } : {}),
+    ...(professionRecipes ? { professionRecipes } : {}),
+    ...(quests ? { quests } : {}),
+    ...(reputation ? { reputation: { character: reputation } } : {}),
+    ...(talents ? { talents } : {}),
+  };
+}
+
+/** The export's own Forever profile; a sidecar is only accepted when its captureProfile matches it. */
+function foreverExportProfile(text: string): string | undefined {
+  try {
+    const character = parseWowSyncExport(text).character;
+    return detectVersion(character) === "forever" ? foreverProfileOf(character) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Retail equipment observation as plain JSON: the canonical envelope subset plus GearExport's latestExport
+ * projection of the spec sidecar, carried only as corroboration. The store validates both and decides; nothing is
+ * judged here. Undefined when the record has neither.
+ */
+function readEquipmentObservation(equipment: LuaValue | undefined, projection: LuaValue | undefined): { envelope?: Record<string, unknown>; projection?: unknown } | undefined {
+  const envelope: Record<string, unknown> = {};
+  if (isLuaTable(equipment)) {
+    for (const field of EQUIPMENT_ENVELOPE_FIELDS) {
+      const value = luaGet(equipment, field);
+      if (value !== undefined) envelope[field] = luaToPlain(value);
+    }
+  }
+  const hasEnvelope = isLuaTable(equipment);
+  if (!hasEnvelope && projection === undefined) return undefined;
+  return { ...(hasEnvelope ? { envelope } : {}), ...(projection === undefined ? {} : { projection: luaToPlain(projection) }) };
 }
 
 /** The pure half of {@link readSavedExports}: the file's text (already read) to its saved character records. `filePath` is for messages only. */
@@ -269,22 +370,91 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
     const sections = luaGet(record, "sections");
     const currencies = luaGet(sections, "currencies");
     const currencyObservedAt = luaGet(currencies, "observedAt");
+    const equipment = luaGet(sections, "equipment");
+    const foreverEvidence = luaGet(sections, "forever70291Evidence");
+    const professionRecipes = luaGet(sections, "professionRecipes");
+    const retailProfessionRecipes = typeof text === "string" && isRetailExportText(text) ? professionRecipes : undefined;
+    const itemMetadata = luaGet(record, "itemMetadata");
     const combat = luaGet(sections, "combatSpecialization");
     const professionSpecializations = luaGet(sections, "professionSpecializations");
-    const professionRecipes = luaGet(sections, "professionRecipes");
     const characterReputation = luaGet(sections, "reputation");
     const accountReputation = luaGet(luaGet(luaGet(db, "account"), "sections"), "reputation");
-    const characterState = (combat instanceof Map || professionSpecializations instanceof Map || professionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
+    const retailText = typeof text === "string" && isRetailExportText(text);
+    const classicText = typeof text === "string" && isClassicExportText(text);
+    const guid = luaGet(luaGet(record, "identity"), "guid");
+    const characterState = classicText
+      ? classicCharacterState(sections, typeof guid === "string" ? guid : undefined)
+      : retailText && (combat instanceof Map || professionSpecializations instanceof Map || retailProfessionRecipes instanceof Map || characterReputation instanceof Map || accountReputation instanceof Map)
       ? {
           formatVersion: 1,
           clientFamily: "Retail",
+          ...(typeof guid === "string" ? { sourceCharacterGuid: guid } : {}),
           ...(combat instanceof Map ? { combatSpecialization: luaToPlain(combat) } : {}),
           ...(professionSpecializations instanceof Map ? { professionSpecializations: luaToPlain(professionSpecializations) } : {}),
-          ...(professionRecipes instanceof Map ? { professionRecipes: luaToPlain(professionRecipes) } : {}),
+          ...(retailProfessionRecipes instanceof Map ? { professionRecipes: luaToPlain(retailProfessionRecipes) } : {}),
           ...((characterReputation instanceof Map || accountReputation instanceof Map) ? { reputation: {
             ...(characterReputation instanceof Map ? { character: luaToPlain(characterReputation) } : {}),
             ...(accountReputation instanceof Map ? { account: luaToPlain(accountReputation) } : {}),
           } } : {}),
+        }
+      : undefined;
+    const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
+    const captureProfile = luaGet(record, "captureProfile");
+    // The addon writes race under sections.character.data (UnitRace); identity.race is only a fallback.
+    const foreverRace = [luaGet(luaGet(luaGet(sections, "character"), "data"), "race"), luaGet(identity, "race")]
+      .find((value): value is string => typeof value === "string" && value.trim() !== "")?.trim();
+    const foreverGearObservation = typeof text === "string" && isForeverProfile(captureProfile) && foreverExportProfile(text) === captureProfile
+      ? {
+          clientProfile: captureProfile,
+          name: typeof name === "string" ? name : "",
+          realm: typeof realm === "string" ? realm : "",
+          generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
+          ...(foreverRace ? { race: foreverRace } : {}),
+          ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
+          ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && typeof luaGet(professionRecipes, "changedAt") === "number"
+            ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") } }
+            : {}),
+          ...(isLuaTable(professionRecipes) && typeof luaGet(professionRecipes, "lastAttemptError") === "string" && typeof luaGet(professionRecipes, "lastAttemptAt") === "number"
+            ? { recipeCaptureAttempt: { observedAt: luaGet(professionRecipes, "lastAttemptAt"), data: { error: luaGet(professionRecipes, "lastAttemptError") } } }
+            : {}),
+          ...Object.fromEntries(["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog"].flatMap((key) => {
+            const section = luaGet(sections, key);
+            return isLuaTable(section) ? [[key, luaToPlain(section)]] : [];
+          })),
+          ...(isLuaTable(foreverEvidence) ? (() => {
+            const data = luaGet(foreverEvidence, "data");
+            const itemFacts = luaGet(data, "itemFacts");
+            const skillLines = luaGet(data, "skillLines");
+            const skillLineCount = luaGet(data, "skillLineCount");
+            const skillLineCoverage = luaGet(data, "skillLineCoverage");
+            // Skill recency is independent from item API recency. Only the skill collector's own
+            // timestamp may establish when these character-specific rows were observed.
+            const skillLinesObservedAt = luaGet(skillLineCount, "observedAt");
+            const specialization = luaGet(data, "specialization");
+            const trainerEvidence = luaGet(data, "trainer");
+            const capturedAt = luaGet(data, "capturedAt");
+            const itemFactsData = isLuaTable(itemFacts) ? luaToPlain(itemFacts) as Record<string, unknown> : {};
+            // Keep the raw character skill/specialization observations beside the item facts because the
+            // Forever allocation read model consumes them for each recipient. Preserve their own timestamp;
+            // item-fact freshness must not silently refresh these character observations.
+            const dataWithCharacterEvidence = {
+              ...itemFactsData,
+              ...(isLuaTable(skillLines) ? { skillLines: luaToPlain(skillLines) } : {}),
+              ...(typeof skillLinesObservedAt === "number" ? { skillLinesObservedAt } : {}),
+              ...(isLuaTable(skillLineCount) ? { skillLineCount: luaToPlain(skillLineCount) } : {}),
+              ...(typeof skillLineCoverage === "string" ? { skillLineCoverage } : {}),
+              ...(isLuaTable(specialization) ? { specialization: luaToPlain(specialization) } : {}),
+              ...(typeof capturedAt === "number" ? { capturedAt } : {}),
+              ...(isLuaTable(trainerEvidence) ? { trainerEvidence: luaToPlain(trainerEvidence) } : {}),
+            };
+            if (!isLuaTable(itemFacts) && !isLuaTable(trainerEvidence)) return {};
+            return { itemEvidence: {
+              ...(isLuaTable(itemFacts) ? { observedAt: luaGet(itemFacts, "observedAt"), completeness: luaGet(itemFacts, "completeness"), source: luaGet(itemFacts, "source") }
+                : typeof capturedAt === "number" ? { observedAt: capturedAt, completeness: "partial", source: "Forever raw runtime evidence" } : {}),
+              data: dataWithCharacterEvidence,
+            } };
+          })() : {}),
+          ...(isLuaTable(itemMetadata) ? { itemMetadata: luaToPlain(itemMetadata) } : {}),
         }
       : undefined;
     out.push({
@@ -295,6 +465,9 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       ...(isLuaTable(currencies) ? { currencies: luaToPlain(currencies) } : {}),
       ...(typeof currencyObservedAt === "number" ? { currencyObservedAt } : {}),
       ...(characterState ? { characterState } : {}),
+      ...(equipmentObservation ? { equipmentObservation } : {}),
+      ...(foreverGearObservation ? { foreverGearObservation } : {}),
+      ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
     });
   }
   return out.sort(
@@ -345,6 +518,9 @@ export function selectExport(records: readonly SavedExport[], request: { charact
   const top = withText.filter((r) => (r.generatedAt ?? 0) === newest);
   if (new Set(top.map((r) => r.text)).size > 1) {
     throw new BridgeError(`${label(top[0])} has ${top.length} saved records generated at the same time with different text; refusing to guess.`);
+  }
+  if ((top.length > 1 && top.some((r) => !r.sourceCharacterGuid)) || new Set(top.flatMap((r) => r.sourceCharacterGuid ? [r.sourceCharacterGuid] : [])).size > 1) {
+    throw new BridgeError(`${label(top[0])} has same-time exports with missing or conflicting WoWSyncDB character GUIDs; refusing to mix source characters.`);
   }
   const warnings: string[] = [];
   if (withText.length > 1) {
@@ -570,6 +746,22 @@ function describeSummary(s: ExportSummary, now: number): string[] {
   ];
 }
 
+/** One line naming the structured sidecars that travel with the text (validated again by the server). */
+export function describeSidecars(entry: SavedExport): string {
+  const parts: string[] = [];
+  const state = entry.characterState as Record<string, unknown> | undefined;
+  if (state) {
+    const reputation = state.reputation as Record<string, unknown> | undefined;
+    const domains = ["professionRecipes", "quests", "talents", "combatSpecialization", "professionSpecializations"].filter((key) => state[key] !== undefined)
+      .concat(reputation?.character !== undefined ? ["reputation"] : [], reputation?.account !== undefined ? ["accountReputation"] : []);
+    parts.push(`${String(state.clientFamily)} state (${domains.join(", ") || "no domains"})`);
+  }
+  if (entry.foreverGearObservation !== undefined) parts.push("Forever structured observation");
+  if (entry.equipmentObservation !== undefined) parts.push("Retail equipment observation");
+  if (entry.currencies !== undefined) parts.push("currencies");
+  return `Sidecars:   ${parts.length ? parts.join("; ") : "none"}`;
+}
+
 // --- the one POST -----------------------------------------------------------------------------------
 
 /** Why a POST did not import: the Dashboard could not be reached (worth retrying), or it answered and did not accept the text. */
@@ -591,14 +783,14 @@ export const importEndpoint = (origin: string): string => `${origin}/api/import`
  * send, shared by `import:saved` and `watch:saved`: neither has any import logic of its own. Throws {@link ImportPostError}
  * (a BridgeError) with the reason; nothing has been imported when it does.
  */
-export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown): Promise<any> {
+export async function postImport(deps: Pick<Deps, "fetch" | "timeoutMs">, origin: string, text: string, currencies?: unknown, characterState?: unknown, equipmentObservation?: unknown, foreverGearObservation?: unknown): Promise<any> {
   let response: Response;
   try {
     response = await deps.fetch(importEndpoint(origin), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // `currencies` (the record's structured section) rides along only when the record has one; the text is untouched.
-      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }) }),
+      body: JSON.stringify({ text, ...(currencies === undefined ? {} : { currencies }), ...(characterState === undefined ? {} : { characterState }), ...(equipmentObservation === undefined ? {} : { equipmentObservation }), ...(foreverGearObservation === undefined ? {} : { foreverGearObservation }) }),
       signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
     });
   } catch (err) {
@@ -632,7 +824,9 @@ export function describeImportResult(result: any, sentSha256: string): string[] 
     result.isDuplicate
       ? result.currencies?.outcome === "attached"
         ? "Result: ALREADY IMPORTED (duplicate): the snapshot is unchanged; its currencies section was attached."
-        : "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing."
+        : result.equipmentObservation === "recorded"
+          ? "Result: ALREADY IMPORTED (duplicate): the snapshot is unchanged; a new equipment observation was recorded."
+          : "Result: ALREADY IMPORTED (duplicate): the Dashboard changed nothing."
       : "Result: imported as a new snapshot.",
     `  character:     ${result.character?.identityKey ?? "?"}`,
     `  snapshot id:   ${result.snapshot.id}${result.isLatest === undefined ? "" : result.isLatest ? " (now the character's latest)" : " (older than the character's latest)"}`,
@@ -659,6 +853,7 @@ export function describeImportResult(result: any, sentSha256: string): string[] 
         (c.carried ? ` - LAST_SEEN (${c.carriedReason ?? "carried"})` : ""),
     );
   }
+  if (typeof result.equipmentObservation === "string") lines.push(`  equipment observation: ${result.equipmentObservation}`);
   return lines;
 }
 
@@ -690,6 +885,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const summary = describeExport(text);
     for (const w of warnings) stderr.push(`warning: ${w}`);
     out(...describeSummary(summary, now));
+    out(describeSidecars(chosen));
     const problems = consistencyProblems(chosen, summary, request);
     if (problems.length > 0) {
       throw new BridgeError(`Stopping: this saved export is not what was asked for.\n${problems.map((p) => `  - ${p}`).join("\n")}\n  Nothing was sent.`);
@@ -703,7 +899,7 @@ export async function runImportSaved(argv: readonly string[], deps: Deps): Promi
     const target = resolveDashboardUrl(options, deps.env);
     if (target.warning) stderr.push(`warning: ${target.warning}`);
     out(`Sending to ${importEndpoint(target.origin)} ...`);
-    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState), summary.sha256));
+    out(...describeImportResult(await postImport(deps, target.origin, text, chosen.currencies, chosen.characterState, chosen.equipmentObservation, chosen.foreverGearObservation), summary.sha256));
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
     if (err instanceof BridgeError) {

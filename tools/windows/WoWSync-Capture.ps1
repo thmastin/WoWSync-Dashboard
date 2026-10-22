@@ -16,10 +16,21 @@ $McpTokenPath = Join-Path $AppDir 'mcp-tunnel-key.dpapi'
 $StopPath = Join-Path $AppDir 'stop.requested'
 $SupervisorPath = Join-Path $AppDir 'supervisor.json'
 
-function Write-JsonAtomic([string]$Path, $Value) {
+function Write-JsonAtomic([string]$Path, $Value, [switch]$BestEffort) {
     $temp = "$Path.$PID.tmp"
     $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temp -Encoding UTF8
-    Move-Item -LiteralPath $temp -Destination $Path -Force
+    # A reader (tray icon, antivirus) holding the target open makes the replace fail for a moment.
+    for ($attempt = 0; ; $attempt++) {
+        try { Move-Item -LiteralPath $temp -Destination $Path -Force -ErrorAction Stop; return }
+        catch {
+            if ($attempt -ge 5) {
+                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+                if ($BestEffort) { return }
+                throw
+            }
+            Start-Sleep -Milliseconds (100 * ($attempt + 1))
+        }
+    }
 }
 
 function Get-Config {
@@ -210,7 +221,7 @@ function Run-Supervisor {
                 mcpTunnelPid = $null
                 tunnelRestarts = $tunnelRestarts; watcherRestarts = $watcherRestarts
                 dashboardUrl = 'http://127.0.0.1:4174'
-            })
+            }) -BestEffort
             Start-Sleep -Seconds 2
         }
     } finally {
@@ -218,7 +229,7 @@ function Run-Supervisor {
         Stop-Child $ssh
         Remove-Item Env:WOWSYNC_CAPTURE_TOKEN -ErrorAction SilentlyContinue
         Remove-Variable tokenValue -ErrorAction SilentlyContinue
-        Write-JsonAtomic $SupervisorPath ([ordered]@{ target = 'DEV'; state = 'stopped'; heartbeatAt = (Get-Date).ToUniversalTime().ToString('o'); tunnelRunning = $false; watcherRunning = $false; mcpTunnelRunning = $false; dashboardUrl = 'http://127.0.0.1:4174' })
+        Write-JsonAtomic $SupervisorPath ([ordered]@{ target = 'DEV'; state = 'stopped'; heartbeatAt = (Get-Date).ToUniversalTime().ToString('o'); tunnelRunning = $false; watcherRunning = $false; mcpTunnelRunning = $false; dashboardUrl = 'http://127.0.0.1:4174' }) -BestEffort
     }
 }
 

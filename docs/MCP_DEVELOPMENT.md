@@ -2,8 +2,8 @@
 
 Status: Phase 6 complete; Secure MCP Tunnel and the personal ChatGPT MCP App
 were live-validated on 2026-09-28. No public Dashboard/MCP endpoint, MCP OAuth,
-or Dashboard UI integration exists or is intended for this path. The separate
-Ask My Account feature is unchanged.
+or Dashboard UI integration exists or is intended for this path. Ask My Account
+was retired on 2026-10-12; MCP is the only AI integration.
 
 The current **DEV** tunnel runtime is on Omarchy. The root-managed
 `wowsync-dev-mcp-tunnel.service` runs the official tunnel-client v0.0.15 as
@@ -24,8 +24,8 @@ and its credential material) is intentionally retained on the Windows host at
 `%APPDATA%\tunnel-client\wowsync.yaml` for rollback only; its tunnel ID is not
 reproduced here. The old MCP must not be described or treated as active.
 
-`@wowsync-dashboard/mcp` is a thin STDIO adapter over the provider-neutral
-core. Its process path is deliberately:
+`@wowsync-dashboard/mcp` is a STDIO adapter over the provider-neutral
+core. Its default process path is deliberately read-only:
 
 ```text
 SqliteSnapshotReadStore (SQLite readOnly: true)
@@ -34,9 +34,13 @@ SqliteSnapshotReadStore (SQLite readOnly: true)
   -> STDIO MCP tools
 ```
 
-It never creates `SqliteSnapshotStore`, so it cannot initialize, import into,
-or mutate the WoWSync database. It exposes no SQL, filesystem, shell, HTTP
-proxy, raw export, mutation, account-dump, or shared-storage tool.
+The default MCP configuration never creates `SqliteSnapshotStore`, so it
+cannot initialize, import into, or mutate the WoWSync database. In a separate
+explicit opt-in mode, four narrowly scoped plan-only tools forward fixed ERP
+planning routes to a process-configured loopback Dashboard origin. They do not
+accept a caller-selected URL, path, database, shell command, or SQL, and the
+Dashboard REST handlers retain revision, evidence, identity, and atomic-write
+validation. Those tools write saved planning intent only; no game action runs.
 
 ## STDIO output and launch commands
 
@@ -81,6 +85,52 @@ The default registered research root is `docs/`. Set
 The tool surface remains constrained to the fixed research registration
 manifest, not paths supplied by an MCP caller.
 
+### Optional ERP planning writes
+
+MCP remains read-only unless the process environment explicitly sets
+`WOWSYNC_MCP_PLANNING_API_URL` to the local Dashboard origin, for example
+`http://127.0.0.1:4173`. Only loopback IP literals `127.0.0.1` and `::1` are
+accepted; hostnames are rejected to avoid name-resolution ambiguity. Startup rejects non-HTTP, non-loopback, credentialed,
+or path-bearing values. Tool callers cannot select or change this destination.
+When enabled, planning tools stage immutable, version-scoped proposals. They do
+not directly mutate a project. The proposal stores the exact payload, digest,
+target project identities/revisions, rationale, expiry, and state. A player
+must inspect that payload and explicitly approve or reject it in the Dashboard;
+the Dashboard approval route accepts only the stored digest and rechecks every
+project revision. MCP has no approval tool and cannot assert a caller-supplied
+`approved: true`. `commit_approved_erp_change` accepts only a proposal ID,
+version, and exact digest, then dispatches the frozen payload through the
+existing REST validation path. Commits are compare-and-set claimed and retries
+return the recorded result; indeterminate outcomes fail closed to avoid
+replaying a possibly completed mutation. Reservation changes retain the
+existing reduction/release-only behavior. The MCP annotations remain advisory
+client hints; the separate Dashboard action is the approval boundary.
+
+Read-only MCP profiles can list and inspect pending/approved proposals using
+`get_erp_change_proposals` and `get_erp_change_proposal`, so a fresh Operations
+conversation can recover an approval after losing chat context. Those tools do
+not approve or commit. The proposal registry adds one SQLite table and one
+index, so deployments require a reviewed additive schema plan and backup.
+
+The read-only profile also provides `get_erp_operations_context` as a bounded,
+explicit-version startup read for fresh Operations conversations, and
+`get_erp_project` for focused revision/evidence/history retrieval. Neither
+searches or merges another version. Read context includes compact project
+summaries, character freshness, requirements, dependencies/readiness, recent
+saved rationales, commitments, and next actions; use focused project retrieval
+before preparing a whole-plan update.
+
+The active Secure MCP Tunnel profile remains read-only until the Dashboard
+proposal store has been deployed and the loopback planning endpoint is
+deliberately enabled for that MCP process. Tunnel enablement exposes proposal
+and commit tools, but still cannot approve: the player must approve the exact
+proposal through the trusted Dashboard browser path first. Do not weaken the
+tunnel allowlist or expose generic HTTP. For local integration testing, run the
+Dashboard on loopback and set the variable only on the MCP child process. If
+the Dashboard is unavailable, planning tools return
+`PLANNING_API_UNAVAILABLE`; retrieval tools continue using the configured
+read-only database. No generic HTTP proxy is exposed.
+
 The read-only SQLite path refuses missing or incompatible databases and never
 creates schemas, runs migrations/backfills, or changes journal mode. A live
 WAL database can create empty `-wal` / `-shm` coordination sidecars when a
@@ -99,14 +149,20 @@ imports may update the database.
 | `get_character_history` | Return a compact, newest-first paged snapshot timeline for one character. |
 | `get_character_changes` | Compare the previous/latest snapshots or two explicit snapshots for one character. |
 | `get_character_spells` | Return bounded known-spellbook evidence from the current or selected snapshot. |
-| `get_character_trainer` | Return bounded trainer-visit services and the exact captured status at visit. |
+| `get_character_trainer` | Return bounded trainer-visit services and the exact captured status at visit; an earlier visit is LAST_SEEN, and Retail/Forever services may carry `recipeMatch` (RECIPE_ID or DERIVED_NAME) to captured recipe rows. |
 | `get_account_overview` | Return bounded version-scoped account/economy facts, currencies and storage coverage. |
 | `get_account_currencies` | Return detailed bounded currency evidence with ownership scope and per-character coverage. |
 | `get_account_changes` | Page the existing AccountFacts recent meaningful-change summaries. |
 | `get_character_equipment` | Return latest-known slot equipment with provenance. |
+| `get_forever_gear_observation` | Return Forever 70291 observed equipped and carried items with structured source/freshness; candidate classification and all allocation claims stay UNKNOWN absent validated Forever metadata. Requires `version: "forever"`. |
+| `get_forever_character_quests` | Return the canonical Forever quest projection with identity, snapshot and freshness provenance; optionally select a character-owned `snapshotId`. OBSERVED, LAST_SEEN, UNKNOWN, objective, completion, history, and waypoint evidence remain separate. Requires `version: "forever"`. |
 | `get_character_professions` | Return captured profession observations and their provenance. |
 | `get_character_currencies` | Return captured currency data, bounded to 100 records. |
 | `get_profession_coverage` | Return per-version account profession coverage as derived data. |
+| `find_recipe_crafters` | Which characters in one version (Retail, Forever, Classic Era, TBC Anniversary) have captured evidence for a recipe, by `recipeID`, Classic `recipeKey`, `outputItemID`, Classic `enchantID`, or name. Buckets: learned / observed-not-learned / unresolved; each row carries `knowledgeClass` (LEARNED, VISIBLE_NOT_LEARNED, VISIBLE_LEARNED_UNKNOWN for a Classic Craft-window row, LEARNED_STATE_UNKNOWN), OBSERVED or LAST_SEEN evidence, and `outputKind` (ITEM or ENCHANTMENT). Characters without captures are listed separately, never as unable. |
+| `get_recipe_reagent_availability` | One character's recipe reagents, selected by exactly one of `recipeID`, `recipeKey`, `outputItemID`, `enchantID`, or `recipeName`; an ambiguous selector returns the candidates rather than choosing. OR alternatives are kept separate, with per-owner holdings: crafter bags, crafter bank, other characters. Classic client-reported counts are labelled as observation-time reports. Craftability stays NOT_ESTABLISHED and no transfer is assumed. |
+| `get_character_quests` | Forever (C_QuestLog) or Classic Era / TBC (legacy quest log) active quests, objectives, and the completed quest IDs the client returned. Rows the exporter kept after they vanished from the log are `rowEvidence: LAST_SEEN`, never inferred completed. `completedQuestIDs` looks up specific IDs: OBSERVED or LAST_SEEN; NOT_IN_RETURNED_HISTORY only when the history was fully observed; otherwise UNKNOWN. Retail returns UNKNOWN. |
+| `get_character_progression` | Classic Era / TBC visible reputation rows and talent trees. Standing labels are DERIVED from the standing ID, `distribution` is DERIVED from points spent, and reputation is always partial (visible rows only). Retail reputation stays on `get_renown`; Forever does not capture these domains. |
 | `get_renown` | Return captured Renown state; currently `UNKNOWN` because WoWSync does not capture it. |
 | `list_research_documents` | List registered research metadata with a bounded section outline, not document bodies. |
 | `get_research_document` | Retrieve one registered document, capped at 40,000 characters. |
@@ -116,13 +172,26 @@ imports may update the database.
 | `get_character_storage` | Retrieve bounded character-owned storage for one character. |
 | `get_shared_storage` | Retrieve bounded account/Warband shared storage. |
 | `get_item_metadata` | Retrieve deterministic metadata for specified item IDs. |
+| `get_erp_change_proposals` | Recover pending, approved, or in-progress proposals in one version; never approves or commits. |
+| `get_erp_change_proposal` | Read one exact proposal and its lifecycle state in one version. |
+| `create_erp_project_from_goal` (opt-in) | Build the supported Rordin Forever goal plan and stage it for exact Dashboard approval. |
+| `create_erp_project` (opt-in) | Stage a version-scoped project-creation proposal. |
+| `plan_erp_work_order_batch` (opt-in) | Stage a batch proposal; existing revision/evidence checks repeat on commit. |
+| `update_erp_project_plan` (opt-in) | Stage one exact-revision project edit for Dashboard approval. |
+| `set_erp_project_status` (opt-in) | Stage a status proposal; completion remains player-declared. |
+| `replan_erp_reservations` (opt-in) | Stage a reduction/release proposal; cannot increase or move reservations. |
+| `commit_approved_erp_change` (opt-in) | Commit only the exact digest approved in Dashboard; accepts no mutation payload. |
 | `get_item_allocation` | Azeroth ERP Vertical Slice 1: resolve one commodity's active STOCK_TARGET demand against account-owned evidence into a deterministic allocation decision. Slice 3 (shipped and live-validated): every result carries `confirmedItemStringIdentity`/`potentialItemStringIdentity` and `confirmedBinding`/`potentialBinding`; a `BASE_ITEM_AGGREGATION_UNPROVEN` result (confirmed item-string variants or a bare `item:<id>`) has no `allocated`/`confirmedDeficit`/`confirmedSurplus`; confirmed bound/binding-unknown rows withhold `SEND_HELLOMAGS`. See `docs/AZEROTH_ERP_ARCHITECTURE.md` §24 and the live-validation record. |
 | `get_allocation_review` | Azeroth ERP Vertical Slice 2: account-wide review — every active STOCK_TARGET demand's allocation result (identical to `get_item_allocation`) plus unallocated account-owned holdings (evidence only; never surplus, no disposition). Inputs: `version`, optional `demandedOffset`/`demandedLimit` and `unallocatedOffset`/`unallocatedLimit` (default 50, max 100). Retail-only. Slice 3 (shipped and live-validated): `BASE_ITEM_AGGREGATION_UNPROVEN` sorts in the REQUIRES_REVIEW group; unallocated entries add the four identity/binding facets (still evidence only), and `unallocatedItemStringIdentityCounts` covers the whole unallocated list. `itemNames` maps each base item ID on the returned demanded page to its name observed in account-owned evidence (presentation only; never inside an allocation result; no key when no name was observed). The Dashboard-only unallocated search `q` is not an MCP input (the strict schema rejects it). See `docs/AZEROTH_ERP_ARCHITECTURE.md` §23–§25. |
+| `get_gear_candidate_evidence` | Return snapshot-scoped Retail candidate evidence. Use its identity key, snapshot ID, and one-based row ordinal to select a row. |
+| `analyze_retail_gear_candidate` | Deterministically screen a selected Retail candidate against known Retail characters and retained qualifying per-spec equipment. Returns comparison provenance, ties, and UNKNOWN reasons; no transferability/disposition. See [`RETAIL_GEAR_ALLOCATION.md`](RETAIL_GEAR_ALLOCATION.md). |
 
 This table lists every tool registered via `server.registerTool(...)` in `packages/mcp/src/server.ts`
 as of this entry; see [`CURRENT_STATE.md`](CURRENT_STATE.md) for the current authoritative total
-(it changes as tools are added, so it is stated there once rather than repeated here). All tools
-are marked read-only and closed-world. Every account-state query
+(it changes as tools are added, so it is stated there once rather than repeated here). Retrieval
+tools are read-only. Opt-in planning tools stage immutable proposals or commit only an exact
+Dashboard-approved proposal; no MCP tool approves or executes game actions. Tool annotations
+are advisory and are not the approval boundary. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
 lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently
@@ -225,7 +294,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Item search | MCP PARITY | Bounded search over typed version-scoped read projections. |
 | Professions | MCP PARITY | Current bounded character profession state. |
 | Profession coverage | MCP PARITY | Derived by `AccountFacts` / provider-neutral coverage. |
-| Known profession recipes | PARTIAL MCP PARITY | Retail recipe learned-state observations (ingested since `ed730ba`; captured by GearExport as of `2e67d88`) via `get_character_professions` `recipeKnowledge`; candidate coverage is partial, absence never means unlearned. Recipe definitions (outputs/reagents) are not provided by this evidence. |
+| Known profession recipes | PARTIAL MCP PARITY (recipe evidence resolves across snapshots as LAST_SEEN since 2026-10-12) | Retail recipe learned-state observations and Forever 1.60.1 build 70338 captured candidates are returned through `get_character_professions` `recipeKnowledge`. Forever rows can include exact recipe IDs, observed learned state, output item IDs, and reagent slots/quantities. Both catalogues remain partial; absence never means unlearned, and recipe evidence does not establish skill eligibility or present craftability. |
 | Trainer observations | MCP PARITY | `spells`/`trainer` snapshot sections; exact visit statuses and freshness retained. |
 | Known spells / spellbook | MCP PARITY | Captured spellbook section; capture coverage may be limited by client/spec. |
 | Character currencies | MCP PARITY | Structured currency list, per-character state and quantities. |
@@ -237,7 +306,7 @@ explicit truncation. Existing exact section retrieval remains capped at
 | Research list/search/section | MCP PARITY | Fixed `ResearchRegistry`, registered-only. |
 | Research metadata/outline/full registered doc | MCP PARITY | Registry metadata, bounded outline and 40,000-character registered document read. |
 | Spell/trainer historical comparison | CAPTURED BUT NOT MCP-EXPOSED | Snapshot diff does not compare these sections: spellbook capture coverage can vary and trainer visits are point-in-time observations, not learned-state transitions. |
-| External game data, auction prices, arbitrary paths/SQL, raw snapshots, mutations | INTENTIONALLY OUT OF MCP SCOPE | Not a provider-neutral captured read capability; no such MCP surface is exposed. |
+| External game data, auction prices, arbitrary paths/SQL, raw snapshots, game-action mutations | INTENTIONALLY OUT OF MCP SCOPE | These are not provider-neutral captured facts or safe plan-only writes. The optional ERP tools are limited to fixed local planning routes. |
 
 This pass added five tools, bringing the implementation to 24 registered tools
 **at that time (2026-09-30)** — since superseded by the later Azeroth ERP

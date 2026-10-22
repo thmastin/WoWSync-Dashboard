@@ -794,6 +794,13 @@ h1, h2, h3 {
 .ask-textarea {
   margin-top: 12px;
 }
+.ask-gear-candidate {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
 .ask-answer {
   margin-top: 16px;
   padding-top: 14px;
@@ -1278,3 +1285,210 @@ button.roster-name-link {
 .allocation-pager { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .allocation-removed summary { cursor: pointer; font-family: "Cinzel", serif; }
 .allocation-removed-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; border-top: 1px solid var(--border); padding: 6px 0; }
+
+.forever-review-page { display: grid; gap: 12px; }
+.forever-review-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.forever-review-intro h2 { margin: 4px 0; }
+.forever-detail-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.forever-detail-heading h3 { margin: 0; }
+.forever-review-intro p { max-width: 90ch; }
+.forever-review-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.forever-review-summary > div { display: flex; flex-direction: column; gap: 3px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.forever-review-summary strong { font-size: 1.4rem; }
+.forever-review-summary span { color: var(--text-muted); font-size: 0.8rem; }
+.forever-review-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.forever-review-controls label { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 0.82rem; }
+.forever-review-controls select, .forever-review-controls input { min-width: 12rem; }
+.forever-review-controls .forever-review-search { flex: 1; }
+.forever-review-search input { width: 100%; }
+.forever-review-item > header, .forever-review-recipient-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.forever-review-item > header h3 { margin: 0; }
+.forever-review-recipient-list { display: grid; gap: 8px; margin-top: 10px; }
+.forever-review-recipient { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--panel) 72%, var(--bg)); }
+.forever-review-recipient h4 { margin: 0; }
+.forever-disposition, .evidence-chip { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; color: var(--text-muted); font-size: 0.78rem; }
+.disposition-equip_candidate, .disposition-possible_other_character { color: var(--warning, #b78a35); }
+.disposition-insufficient_evidence { color: var(--text-muted); }
+.forever-review-recipient details { margin-top: 8px; }
+.forever-review-conflict { padding: 8px 10px; border-left: 3px solid var(--warning, #b78a35); background: color-mix(in srgb, var(--warning, #b78a35) 10%, transparent); }
+.forever-review-recipient summary { cursor: pointer; }
+.forever-review-page .link-button { border: 0; padding: 2px 4px; background: transparent; color: var(--accent); text-decoration: underline; cursor: pointer; }
+@media (max-width: 700px) {
+  .forever-review-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .forever-review-intro { flex-direction: column; }
+  .forever-review-controls > label, .forever-review-controls select, .forever-review-controls input { width: 100%; }
+}
+/* Account ERP projects: explicit player intent with evidence shown beside every need. */
+.erp-workbench { max-width: 1180px; margin: 0 auto; padding: 20px 24px 48px; color: var(--text, #e8eaf0); }
+.erp-workbench-header, .erp-project-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.erp-workbench-header h1 { margin: 4px 0; font-size: 1.8rem; }
+.erp-workbench-header p, .erp-project-title p { color: var(--muted, #aab0bd); margin: 6px 0; }
+.erp-workbench .eyebrow { font-size: .72rem; letter-spacing: .12em; font-weight: 700; color: var(--accent); }
+.erp-scope-note, .erp-status { border: 1px solid #ffffff24; border-radius: 999px; padding: 4px 9px; font-size: .76rem; color: #c9d1df; white-space: nowrap; }
+.erp-evidence-note { margin: 18px 0; padding: 12px 15px; background: #d49a2420; border-left: 3px solid #d49a24; border-radius: 4px; color: #e5d5ab; }
+.erp-work-order-queue { margin: 18px 0; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
+.erp-work-order-queue > p { color: #b8c2d0; max-width: 1000px; }
+.erp-queue-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 14px 0; }
+.erp-queue-controls label { display: grid; gap: 4px; }
+.erp-queue-controls input, .erp-queue-controls select { min-width: 160px; padding: 7px 9px; color: inherit; background: #111923; border: 1px solid #ffffff2b; border-radius: 4px; }
+.erp-queue-controls span { color: #aab5c4; margin-left: auto; }
+.erp-work-order-queue ol { display: grid; gap: 9px; padding-left: 24px; }
+.erp-work-order-queue li { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid #ffffff1a; border-radius: 6px; background: #00000018; }
+.erp-work-order-queue li p { margin: 5px 0; color: #c2cad6; }
+.erp-work-order-queue li button { align-self: center; flex: 0 0 auto; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-unworked-needs { margin: 18px 0; padding: 16px; border: 1px solid #d2a85b66; border-radius: 9px; background: #d49a240c; }
+.erp-unworked-needs > p { color: #b8c2d0; max-width: 1000px; }
+.erp-unworked-needs ul { display: grid; gap: 9px; padding-left: 24px; }
+.erp-unworked-needs li { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid #ffffff1a; border-radius: 6px; background: #00000018; }
+.erp-unworked-needs li p { margin: 5px 0; color: #c2cad6; }
+.erp-unworked-needs li small { display: block; margin-top: 5px; color: #aab5c4; }
+.erp-unworked-needs li button { align-self: center; flex: 0 0 auto; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-create-form, .erp-inline-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 16px; border: 1px solid #ffffff1a; border-radius: 8px; background: #ffffff06; margin: 18px 0; }
+.erp-create-form h2, .erp-inline-form h4 { flex-basis: 100%; margin: 0; }
+.erp-create-form label, .erp-inline-form label, .erp-project-actions label { display: grid; gap: 5px; font-size: .8rem; color: #b9c0cc; }
+.erp-create-form input, .erp-create-form textarea, .erp-create-form select, .erp-inline-form input, .erp-inline-form select, .erp-project-actions select { min-width: 130px; padding: 7px 9px; color: inherit; background: #111923; border: 1px solid #ffffff2b; border-radius: 4px; }
+.erp-create-form textarea { min-width: 260px; }
+.erp-inline-form { margin: 12px 0; background: #101821; }
+.erp-form-help, .erp-project-meta { flex-basis: 100%; color: #9da8b8; font-size: .78rem; }
+.erp-history { flex-basis: 100%; color: #c2cad6; font-size: .82rem; }
+.erp-history summary { cursor: pointer; color: #b7c7dc; }
+.erp-fulfillment-snapshot { margin: 12px 0 18px; padding: 12px 14px; border: 1px solid #7794b33d; border-radius: 7px; background: #7794b30a; }
+.erp-fulfillment-snapshot h3 { margin: 0 0 6px; }
+.erp-fulfillment-snapshot p { margin: 5px 0; color: #c2cad6; }
+.erp-fulfillment-snapshot ul { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 8px 0; padding-left: 18px; color: #c2cad6; }
+.erp-fulfillment-snapshot small { color: #9da8b8; }
+.erp-cross-project-plan { margin: 16px 0 22px; padding: 16px; border: 1px solid #7189b055; border-radius: 9px; background: #7189b00c; }
+.erp-cross-project-plan > p, .erp-cross-project-plan > small { color: var(--muted, #aab0bd); }
+.erp-procurement-budget-review { margin: 16px 0 22px; padding: 16px; border: 1px solid #d5a24c55; border-radius: 9px; background: #d5a24c0b; }
+.erp-procurement-budget-review > p, .erp-procurement-budget-review > small { color: var(--muted, #aab0bd); }
+.erp-procurement-budget-review > ol { display: grid; gap: 12px; padding-left: 22px; }
+.erp-procurement-budget-review > ol > li { padding: 12px; border: 1px solid #d5a24c38; border-radius: 7px; overflow-wrap: anywhere; }
+.erp-procurement-budget-review h3 { margin: 0 0 6px; }
+.erp-procurement-budget-review p { margin: 6px 0; }
+.erp-procurement-budget-review button { margin-top: 6px; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-procurement-buyer-review { margin: 16px 0 22px; padding: 16px; border: 1px solid #7298d655; border-radius: 9px; background: #7298d60b; }
+.erp-procurement-buyer-review > p { color: var(--muted, #aab0bd); }
+.erp-procurement-buyer-review > ol { display: grid; gap: 12px; padding-left: 22px; }
+.erp-procurement-buyer-review > ol > li { padding: 12px; border: 1px solid #7298d638; border-radius: 7px; overflow-wrap: anywhere; }
+.erp-procurement-buyer-review h3 { margin: 0 0 6px; }
+.erp-procurement-buyer-review p { margin: 6px 0; }
+.erp-procurement-buyer-review button { margin-top: 6px; background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-procurement-buyer-review li > section { margin: 10px 0; padding: 10px; border-left: 3px solid #7298d688; background: #00000016; }
+.erp-procurement-buyer-review li > section ul { padding-left: 20px; }
+.erp-cross-project-candidates { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
+.erp-cross-project-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid #7189b044; border-radius: 6px; cursor: pointer; }
+.erp-cross-project-choice input { margin-top: 4px; }
+.erp-cross-project-choice span, .erp-cross-project-choice small { display: block; }
+.erp-cross-project-choice small { margin-top: 3px; color: var(--muted, #aab0bd); overflow-wrap: anywhere; }
+.erp-cross-project-task { display: grid; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid #7189b055; border-radius: 7px; }
+.erp-cross-project-task label { display: grid; gap: 4px; }
+.erp-cross-project-task input, .erp-cross-project-task select, .erp-cross-project-task textarea { max-width: 100%; }
+.erp-history ol { display: grid; gap: 7px; padding-left: 22px; }
+.erp-history li small { display: block; color: #9da8b8; margin-top: 3px; }
+.erp-history p { color: #9da8b8; }
+.erp-form-error { color: #ffb6a8; }
+.erp-empty { margin: 20px 0; padding: 24px; border: 1px dashed #ffffff30; border-radius: 8px; color: #b9c0cc; }
+.erp-project-list { display: grid; gap: 16px; margin-top: 20px; }
+.erp-project-card { padding: 18px; border: 1px solid #ffffff20; border-radius: 9px; background: #ffffff05; }
+.erp-project-title h2 { margin: 9px 0 4px; }
+.erp-project-actions, .erp-card-actions { display: flex; gap: 9px; align-items: center; }
+.erp-project-actions button, .erp-card-actions button, .erp-need-list button, .erp-work-order-list button, .erp-inline-form button { background: #ffffff10; color: inherit; border: 1px solid #ffffff2b; border-radius: 4px; padding: 7px 10px; cursor: pointer; }
+.erp-project-card h3 { margin: 20px 0 8px; font-size: 1rem; }
+.erp-need-list, .erp-work-order-list { display: grid; gap: 9px; padding-left: 22px; }
+  .erp-work-order-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.erp-need-list li, .erp-work-order-list li { padding: 10px 12px; border-radius: 5px; background: #ffffff07; }
+.erp-need-list li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.erp-need-list li p { margin: 6px 0; color: #c2cad6; }
+.erp-need-list li .erp-change-note { padding: 8px 10px; border-left: 2px solid #8096b0; background: #ffffff08; color: #cbd4df; font-size: .82rem; }
+.erp-source-screen { margin-top: 12px; padding: 9px 12px; border-left: 2px solid #a58ac9; background: #ffffff08; }
+.erp-source-screen p { font-size: .84rem; }
+.erp-source-screen ul { display: grid; gap: 8px; margin: 8px 0; padding-left: 18px; }
+.erp-source-screen li { display: block; padding: 0; background: transparent; }
+.erp-source-screen small { display: block; margin-top: 4px; color: #aeb7c5; }
+.erp-source-screen code { overflow-wrap: anywhere; color: #d7c8ef; }
+.erp-need-list small, .erp-work-order-list small { display: block; margin-top: 5px; color: #9da8b8; }
+.erp-reservation-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; }
+.erp-need-list .erp-reservation-actions button { margin-top: 5px; }
+.erp-resource-commitments { margin: 20px 0 26px; padding: 16px; border: 1px solid #ffffff24; border-radius: 9px; background: #ffffff06; }
+.erp-resource-commitments > p { color: #b8c2d0; max-width: 1000px; }
+.erp-commitment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: 12px; }
+.erp-commitment-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 14px 0; }
+.erp-commitment-controls label { display: grid; gap: 4px; }
+.erp-commitment-controls span { color: #aab5c4; margin-left: auto; }
+.erp-commitment-card { min-width: 0; padding: 14px; border: 1px solid #ffffff1e; border-radius: 7px; background: #00000018; }
+.erp-commitment-card h3 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.erp-commitment-card h3 small { display: block; margin-top: 4px; color: #aab5c4; font-weight: 400; }
+.erp-commitment-card p, .erp-commitment-card li { overflow-wrap: anywhere; }
+.erp-commitment-card dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.erp-commitment-card dl div { padding: 8px; background: #ffffff08; border-radius: 4px; }
+.erp-commitment-card dt { color: #9da8b8; font-size: .8rem; }
+.erp-commitment-card dd { margin: 3px 0 0; font-weight: 600; }
+.erp-commitment-card [role="note"] { padding: 8px; border-left: 2px solid #d2a85b; background: #ffffff08; }
+.erp-card-actions { margin-top: 14px; }
+.erp-status-active { color: #a7e4b2; }
+.erp-status-paused { color: #ffd486; }
+.erp-status-completed { color: #9cc8ff; }
+.erp-status-cancelled { color: #ffb6a8; }
+.erp-batch-fulfillment { margin: 18px 0; padding: 14px; border: 1px solid #56708a; border-radius: 8px; background: #162433; }
+.erp-batch-fulfillment-form { display: grid; gap: 12px; }
+.erp-batch-fulfillment-form fieldset { display: grid; gap: 8px; }
+.erp-batch-need { display: grid; grid-template-columns: 22px 1fr; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; background: #ffffff08; }
+.erp-batch-need input { margin-top: 4px; }
+.erp-batch-need small { display: block; margin-top: 4px; color: #aeb8c5; }
+.erp-batch-order-draft { display: grid; gap: 10px; margin: 14px 0; padding: 12px; border: 1px solid #40556b; border-radius: 6px; }
+.erp-batch-order-draft select[multiple] { min-height: 78px; }
+.erp-need-bundle { margin: 18px 0; padding: 14px; border: 1px solid #56708a; border-radius: 8px; background: #162433; }
+.erp-need-bundle-row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); margin: 12px 0; padding: 12px; border: 1px solid #40556b; border-radius: 6px; }
+.erp-observation-change-queue { margin: 18px 0; padding: 14px; border: 1px solid #725d37; border-radius: 8px; background: #272216; }
+.erp-observation-change-queue > ol { display: grid; gap: 10px; padding-left: 24px; }
+.erp-observation-change-queue > ol > li { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 12px; border: 1px solid #51452e; border-radius: 6px; }
+.erp-observation-change-actions { display: grid; flex: 0 0 auto; gap: 8px; justify-items: start; }
+.erp-observation-change-actions label { display: flex; align-items: start; gap: 6px; max-width: 15rem; }
+.erp-observation-change-group { margin: 12px 0; padding-top: 12px; border-top: 1px solid #51452e; }
+.erp-need-list > li:focus { outline: 2px solid #cfaa51; outline-offset: 3px; }
+@media (max-width: 760px) { .erp-workbench { padding: 14px; } .erp-workbench-header, .erp-project-title { flex-direction: column; } .erp-need-list li, .erp-work-order-queue li, .erp-unworked-needs li, .erp-observation-change-queue > ol > li { display: grid; } .erp-create-form label, .erp-inline-form label { width: 100%; } }
+
+/* Player-first project view: keep operational diagnostics available but quiet by default. */
+.erp-player-projects { display: grid; grid-template-columns: minmax(220px, 290px) minmax(0, 1fr); gap: 22px; align-items: start; margin: 22px 0 28px; }
+.erp-change-approvals { margin: 18px 0 24px; padding: 18px; border: 1px solid var(--accent, #8f78ff); border-radius: 12px; background: color-mix(in srgb, var(--accent, #8f78ff) 7%, var(--panel, #151922)); }
+.erp-change-approval { margin: 14px 0; padding: 16px; border: 1px solid var(--border, #343b49); border-radius: 10px; background: var(--panel, #151922); }
+.erp-change-approval > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.erp-change-approval h3 { display: inline-block; margin: 0 0 0 10px; text-transform: capitalize; }
+.erp-change-approval pre { max-height: 360px; overflow: auto; padding: 12px; background: var(--surface, #0e1118); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.erp-approval-digest { font: 0.75rem ui-monospace, monospace; overflow-wrap: anywhere; color: var(--muted, #aab0bd); }
+.erp-change-approval-actions { display: flex; gap: 10px; }
+.erp-player-project-nav, .erp-player-project-detail { border: 1px solid #ffffff20; border-radius: 12px; background: #ffffff05; padding: 18px; }
+.erp-player-project-nav h2 { font-size: 1.05rem; margin: 0 0 12px; }
+.erp-player-project-nav ul { display: grid; list-style: none; padding: 0; margin: 0; gap: 8px; }
+.erp-player-project-nav button { display: grid; width: 100%; text-align: left; gap: 5px; padding: 11px; border: 1px solid #ffffff18; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.erp-player-project-nav button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.erp-player-project-nav button strong { font-size: .93rem; }
+.erp-player-project-detail > header h2 { margin: 7px 0; }
+.erp-player-project-detail > header p, .erp-player-project-note { color: var(--muted, #aab0bd); margin: 6px 0 14px; }
+.erp-next-action { margin: 18px 0; padding: 18px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent) 52%, #ffffff20); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.erp-next-action-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.erp-next-action-heading h3 { margin: 2px 0 8px; }
+.erp-next-action-copy { font-size: 1.04rem; line-height: 1.5; max-width: 72ch; }
+.erp-player-assignment { color: var(--muted, #aab0bd); }
+.erp-player-actions .erp-work-order-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.erp-player-actions .erp-work-order-actions button:first-child { border-color: var(--accent); font-weight: 700; }
+.erp-player-evidence { margin-top: 12px; }
+.erp-player-evidence summary, .erp-advanced-planning > summary { cursor: pointer; font-weight: 700; padding: 10px 0; }
+.erp-player-evidence p { margin: 9px 0; }
+.erp-player-steps { margin-top: 22px; }
+.erp-player-steps h3 { margin-bottom: 10px; }
+.erp-player-steps ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
+.erp-player-steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px; border-radius: 7px; background: #ffffff05; }
+.erp-player-steps li.is-next { outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); }
+.erp-player-step-number { color: var(--muted, #aab0bd); font-variant-numeric: tabular-nums; }
+.erp-player-step-title { font-weight: 600; }
+.erp-player-state { white-space: nowrap; border-radius: 999px; padding: 4px 9px; font-size: .78rem; font-weight: 700; }
+.erp-player-state-ready { background: #227a4833; color: #9ee2b8; }
+.erp-player-state-waiting { background: #92731e33; color: #f0d387; }
+.erp-player-state-needs_evidence { background: #8c562b33; color: #ffc18e; }
+.erp-player-state-completed, .erp-player-state-cancelled { background: #ffffff12; color: var(--muted, #aab0bd); }
+.erp-advanced-planning { margin-top: 24px; border-top: 1px solid #ffffff20; padding: 4px 14px 16px; border-radius: 8px; background: #ffffff03; }
+.erp-advanced-planning[open] > summary { border-bottom: 1px solid #ffffff20; margin-bottom: 16px; }
+@media (max-width: 760px) { .erp-player-projects { grid-template-columns: 1fr; gap: 12px; } .erp-player-project-nav ul { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); } .erp-player-steps li { grid-template-columns: 24px minmax(0, 1fr); } .erp-player-steps .erp-player-state { grid-column: 2; justify-self: start; } }
+
+.modal-wide { max-width: min(960px, 96vw); max-height: 90vh; overflow-y: auto; }

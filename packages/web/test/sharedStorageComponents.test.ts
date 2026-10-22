@@ -379,7 +379,7 @@ test("the stylesheet bounds the item table and hides secondary columns and wraps
 
 test("shared storage stays out of AccountFacts, totals, search, recent changes, AccountContext and the AI context UI: none of those modules or screens reads it (this checkpoint is presentation only)", () => {
   const src = (p: string) => readFileSync(fileURLToPath(new URL(`../src/${p}`, import.meta.url)), "utf8");
-  for (const file of ["totals.ts", "scopedFacts.ts", "components/AccountOverview.tsx", "components/AccountEconomy.tsx", "components/CharactersGrid.tsx", "components/AskAccountModal.tsx", "components/DeveloperExportModal.tsx", "components/ImportModal.tsx", "importOutcome.ts"]) {
+  for (const file of ["totals.ts", "scopedFacts.ts", "components/AccountOverview.tsx", "components/AccountEconomy.tsx", "components/CharactersGrid.tsx", "components/DeveloperExportModal.tsx", "components/ImportModal.tsx", "importOutcome.ts"]) {
     assert.doesNotMatch(src(file), /sharedStorage|SharedStorage|shared-storage/, `${file} must not read shared storage`);
   }
   // The only consumers are the Shared Storage surface itself, the App shell that hosts it, and the character-page wording.

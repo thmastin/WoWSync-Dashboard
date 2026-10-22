@@ -18,6 +18,10 @@ DEV Codex uses the repository-local `.codex/config.toml` with `approval_policy =
 
 Tate approval is required for authoritative database migration, production credentials, Windows LIVE destination changes, destructive LIVE operations, merge to `main`, and addon deployment or live-game validation requiring `/reload`. Ordinary DEV edits, commands, tests, builds, and feature-branch Git work are autonomous.
 
+## Long-running authorized ERP missions
+
+For a multi-phase user-authorized ERP mission, use the native persistent Codex Goal feature on the current thread when it is available. State the measurable outcome and safety limits in the Goal. Keep it active across ordinary test, review, commit, push, and reporting checkpoints; a checkpoint report is not mission completion. After each checkpoint, inspect the current branch and durable truth, then continue to the next useful authorized phase. Do not create a self-launching process or repeated `codex exec` loop while native Goals can continue the same thread. If a Goal is unavailable, use the durable truth `OPEN.md`/`SESSION.md` checkpoint with the supported `codex exec resume <session-id> [prompt]` or `codex exec resume --last [prompt]` command; this resumes a recorded session but does not schedule another run. Stop only at the mission's stated completion condition or a genuine approval, safety, live-player, platform, or technical boundary.
+
 ## Deploying to DEV
 
 The persistent DEV Dashboard and MCP run from an immutable exact-SHA release, not from any workspace, so normal workspace activity cannot change them. Deploy to DEV only when explicitly asked, and then only with the one command, passing the exact SHA you validated and pushed:
@@ -27,6 +31,8 @@ wowsync-dev-deploy deploy <branch-or-ref> <validated-sha>
 ```
 
 Report the result it prints. Do not run `wowsync-dev-deploy rollback`, or restart DEV services any other way, unless explicitly asked; the deploy command's own automatic recovery is the only routine rollback. `wowsync-dev-deploy status` is read-only and always fine. Details: `docs/OPERATIONS_RUNBOOK.md` ("Deploying to DEV").
+
+A release that adds a database table or index is refused by the plain command. Never infer schema declarations yourself: add `--expect-schema-add <declaration>` only when the user's instruction names that exact declaration or explicitly approves the exact `wowsync-dev-deploy prepare` schema plan that printed it, and add `--previous-code-compatible` only when the user explicitly says so — both are Tate decisions. Declarations apply to that one invocation; repeat them only on Tate's instruction. Ordinary deployments remain the single tool-mediated command above; never work around a refused schema change any other way. Details: `docs/OPERATIONS_RUNBOOK.md` ("Deploying an expected additive schema change").
 
 ## Current state and next milestone
 

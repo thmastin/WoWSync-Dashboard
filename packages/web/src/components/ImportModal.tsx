@@ -4,6 +4,7 @@ import { formatCopper, formatCopperDelta, formatPlaytime } from "../format.ts";
 import { classifyImport, hasAnyChange } from "../importOutcome.ts";
 import type { ImportResult } from "../types.ts";
 import { VERSION_LABELS } from "../versions.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
 
 export default function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
   const [text, setText] = useState("");
@@ -82,7 +83,7 @@ export default function ImportModal({ onClose, onImported }: { onClose: () => vo
         {result && (
           <div className="import-result">
             <p>
-              {classifyImport(result) === "duplicate" ? "Already imported" : "Imported"} <strong>{result.character.name}</strong>
+              {classifyImport(result) === "duplicate" ? "Already imported" : "Imported"} <strong>{characterDisplayName(result.character)}</strong>
               <br />
               <span className="muted">{VERSION_LABELS[result.character.version]}</span>
             </p>

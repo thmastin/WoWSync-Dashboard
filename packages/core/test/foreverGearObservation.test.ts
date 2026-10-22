@@ -1,0 +1,335 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { buildForeverGearObservation, normalizeForeverStructuredObservation, type ForeverStructuredObservation } from "../src/foreverGearObservation.ts";
+import type { EquipmentSection, InventorySection } from "../src/types.ts";
+
+const equipment: EquipmentSection = { status: { state: "OBSERVED", observedAt: 100 }, slots: [{ slot: 16, slotName: "Main Hand", empty: false, itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade" }] };
+const bags: InventorySection = { status: { state: "OBSERVED", observedAt: 101 }, containers: [], itemsKnownEmpty: false, items: [{ itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade", qty: 1 }, { itemRef: "item:456:0:0:0:0:0:0:0:77:0:0:0", name: "Variant", qty: 2 }] };
+const bank: InventorySection = { status: { state: "UNKNOWN", reason: "Not captured" }, containers: [], itemsKnownEmpty: false, items: [] };
+const identity = { version: "forever" as const, identityKey: "forever::hallo::hero", name: "Hero", realm: "Hallo" };
+const sidecar: ForeverStructuredObservation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hero", realm: "Hallo", generatedAt: 99, sourceCharacterGuid: "Player-1-HERO", equipment: { observedAt: 100, completeness: "complete", data: { slots: { "16": { itemID: 999, itemString: "item:999:4:5", name: "Structured Blade", itemLevel: 2 } } } }, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString: "item:999:4:5", count: 2, name: "Structured Variant" } } }] } }, bank: { observedAt: 101, completeness: "unknown", reason: "not visited", data: {} }, itemMetadata: {} };
+
+test("Forever structured sidecar is isolated by version, identity, profile, and export timestamp", () => {
+  assert.ok(normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 99));
+  assert.equal(normalizeForeverStructuredObservation(sidecar, "retail", "Hero", "Hallo", 99), undefined);
+  assert.equal(normalizeForeverStructuredObservation(sidecar, "forever", "Other", "Hallo", 99), undefined);
+  assert.equal(normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 98), undefined);
+  assert.equal(normalizeForeverStructuredObservation({ ...sidecar, clientProfile: "Retail" }, "forever", "Hero", "Hallo", 99), undefined);
+});
+
+test("Forever profession recipes accept the validated partial catalogue shape from any well-formed Forever build", () => {
+  const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 1, uniqueCandidateCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, evidence: "OBSERVED", observedAt: 100, recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: 100, outputItemID: 2862, reagentSlots: [{ quantityRequired: 1, reagents: [{ itemID: 2835 }] }] }] }] };
+  const recipes = { observedAt: 100, capture: 59, revision: 2, source: "client", data: recipeData };
+  const current = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001" as const, professionRecipes: recipes };
+  const normalized = normalizeForeverStructuredObservation(current, "forever", "Hero", "Hallo", 99);
+  assert.equal(normalized?.professionRecipes?.status.state, "OBSERVED");
+  assert.equal((normalized?.professionRecipes?.data.professions as any[])[0].recipes[0].outputItemID, 2862);
+  const olderBuild = normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:1.60.1:70291:16001" }, "forever", "Hero", "Hallo", 99);
+  assert.equal(olderBuild?.professionRecipes?.status.state, "OBSERVED", "the recipe shape is validated by content, not by an exact build allowlist");
+  const launchBuild = normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:1.61.0:71234:16100" }, "forever", "Hero", "Hallo", 99);
+  assert.equal(launchBuild?.professionRecipes?.status.state, "OBSERVED", "a future Forever build is not silently discarded at import");
+  assert.equal(normalizeForeverStructuredObservation({ ...current, clientProfile: "Forever:beta" }, "forever", "Hero", "Hallo", 99), undefined, "malformed profiles still fail closed");
+  assert.equal(normalizeForeverStructuredObservation(current, "retail", "Hero", "Hallo", 99), undefined, "Forever recipe evidence remains version-isolated");
+  const falselyComplete = normalizeForeverStructuredObservation({ ...current, professionRecipes: { ...recipes, data: { ...recipeData, coverage: { state: "COMPLETE", candidateCompleteness: "COMPLETE" } } } }, "forever", "Hero", "Hallo", 99);
+  assert.equal(falselyComplete?.professionRecipes, undefined, "unsupported complete-catalogue claims fail closed");
+  assert.ok(falselyComplete?.equipment, "invalid optional recipe data does not discard valid equipment evidence");
+  const contradictory = normalizeForeverStructuredObservation({ ...current, professionRecipes: { ...recipes, data: { ...recipeData, professions: [{ ...recipeData.professions[0], recipes: [{ recipeID: 2660, learned: false, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED" }] }] } } }, "forever", "Hero", "Hallo", 99);
+  assert.equal(contradictory?.professionRecipes, undefined, "contradictory boolean and learned-state pairs fail closed");
+});
+
+test("Forever observation preserves exact variants and keeps evaluation claims UNKNOWN", () => {
+  const structured = normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 99);
+  const view = buildForeverGearObservation({ identity, snapshotId: 1, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.identity.identityKey, identity.identityKey);
+  assert.equal(view.equipment.items[0]?.itemRef, "item:999:4:5", "structured items stay paired with their own observedAt timestamp even if text differs");
+  assert.equal(view.equipment.observedAt, 100);
+  assert.equal(view.equipment.freshness, "recent");
+  assert.equal(view.equipment.items[0]?.provenance, "OBSERVED");
+  assert.equal(view.carried?.items?.[0]?.itemRef, "item:999:4:5", "structured bag rows stay paired with the structured bag timestamp");
+  assert.equal(view.carried?.items?.[0]?.quantity, 2);
+  assert.equal(view.evaluationCandidates.state, "UNKNOWN");
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.ok(view.evaluationCandidates.unclassifiedItems.some((item) => item.itemRef === "item:999:4:5"), "an observed carried variant with no item API record is retained as an unclassified evidence gap");
+  assert.match(view.evaluationCandidates.unclassifiedItems.find((item) => item.itemRef === "item:999:4:5")?.reason ?? "", /exact-variant Forever item API/);
+  assert.deepEqual(view.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
+  assert.equal(view.bank.state, "UNKNOWN");
+  assert.match(view.bank.reason!, /not empty/);
+});
+
+test("missing and stale structured observations remain explicit", () => {
+  const missing = buildForeverGearObservation({ identity, snapshotId: 2, importedAt: 1000, equipment, bags, bank, now: 10_000_000 });
+  assert.equal(missing.equipment.source, "WOWSYNC v1 equipment");
+  assert.equal(missing.equipment.freshness, "stale");
+  assert.equal(missing.metadataSource, "UNKNOWN");
+  assert.equal(missing.evaluationCandidates.state, "UNKNOWN");
+});
+
+test("carried rows without exact item identifiers remain visible as UNKNOWN plan candidates", () => {
+  const view = buildForeverGearObservation({ identity, snapshotId: 201, generatedAt: 99, importedAt: 102, equipment,
+    bags: { ...bags, items: [{ name: "Unidentified carried row", qty: 2 }] }, bank, structured: { ...sidecar, bags: undefined, equipment: undefined }, now: 110 });
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
+  assert.equal(view.evaluationCandidates.unclassifiedItems[0]?.itemRef, undefined);
+  assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /identity and equipment class are UNKNOWN/);
+});
+
+test("equipment slots without item identifiers remain UNKNOWN and partial identifiers stay visible", () => {
+  const view = buildForeverGearObservation({ identity, snapshotId: 3, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: { ...sidecar, equipment: { observedAt: 103, completeness: "partial", data: { slots: { "1": {}, "16": { itemID: 321, name: "Partial only" } } } } }, now: 110 });
+  assert.equal(view.equipment.items[0]?.provenance, "UNKNOWN");
+  assert.equal(view.equipment.items[0]?.itemRef, undefined);
+  assert.equal(view.equipment.items[1]?.itemRef, "item:321");
+  assert.equal(view.equipment.items[1]?.itemIdentity, "PARTIAL");
+});
+
+test("structured bag slot arrays preserve the observed one-based WoW slot indexes", () => {
+  const view = buildForeverGearObservation({ identity, snapshotId: 4, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: { ...sidecar, bags: { observedAt: 104, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 111, itemString: "item:111:0", count: 3 }, { itemID: 112, itemString: "item:112:7", count: 1 }] }] } } }, now: 110 });
+  assert.deepEqual(view.carried.items?.map((item) => ({ slot: item.slot, itemRef: item.itemRef, quantity: item.quantity })), [
+    { slot: 1, itemRef: "item:111:0", quantity: 3 },
+    { slot: 2, itemRef: "item:112:7", quantity: 1 },
+  ]);
+});
+
+test("carried location, ownership, binding, and transferability remain separate", () => {
+  const itemString = "item:999:4:5";
+  const view = buildForeverGearObservation({ identity, snapshotId: 40, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bags: { observedAt: 104, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 2, bound: true, bindingState: "OBSERVED_TRUE" } } }] } } }, now: 110 });
+  const item = view.carried.items?.[0];
+  assert.equal(item?.itemRef, itemString);
+  assert.equal(item?.locatedWith.state, "OBSERVED");
+  assert.equal(item?.locatedWith.locationScope, "CHARACTER_CARRIED_INVENTORY");
+  assert.equal(item?.ownership.state, "UNKNOWN", "inventory location does not establish ownership");
+  assert.equal(item?.binding.state, "OBSERVED");
+  assert.equal(item?.binding.value, true);
+  assert.equal(item?.transferability.state, "UNKNOWN", "binding alone does not establish transferability");
+  assert.equal(view.identity.accountScope, "UNKNOWN");
+  const old = buildForeverGearObservation({ identity, snapshotId: 41, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bags: { observedAt: 1, completeness: "complete", lastAttemptStale: true, data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 2, bound: true, bindingState: "OBSERVED_TRUE" } } }] } } }, now: 10_000_000 });
+  assert.equal(old.carried.items?.[0]?.locatedWith.state, "LAST_SEEN");
+  assert.equal(old.carried.items?.[0]?.binding.state, "LAST_SEEN", "historical binding never becomes current OBSERVED evidence");
+  assert.equal(old.carried.items?.[0]?.transferability.state, "UNKNOWN");
+});
+
+function itemFact(itemString: string, itemID: number, equipLocation: string, equippable: boolean) {
+  const observed = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  const values = ["Synthetic", `|H${itemString}|h[Synthetic]|h`, 2, 3, 1, "Armor", "Leather", 1, equipLocation, 1, 0, 4, 2, 0, 0, null, false, ""];
+  return { itemString, itemID,
+    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [itemID, "Armor", "Leather", equipLocation, 1, 4, 2].map((value) => ({ observation: observed(value) })) },
+    itemInfo: { api: "C_Item.GetItemInfo", state: "OBSERVED_VALUE", returnCount: 18, returns: values.map((value, index) => ({ index: index + 1, observation: value === null ? { state: "NIL", type: "nil" } : observed(value) })) },
+    itemStats: { api: "C_Item.GetItemStats", state: "OBSERVED_VALUE", table: { state: "OBSERVED_TABLE", entryCount: 1, complete: true, entries: [{ key: "ITEM_MOD_STAMINA_SHORT", observation: observed(5) }] } },
+    isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: observed(equippable) }] },
+  };
+}
+
+test("Forever item API evidence exposes potential candidates without claiming eligibility or upgrades", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" }, equipment: { observedAt: 100, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)], statDeltaComparisons: { state: "OBSERVED_RAW_COMPARISONS", completeness: "complete", observedAt: 105, comparisons: [{ api: "C_Item.GetItemStatDelta", state: "OBSERVED_VALUE", input: { candidateItemString: itemString, equippedItemString: "item:999:4:5" }, table: { state: "OBSERVED_TABLE", complete: true, entries: [{ key: "ITEM_MOD_STAMINA_SHORT", observation: { state: "OBSERVED", type: "number", value: 2 } }] } }] } } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 5, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "OBSERVED");
+  assert.equal(view.evaluationCandidates.items.length, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 0, "a complete exact-variant candidate is not duplicated as unclassified");
+  assert.equal(view.evaluationCandidates.items[0]?.equipLocation, "INVTYPE_CHEST");
+  assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemInfo.returns[4]?.observation.value, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.itemStats.entries[0]?.key, "ITEM_MOD_STAMINA_SHORT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "PARTIALLY_VALIDATED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.interpretation, "RAW_ORDERED_PAIR_RESULT");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.equippedItemString, "item:999:4:5");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons[0]?.freshness, "recent");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.completeness, "complete");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.requiredLevel.value, 1);
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.itemClass.value, "Armor");
+  assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
+  assert.match(view.evaluationCandidates.items[0]?.reason ?? "", /does not establish character eligibility/);
+  const partial = structuredClone(structured);
+  partial.equipment = { ...partial.equipment!, completeness: "partial" };
+  const partialData = partial.itemEvidence!.data as Record<string, any>;
+  partialData.sourceSections.equipment.state = "partial";
+  partialData.statDeltaComparisons.completeness = "partial";
+  const partialView = buildForeverGearObservation({ identity, snapshotId: 8, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: partial, now: 110 });
+  assert.equal(partialView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons.length, 1, "a complete exact-item pair remains useful when unrelated pairs or slots are partial");
+  assert.equal(partialView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.completeness, "partial");
+  const staleEquipment = structuredClone(partial);
+  staleEquipment.equipment = { ...staleEquipment.equipment!, observedAt: 1 };
+  const staleEquipmentView = buildForeverGearObservation({ identity, snapshotId: 9, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: staleEquipment, now: 10_000_000 });
+  assert.deepEqual(staleEquipmentView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "fresh item/delta calls cannot make a pair against stale equipment current");
+  const stale = structuredClone(structured);
+  const staleDelta = ((stale.itemEvidence?.data as Record<string, unknown>).statDeltaComparisons as Record<string, unknown>);
+  staleDelta.observedAt = 1;
+  const staleView = buildForeverGearObservation({ identity, snapshotId: 6, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: stale, now: 10_000_000 });
+  assert.deepEqual(staleView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "stale pair results are withheld from the current item view");
+  assert.equal(staleView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaEvidence.freshness, "stale");
+  const unmatched = structuredClone(structured);
+  const pairs = ((unmatched.itemEvidence?.data as Record<string, unknown>).statDeltaComparisons as { comparisons: Array<{ input: { equippedItemString: string } }> }).comparisons;
+  pairs[0]!.input.equippedItemString = "item:123:not-equipped";
+  const unmatchedView = buildForeverGearObservation({ identity, snapshotId: 7, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: unmatched, now: 110 });
+  assert.deepEqual(unmatchedView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "pair results are withheld unless the exact equipped variant is observed");
+});
+
+test("build 70338 item API evidence remains raw until its semantics are live-validated", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001",
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "raw build 70338 calls", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 12, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
+  assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /build 70338.*raw observations/);
+  const equipped = (view.equipment.items[0] as { itemApiEvidence?: { clientProfile: string; validatedFields: { contractState: string } } } | undefined)?.itemApiEvidence;
+  assert.equal(equipped?.clientProfile, "Forever:1.60.1:70338:16001");
+  assert.equal(equipped?.validatedFields.contractState, "UNKNOWN");
+});
+
+test("open Forever bank contents retain item variants and empty scans remain distinct from inaccessible bank", () => {
+  const itemString = "item:321:2:4";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bank: { observedAt: 106, completeness: "complete", data: { containers: [{ id: 40, slots: { "1": { itemID: 321, itemString, count: 2, name: "Observed bar" } } }] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 13, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.bank.state, "OBSERVED");
+  assert.equal(view.bank.items?.[0]?.itemRef, itemString);
+  assert.equal(view.bank.items?.[0]?.quantity, 2);
+  assert.equal(view.bank.items?.[0]?.provenance, "OBSERVED");
+  const empty = buildForeverGearObservation({ identity, snapshotId: 14, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, bank: { observedAt: 106, completeness: "complete", data: { containers: [] } } }, now: 110 });
+  assert.equal(empty.bank.state, "OBSERVED");
+  assert.deepEqual(empty.bank.items, []);
+  assert.equal(buildForeverGearObservation({ identity, snapshotId: 15, importedAt: 102, equipment, bags, bank, now: 110 }).bank.state, "UNKNOWN");
+});
+
+test("CanUseItem is preserved as base-ID/current-player evidence and never exact-variant proof", () => {
+  const itemString = "item:999:4:5:77:0:0:0";
+  const fact = itemFact(itemString, 999, "INVTYPE_CHEST", true) as ReturnType<typeof itemFact> & Record<string, unknown>;
+  const observed = (value: number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  fact.playerCanUseItem = { api: "C_PlayerInfo.CanUseItem", state: "OBSERVED_VALUE", observedAt: 105,
+    input: { itemID: 999, itemString, scope: "CURRENT_PLAYER_ONLY" }, returns: [{ observation: observed(true) }] };
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "synthetic API contract fixture", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [fact] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 55, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  const signal = view.evaluationCandidates.items[0]?.itemApiEvidence.playerCanUseItem;
+  assert.equal(signal?.state, "OBSERVED");
+  assert.equal(signal?.itemID, 999);
+  assert.equal(signal?.identityScope, "BASE_ITEM_ID");
+  assert.match(signal?.reason ?? "", /not exact-variant/);
+  assert.equal(signal?.itemString, itemString, "exact variant is retained as contextual identity, not API input semantics");
+});
+
+test("Forever GetItemInfo semantics remain UNKNOWN when the returned hyperlink conflicts with the observed variant", () => {
+  const itemString = "item:999:4:5";
+  const wrongLink = itemFact(itemString, 999, "INVTYPE_CHEST", true);
+  wrongLink.itemInfo.returns[1] = { index: 2, observation: { state: "OBSERVED", type: "string", value: "|Hitem:999:other:variant|h[Synthetic]|h" } };
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [wrongLink] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 5, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items[0]?.classification, "POTENTIAL_EQUIPMENT", "raw discovery remains independent of metadata interpretation");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.contractState, "UNKNOWN");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.requiredLevel.state, "UNKNOWN");
+});
+
+test("candidate classification matches exact item variants and leaves missing rows partial", () => {
+  const firstVariant = "item:999:4:5";
+  const otherVariant = "item:999:4:5:6";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: {
+      "1": { itemID: 999, itemString: firstVariant, count: 1 },
+      "2": { itemID: 999, itemString: otherVariant, count: 2 },
+    } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(firstVariant, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 6, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "PARTIAL");
+  assert.deepEqual(view.evaluationCandidates.items.map((item) => item.itemRef), [firstVariant]);
+  assert.match(view.evaluationCandidates.reason, /not ruled out/);
+});
+
+test("uncached or stale item facts never become current candidate exclusions", () => {
+  const uncached = { ...itemFact("item:999:4:5", 999, "INVTYPE_CHEST", true),
+    itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "API_ERROR", returns: [] },
+  };
+  const missingFact: ForeverStructuredObservation = { ...sidecar,
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "C_Item evidence", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [uncached] } },
+  };
+  const unknown = buildForeverGearObservation({ identity, snapshotId: 7, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured: missingFact, now: 110 });
+  assert.equal(unknown.evaluationCandidates.state, "PARTIAL", "the source inventory itself is partial even when no API fact is usable");
+  assert.equal(unknown.evaluationCandidates.items.length, 0);
+  const stale = buildForeverGearObservation({ identity, snapshotId: 8, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 1, completeness: "complete", source: "Old C_Item evidence", data: { sourceSections: { bags: { observedAt: 1, state: "complete" } }, items: [itemFact("item:999:4:5", 999, "INVTYPE_CHEST", true)] } } }, now: 10_000_000 });
+  assert.equal(stale.evaluationCandidates.state, "LAST_SEEN");
+  assert.equal(stale.evaluationCandidates.items[0]?.provenance, "LAST_SEEN");
+  assert.equal(stale.bank.state, "UNKNOWN");
+});
+
+test("mismatched item identity cannot suppress a carried row using a non-equipment slot result", () => {
+  const itemString = "item:999:4:5";
+  const mismatched = itemFact(itemString, 999, "INVTYPE_NON_EQUIP_IGNORE", false);
+  mismatched.itemInfoInstant.returns[0] = { observation: { state: "OBSERVED", type: "number", value: 998 } };
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "adversarial identity mismatch fixture", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [mismatched] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 202, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1, "unverified metadata must not rule out the observed exact variant");
+  assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /missing or inconsistent/);
+});
+
+test("same-base-ID API evidence for a different item variant cannot classify or suppress the observed variant", () => {
+  const itemString = "item:999:4:5";
+  const fact = itemFact(itemString, 999, "INVTYPE_NON_EQUIP_IGNORE", false);
+  fact.itemInfoInstant.input.itemString = "item:999:other:variant";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "same-ID wrong-variant fixture", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [fact] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 203, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
+});
+
+test("partial base-item identifiers are not represented as exact variants in evaluation candidates", () => {
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "partial identity fixture", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact("item:999", 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 204, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 0);
+  assert.equal(view.evaluationCandidates.unclassifiedItems[0]?.itemRef, "item:999");
+  assert.equal(view.evaluationCandidates.unclassifiedItems[0]?.itemIdentity, "PARTIAL");
+});
+
+test("partial or stale carried-source timestamps cannot be upgraded by a fresh item API sample", () => {
+  const itemString = "item:999:4:5";
+  const facts = [itemFact(itemString, 999, "INVTYPE_CHEST", true)];
+  const partial = buildForeverGearObservation({ identity, snapshotId: 9, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 109, completeness: "complete", source: "fresh API, partial source", data: { sourceSections: { bags: { observedAt: 101, state: "partial" } }, items: facts } } }, now: 110 });
+  assert.equal(partial.evaluationCandidates.state, "PARTIAL");
+  assert.equal(partial.evaluationCandidates.items[0]?.provenance, "DERIVED", "an exact row remains usable evidence while coverage is partial");
+  const old = buildForeverGearObservation({ identity, snapshotId: 10, generatedAt: 99, importedAt: 102, equipment, bags, bank,
+    structured: { ...sidecar, itemEvidence: { observedAt: 10_000_000, completeness: "complete", source: "fresh API, old source", data: { sourceSections: { bags: { observedAt: 1, state: "complete" } }, items: facts } } }, now: 10_000_000 });
+  assert.equal(old.evaluationCandidates.state, "LAST_SEEN");
+  assert.equal(old.evaluationCandidates.freshness, "recent", "the fresh API sample cannot refresh its old inventory source");
+  assert.equal(old.evaluationCandidates.items[0]?.provenance, "LAST_SEEN");
+});
+
+test("partial equipment item facts do not downgrade complete carried-candidate coverage", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar,
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "partial", source: "equipment source partial; carried facts complete", data: {
+      sourceSections: { equipment: { observedAt: 100, state: "partial" }, bags: { observedAt: 101, state: "complete" } },
+      items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)],
+    } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 11, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.state, "OBSERVED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemRef, itemString);
+  assert.match(view.evaluationCandidates.reason, /Every carried row has matching/);
+  assert.deepEqual(view.evaluationCandidates.unknowns, { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" });
+});

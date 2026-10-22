@@ -123,12 +123,12 @@ export function exposureWarning(resolved: ResolvedHost, port: number): string | 
   return [
     `WARNING: WoWSync is listening ${where} (WOWSYNC_HOST=${resolved.host}, port ${port}).`,
     "It has NO authentication. Anyone who can reach this address can read your character data,",
-    "import or DELETE characters, and use Ask My Account (spending your OPENAI_API_KEY).",
+    "and import or DELETE characters.",
     "Only do this on a network you trust. Unset WOWSYNC_HOST to listen on this machine only.",
   ].join("\n");
 }
 
-/** The URL a client on THIS machine should use to reach a server bound to `host` (used for /api/ask's request to its own /api/account-context). */
+/** The URL a client on THIS machine should use to reach a server bound to `host` (used for the server's requests to its own routes). */
 export function loopbackOrigin(host: string, port: number): string {
   if (classifyAddress(host) === "all-interfaces") return `http://127.0.0.1:${port}`;
   if (net.isIPv6(host)) return `http://[${host}]:${port}`;

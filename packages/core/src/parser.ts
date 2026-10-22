@@ -7,6 +7,8 @@
 // actionable error instead of silently producing wrong data.
 
 import { fieldNumber, fieldValue } from "./escape.ts";
+import { isForeverClient } from "./foreverProfile.ts";
+import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 import type {
   AccountBankSection,
   CharacterSection,
@@ -166,9 +168,12 @@ function parseCharacter(lines: string[]): CharacterSection {
   };
 
   const name = fieldValue(get("Name: "));
+  const surname = fieldValue(get("Surname: ", false));
+  const surnameSource = surname !== undefined ? fieldValue(get("SurnameSource: ", false)) : undefined;
   const realm = fieldValue(get("Realm: "));
   const cls = fieldValue(get("Class: "));
   const level = fieldNumber(get("Level: "));
+  const race = fieldValue(get("Race: ", false));
   const faction = fieldValue(get("Faction: "));
   const moneyCopper = fieldNumber(get("MoneyCopper: "));
   // PlayedSeconds/LevelPlayedSeconds were added to the schema after v1's
@@ -196,13 +201,23 @@ function parseCharacter(lines: string[]): CharacterSection {
 
   const clientFamily = fieldValue(get("ClientFamily: ", false));
   const iface = clientFamily !== undefined ? fieldValue(get("Interface: ", false)) : undefined;
+  // GearExport 2c5e9b3+: Forever exports state their own compatibility claim. Kept verbatim and never
+  // trusted over the Dashboard's own build verification.
+  const exporterCompatibility = clientFamily !== undefined ? fieldValue(get("Compatibility: ", false)) : undefined;
+  const exporterCompatibilityNote = exporterCompatibility !== undefined ? fieldValue(get("CompatibilityNote: ", false)) : undefined;
+  if (surname !== undefined && !isForeverClient({ clientFamily, clientVersion, clientBuild, interface: iface })) {
+    fail("Surname is only supported for a well-formed Forever client profile");
+  }
 
   return {
     status,
     name,
+    surname,
+    surnameSource,
     realm,
     class: cls,
     level,
+    race,
     faction,
     moneyCopper,
     playedSeconds,
@@ -213,6 +228,8 @@ function parseCharacter(lines: string[]): CharacterSection {
     clientBuild,
     clientFamily,
     interface: iface,
+    ...(exporterCompatibility !== undefined ? { exporterCompatibility } : {}),
+    ...(exporterCompatibilityNote !== undefined ? { exporterCompatibilityNote } : {}),
   };
 }
 
@@ -844,11 +861,19 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     fail("[GEAR CANDIDATES] is only valid for a Retail export");
   }
 
+  const character = result.character!;
+  if (isForeverClient(character)) {
+    for (const slot of result.equipment!.slots) {
+      const known = FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot];
+      if (known) slot.slotName = known;
+    }
+  }
+
   return {
     raw,
     generatedAt,
     formatLine,
-    character: result.character!,
+    character,
     location: result.location!,
     equipment: result.equipment!,
     bags: result.bags!,

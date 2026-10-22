@@ -10,10 +10,13 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
-import { BridgeError, findSavedVariablesFiles, readSavedExports, runImportSaved, selectExport, type Deps } from "../src/importSaved.ts";
+import { BridgeError, findSavedVariablesFiles, parseSavedExports, readSavedExports, runImportSaved, selectExport, type Deps } from "../src/importSaved.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { warband } from "../../core/test/sharedStorageBuilders.ts";
-import { exportFor, record, savedVariables } from "./savedVariablesFixtures.ts";
+import { exportFor, record, savedVariables, toLua } from "./savedVariablesFixtures.ts";
+import { DatabaseSync } from "node:sqlite";
+import { VIREK_TUPLE, envelope, sidecar, type EnvelopeOptions } from "../../core/test/equipmentObservationFixtures.ts";
+import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 
 // Fixtures (WoW-style SavedVariables text) live in savedVariablesFixtures.ts, shared with watchSaved.test.ts.
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
@@ -277,6 +280,14 @@ test("two saved records for one name+realm resolve to the NEWEST export, with a 
   assert.match(warnings[0], /2 saved records exist for Virek-Cairne/);
   const tie = [record("Virek", 100), { ...record("Virek", 100), text: exportFor("Virek", 100, { level: 60 }) }].map(({ name, realm, text, generatedAt }) => ({ name, realm, text, generatedAt }));
   assert.throws(() => selectExport(tie, { character: "Virek" }), /same time with different text/);
+});
+
+test("same-time identical SavedVariables exports with missing or conflicting source GUIDs are refused", () => {
+  const first = { ...record("Virek", 100, { guid: "Player-1-A" }), sourceCharacterGuid: "Player-1-A" };
+  const second = { ...record("Virek", 100, { guid: "Player-2-B" }), sourceCharacterGuid: "Player-2-B" };
+  assert.throws(() => selectExport([first, second], { character: "Virek" }), /missing or conflicting WoWSyncDB character GUIDs/);
+  const missing = { ...record("Virek", 100, { guid: "Player-3-C" }), sourceCharacterGuid: undefined };
+  assert.throws(() => selectExport([first, missing], { character: "Virek" }), /missing or conflicting WoWSyncDB character GUIDs/);
 });
 
 // --- consistency checks --------------------------------------------------------------------------------------
@@ -556,6 +567,138 @@ test("END TO END: the bridge imports through the real /api/import; a second run 
   });
 });
 
+test("END TO END: Forever import:saved carries the structured sidecar and WoWSyncDB GUID into the read model", async () => {
+  const generatedAt = 1_791_500_000;
+  const guid = "Player-1-HALLO";
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const file = svFile(savedVariables([{
+    guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
+    equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
+    bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
+    quests: toLua({ observedAt: generatedAt + 7, completeness: "partial", data: { formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: generatedAt + 7, activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, active: [{ questID: 1234, title: "A Captured Quest", titleState: "OBSERVED", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }], completedHistory: { state: "UNKNOWN", questIDs: [] }, issues: ["ReadyForTurnIn unknown"] } }),
+    forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
+      capturedAt: generatedAt + 6,
+      trainer: { state: "OBSERVED_OPEN_WINDOW", provenance: "IN_GAME_RUNTIME_CONTEXT", lastObserved: { state: "OBSERVED_OPEN_WINDOW", observedAt: generatedAt + 6, calls: [{ api: "GetTrainerServiceInfo", state: "OBSERVED_RAW" }] } },
+      skillLineCount: { observedAt: generatedAt + 4, state: "OBSERVED_VALUE" },
+      skillLineCoverage: "OBSERVED_INDEXED_ROWS",
+      skillLines: [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }],
+      specialization: { capturedAt: generatedAt + 5, activeIndex: { api: "C_SpecializationInfo.GetSpecialization", returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 1 } }] } },
+      itemFacts: { observedAt: generatedAt + 3, completeness: "complete", source: "C_Item live facts", items: [{ itemID: 124, itemString: "item:124:0:7", itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString: "item:124:0:7" }, returns: [{ index: 1, observation: { state: "OBSERVED", type: "number", value: 124 } }, { index: 2, observation: { state: "OBSERVED", type: "string", value: "Weapon" } }, { index: 3, observation: { state: "OBSERVED", type: "string", value: "Sword" } }, { index: 4, observation: { state: "OBSERVED", type: "string", value: "INVTYPE_WEAPON" } }] }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ index: 1, observation: { state: "OBSERVED", type: "boolean", value: true } }] } }] },
+    } }),
+  }]));
+  await withServer(async (base, store) => {
+    const result = await runImportSaved(["--character", "Hallo", "--file", file, "--url", base], live(base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("forever::hallo::hallo")[0];
+    assert.equal(snapshot.parsed.foreverGearObservation?.sourceCharacterGuid, guid);
+    assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
+    assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
+    assert.equal(snapshot.parsed.foreverGearObservation?.itemEvidence?.observedAt, generatedAt + 3);
+    assert.equal(snapshot.parsed.foreverGearObservation?.quests?.observedAt, generatedAt + 7);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.items[0]?.itemString, "item:124:0:7");
+    assert.deepEqual((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLines, [{ index: 1, name: "Daggers", skillID: 173, rank: 42, maxRank: 45, skillLineCategoryID: 6, state: "OBSERVED_VALUE", provenance: "IN_GAME_RUNTIME_CALL" }]);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.skillLinesObservedAt, generatedAt + 4, "skill evidence keeps its own count-call timestamp, not item-fact time");
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.specialization.capturedAt, generatedAt + 5);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.capturedAt, generatedAt + 6);
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.state, "OBSERVED_OPEN_WINDOW");
+    assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.trainerEvidence.lastObserved.calls[0].api, "GetTrainerServiceInfo");
+    const questObservation = snapshot.parsed.foreverGearObservation?.quests?.data as any;
+    assert.equal(questObservation.active[0].questID, 1234);
+    assert.equal(questObservation.active[0].readyForTurnIn, undefined, "nil turn-in readiness remains absent, not false");
+    assert.equal(questObservation.completedHistory.state, "UNKNOWN");
+  });
+});
+
+test("END TO END: Forever 70338 profession recipe section is preserved through SavedVariables import", async () => {
+  const generatedAt = 1_791_755_559;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+  const professionRecipes = toLua({ capture: 59, revision: 2, changedAt: generatedAt - 56, source: "client", data: {
+    formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 2, uniqueCandidateCount: 2, filteredEnumerationUsed: false },
+    professions: [{ baseSkillLineID: 164, skillLineID: 2938, professionName: "Blacksmithing", name: "Blacksmithing", evidence: "OBSERVED", observedAt: generatedAt - 56,
+      recipes: [
+        { recipeID: 2660, name: "Rough Sharpening Stone", learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2862, reagentSlots: [{ slotIndex: 1, quantityRequired: 1, reagents: [{ itemID: 2835 }] }] },
+        { recipeID: 2661, name: "Copper Chain Belt", learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2851, reagentSlots: [{ slotIndex: 1, quantityRequired: 6, reagents: [{ itemID: 2840 }] }] },
+      ] }],
+  } });
+  const file = svFile(savedVariables([{ guid: "Player-1-RORDIN", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt, captureProfile: "Forever:1.60.1:70338:16001", professionRecipes }]));
+  await withServer(async (_base, store) => {
+    const result = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--file", file, "--url", _base], live(_base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin")[0];
+    const captured = snapshot.parsed.foreverGearObservation?.professionRecipes as any;
+    assert.equal(snapshot.parsed.characterState, undefined, "Forever recipe rows do not enter the Retail-only characterState sidecar");
+    assert.equal(captured.status.state, "OBSERVED");
+    assert.equal(captured.observedAt, generatedAt - 56);
+    assert.equal(captured.data.coverage.candidateCompleteness, "UNKNOWN");
+    assert.deepEqual(captured.data.professions[0].recipes.map((row: any) => [row.recipeID, row.learnedState, row.outputItemID, row.reagentSlots[0].quantityRequired]), [[2660, "OBSERVED_TRUE", 2862, 1], [2661, "OBSERVED_FALSE", 2851, 6]]);
+  });
+});
+
+test("LAUNCH SAFETY: a future Forever client build with a surname keeps its recipe sidecar through SavedVariables import", async () => {
+  const generatedAt = 1_791_755_559;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.61.0", clientBuild: "71234", interface: "16100" } });
+  const professionRecipes = toLua({ capture: 59, revision: 2, changedAt: generatedAt - 56, source: "client", data: {
+    formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 2, uniqueCandidateCount: 2, filteredEnumerationUsed: false },
+    professions: [{ baseSkillLineID: 164, skillLineID: 2938, professionName: "Blacksmithing", name: "Blacksmithing", evidence: "OBSERVED", observedAt: generatedAt - 56,
+      recipes: [
+        { recipeID: 2660, name: "Rough Sharpening Stone", learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2862, reagentSlots: [{ slotIndex: 1, quantityRequired: 1, reagents: [{ itemID: 2835 }] }] },
+        { recipeID: 2661, name: "Copper Chain Belt", learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: generatedAt - 56, skillLineIDs: [2938], outputItemID: 2851, reagentSlots: [{ slotIndex: 1, quantityRequired: 6, reagents: [{ itemID: 2840 }] }] },
+      ] }],
+  } });
+  const file = svFile(savedVariables([{ guid: "Player-1-RORDIN", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt, captureProfile: "Forever:1.61.0:71234:16100", professionRecipes }]));
+  await withServer(async (_base, store) => {
+    const result = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--file", file, "--url", _base], live(_base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin")[0];
+    const captured = snapshot.parsed.foreverGearObservation?.professionRecipes as any;
+    assert.equal(snapshot.parsed.characterState, undefined, "Forever recipe rows do not enter the Retail-only characterState sidecar");
+    assert.equal(snapshot.parsed.character.surname, "Longbraid");
+    assert.equal(snapshot.parsed.foreverGearObservation?.clientProfile, "Forever:1.61.0:71234:16100");
+    assert.equal(captured.status.state, "OBSERVED");
+    assert.equal(captured.observedAt, generatedAt - 56);
+    assert.equal(captured.data.coverage.candidateCompleteness, "UNKNOWN");
+    assert.deepEqual(captured.data.professions[0].recipes.map((row: any) => [row.recipeID, row.learnedState, row.outputItemID, row.reagentSlots[0].quantityRequired]), [[2660, "OBSERVED_TRUE", 2862, 1], [2661, "OBSERVED_FALSE", 2851, 6]]);
+  });
+});
+
+test("END TO END: the SavedVariables bridge discovers a new Forever 70338 character with a surname", async () => {
+  const generatedAt = 1_791_683_475;
+  const text = buildWowSyncExport({ generatedAt, character: {
+    name: "Rordin", surname: "Longbraid", surnameSource: "UnitName[2]+UnitFullName[2]+UnitNameUnmodified[2]",
+    realm: "Classic Beta PvP 2", class: "Warrior", level: 3,
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+  } });
+  const rordin = {
+    guid: "Player-4613-016F932B", name: "Rordin", realm: "Classic Beta PvP 2", text, generatedAt,
+    captureProfile: "Forever:1.60.1:70338:16001",
+  };
+  const rootDir = wow({
+    [svPath("_classic_beta_", "262269#1")]: savedVariables([rordin]),
+  });
+  await withServer(async (base, store) => {
+    const imported = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--wow-dir", rootDir, "--url", base], live(base));
+    assert.equal(imported.exitCode, 0, all(imported));
+    assert.match(all(imported), /Result: imported as a new snapshot/);
+    const characters = store.listCharacters("forever");
+    assert.equal(characters.length, 1);
+    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(characters[0]?.name, "Rordin");
+    assert.equal(characters[0]?.surname, "Longbraid");
+    assert.equal(characters[0]?.realm, "Classic Beta PvP 2");
+    assert.equal(store.listCharacters("retail").length, 0, "the import remains in the Forever version bucket");
+    const snapshot = store.listSnapshots(characters[0]!.identityKey)[0];
+    assert.equal(snapshot?.parsed.character.clientBuild, "70338");
+    assert.equal(snapshot?.parsed.character.moneyCopper, undefined, "unobserved gold remains unknown");
+    assert.equal(snapshot?.parsed.raw, text, "the exact persisted WOWSYNC v1 export reaches storage");
+    const rosterResponse = await fetch(`${base}/api/versions/forever/characters`);
+    assert.equal(rosterResponse.status, 200);
+    const roster = await rosterResponse.json() as { characters: Array<{ identityKey: string; surname?: string; latestLevel?: number }> };
+    assert.deepEqual(roster.characters.map(({ identityKey, surname, latestLevel }) => ({ identityKey, surname, latestLevel })), [
+      { identityKey: "forever::classic beta pvp 2::rordin", surname: "Longbraid", latestLevel: 3 },
+    ], "the roster REST contract exposes the newly imported Forever character");
+  });
+});
+
 test("END TO END: a refusal by the real server and an absent server both leave the Dashboard untouched", async () => {
   const file = svFile(savedVariables([VIREK]));
   const store = new SqliteSnapshotStore(":memory:");
@@ -577,4 +720,214 @@ test("END TO END: a refusal by the real server and an absent server both leave t
     await new Promise<void>((r) => server.close(() => r()));
     store.close();
   }
+});
+
+// --- Slice A: Retail canonical equipment observations through the bridge -----------------------------------
+
+const MM_TUPLE = { observedAt: 1791375400, capture: 3, revision: 220 };
+/** Virek with GearExport 7958c56's canonical sections.equipment (incl. S.Attempt diagnostics) and its latestExport projection. */
+const virekWithEquipment = (options: EnvelopeOptions = {}, projection: unknown = sidecar(options.tuple ?? VIREK_TUPLE, options)) =>
+  record("Virek", 1_791_375_100, { equipment: toLua(envelope({ lastAttempt: true, ...options })), ...(projection === undefined ? {} : { specProjection: toLua(projection) }) });
+
+/** A real server over a file-backed store, plus a raw connection to read the observation table. */
+async function withObservedServer(run: (base: string, rows: () => Array<Record<string, any>>) => Promise<void>) {
+  const folder = mkdtempSync(join(tmpdir(), "wowsync-bridge-equipment-"));
+  const path = join(folder, "test.sqlite");
+  const store = new SqliteSnapshotStore(path);
+  const raw = new DatabaseSync(path);
+  const server = await listenOnce(createApp(store, 0, undefined, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
+  try {
+    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, () => raw.prepare("SELECT * FROM snapshot_equipment_observations ORDER BY id").all() as Array<Record<string, any>>);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+    raw.close();
+    store.close();
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+test("A13 readSavedExports carries the canonical sections.equipment subset plus the latestExport projection for a Retail record", () => {
+  const saved = virekWithEquipment();
+  const [read] = readSavedExports(svFile(savedVariables([saved])));
+  assert.equal(read.text, saved.text, "the text export is untouched");
+  const carried = read.equipmentObservation as { envelope: Record<string, unknown>; projection: unknown };
+  assert.deepEqual(carried, { envelope: envelope(), projection: sidecar() }, "exact 7958c56 fields, as plain JSON");
+  assert.deepEqual(carried.envelope.observedAt, 1791375064);
+  assert.equal((carried.envelope.specEquipmentObservation as any).roster.specializations[2].isUnlocked, false);
+});
+
+test("Forever 70291 bridge carries identity-matched structured inventory timestamps and metadata", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const record = {
+    ...({ guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt } as const),
+    race: "Gnome",
+    captureProfile: "Forever:1.60.1:70291:16001",
+    equipment: toLua({ observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } }),
+    bags: toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } }),
+    bank: toLua({ observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} }),
+    itemMetadata: toLua({ "123": { classID: 4 } }),
+  };
+  const [saved] = parseSavedExports(savedVariables([record]), "fixture");
+  assert.deepEqual(saved.foreverGearObservation, {
+    clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt, race: "Gnome", sourceCharacterGuid: "Player-1-HALLO",
+    equipment: { observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } },
+    bags: { observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } },
+    bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} },
+    itemMetadata: { "123": { classID: 4 } },
+  });
+  const wrongProfile = parseSavedExports(savedVariables([{ ...record, captureProfile: "Forever:1.60.1:69913:16001" }]), "fixture")[0];
+  assert.equal(wrongProfile.foreverGearObservation, undefined);
+  const oldText = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "69913", interface: "16001" } });
+  const wrongBuild = parseSavedExports(savedVariables([{ ...record, text: oldText }]), "fixture")[0];
+  assert.equal(wrongBuild.foreverGearObservation, undefined);
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(saved.text!, { foreverGearObservation: saved.foreverGearObservation });
+    assert.equal(imported.snapshot.parsed.character.race, "Gnome");
+    assert.equal(imported.character.race, "Gnome");
+  } finally { store.close(); }
+});
+
+test("Forever race is read from sections.character.data.race, with identity.race as fallback and an observed Race: line winning", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  assert.match(text, /^Race: \?$/m);
+  const base = { guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001" };
+  const observation = (extra: Record<string, string>) => parseSavedExports(savedVariables([{ ...base, ...extra }]), "fixture")[0];
+  const raceOf = (extra: Record<string, string>) => (observation(extra).foreverGearObservation as { race?: string } | undefined)?.race;
+  assert.equal(raceOf({ sectionRace: "Dwarf" }), "Dwarf");
+  assert.equal(raceOf({ race: "Gnome" }), "Gnome");
+  assert.equal(raceOf({ sectionRace: "Dwarf", race: "Gnome" }), "Dwarf");
+  assert.equal(raceOf({}), undefined);
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const saved = observation({ sectionRace: "Dwarf" });
+    assert.equal(store.importSnapshot(saved.text!, { foreverGearObservation: saved.foreverGearObservation }).character.race, "Dwarf");
+    // An observed Race: text line still wins over the structured observation.
+    const withLine = text.replace("Race: ?", "Race: Human");
+    assert.match(withLine, /^Race: Human$/m);
+    const lineStore = new SqliteSnapshotStore(":memory:");
+    try {
+      assert.equal(lineStore.importSnapshot(withLine, { foreverGearObservation: saved.foreverGearObservation }).character.race, "Human");
+    } finally { lineStore.close(); }
+  } finally { store.close(); }
+});
+
+test("Forever duplicate-text re-sync persists race observed after the first import", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const base = { guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001" };
+  const first = parseSavedExports(savedVariables([base]), "fixture")[0];
+  const second = parseSavedExports(savedVariables([{ ...base, sectionRace: "Dwarf" }]), "fixture")[0];
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    assert.equal(store.importSnapshot(first.text!, { foreverGearObservation: first.foreverGearObservation }).character.race, undefined);
+    const resync = store.importSnapshot(second.text!, { foreverGearObservation: second.foreverGearObservation });
+    assert.equal(resync.isDuplicate, true);
+    assert.equal(resync.character.race, "Dwarf");
+  } finally { store.close(); }
+});
+
+test("Forever skill rows do not inherit a timestamp from unrelated fresh item evidence", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const row = record("Hallo", generatedAt, { guid: "Player-1-HALLO" });
+  row.captureProfile = "Forever:1.60.1:70291:16001";
+  row.forever70291Evidence = toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
+    capturedAt: generatedAt + 4,
+    skillLines: [{ name: "Daggers", rank: 42, maxRank: 45 }],
+    itemFacts: { observedAt: generatedAt + 5, completeness: "complete", items: [] },
+  } });
+  row.text = text;
+  row.generatedAt = generatedAt;
+  const [saved] = parseSavedExports(savedVariables([row]), "fixture");
+  const data = ((saved.foreverGearObservation as any)?.itemEvidence as any)?.data;
+  assert.deepEqual(data.skillLines, [{ name: "Daggers", rank: 42, maxRank: 45 }]);
+  assert.equal(data.skillLinesObservedAt, undefined, "sidecar and itemFacts times do not refresh skill evidence");
+});
+
+test("Forever trainer raw evidence survives SavedVariables parsing without item-fact rows", () => {
+  const generatedAt = 1_791_500_000;
+  const row = record("Hallo", generatedAt, { guid: "Player-1-HALLO" });
+  row.captureProfile = "Forever:1.60.1:70338:16001";
+  row.text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+  row.generatedAt = generatedAt;
+  const trainer = { state: "OBSERVED_OPEN_WINDOW", provenance: "IN_GAME_RUNTIME_CONTEXT", lastObserved: { state: "OBSERVED_OPEN_WINDOW", calls: [{ api: "GetTrainerServiceInfo", returnCount: 6, interpretation: "UNKNOWN" }] } };
+  row.forever70291Evidence = toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { capturedAt: generatedAt + 3, trainer } });
+  const [saved] = parseSavedExports(savedVariables([row]), "fixture");
+  const observation = saved.foreverGearObservation as any;
+  assert.equal(observation?.clientProfile, "Forever:1.60.1:70338:16001");
+  assert.equal(observation?.itemEvidence?.observedAt, generatedAt + 3, "raw section timestamp provides its own evidence envelope when itemFacts is absent");
+  assert.equal(observation?.itemEvidence?.data?.trainerEvidence.lastObserved.calls[0].returnCount, 6);
+});
+
+test("A41 the bridge never transports S.Attempt's lastAttemptAt / lastAttemptError", () => {
+  const [read] = readSavedExports(svFile(savedVariables([virekWithEquipment()])));
+  const env = (read.equipmentObservation as any).envelope;
+  assert.equal("lastAttemptAt" in env, false);
+  assert.equal("lastAttemptError" in env, false);
+  assert.doesNotMatch(JSON.stringify(read.equipmentObservation), /lastAttempt/);
+});
+
+test("A13 the bridge carries a projection-only record (for the server to refuse), omits the field when there is neither, and never for a non-Retail export", () => {
+  const projectionOnly = record("Virek", 1_791_375_100, { specProjection: toLua(sidecar()) });
+  assert.deepEqual(readSavedExports(svFile(savedVariables([projectionOnly])))[0].equipmentObservation, { projection: sidecar() });
+  assert.equal(readSavedExports(svFile(savedVariables([VIREK])))[0].equipmentObservation, undefined);
+  const classicText = buildWowSyncExport({ generatedAt: 1_791_375_100, character: { name: "Bromrik", realm: "Cairne", clientVersion: "1.15.7" } });
+  const classic = { guid: "Player-1-BROMRIK", name: "Bromrik", realm: "Cairne", text: classicText, generatedAt: 1_791_375_100, equipment: toLua(envelope()) };
+  assert.equal(readSavedExports(svFile(savedVariables([classic])))[0].equipmentObservation, undefined, "the Retail gate uses the export's own ClientFamily");
+});
+
+test("A13 import:saved POSTs the evidence with the exact text and reports the server's equipment outcome", async () => {
+  const saved = virekWithEquipment();
+  const file = svFile(savedVariables([saved]));
+  const d = deps(() => importedOk({ equipmentObservation: "recorded" }, saved.text));
+  const result = await runImportSaved(["--character", "Virek", "--file", file], d);
+  assert.equal(result.exitCode, 0, all(result));
+  const sent = JSON.parse(d.calls[0].body!);
+  assert.deepEqual(Object.keys(sent), ["text", "equipmentObservation"]);
+  assert.equal(sent.text, saved.text);
+  assert.deepEqual(sent.equipmentObservation, { envelope: envelope(), projection: sidecar() });
+  assert.match(all(result), /equipment observation: recorded/);
+});
+
+test("A13 A07-A10 A24 END TO END: the bridge records the canonical observation; a re-run is already-recorded; a spec swap with the same text is a second row", async () => {
+  const bm = virekWithEquipment();
+  const file = svFile(savedVariables([bm]));
+  await withObservedServer(async (base, rows) => {
+    const first = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.equal(first.exitCode, 0, all(first));
+    assert.match(all(first), /equipment observation: recorded/);
+    const [row] = rows();
+    assert.deepEqual([row.observed_at, row.capture, row.revision, row.completeness], [1791375064, 29, 220, "complete"]);
+    assert.doesNotMatch(row.evidence_json, /lastAttempt|generatedAt/);
+
+    const again = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.match(all(again), /Result: ALREADY IMPORTED \(duplicate\): the Dashboard changed nothing/);
+    assert.match(all(again), /equipment observation: already-recorded/);
+    assert.equal(rows().length, 1);
+
+    // GearExport re-captured equipment as Marksmanship; latestExport.text is byte-identical.
+    const mm = virekWithEquipment({ tuple: MM_TUPLE, specID: 254 });
+    assert.equal(mm.text, bm.text);
+    writeFileSync(file, savedVariables([mm]));
+    const swapped = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.match(all(swapped), /ALREADY IMPORTED \(duplicate\): the snapshot is unchanged; a new equipment observation was recorded/);
+    const both = rows();
+    assert.equal(both.length, 2);
+    assert.equal(both[0].snapshot_id, both[1].snapshot_id);
+    assert.deepEqual(both.map((r) => JSON.parse(r.evidence_json).specEquipmentObservation.activeSpecBefore.specID), [253, 254]);
+  });
+});
+
+test("A05 END TO END: a latestExport projection that disagrees with the canonical sidecar stores no observation", async () => {
+  const file = svFile(savedVariables([virekWithEquipment({}, sidecar(VIREK_TUPLE, { specID: 255 }))]));
+  await withObservedServer(async (base, rows) => {
+    const result = await runImportSaved(["--character", "Virek", "--file", file, "--url", base], live(base));
+    assert.equal(result.exitCode, 0, all(result));
+    assert.match(all(result), /Result: imported as a new snapshot/);
+    assert.match(all(result), /equipment observation: projection-mismatch/);
+    assert.equal(rows().length, 0);
+  });
 });

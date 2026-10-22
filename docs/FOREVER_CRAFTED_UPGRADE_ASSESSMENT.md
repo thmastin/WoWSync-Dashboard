@@ -1,0 +1,11 @@
+# Forever crafted-upgrade assessment
+
+The read-only `getForeverCraftedUpgradeAssessment` projection evaluates only equipment outputs from positively observed `OBSERVED_TRUE` learned recipes in one canonical Forever 1.60.1 snapshot. It retains the snapshot identity and profile, reports partial recipe coverage, and does not use or weaken the historical GUID guard on the existing gear observation projection.
+
+The result separates recipe evidence, output identity, item API equipability, slot mapping, the corresponding equipped item, player-specific eligibility, raw stat comparison, upgrade conclusion, profession skill, required skill, facilities, exact reagent needs, carried-bag availability, and bank state. Recipe knowledge alone does not establish craftability. A `POSSIBLE_RECORDED_STAT_UPGRADE` means only that complete recent same-snapshot item-stat tables show strict recorded-stat dominance; it is not an overall gameplay recommendation or proof. Missing evidence remains `UNKNOWN`.
+
+Item evidence must match the exact item ID and, when supplied, the exact item string. Stat comparisons require complete recent `C_Item.GetItemStats` tables from the snapshot profile and same mapped slot. Unknown stat names remain raw keys; build 70338 comparisons do not borrow 70291 labels as confirmed semantics. A reference lead may be attached under an item evidence row's `referenceFacts.leads`; its build relation is explicit, and reference values never substitute for observed candidate stats.
+
+Only the target character's carried bags are used for reagent availability. A current complete observed bag section can establish presence or insufficiency. Partial scans cannot establish insufficiency. Historical bags produce `LAST_SEEN`; omitted historical rows do not produce a zero quantity. Bank contents and other characters' ownership/access/transferability remain separate and are never treated as available materials.
+
+The core result is surfaced through AccountContext, the compact Ask My Account context, MCP tool `get_forever_crafted_upgrade_assessment`, and REST route `/api/characters/:identityKey/forever-crafted-upgrade-assessment` (with optional `snapshotId`). These are read-only views; they do not craft, transfer, reserve, or mutate ERP projects. The feature adds no database schema.

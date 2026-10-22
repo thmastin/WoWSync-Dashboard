@@ -10,7 +10,6 @@
 // database" (must stay deleted) from "an export imported after the deletion" (is new evidence).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildLlmContext } from "../src/llmContext.ts";
 import { SharedStorageIntegrityError, guildOwner, warbandOwner, type SharedStorageOwner } from "../src/sharedStorage.ts";
 import { BIG_ID, guild, warband } from "./sharedStorageBuilders.ts";
 import { NARROW, NOW, T, VIREK_1, VIREK_2, VIREK_KEY, WARBAND_KEY, WIDE, mats, normalized, withHarness, type Harness } from "./sharedStorageHarness.ts";
@@ -192,7 +191,7 @@ test("[SYNTHETIC] shared storage still stays out of AccountFacts, totals, search
     seed(h);
     const world = () => {
       const context = h.store.buildAccountContext(NOW);
-      return JSON.stringify({ facts: h.store.buildAccountFacts("retail", NOW), llm: buildLlmContext(context), versions: h.store.listVersions(), changes: h.store.recentChanges("retail").map((c) => c.diff) });
+      return JSON.stringify({ facts: h.store.buildAccountFacts("retail", NOW), versions: h.store.listVersions(), changes: h.store.recentChanges("retail").map((c) => c.diff) });
     };
     const before = world();
     h.store.deleteSharedStorageOwner(WB);

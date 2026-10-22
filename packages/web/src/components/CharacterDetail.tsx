@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchCharacter, fetchSnapshots } from "../api.ts";
+import { fetchCharacter, fetchSnapshots, fetchForeverGearAllocation, fetchForeverQuests } from "../api.ts";
 import { useAsync } from "../useAsync.ts";
 import ErrorNotice from "./ErrorNotice.tsx";
 import { professionEntryIsEvidence } from "@wowsync-dashboard/core/professionCatalog.ts";
@@ -16,9 +16,50 @@ import type { SectionStatus } from "../types.ts";
 import { CARRIED_WARBAND_NOTE, CARRIED_WARBAND_TITLE, OPEN_SHARED_WARBAND } from "../sharedStorage.ts";
 import GuildBankCard from "./GuildBankCard.tsx";
 import TrainerCategoryCard from "./TrainerCategoryCard.tsx";
+import { buildForeverGearObservation } from "@wowsync-dashboard/core/foreverGearObservation.ts";
+import { foreverSnapshotIdentityIssue } from "../foreverIdentityGuard.ts";
+import { characterDisplayName } from "@wowsync-dashboard/core/identity.ts";
+import { classifyForeverEmptySlot, equipmentSlotLabel, unresolvedItemName } from "@wowsync-dashboard/core/foreverEquipmentSlots.ts";
 
 function StatusBadge({ state }: { state: string }) {
   return <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>;
+}
+
+function foreverPlanLabel(disposition: string): string {
+  switch (disposition) {
+    case "EQUIP_CANDIDATE": return "Worth reviewing for this character";
+    case "KEEP": return "Keep as the observed comparison item";
+    case "POSSIBLE_OTHER_CHARACTER": return "May merit review for another character";
+    case "NOT_AN_UPGRADE_ON_OBSERVED_METRICS": return "No gain in the recorded metrics";
+    default: return "More evidence needed";
+  }
+}
+
+function foreverPlanFacet(facet: "eligibility" | "suitability" | "transferability", state: string): string {
+  if (facet === "eligibility") {
+    if (state === "UNKNOWN") return "not established";
+    if (state === "POSSIBLE_BY_RULE_SCREEN") return "possible by a limited rule screen; not confirmed";
+    if (state === "INELIGIBLE") return "excluded by a supported check";
+  }
+  if (facet === "suitability") {
+    if (state === "UNKNOWN") return "build fit not established";
+    if (state === "OBSERVED_SPEC_TAG_MATCH") return "observed specialization hint";
+    if (state === "OBSERVED_SPEC_TAG_MISMATCH") return "observed specialization caution";
+  }
+  if (facet === "transferability") {
+    if (state === "UNKNOWN") return "transfer route not established";
+    if (state === "BLOCKED_BOUND_TO_SOURCE") return "observed as bound to its current source";
+    if (state === "No transfer needed for source character" || state === "not applicable") return state;
+  }
+  return state;
+}
+
+function foreverPlanProvenance(provenance: string): string {
+  if (provenance === "OBSERVED") return "directly observed";
+  if (provenance === "LAST_SEEN") return "last seen, potentially stale";
+  if (provenance === "HYPOTHESIS") return "hypothesis-based screen";
+  if (provenance === "DERIVED") return "derived from observations";
+  return "unknown evidence";
 }
 
 /** Relative age under a section heading; LAST_SEEN is "as of …", never current. */
@@ -53,6 +94,7 @@ export default function CharacterDetail({
   onBack,
   onDeleted,
   onOpenSharedStorage,
+  onOpenForeverGearReview,
 }: {
   identityKey: string;
   /** Changes after an import/delete elsewhere, so this page reloads instead of showing pre-import data. */
@@ -62,6 +104,8 @@ export default function CharacterDetail({
   onDeleted: () => void;
   /** Opens the account-level Shared Storage view (the reconciled Warband / Guild Bank), which is where that state lives. */
   onOpenSharedStorage?: () => void;
+  /** Opens the roster-level Forever gear review from this character's assessment. */
+  onOpenForeverGearReview?: () => void;
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -88,8 +132,22 @@ export default function CharacterDetail({
   }, [load.state.data]);
 
   const snapshot = snapshots.find((s) => s.id === selectedId) ?? snapshots[0];
+  const foreverIdentityIssue = character?.version === "forever" ? foreverSnapshotIdentityIssue(snapshots.map((entry) => entry.parsed.foreverGearObservation)) : undefined;
+  const foreverObservation = character?.version === "forever" && snapshot && snapshot.parsed.character.clientFamily === "Forever" && snapshot.parsed.character.clientVersion === "1.60.1" && ["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") && snapshot.parsed.character.interface === "16001"
+    ? buildForeverGearObservation({ identity: { version: "forever", identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), ...(character.surnameSource ? { surnameSource: character.surnameSource } : {}), realm: character.realm }, snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt, equipment: snapshot.parsed.equipment, bags: snapshot.parsed.bags, bank: snapshot.parsed.bank, structured: snapshot.parsed.foreverGearObservation, now: Math.floor(Date.now() / 1000) })
+    : undefined;
   // Enrichment for this character's game version (bags, Character Bank, carried Warband/Guild); never blocks the page.
   const itemInfo = useItemInfoLoader(character?.version, refreshTick);
+  const foreverAllocationLoad = useAsync(
+    (signal) => character?.version === "forever" ? fetchForeverGearAllocation(identityKey, signal) : Promise.resolve(null),
+    `forever-allocation:${identityKey}`,
+    refreshTick,
+  );
+  const foreverQuestLoad = useAsync(
+    (signal) => character?.version === "forever" && snapshot ? fetchForeverQuests(identityKey, snapshot.id, signal) : Promise.resolve(null),
+    `forever-quests:${identityKey}:${snapshot?.id ?? "none"}`,
+    refreshTick,
+  );
 
   if (!character) {
     if (load.state.status === "error") return <ErrorNotice error={load.state.error} onRetry={load.retry} onBack={onBack} />;
@@ -105,9 +163,9 @@ export default function CharacterDetail({
         ← Back to characters
       </button>
       <div className="detail-header">
-        <h1>{character.name}</h1>
+        <h1>{characterDisplayName(character)}</h1>
         <div className="detail-subline">
-          {header.className} · Level {header.level} · {header.realm}
+          {header.className}{snapshot?.parsed.character.race ? ` · ${snapshot.parsed.character.race}` : ""} · Level {header.level} · {header.realm}
           {header.faction ? ` · ${header.faction}` : ""}
         </div>
         <div className="detail-subline muted small">
@@ -158,6 +216,7 @@ export default function CharacterDetail({
           { id: "detail-trainers", label: "Trainers" },
           { id: "detail-snapshots", label: "Snapshots" },
         );
+        if (character.version === "forever") detailTocLinks.splice(detailTocLinks.length - 1, 0, { id: "detail-forever-quests", label: "Quests" });
         return (
         <>
         <DetailToc links={detailTocLinks} />
@@ -228,7 +287,7 @@ export default function CharacterDetail({
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
             <SectionFreshnessLine status={snapshot.parsed.equipment.status} />
-            {snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
+              {character.version === "forever" && foreverIdentityIssue ? <p role="status">Equipment withheld: {foreverIdentityIssue}</p> : snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
               <>
@@ -242,7 +301,7 @@ export default function CharacterDetail({
                   }
                   const unknownNote =
                     ilvl.unknownIlvl > 0 ? ` / ${ilvl.unknownIlvl} equipped without ilvl` : "";
-                  const emptyNote = ilvl.empty > 0 ? ` / ${ilvl.empty} empty` : "";
+                  const emptyNote = ilvl.empty > 0 ? ` / ${ilvl.empty} physically empty` : "";
                   return (
                     <div className="muted small">
                       Avg ilvl {ilvl.average} (from {ilvl.counted}/{ilvl.equipped} equipped)
@@ -251,12 +310,18 @@ export default function CharacterDetail({
                     </div>
                   );
                 })()}
+                {character.version === "forever" && (() => {
+                  const empty = snapshot.parsed.equipment.slots.filter((slot) => slot.empty);
+                  const optional = empty.filter((slot) => classifyForeverEmptySlot(slot.slot) === "OPTIONAL_OR_COSMETIC").length;
+                  const applicabilityUnknown = empty.filter((slot) => classifyForeverEmptySlot(slot.slot) === "UNKNOWN_APPLICABILITY").length;
+                  return empty.length ? <p className="muted small">Empty slots are observations, not gear deficiencies: {empty.length} physically empty; {optional} optional/cosmetic; applicability UNKNOWN for {applicabilityUnknown}. No slot is counted as a missing upgrade.</p> : null;
+                })()}
                 <ul className="compact-list">
                   {snapshot.parsed.equipment.slots.map((s) => {
                     if (s.empty) {
                       return (
                         <li key={s.slot} className="muted">
-                          <span>{s.slotName || `Slot ${s.slot}`}:</span> empty
+                          <span>{equipmentSlotLabel(character.version, s.slot, s.slotName)}:</span> empty{character.version === "forever" && classifyForeverEmptySlot(s.slot) === "OPTIONAL_OR_COSMETIC" ? " (optional/cosmetic)" : character.version === "forever" ? " (applicability UNKNOWN)" : ""}
                         </li>
                       );
                     }
@@ -264,7 +329,7 @@ export default function CharacterDetail({
                     const ilvlLabel = level !== undefined ? `ilvl ${level}` : "ilvl ?";
                     return (
                       <li key={s.slot}>
-                        <span className="muted">{s.slotName || `Slot ${s.slot}`}:</span> {s.name ?? s.itemRef ?? "?"}{" "}
+                        <span className="muted">{equipmentSlotLabel(character.version, s.slot, s.slotName)}:</span> {s.name ?? (character.version === "forever" ? unresolvedItemName(undefined, s.itemRef) : s.itemRef ?? "?")}{" "}
                         <span className="muted small">- {ilvlLabel}</span>
                       </li>
                     );
@@ -275,8 +340,131 @@ export default function CharacterDetail({
             )}
           </section>
 
-          <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} />
-          <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} />
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-gear-observation">
+              <h3>Forever gear observations</h3>
+              {snapshot.parsed.character.clientFamily !== "Forever" || snapshot.parsed.character.clientVersion !== "1.60.1" || !["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") || snapshot.parsed.character.interface !== "16001" ? (
+                <p>Observation view unavailable: this view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001.</p>
+              ) : <>
+              <p className="muted small">
+                {foreverObservation?.identity.accountScope === "UNKNOWN"
+                  ? `${foreverObservation.identity.accountScope}: ${foreverObservation.identity.accountScopeReason}`
+                  : "Account scope unavailable."}
+              </p>
+              {foreverIdentityIssue && <p role="status">Observation unavailable: {foreverIdentityIssue}</p>}
+              {!foreverIdentityIssue && <>
+              <p className="muted small">
+                {snapshot.parsed.foreverGearObservation
+                  ? `Snapshot source: Forever WoWSyncDB structured sections · export ${formatAbsoluteTime(snapshot.parsed.foreverGearObservation.generatedAt)}`
+                  : "Source: WOWSYNC v1 export · structured section timestamps unavailable for this snapshot."}
+              </p>
+              <p>Equipped slots and carried items below are observations. Potential equipment candidates use same-snapshot Forever item API evidence; they are not character eligibility or upgrade verdicts.</p>
+              <p className="muted small">Equipment: {foreverObservation?.equipment.state} · {foreverObservation?.equipment.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.equipment.observedAt)} (${foreverObservation.equipment.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.equipment.source}</p>
+              {foreverObservation?.equipment.items.map((slot, index) => (
+                <div key={`forever-eq-${slot.slot}-${index}`} className="muted small">{slot.provenance === "OBSERVED" ? "OBSERVED equipped" : "UNKNOWN equipment slot"} · item identity {slot.itemIdentity ?? "UNKNOWN"} · {equipmentSlotLabel("forever", slot.slot, slot.slotName)}: {slot.name ?? unresolvedItemName(slot.itemID, slot.itemRef)} · {slot.itemRef ?? "item identifier unavailable"} · name {slot.nameResolution ?? (slot.name ? "OBSERVED" : "UNKNOWN")}{slot.nameSource ? ` via ${slot.nameSource}` : ""}</div>
+              ))}
+              <p className="muted small">Carried inventory: {foreverObservation?.carried.state} · {foreverObservation?.carried.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.carried.observedAt)} (${foreverObservation.carried.freshness})` : "timestamp UNKNOWN"} · {foreverObservation?.carried.source}</p>
+              {foreverObservation?.carried.items === undefined ? <div>Carried inventory: UNKNOWN.</div> : foreverObservation.carried.items.map((item, index) => (
+                <div key={`forever-bag-${index}`} className="muted small">{item.provenance} carried · item identity {item.itemIdentity ?? "UNKNOWN"} · {item.name ?? unresolvedItemName(item.itemID, item.itemRef)} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"} · name {item.nameResolution ?? (item.name ? "OBSERVED" : "UNKNOWN")}{item.nameSource ? ` via ${item.nameSource}` : ""}</div>
+              ))}
+              <p className="muted small">Potential equipment candidates: {foreverObservation?.evaluationCandidates.state} | {foreverObservation?.evaluationCandidates.observedAt ? `item evidence ${formatAbsoluteTime(foreverObservation.evaluationCandidates.observedAt)} (${foreverObservation.evaluationCandidates.freshness})` : "item evidence timestamp UNKNOWN"} | {String(foreverObservation?.evaluationCandidates.source ?? "UNKNOWN")} | {foreverObservation?.evaluationCandidates.reason}</p>
+              {foreverObservation?.evaluationCandidates.items.map((item, index) => (
+                <div key={`forever-candidate-${index}`} className="muted small">{item.provenance} potential equipment | {item.name ?? item.itemRef} | {item.itemType ?? "type UNKNOWN"}/{item.itemSubType ?? "subtype UNKNOWN"} | {item.equipLocation} | carried {item.container === undefined ? "location UNKNOWN" : `bag ${item.container}, slot ${item.slot ?? "?"}`} x {item.quantity ?? "?"} | {item.itemRef} | eligibility UNKNOWN | suitability UNKNOWN | upgrade UNKNOWN | transferability UNKNOWN</div>
+              ))}
+              <p>Bank: {foreverObservation?.bank.state === "UNKNOWN" ? `UNKNOWN; ${foreverObservation.bank.reason}` : `${foreverObservation?.bank.state ?? "UNKNOWN"} · ${foreverObservation?.bank.source ?? "source UNKNOWN"} · ${foreverObservation?.bank.observedAt ? `observed ${formatAbsoluteTime(foreverObservation.bank.observedAt)} (${foreverObservation.bank.freshness ?? "unknown freshness"})` : "timestamp UNKNOWN"}.`}</p>
+              {foreverObservation?.bank.items?.map((item, index) => <div key={`forever-bank-${index}`} className="muted small">{item.provenance} character bank · {item.name ?? unresolvedItemName(item.itemID, item.itemRef)} × {item.quantity ?? "?"} · {item.itemRef ?? "item variant unavailable"} · name {item.nameResolution}</div>)}
+              {foreverObservation?.bank.state !== "UNKNOWN" && foreverObservation?.bank.items?.length === 0 && <p className="muted small">No occupied slots were returned in this observed bank scan.</p>}
+              <p className="muted small">Trainer services: {String((foreverObservation?.trainerEvidence as { state?: unknown } | undefined)?.state ?? "UNKNOWN")}{typeof (foreverObservation?.trainerEvidence as { capturedAt?: unknown } | undefined)?.capturedAt === "number" ? ` · raw capture ${formatAbsoluteTime((foreverObservation?.trainerEvidence as { capturedAt: number }).capturedAt)}` : " · timestamp UNKNOWN"}. Raw trainer API capture is retained only when the trainer window is open; service meanings and requirements remain UNKNOWN until verified.</p>
+              {foreverObservation?.trainerEvidence && (foreverObservation.trainerEvidence as { lastObserved?: unknown }).lastObserved ? <details><summary>Raw trainer observation</summary><pre>{JSON.stringify((foreverObservation.trainerEvidence as { lastObserved?: unknown }).lastObserved, null, 2)}</pre></details> : null}
+              </>}
+              </>}
+            </section>
+          )}
+
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-quests">
+              <h3>Forever quests and objectives</h3>
+              {foreverQuestLoad.state.status === "error" ? <p role="status">Quest observation unavailable: {String(foreverQuestLoad.state.error)} <button onClick={foreverQuestLoad.retry}>Retry</button></p>
+                : foreverQuestLoad.state.status !== "ready" || !foreverQuestLoad.state.data ? <p>Loading quest observation…</p>
+                : foreverQuestLoad.state.data.status !== "FOUND" || !foreverQuestLoad.state.data.value?.data ? <p>Quest observation unavailable for this character snapshot.</p>
+                : (() => {
+                const quests = foreverQuestLoad.state.data.value.data;
+                return <>
+                  <p className="muted small">{quests.state} · {quests.completeness} coverage · {quests.observedAt ? `observed ${formatAbsoluteTime(quests.observedAt)} (${quests.freshness})` : "observation time UNKNOWN"} · {quests.source}</p>
+                  {quests.reason && <p>{quests.reason}</p>}
+                  {quests.activeState === "UNKNOWN" ? <p>Active quest log: UNKNOWN. Unavailable quest data is not an empty log.</p>
+                    : quests.activeState === "LAST_SEEN" ? <p>Showing LAST_SEEN quest observations; the most recent refresh did not succeed.</p>
+                    : quests.active?.length ? quests.active.map((quest) => <article className="allocation-row" key={`quest-${quest.questID}`}>
+                      <strong>{quest.title ?? `Quest ${quest.questID}`} <span className="muted small">(ID {quest.questID})</span></strong>
+                      <p className="muted small">Quest title {quest.titleState} · log row {quest.logIndex ?? "UNKNOWN"} · level {quest.level ?? "UNKNOWN"} · Complete: {quest.completionState === "OBSERVED" ? `OBSERVED (${quest.isComplete ? "yes" : "no"})` : "UNKNOWN"} · Turn-in readiness: {quest.turnInReadinessState === "OBSERVED" ? `OBSERVED (${quest.readyForTurnIn ? "yes" : "no"})` : "UNKNOWN"}</p>
+                      {(quest.isTask !== undefined || quest.isBounty !== undefined || quest.isStory !== undefined || quest.isAutoComplete !== undefined || quest.suggestedGroup !== undefined || quest.frequency !== undefined || quest.campaignID !== undefined) && <p className="muted small">Observed quest metadata: {[quest.isTask !== undefined ? `task ${quest.isTask ? "yes" : "no"}` : undefined, quest.isBounty !== undefined ? `bounty ${quest.isBounty ? "yes" : "no"}` : undefined, quest.isStory !== undefined ? `story ${quest.isStory ? "yes" : "no"}` : undefined, quest.isAutoComplete !== undefined ? `auto-complete ${quest.isAutoComplete ? "yes" : "no"}` : undefined, quest.suggestedGroup !== undefined ? `suggested group ${quest.suggestedGroup}` : undefined, quest.frequency !== undefined ? `frequency ${quest.frequency}` : undefined, quest.campaignID !== undefined ? `campaign ${quest.campaignID}` : undefined].filter(Boolean).join(" · ")}</p>}
+                      {quest.objectiveState === "UNKNOWN" ? <p>Objectives: UNKNOWN; the client did not provide objective data.</p>
+                        : quest.objectives?.length ? quest.objectives.map((objective, index) => <p className="muted small" key={`${quest.questID}-objective-${index}`}>
+                          {objective.text ?? "Objective text UNKNOWN"} · Finished {objective.finishedState === "OBSERVED" ? `OBSERVED (${objective.finished ? "yes" : "no"})` : "UNKNOWN"} · Progress {objective.numFulfilledState === "OBSERVED" && objective.numRequiredState === "OBSERVED" ? `OBSERVED ${objective.numFulfilled}/${objective.numRequired}` : "UNKNOWN"}
+                        </p>) : quest.objectiveState === "OBSERVED" ? <p className="muted small">Objectives: OBSERVED empty list.</p> : <p className="muted small">Objectives: {quest.objectiveState}; no objective rows are available.</p>}
+                      {quest.waypointState === "OBSERVED" && quest.waypoint ? <p className="muted small">Observed waypoint{quest.waypointText ? ` (${quest.waypointText})` : ""}: map {quest.waypoint.mapID}, {quest.waypoint.x.toFixed(3)}, {quest.waypoint.y.toFixed(3)}.</p> : <p className="muted small">Waypoint: UNKNOWN.</p>}
+                    </article>) : <p>Active quest log observed empty.</p>}
+                  <p className="muted small">Completed-quest history: {quests.completedHistory.state}{quests.completedHistory.returnedCount !== undefined ? ` · ${quests.completedHistory.returnedCount} IDs returned` : ""}{quests.completedHistory.truncated ? " · partial/truncated" : ""}. History is separate from the active quest log.</p>
+                  {quests.completedHistory.quests?.length ? <ul className="compact-list">{quests.completedHistory.quests.slice(0, 40).map((quest) => <li key={`completed-quest-${quest.questID}`}>{quest.titleState === "UNKNOWN" ? `Quest ${quest.questID}` : quest.title} <span className="muted small">· {quest.titleState} · ID {quest.questID}</span></li>)}</ul> : null}
+                  {quests.issues.length > 0 && <details><summary>Quest observation limitations</summary><ul>{quests.issues.slice(0, 20).map((issue, index) => <li key={`quest-issue-${index}`}>{issue}</li>)}</ul></details>}
+                </>;
+              })()}
+            </section>
+          )}
+
+          {character.version === "forever" && (
+            <section className="detail-card" id="detail-forever-gear-allocation">
+              <div className="forever-detail-heading"><h3>Forever allocation assessment</h3>{onOpenForeverGearReview && <button type="button" className="link-button" onClick={onOpenForeverGearReview}>Compare across roster</button>}</div>
+              {foreverAllocationLoad.state.status === "error" ? <p role="status">Allocation evidence unavailable: {String(foreverAllocationLoad.state.error)} <button onClick={foreverAllocationLoad.retry}>Retry</button></p> : null}
+              {foreverAllocationLoad.state.status === "loading" ? <p className="muted">Loading latest Forever allocation evidence…</p> : null}
+              {foreverAllocationLoad.state.status === "ready" && foreverAllocationLoad.state.data?.value?.data ? (() => {
+                const allocation = foreverAllocationLoad.state.data.value.data;
+                return <>
+                  <p>{allocation.conclusion}: {allocation.reason}</p>
+                  <p className="muted small">Import-context roster scope: {allocation.scope.accountMembership}. {allocation.scope.reason}</p>
+                  <div className="forever-allocation-plan" aria-label="Forever gear review plan">
+                    <h4>Gear review plan</h4>
+                    {allocation.allocationPlan?.length ? allocation.allocationPlan.map((entry, index) => <article className="allocation-row" key={`${entry.disposition}:${entry.source.identityKey}:${entry.item.itemRef ?? index}:${entry.recipient.identityKey}`}>
+                      <strong>{foreverPlanLabel(entry.disposition)}: {entry.item.name ?? entry.item.itemRef ?? "Unknown item"}</strong>
+                      <p className="muted small">{characterDisplayName(entry.source)} ({entry.source.realm}) · {entry.source.location === "CARRIED_INVENTORY" ? "observed in carried inventory" : entry.source.location === "EQUIPPED" ? "observed equipped" : "location unknown"} · {foreverPlanProvenance(entry.source.provenance)} · {entry.item.itemIdentity === "OBSERVED" ? `exact variant ${entry.item.itemRef ?? "UNKNOWN"}` : entry.item.itemIdentity === "PARTIAL" ? `partial item identifier ${entry.item.itemRef ?? "UNKNOWN"}; exact variant UNKNOWN` : "exact variant UNKNOWN"}{entry.source.observedAt ? ` · captured ${formatAbsoluteTime(entry.source.observedAt)} (${entry.source.freshness})` : " · capture time unknown"}</p>
+                      <p>{entry.evidence.reasons[0]}</p>
+                      <p className="muted small">For {characterDisplayName(entry.recipient)} ({entry.recipient.realm}): eligibility {foreverPlanFacet("eligibility", entry.evidence.eligibility)}; suitability {foreverPlanFacet("suitability", entry.evidence.suitability)}; {foreverPlanFacet("transferability", entry.evidence.transferability)}. Evidence is {foreverPlanProvenance(entry.evidence.provenance)}; strength {entry.evidence.confidence.toLowerCase()}.</p>
+                      {entry.comparison?.rawComparisons.map((comparison, comparisonIndex) => <p className="muted small" key={`${comparison.slot}:${comparison.equippedItemRef}:${comparisonIndex}`}>Compared with observed {equipmentSlotLabel("forever", comparison.slot)} item {comparison.equippedItemRef}: {comparison.classification}. {comparison.reason}</p>)}
+                      {entry.evidence.whatWouldChange.length > 0 && <details><summary>What could resolve this</summary><ul>{entry.evidence.whatWouldChange.map((fact, evidenceIndex) => <li key={`${evidenceIndex}:${fact}`}>{fact}</li>)}</ul></details>}
+                    </article>) : <p>No current gear-plan entries can be supported from the imported observations. Missing or inaccessible storage is not treated as empty.</p>}
+                    <p className="muted small">These are review outcomes, not commands. Cross-character rows do not establish shared account ownership or a transfer route.</p>
+                  </div>
+                  <p className="muted small">Recipient: {allocation.recipient.class?.value ?? "class UNKNOWN"} · level {allocation.recipient.level?.value ?? "UNKNOWN"} · character snapshot {allocation.recipient.freshness}. Equipment {allocation.recipient.equipment.state}{allocation.recipient.equipment.observedAt ? ` observed ${formatAbsoluteTime(allocation.recipient.equipment.observedAt)} (${allocation.recipient.equipment.freshness ?? "unknown freshness"})` : " timestamp UNKNOWN"}:</p>
+                  {allocation.recipient.observedSkillLines.length > 0 && <p className="muted small">Observed skill lines: {allocation.recipient.observedSkillLines.map((skill) => `${skill.name} ${skill.rank ?? "?"}/${skill.maxRank ?? "?"}${skill.rawCategoryID !== undefined ? ` (category ${skill.rawCategoryID})` : ""} · ${skill.provenance}`).join(", ")}. Category IDs are shown raw; these observations do not prove weapon proficiency.</p>}
+                  {allocation.recipient.equipment.items.map((item, index) => <p key={`allocation-eq-${item.slot}-${index}`} className="muted small">{item.provenance} · {item.slotName}: {item.itemRef ?? "item identity UNKNOWN"}</p>)}
+                  {allocation.candidateSources.map((source) => <p key={source.source.identityKey} className="muted small">{source.source.name}: carried {source.carried.state}{source.carried.itemCount !== undefined ? ` · ${source.carried.itemCount} observed rows` : " · item count UNKNOWN"}; bank {source.bank.state}{source.bank.reason ? ` · ${source.bank.reason}` : ""}{source.bank.observedAt ? ` · observed ${formatAbsoluteTime(source.bank.observedAt)} (${source.bank.freshness ?? "unknown freshness"})` : ""}.</p>)}
+                  {allocation.assessments.length === 0 ? <p>No currently classified carried potential-equipment rows are available. Missing candidate observations do not establish an empty gear source.</p> : allocation.assessments.map((assessment, index) => {
+                    const sourceEvidence = allocation.candidateSources.find((source) => source.source.identityKey === assessment.source.identityKey);
+                    return <div key={`${assessment.source.identityKey}:${assessment.candidate.itemRef ?? index}`} className="allocation-row">
+                      <strong>{assessment.candidate.name ?? assessment.candidate.itemRef ?? "Unknown item"}</strong>
+                      <p className="muted small">Observed with {characterDisplayName(assessment.source)} ({assessment.source.realm}){assessment.candidate.container !== undefined ? ` · bag ${assessment.candidate.container}, slot ${assessment.candidate.slot ?? "?"}` : " · location UNKNOWN"} · {assessment.candidate.quantity ?? "?"} carried · {assessment.candidate.itemRef ?? "exact variant UNKNOWN"}{sourceEvidence?.carried.observedAt ? ` · carried capture ${formatAbsoluteTime(sourceEvidence.carried.observedAt)} (${sourceEvidence.carried.freshness ?? "unknown freshness"})` : " · carried capture time UNKNOWN"}</p>
+                      <p className="muted small">Potential type: {assessment.candidate.itemType ?? "UNKNOWN"}/{assessment.candidate.itemSubType ?? "UNKNOWN"} · slot type {assessment.candidate.equipLocation ?? "UNKNOWN"}. Location: carried by {characterDisplayName(assessment.source)}; ownership UNKNOWN. Item API: {assessment.candidate.itemApiEvidence?.itemInfo.state ?? "UNKNOWN"}{sourceEvidence?.observedAt ? ` · evidence observed ${formatAbsoluteTime(sourceEvidence.observedAt)} (${sourceEvidence.freshness ?? "unknown freshness"})` : " · timestamp UNKNOWN"}. Binding: {assessment.candidate.binding?.state === "OBSERVED" ? (assessment.candidate.binding.value ? "observed bound" : "observed not bound") : "UNKNOWN"}; binding category {assessment.bindingAssessment.state}; transferability {assessment.transferability} — {assessment.transferabilityReason}</p>
+                      {assessment.candidate.itemApiEvidence && <p className="muted small">GetItemInfo {assessment.candidate.itemApiEvidence.itemInfo.state} ({assessment.candidate.itemApiEvidence.itemInfo.returnCount ?? "?"} returns); validated-field contract {assessment.candidate.itemApiEvidence.validatedFields?.contractState ?? "UNKNOWN"}. Required level {assessment.candidate.itemApiEvidence.validatedFields?.requiredLevel.state === "OBSERVED" ? String(assessment.candidate.itemApiEvidence.validatedFields.requiredLevel.value) : "UNKNOWN"}; GetItemStats {assessment.candidate.itemApiEvidence.itemStats.state} ({assessment.candidate.itemApiEvidence.itemStats.entryCount ?? "?"} raw fields).</p>}
+                      <p className="muted small">Eligibility: {assessment.eligibility}; exact-item IsEquippableItem signal {assessment.playerApiSignal}; base-ID/current-player C_PlayerInfo.CanUseItem signal {assessment.playerCanUseSignal}. Eligibility screen {assessment.eligibilityAssessment.state} ({assessment.eligibilityAssessment.confidence}). Required level {assessment.eligibilityChecks.requiredLevel.state} — {assessment.eligibilityChecks.requiredLevel.reason} Class {assessment.eligibilityChecks.classRestriction.state} — {assessment.eligibilityChecks.classRestriction.reason} Armor proficiency {assessment.eligibilityChecks.armorProficiency.state} ({assessment.eligibilityChecks.armorProficiency.confidence}) — {assessment.eligibilityChecks.armorProficiency.reason}. Weapon proficiency {assessment.eligibilityChecks.weaponProficiency.state} — {assessment.eligibilityChecks.weaponProficiency.reason}. Slot compatibility: {assessment.eligibilityChecks.slotCompatibility.state} ({assessment.eligibilityChecks.slotCompatibility.possibleSlots.join(", ") || "slot UNKNOWN"}). {assessment.eligibilityChecks.slotCompatibility.reason}{assessment.eligibilityChecks.slotCompatibility.conflicts.length ? ` Conflicts: ${assessment.eligibilityChecks.slotCompatibility.conflicts.map((conflict) => `slot ${conflict.slot}: ${conflict.reason}`).join("; ")}` : ""}</p>
+                      {assessment.rawStatComparisons.length > 0 && <p className="muted small">Raw same-slot comparisons: {assessment.rawStatComparisons.map((comparison) => `slot ${comparison.slot} ${comparison.classification}: ${comparison.values.map((value) => `${value.key} ${value.candidate} vs ${value.equipped} (Δ ${value.delta})`).join(", ")}${comparison.weaponMetrics ? `; DPS ${comparison.weaponMetrics.dps.map((metric) => `${metric.key} Δ${metric.delta}`).join(", ") || "UNKNOWN"}, speed UNKNOWN` : ""}`).join("; ")}. Upgrade assessment: {assessment.upgradeStatus} ({assessment.upgradeConfidence}); raw stats are not build weights or a complete upgrade score.</p>}
+                      {assessment.statDeltaCalibrations.length > 0 && <p className="muted small">GetItemStatDelta calibration against exact GetItemStats pairs: {assessment.statDeltaCalibrations.map((entry) => `${entry.state} (${entry.matchedKeys.join(", ") || "no matched keys"})`).join("; ")}. Calibration describes returned arithmetic only.</p>}
+                      <p className="muted small">Build suitability: {assessment.suitability}. {assessment.suitabilityEvidence.reason}</p>
+                      <p>Recipient {characterDisplayName(assessment.recipient)}: eligibility {assessment.eligibility}; suitability {assessment.suitability}; upgrade {assessment.upgradeStatus}; binding category {assessment.bindingAssessment.state}; transferability {assessment.transferability}; priority {assessment.allocationPriority}. {assessment.decision}.</p>
+                      {allocation.recipientEvaluations.find((entry) => entry.source.identityKey === assessment.source.identityKey && entry.itemRef === assessment.candidate.itemRef) && <details><summary>Forever roster fit screen</summary><ul>{allocation.recipientEvaluations.find((entry) => entry.source.identityKey === assessment.source.identityKey && entry.itemRef === assessment.candidate.itemRef)!.recipients.map((row) => <li key={row.identityKey}>{row.name}: {row.fit}; eligibility {row.eligibility}; armor {row.armorProficiency}; slot {row.slotCompatibility}; comparison {row.upgradeStatus}; transfer {row.transferability}. {row.reasons.join(' ')}</li>)}</ul><p className="muted small">The screen compares this exact observed candidate against the known Forever roster. It does not rank across unknown account/transfer scope or recommend a transfer.</p></details>}
+                      <p className="muted small">{assessment.reason}</p>
+                      <details><summary>Evidence needed</summary><ul>{assessment.missingEvidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></details>
+                    </div>;
+                  })}
+                  {allocation.exclusions.length > 0 && <details><summary>Characters withheld from source evaluation ({allocation.exclusions.length})</summary><ul>{allocation.exclusions.map((entry) => <li key={entry.character.identityKey}>{characterDisplayName(entry.character)}: {entry.reason}</li>)}</ul></details>}
+                </>;
+              })() : null}
+            </section>
+          )}
+
+          {character.version === "forever" && foreverIdentityIssue ? <div className="detail-card" role="status">Forever inventory withheld: {foreverIdentityIssue}</div> : <>
+            <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} unresolvedItemVersion={character.version} />
+            <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} unresolvedItemVersion={character.version} />
+          </>}
           {snapshot.parsed.accountBank && (
             <InventoryCard
               id="detail-warband"
@@ -432,11 +620,13 @@ export function InventoryCard({
   actionLabel,
   onAction,
   itemInfo = EMPTY_ITEM_INFO,
+  unresolvedItemVersion,
 }: {
   id?: string;
   title: string;
   /** Game-client item metadata for this character's game version; absent or empty means nothing extra is shown. */
   itemInfo?: ItemInfoLookup;
+  unresolvedItemVersion?: string;
   inv: import("../types.ts").InventorySection;
   note?: string;
   /** A link-style button to somewhere more authoritative (only shown when both are given). */
@@ -467,7 +657,7 @@ export function InventoryCard({
               const info = itemInfoSuffix(view);
               return (
                 <li key={i}>
-                  {item.name ?? item.itemRef ?? "?"} × {item.qty ?? "?"}
+                  {item.name ?? (unresolvedItemVersion === "forever" ? unresolvedItemName(undefined, item.itemRef) : item.itemRef ?? "?")} × {item.qty ?? "?"}
                   {info && (
                     <span className="muted small item-info" title={describeItemInfo(view).summary}>
                       {" "}

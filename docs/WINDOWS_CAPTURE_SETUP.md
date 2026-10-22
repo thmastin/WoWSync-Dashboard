@@ -120,6 +120,26 @@ error. It never displays the capture token. The status JSON and logs are local
 to the Windows user under `%LOCALAPPDATA%\WoWSync`; the status record contains
 no token or export text.
 
+### Tray icon
+
+`tools/windows/WoWSync-Tray.ps1` adds a notification-area icon on top of the collector. The collector stays the
+`WoWSync DEV Runtime` logon task; the tray only reads `supervisor.json`, `status.json` and the outbox every 10
+seconds and calls the modes above.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\windows\WoWSync-Tray.ps1 -Install    # copy to %LOCALAPPDATA%\WoWSync, start at sign-in
+powershell -ExecutionPolicy Bypass -File tools\windows\WoWSync-Tray.ps1 -Uninstall  # remove from sign-in
+powershell -ExecutionPolicy Bypass -File tools\windows\WoWSync-Tray.ps1 -CheckHealth # print what the icon would show
+```
+
+- Icon: green capturing; amber not connected to DEV (captures queue) or sending queued captures; red collector or
+  watcher stopped; grey not installed. Same health rules as `-Mode Status` (heartbeats under 90 seconds).
+- Hover: state and last delivered capture. A balloon appears when capture stops and when it recovers.
+- Menu: Open Dashboard, Status details (double-click), Restart, Stop/Start collector (Stop asks first), Open logs
+  folder, Exit tray. Exiting the tray does not stop capture.
+- Sign-in start uses a shortcut in the user's Startup folder that runs a hidden Windows Script Host launcher.
+  A named mutex keeps one icon.
+
 ## Outages and accepted runtime behavior
 
 If Omarchy is off, the SSH child retries and captures stay in the Windows

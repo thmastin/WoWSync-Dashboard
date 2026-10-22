@@ -108,6 +108,13 @@ test("binding unknown gate: Binding unknown chip", () => {
   assert.match(row.detail.binding!, /3 binding unknown/);
 });
 
+test("an active ERP project reservation blocks the sale recommendation and explains the plan conflict", () => {
+  const row = targetRowView(resolved({ id: 1, keep: 2, have: 9, disposition: "REQUIRES_REVIEW", reasons: [{ code: "EXPLICIT_DEMAND_EXISTS" }, { code: "SURPLUS_CONFIRMED" }, { code: "PROJECT_RESERVATION_GATES_SALE", detail: "Reserve for a craft has 5 units reserved." }] }), "X");
+  assert.equal(row.state, "surplusReview");
+  assert.doesNotMatch(allText(row), /Eligible for Hellomags/);
+  assert.ok(row.notes.some((note) => /active project reservation overlaps this item/i.test(note)));
+});
+
 test("bound=no is never presented as tradeable, transferable, or sale-certified", () => {
   const row = targetRowView(resolved({ id: 1, keep: 1, have: 5, facets: { confirmedBinding: { boundRowCount: 0, unboundRowCount: 4, unknownRowCount: 0 } } }), "X");
   const held = noTargetRowView(heldEntry({ id: 2, seen: 4, facets: { confirmedBinding: { boundRowCount: 0, unboundRowCount: 4, unknownRowCount: 0 } } }));

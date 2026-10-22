@@ -20,8 +20,11 @@ export interface StoredCharacterSummary {
   version: VersionOrUnknown;
   realm: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   identityKey: string;
   class?: string;
+  race?: string;
   faction?: string;
   latestLevel?: number;
   latestMoneyCopper?: number;
@@ -121,6 +124,7 @@ export interface ParsedSnapshot {
     name?: string;
     realm?: string;
     class?: string;
+    race?: string;
     level?: number;
     faction?: string;
     moneyCopper?: number;
@@ -154,6 +158,18 @@ export interface ParsedSnapshot {
   trainer: {
     status: SectionStatus;
     categories: TrainerCategory[];
+  };
+  foreverGearObservation?: {
+    clientProfile: `Forever:${string}`;
+    name: string;
+    realm: string;
+    generatedAt: number;
+    sourceCharacterGuid?: string;
+    sourceCharacterGuidConflict?: boolean;
+    equipment?: Record<string, unknown>;
+    bags?: Record<string, unknown>;
+    bank?: Record<string, unknown>;
+    itemMetadata?: Record<string, unknown>;
   };
 }
 
@@ -271,8 +287,11 @@ export type Freshness = "recent" | "stale" | "unknown";
 export interface CharacterFacts {
   identityKey: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   realm: string;
   class?: string;
+  race?: string;
   faction?: string;
   level?: number;
   xp?: number;
@@ -499,22 +518,7 @@ export interface AccountContext {
   schemaVersion: string;
   generatedAt: number;
   versions: Record<string, AccountContextVersionSummary>;
-}
-
-// --- "Ask My Account" (LLM POC) ---
-
-export interface AskAccountUsage {
-  promptTokens?: number;
-  completionTokens?: number;
-  totalTokens?: number;
-}
-
-export interface AskAccountResponse {
-  answer: string;
-  model: string;
-  contextGeneratedAt: number;
-  contextSummary: { characterCount: number; versions: string[] };
-  usage?: AskAccountUsage;
+  planning?: { projects: Array<{ stableId: string; version: string; title: string; status: string; priority: number; updatedAt: number; needsCount: number; workOrderCounts: Record<string, number>; needStates: Record<string, number> }> };
 }
 
 // --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------

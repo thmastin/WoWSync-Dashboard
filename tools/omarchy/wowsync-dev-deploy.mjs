@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { mkdir, open, readFile, readdir, realpath, rename, rm, lstat, readlink, writeFile, symlink, chmod } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, lstat, readlink, writeFile, symlink, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync, backup } from 'node:sqlite';
@@ -300,10 +300,29 @@ function openDatabase(file, readOnly = true) {
   return new DatabaseSync(file, { readOnly });
 }
 
+// SQLite's own objects (sqlite_autoindex_*, sqlite_sequence, sqlite_stat*)
+// are implied by the user objects' SQL and are never compared or declared.
+// GLOB is exact and case-sensitive; LIKE 'sqlite_%' also hid user objects
+// such as "sqliteXfoo" because `_` is a LIKE wildcard.
+const USER_SCHEMA_OBJECTS = "name NOT GLOB 'sqlite_*'";
+
+// The one SQL normalization and hash used by databaseEvidence, the schema
+// planner, schema declarations, and the post-start classifier.
+export function normalizeSchemaSql(sql) {
+  // sqlite_schema.sql is already SQLite's canonical stored statement. Preserve
+  // it byte-for-byte: whitespace inside any quoted token can be semantic.
+  // Formatting-only differences may conservatively fail closed as schema changes.
+  return typeof sql === 'string' ? sql : null;
+}
+
+export function schemaSqlSha256(sql) {
+  return createHash('sha256').update(normalizeSchemaSql(sql) ?? '', 'utf8').digest('hex');
+}
+
 export function databaseEvidence(dbPath) {
   const db = openDatabase(dbPath, true);
   try {
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((row) => row.name);
+    const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND ${USER_SCHEMA_OBJECTS} ORDER BY name`).all().map((row) => row.name);
     const integrity = db.prepare('PRAGMA integrity_check').all();
     if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') throw new Error(`SQLite integrity_check failed: ${JSON.stringify(integrity)}`);
     const counts = {};
@@ -313,8 +332,8 @@ export function databaseEvidence(dbPath) {
     }
     const userVersion = db.prepare('PRAGMA user_version').get().user_version;
     const schema = db.prepare(`SELECT type, name, tbl_name, sql FROM sqlite_master
-      WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name, tbl_name`).all().map((item) => ({
-      ...item, sql: item.sql?.replace(/\s+/g, ' ').trim() ?? null,
+      WHERE ${USER_SCHEMA_OBJECTS} ORDER BY type, name, tbl_name`).all().map((item) => ({
+      ...item, sql: normalizeSchemaSql(item.sql),
     }));
     const schemaSha256 = createHash('sha256').update(JSON.stringify({ userVersion, schema })).digest('hex');
     let demand = null;
@@ -356,13 +375,208 @@ export function assertSchemaCompatible(before, after) {
   return before.userVersion === after.userVersion && before.schemaSha256 === after.schemaSha256;
 }
 
-export function recoveryPolicy({ schemaChanged = false, candidateStarted = false }) {
-  if (schemaChanged === true || (candidateStarted && schemaChanged !== false)) return { action: 'stop-review-required', mayStartPreviousCode: false };
-  return { action: 'restore-previous-release-and-validate', mayStartPreviousCode: true };
+// --- Expected additive schema changes ---------------------------------------
+// An operator may authorize, for one deploy invocation, the addition of exact
+// tables/indexes, each bound to the sha256 of its normalized SQL. Nothing else
+// (removal, change, rename, trigger, view, user_version) can be authorized.
+
+const SCHEMA_DECLARATION = /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/;
+const DECLARABLE_TYPES = new Set(['table', 'index']);
+
+export function parseSchemaDeclaration(value) {
+  const match = SCHEMA_DECLARATION.exec(value ?? '');
+  if (!match) throw new Error(`Invalid --expect-schema-add declaration: ${value}. Use table:<name>@<sha256> or index:<name>@<sha256> exactly as printed by \`prepare\`.`);
+  const [, type, name, sqlSha256] = match;
+  if (/^sqlite/i.test(name)) throw new Error(`Invalid --expect-schema-add declaration: ${value}. Names beginning with "sqlite" are SQLite-internal and cannot be declared.`);
+  return { type, name, sqlSha256 };
 }
 
-export async function recoverFailedPromotion({ schemaChanged = false, candidateStarted = false, priorStopResult, stop, setPrevious, startPrevious, validatePrevious }) {
-  const policy = recoveryPolicy({ schemaChanged, candidateStarted });
+export function validateSchemaDeclarations(declarations) {
+  if (!Array.isArray(declarations)) throw new Error('Schema declarations must be a list.');
+  const byName = new Map();
+  for (const declaration of declarations) {
+    const parsed = parseSchemaDeclaration(`${declaration?.type}:${declaration?.name}@${declaration?.sqlSha256}`);
+    const prior = byName.get(parsed.name);
+    if (prior?.type === parsed.type) throw new Error(`Duplicate --expect-schema-add declaration for ${parsed.type} ${parsed.name}.`);
+    if (prior) throw new Error(`${parsed.name} is declared as both ${prior.type} and ${parsed.type}; SQLite object names share one namespace.`);
+    byName.set(parsed.name, parsed);
+  }
+  return [...byName.values()];
+}
+
+export function formatSchemaDeclaration(object) {
+  return `${object.type}:${object.name}@${object.sqlSha256}`;
+}
+
+// Structural comparison of two databaseEvidence() results, optionally against
+// this invocation's declarations. Classifications:
+//   NONE              no user-schema or user_version difference
+//   DECLARED_ADDITIVE only declared tables/indexes were added, each with the
+//                     declared SQL hash; everything that existed is unchanged
+//   UNDECLARED        anything else (including a declared object that is absent)
+//   UNKNOWN           evidence missing or unusable; never treated as compatible
+export function classifySchemaChange(before, after, declarations = []) {
+  const unknown = (reason) => ({ classification: 'UNKNOWN', declarationsSatisfied: false, added: [], removed: [], changed: [], userVersion: null, problems: [reason] });
+  if (!before || !after || !Array.isArray(before.schema) || !Array.isArray(after.schema)) return unknown('schema evidence is missing');
+  if (before.integrityCheck !== 'ok' || after.integrityCheck !== 'ok') return unknown('SQLite integrity_check did not pass before and after');
+  let declared;
+  try { declared = validateSchemaDeclarations(declarations); }
+  catch (error) { return unknown(error.message); }
+  const index = (schema) => {
+    const map = new Map();
+    for (const item of schema) {
+      if (map.has(item.name)) return null;
+      map.set(item.name, item);
+    }
+    return map;
+  };
+  const beforeObjects = index(before.schema);
+  const afterObjects = index(after.schema);
+  if (!beforeObjects || !afterObjects) return unknown('schema evidence contains duplicate object names');
+  const describe = (item) => ({ type: item.type, name: item.name, tbl_name: item.tbl_name, sql: normalizeSchemaSql(item.sql), sqlSha256: schemaSqlSha256(item.sql) });
+  const removed = [];
+  const changed = [];
+  const added = [];
+  for (const [name, item] of beforeObjects) {
+    const next = afterObjects.get(name);
+    if (!next) removed.push(describe(item));
+    else if (next.type !== item.type || next.tbl_name !== item.tbl_name || normalizeSchemaSql(next.sql) !== normalizeSchemaSql(item.sql)) {
+      changed.push({ before: describe(item), after: describe(next) });
+    }
+  }
+  for (const [name, item] of afterObjects) if (!beforeObjects.has(name)) added.push(describe(item));
+  const userVersion = { before: before.userVersion, after: after.userVersion };
+  const problems = [];
+  if (before.userVersion !== after.userVersion) problems.push(`user_version changed ${before.userVersion} -> ${after.userVersion}`);
+  for (const item of removed) problems.push(`${item.type} ${item.name} was removed`);
+  for (const item of changed) problems.push(`${item.before.type} ${item.before.name} changed definition`);
+  const declaredByName = new Map(declared.map((item) => [item.name, item]));
+  const addedTables = new Set(added.filter((item) => item.type === 'table').map((item) => item.name));
+  for (const item of added) {
+    const declaration = declaredByName.get(item.name);
+    if (!DECLARABLE_TYPES.has(item.type)) problems.push(`${item.type} ${item.name} was added; only tables and indexes can be declared`);
+    else if (!declaration) problems.push(`${item.type} ${item.name} was added but not declared (${formatSchemaDeclaration(item)})`);
+    else if (declaration.type !== item.type) problems.push(`${item.name} was declared as ${declaration.type} but is a ${item.type}`);
+    else if (declaration.sqlSha256 !== item.sqlSha256) problems.push(`${item.type} ${item.name} SQL hash ${item.sqlSha256} does not match the declared ${declaration.sqlSha256}`);
+    else if (item.type === 'index' && !beforeObjects.has(item.tbl_name) && !(addedTables.has(item.tbl_name) && declaredByName.get(item.tbl_name)?.type === 'table')) {
+      problems.push(`index ${item.name} belongs to ${item.tbl_name}, which is neither pre-existing nor a declared new table`);
+    }
+  }
+  const addedNames = new Set(added.map((item) => item.name));
+  for (const declaration of declared) {
+    if (!addedNames.has(declaration.name)) problems.push(`declared ${declaration.type} ${declaration.name} was not added`);
+  }
+  const structurallyNone = removed.length === 0 && changed.length === 0 && added.length === 0 && before.userVersion === after.userVersion;
+  let classification;
+  if (structurallyNone) classification = 'NONE';
+  else classification = problems.length === 0 && declared.length > 0 ? 'DECLARED_ADDITIVE' : 'UNDECLARED';
+  return { classification, declarationsSatisfied: problems.length === 0, added, removed, changed, userVersion, problems };
+}
+
+// Whether the observed change is exactly what this invocation may accept:
+// nothing without declarations, exactly the declarations with them.
+export function schemaChangeAccepted(change, declarations = []) {
+  if (!change) return false;
+  if (declarations.length === 0) return change.classification === 'NONE';
+  return change.classification === 'DECLARED_ADDITIVE' && change.declarationsSatisfied === true;
+}
+
+// Run one release's real store initialization against a fresh disposable
+// SQLite file. The database path travels in the environment; the script is
+// a single module string so the tool itself imports only Node built-ins.
+export async function runReleaseSchemaInit(releasePath, dbFile, { node = '/usr/bin/node', timeoutMs = 60000 } = {}) {
+  const storeFile = path.join(releasePath, 'packages', 'core', 'src', 'sqliteStore.ts');
+  if (!(await exists(storeFile))) throw new Error(`Schema initialization failed: ${storeFile} does not exist.`);
+  const storeUrl = pathToFileURL(storeFile).href;
+  const script = ['import { SqliteSnapshotStore } from ', JSON.stringify(storeUrl), ';\n',
+    'const store = new SqliteSnapshotStore(process.env.WOWSYNC_SCHEMA_PLAN_DB);\n',
+    'store.close();\n'].join('');
+  await execFile(node, ['--disable-warning=ExperimentalWarning', '--input-type=module', '-e', script], {
+    cwd: releasePath,
+    timeout: timeoutMs,
+    env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', HOME: process.env.HOME ?? '/', WOWSYNC_SCHEMA_PLAN_DB: dbFile },
+  });
+}
+
+function planState(change) {
+  if (change.classification === 'NONE') return 'NONE';
+  const additiveOnly = change.removed.length === 0 && change.changed.length === 0
+    && change.userVersion.before === change.userVersion.after
+    && change.added.every((item) => DECLARABLE_TYPES.has(item.type));
+  return additiveOnly ? 'ADDITIVE' : 'NON_ADDITIVE';
+}
+
+// Predict the schema a candidate release would add, comparing the empty
+// schema created by the previous release with the one created by the
+// candidate. Only disposable files under stagingDir are created; the real
+// database is never opened. Prediction is preventive; the post-start
+// classification of the real database remains authoritative.
+export async function predictSchemaChange({ previousRelease, candidateRelease, stagingDir, declarations = [], runStore = runReleaseSchemaInit }) {
+  await mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  const workspace = await mkdtemp(path.join(stagingDir, 'schema-plan-'));
+  try {
+    const evidence = {};
+    for (const [label, release] of [['previous', previousRelease], ['candidate', candidateRelease]]) {
+      const dbFile = path.join(workspace, `${label}.sqlite`);
+      await runStore(release, dbFile);
+      evidence[label] = databaseEvidence(dbFile);
+    }
+    const structural = classifySchemaChange(evidence.previous, evidence.candidate, []);
+    const state = planState(structural);
+    const matched = declarations.length ? classifySchemaChange(evidence.previous, evidence.candidate, declarations) : structural;
+    return {
+      state,
+      added: structural.added.map((item) => ({ ...item, declaration: formatSchemaDeclaration(item) })),
+      removed: structural.removed,
+      changed: structural.changed,
+      userVersion: structural.userVersion,
+      problems: structural.problems.filter((problem) => !/was added but not declared/.test(problem)),
+      declarations: declarations.map(formatSchemaDeclaration),
+      declarationsMatch: schemaChangeAccepted(matched, declarations),
+      declarationProblems: declarations.length ? matched.problems : [],
+    };
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+// Decide what a pre-stop plan permits for this invocation. Returns null when
+// the deploy may proceed, otherwise the reason it must stop before touching DEV.
+export function schemaPlanRejection(plan, declarations = []) {
+  if (plan.state === 'NON_ADDITIVE') {
+    return `Candidate schema plan is NON-ADDITIVE (${[...plan.problems, ...plan.added.filter((item) => !DECLARABLE_TYPES.has(item.type)).map((item) => `${item.type} ${item.name} added`)].join('; ')}); declarations cannot authorize it.`;
+  }
+  if (plan.state === 'NONE') {
+    return declarations.length ? `No schema change is predicted for the candidate, but --expect-schema-add was given (${declarations.map(formatSchemaDeclaration).join(', ')}).` : null;
+  }
+  if (declarations.length === 0) {
+    return `Candidate adds schema objects that were not declared. Review them, then re-run deploy with: ${plan.added.map((item) => `--expect-schema-add ${item.declaration}`).join(' ')}`;
+  }
+  if (!plan.declarationsMatch) return `Declared schema additions do not match the candidate plan: ${plan.declarationProblems.join('; ')}.`;
+  return null;
+}
+
+// The recovery decision after a failed candidate. `schema` is the
+// post-stop classification of the real database (null when it could not be
+// read). Without `schema`, the original boolean contract applies.
+export function recoveryPolicy({ schemaChanged = false, candidateStarted = false, schema, declarations = [], previousCodeCompatible = false }) {
+  const stop = { action: 'stop-review-required', mayStartPreviousCode: false };
+  const restore = { action: 'restore-previous-release-and-validate', mayStartPreviousCode: true };
+  if (schema !== undefined) {
+    if (schema === null || !schema.classification) return stop;
+    if (schema.classification === 'NONE') return restore;
+    if (schema.classification === 'DECLARED_ADDITIVE' && previousCodeCompatible === true
+      && declarations.length > 0 && schemaChangeAccepted(schema, declarations)) {
+      return { action: 'restore-previous-release-retaining-declared-additions', mayStartPreviousCode: true, retainedAdditions: schema.added.map((item) => ({ type: item.type, name: item.name })) };
+    }
+    return stop;
+  }
+  if (schemaChanged === true || (candidateStarted && schemaChanged !== false)) return stop;
+  return restore;
+}
+
+export async function recoverFailedPromotion({ schemaChanged = false, candidateStarted = false, schema, declarations, previousCodeCompatible, priorStopResult, stop, setPrevious, startPrevious, validatePrevious }) {
+  const policy = recoveryPolicy({ schemaChanged, candidateStarted, schema, declarations, previousCodeCompatible });
   if (!policy.mayStartPreviousCode) {
     if (priorStopResult) return { state: 'stopped-review-required', stopResult: priorStopResult, action: policy.action };
     try { await stop(); return { state: 'stopped-review-required', stopResult: 'succeeded', action: policy.action }; }
@@ -372,7 +586,7 @@ export async function recoverFailedPromotion({ schemaChanged = false, candidateS
   await setPrevious();
   await startPrevious();
   const validation = await validatePrevious();
-  return { state: 'validated', action: policy.action, validation };
+  return { state: 'validated', action: policy.action, validation, ...(policy.retainedAdditions ? { retainedAdditions: policy.retainedAdditions } : {}) };
 }
 
 // Record the attempt before invoking the service boundary: systemd may launch
@@ -576,6 +790,7 @@ export function hostOps(paths = PATHS) {
     processCwd: (pid) => realpath(`/proc/${pid}/cwd`),
     fetch: (url, options) => fetch(url, options),
     validateBuild: runBuildValidation,
+    runSchemaStore: (releasePath, dbFile) => runReleaseSchemaInit(releasePath, dbFile),
     readiness: {},
   };
 }
@@ -700,6 +915,12 @@ async function deploymentToolIdentity(paths = PATHS) {
   return { version: '3', entryPath, releaseSha, entrySha256: await sha256File(entryPath) };
 }
 
+async function toolIdentity(paths, ops) {
+  return typeof ops.deploymentToolIdentity === 'function'
+    ? ops.deploymentToolIdentity(paths)
+    : deploymentToolIdentity(paths);
+}
+
 export async function collectJournalWarnings(since, paths = PATHS, reader = readJournalWarnings) {
   try { return { ok: true, output: await reader(since, paths) }; }
   catch (error) { return { ok: false, error: error.message }; }
@@ -757,11 +978,12 @@ async function rejectUnchanged(error, context, tool, paths) {
     runningSha: context.previousSha ?? null,
     manualIntervention: Boolean(error.manualIntervention),
     cause: error.message,
+    ...(error.schemaPlan ? { schemaPlan: error.schemaPlan } : {}),
   };
   await appendAudit({
     schemaVersion: 2, operation: `${context.kind}_COMMAND_FAILURE`, tool, requestedSha: outcome.requestedSha,
     requestedRef: outcome.requestedRef, previousSha: outcome.runningSha, candidateSha: outcome.requestedSha,
-    devChanged: false, error: error.message, at: iso(),
+    devChanged: false, error: error.message, ...(error.schemaPlan ? { schemaPlan: error.schemaPlan } : {}), at: iso(),
   }, paths).catch(() => {});
   return new DeployError(error.message, outcome);
 }
@@ -784,32 +1006,405 @@ async function ensureRelease(sha, ref, { tool, paths, ops }) {
   return 'built';
 }
 
+async function planCandidateSchema(previousSha, sha, declarations, { paths, ops }) {
+  return predictSchemaChange({
+    previousRelease: await realpath(path.join(paths.releases, previousSha)),
+    candidateRelease: path.join(paths.releases, sha),
+    stagingDir: paths.staging,
+    declarations,
+    runStore: ops.runSchemaStore ?? runReleaseSchemaInit,
+  });
+}
+
 // Troubleshooting/host-setup operation: build (or re-verify) a release
 // without touching DEV, e.g. to create the first release on a rebuilt host.
+// Also prints the candidate's schema plan and any copy-ready declarations.
 export async function prepare({ ref, expectedSha }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'PREPARE', expectedSha, sha: null, ref: null, previousSha: null };
+  let releaseState;
   try {
     context.ref = normalizeRef(ref);
     context.previousSha = await currentSha(paths.releases);
     context.sha = await resolveRequestedCommit(context.ref, expectedSha, paths);
-    const releaseState = await ensureRelease(context.sha, context.ref, { tool, paths, ops });
-    return { state: 'PREPARED', kind: 'PREPARE', sha: context.sha, ref: context.ref, release: releaseState, releasePath: path.join(paths.releases, context.sha), runningSha: context.previousSha, auditPath: paths.audit };
+    releaseState = await ensureRelease(context.sha, context.ref, { tool, paths, ops });
   } catch (error) {
     throw await rejectUnchanged(error, context, tool, paths);
   }
+  let schemaPlan;
+  if (!context.previousSha) schemaPlan = { state: 'UNAVAILABLE', error: 'no deployed release to compare against' };
+  else if (context.previousSha === context.sha) schemaPlan = { state: 'NONE', added: [], removed: [], changed: [], problems: [], note: 'candidate is the deployed release' };
+  else {
+    try { schemaPlan = await planCandidateSchema(context.previousSha, context.sha, [], { paths, ops }); }
+    catch (error) { schemaPlan = { state: 'UNAVAILABLE', error: error.message }; }
+  }
+  return { state: 'PREPARED', kind: 'PREPARE', sha: context.sha, ref: context.ref, release: releaseState, releasePath: path.join(paths.releases, context.sha), runningSha: context.previousSha, schemaPlan, auditPath: paths.audit };
+}
+
+const SWITCH_OPERATION = /^(PROMOTE|ROLLBACK)_(INTENT|SUCCESS|FAILURE)$/;
+
+// The last release-switch record (INTENT/SUCCESS/FAILURE of PROMOTE or
+// ROLLBACK) in the audit journal. An INTENT with nothing after it means a
+// switch was interrupted. A torn final line is treated the same way.
+export async function lastSwitchRecord(auditPath) {
+  let text;
+  try { text = await readFile(auditPath, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return null;
+    return { operation: 'UNREADABLE_JOURNAL', unreadable: true, error: error.message };
+  }
+  const lines = text.split('\n').filter((line) => line.trim());
+  let last = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    let record;
+    try { record = JSON.parse(lines[index]); }
+    catch {
+      if (index === lines.length - 1) return { operation: 'UNREADABLE_FINAL_RECORD', torn: true };
+      continue;
+    }
+    if (typeof record?.operation === 'string' && SWITCH_OPERATION.test(record.operation)) last = record;
+  }
+  return last;
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const APP_SERVICE_UNITS = ['wowsync-dev-dashboard.service', 'wowsync-dev-mcp-tunnel.service'];
+const isFullSha = (value) => typeof value === 'string' && FULL_SHA.test(value);
+const isSha256 = (value) => typeof value === 'string' && SHA256.test(value);
+const isOperation = (value, pattern) => typeof value === 'string' && pattern.test(value);
+const isAuditTime = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value))
+  && new Date(value).toISOString() === value;
+
+function isPlainRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validToolIdentity(tool, expectedReleaseSha) {
+  if (!isPlainRecord(tool) || tool.version !== '3' || typeof tool.entryPath !== 'string'
+    || !path.isAbsolute(tool.entryPath) || !isSha256(tool.entrySha256)) return false;
+  return isFullSha(tool.releaseSha) && tool.releaseSha === expectedReleaseSha;
+}
+
+function validHttpEvidence(http) {
+  if (!Array.isArray(http) || http.length < DEFAULT_VALIDATION_ROUTES.length) return false;
+  for (let index = 0; index < DEFAULT_VALIDATION_ROUTES.length; index += 1) {
+    const item = http[index];
+    if (!isPlainRecord(item) || item.path !== DEFAULT_VALIDATION_ROUTES[index].path
+      || item.expected !== DEFAULT_VALIDATION_ROUTES[index].status || item.actual !== item.expected) return false;
+  }
+  return http.every((item) => {
+    if (!isPlainRecord(item) || !Number.isInteger(item.expected) || item.expected < 100 || item.expected > 599
+      || !Number.isInteger(item.actual) || item.actual !== item.expected) return false;
+    try {
+      const parsed = parseRoute(`${item.path}=${item.expected}`);
+      return parsed.path === item.path && parsed.status === item.expected;
+    } catch { return false; }
+  });
+}
+
+function validServiceEvidence(services, { fresh }) {
+  if (!isPlainRecord(services) || !isPlainRecord(services.units) || !isPlainRecord(services.target)
+    || services.target.ActiveState !== 'active' || services.target.SubState !== 'active') return false;
+  for (const unit of APP_SERVICE_UNITS) {
+    const state = services.units[unit];
+    if (!isPlainRecord(state) || state.ActiveState !== 'active' || state.SubState !== 'running'
+      || state.Result !== 'success' || !Number.isSafeInteger(state.MainPID) || state.MainPID <= 0
+      || !Number.isSafeInteger(state.NRestarts) || state.NRestarts < 0
+      || (fresh && state.NRestarts !== 0)) return false;
+    if (fresh && (typeof state.InvocationID !== 'string' || !/^[0-9a-f]{32}$/.test(state.InvocationID))) return false;
+    if (!fresh && Object.hasOwn(state, 'InvocationID')) return false;
+  }
+  return services.units[APP_SERVICE_UNITS[0]].MainPID !== services.units[APP_SERVICE_UNITS[1]].MainPID;
+}
+
+function validSchemaItems(items) {
+  return Array.isArray(items) && items.every((item) => isPlainRecord(item)
+    && ['table', 'index'].includes(item.type)
+    && typeof item.name === 'string' && /^[a-z][a-z0-9_]{0,62}$/.test(item.name) && !/^sqlite/i.test(item.name)
+    && typeof item.tbl_name === 'string' && item.tbl_name.length > 0
+    && typeof item.sql === 'string' && isSha256(item.sqlSha256)
+    && schemaSqlSha256(item.sql) === item.sqlSha256);
+}
+
+function validSchemaSnapshot(schema) {
+  if (!Array.isArray(schema)) return false;
+  const names = new Set();
+  for (const item of schema) {
+    if (!isPlainRecord(item) || !['table', 'index', 'view', 'trigger'].includes(item.type)
+      || typeof item.name !== 'string' || !item.name.length || /^sqlite_/.test(item.name)
+      || typeof item.tbl_name !== 'string' || !item.tbl_name.length
+      || typeof item.sql !== 'string' || !item.sql.length || names.has(item.name)) return false;
+    if ((item.type === 'table' || item.type === 'view') && item.tbl_name !== item.name) return false;
+    names.add(item.name);
+  }
+  const owners = new Set(schema.filter((item) => item.type === 'table' || item.type === 'view').map((item) => item.name));
+  if (schema.some((item) => ['index', 'trigger'].includes(item.type) && !owners.has(item.tbl_name))) return false;
+  return true;
+}
+
+function validSchemaSnapshotEvidence(evidence) {
+  return isPlainRecord(evidence) && evidence.integrityCheck === 'ok'
+    && Number.isSafeInteger(evidence.userVersion) && evidence.userVersion >= 0
+    && validSchemaSnapshot(evidence.schema) && isSha256(evidence.schemaSha256)
+    && createHash('sha256').update(JSON.stringify({ userVersion: evidence.userVersion, schema: evidence.schema })).digest('hex') === evidence.schemaSha256;
+}
+
+function validSchemaEvidence(change, { declared } = {}) {
+  if (!isPlainRecord(change) || !['NONE', 'DECLARED_ADDITIVE'].includes(change.classification)
+    || change.declarationsSatisfied !== true || !validSchemaItems(change.added)
+    || !Array.isArray(change.removed) || change.removed.length !== 0
+    || !Array.isArray(change.changed) || change.changed.length !== 0
+    || !Array.isArray(change.problems) || change.problems.length !== 0
+    || !isPlainRecord(change.userVersion) || !Number.isSafeInteger(change.userVersion.before)
+    || change.userVersion.before < 0 || !Number.isSafeInteger(change.userVersion.after)
+    || change.userVersion.after !== change.userVersion.before) return false;
+  if (change.classification === 'NONE') return change.added.length === 0 && (!declared || declared.length === 0);
+  if (!change.added.length || !Array.isArray(declared)) return false;
+  let parsed;
+  try { parsed = validateSchemaDeclarations(declared.map((value) => {
+    const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+    if (!match) throw new Error('invalid declaration');
+    return { type: match[1], name: match[2], sqlSha256: match[3] };
+  })); } catch { return false; }
+  const expected = change.added.map((item) => `${item.type}:${item.name}@${item.sqlSha256}`).sort();
+  return expected.length === parsed.length && expected.join('\n') === declared.slice().sort().join('\n')
+    && change.added.every((item) => item.type !== 'index' || typeof item.tbl_name === 'string');
+}
+
+function validUnchangedRecoveryEvidence(change) {
+  return isPlainRecord(change) && change.classification === 'NONE'
+    && Array.isArray(change.added) && change.added.length === 0
+    && Array.isArray(change.removed) && change.removed.length === 0
+    && Array.isArray(change.changed) && change.changed.length === 0
+    && Array.isArray(change.problems) && change.problems.every((problem) => typeof problem === 'string')
+    && isPlainRecord(change.userVersion) && Number.isSafeInteger(change.userVersion.before)
+    && change.userVersion.before >= 0 && change.userVersion.after === change.userVersion.before;
+}
+
+function validSchemaSuccessEvidence(record) {
+  const change = record.schemaChange;
+  if (!validSchemaSnapshotEvidence(record.dataBefore) || !validSchemaSnapshotEvidence(record.dataAfter)
+    || !Array.isArray(change?.declared) || typeof change.previousCodeCompatible !== 'boolean'
+    || typeof record.schemaChanged !== 'boolean') return false;
+  let declarations;
+  try {
+    declarations = validateSchemaDeclarations(change.declared.map((value) => {
+      const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+      if (!match) throw new Error('invalid declaration');
+      return { type: match[1], name: match[2], sqlSha256: match[3] };
+    }));
+  } catch { return false; }
+  const observed = classifySchemaChange(
+    { integrityCheck: 'ok', userVersion: record.dataBefore.userVersion, schema: record.dataBefore.schema },
+    { integrityCheck: 'ok', userVersion: record.dataAfter.userVersion, schema: record.dataAfter.schema },
+    declarations,
+  );
+  return validSchemaEvidence(change, { declared: change.declared })
+    && observed.classification === change.classification
+    && observed.declarationsSatisfied === change.declarationsSatisfied
+    && JSON.stringify(observed.added) === JSON.stringify(change.added)
+    && JSON.stringify(observed.removed) === JSON.stringify(change.removed)
+    && JSON.stringify(observed.changed) === JSON.stringify(change.changed)
+    && JSON.stringify(observed.userVersion) === JSON.stringify(change.userVersion)
+    && JSON.stringify(observed.problems) === JSON.stringify(change.problems)
+    && record.schemaChanged === (change.classification === 'DECLARED_ADDITIVE');
+}
+
+function auditedSchemaChangeMatches(before, after, change, declared) {
+  if (!validSchemaSnapshotEvidence(before) || !validSchemaSnapshotEvidence(after)) return false;
+  let declarations;
+  try {
+    declarations = validateSchemaDeclarations(declared.map((value) => {
+      const match = typeof value === 'string' && /^(table|index):([a-z][a-z0-9_]{0,62})@([0-9a-f]{64})$/.exec(value);
+      if (!match) throw new Error('invalid declaration');
+      return { type: match[1], name: match[2], sqlSha256: match[3] };
+    }));
+  } catch { return false; }
+  const observed = classifySchemaChange(
+    { integrityCheck: before.integrityCheck, userVersion: before.userVersion, schema: before.schema },
+    { integrityCheck: after.integrityCheck, userVersion: after.userVersion, schema: after.schema },
+    declarations,
+  );
+  return observed.classification === change.classification
+    && observed.declarationsSatisfied === change.declarationsSatisfied
+    && JSON.stringify(observed.added) === JSON.stringify(change.added)
+    && JSON.stringify(observed.removed) === JSON.stringify(change.removed)
+    && JSON.stringify(observed.changed) === JSON.stringify(change.changed)
+    && JSON.stringify(observed.userVersion) === JSON.stringify(change.userVersion)
+    && JSON.stringify(observed.problems) === JSON.stringify(change.problems);
+}
+
+function validatedSwitchSha(record) {
+  const { operation, requestedSha, candidateSha, deployedSha, previousSha } = record ?? {};
+  if (!['PROMOTE_SUCCESS', 'ROLLBACK_SUCCESS'].includes(operation)
+    || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha) || requestedSha !== candidateSha || candidateSha !== deployedSha
+    || !isFullSha(previousSha) || previousSha === deployedSha
+    || record.validation !== 'passed' || !validSchemaSuccessEvidence(record)
+    || !validServiceEvidence(record.services, { fresh: true }) || !validHttpEvidence(record.http)
+    || !validToolIdentity(record.tool, previousSha)) return null;
+  if (operation === 'PROMOTE_SUCCESS' && !(typeof record.requestedRef === 'string'
+    && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))) return null;
+  if (operation === 'ROLLBACK_SUCCESS' && record.requestedRef !== null) return null;
+  return deployedSha;
+}
+
+function validatedRecoverySha(record) {
+  const { operation, requestedSha, candidateSha, previousSha, recoveryAction, recoveryResult,
+    restored, schemaChange, selectedSha } = record ?? {};
+  if (!['PROMOTE_FAILURE', 'ROLLBACK_FAILURE'].includes(operation)
+    || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha) || requestedSha !== candidateSha
+    || !isFullSha(previousSha) || previousSha === candidateSha || selectedSha !== previousSha
+    || recoveryResult !== 'validated' || !isPlainRecord(schemaChange)
+    || !validServiceEvidence(restored?.services, { fresh: true }) || !validHttpEvidence(restored?.http)
+    || !validToolIdentity(record.tool, previousSha)) return null;
+  if (operation === 'PROMOTE_FAILURE' && !(typeof record.requestedRef === 'string'
+    && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))) return null;
+  if (operation === 'ROLLBACK_FAILURE' && record.requestedRef !== null) return null;
+  const declared = record.declaredSchemaAdditions;
+  if (recoveryAction === 'restore-previous-release-and-validate'
+    && Array.isArray(declared) && validUnchangedRecoveryEvidence(schemaChange)
+    && auditedSchemaChangeMatches(record.schemaBefore, record.schemaAfter, schemaChange, declared)
+    && record.schemaChanged === false) return previousSha;
+  const retained = record.schemaAdditionsRetained;
+  const retainedNames = Array.isArray(retained) && retained.every((item) => isPlainRecord(item)
+    && ['table', 'index'].includes(item.type) && typeof item.name === 'string')
+    ? retained.map((item) => `${item.type}:${item.name}`).sort() : null;
+  const actualNames = validSchemaItems(schemaChange.added)
+    ? schemaChange.added.map((item) => `${item.type}:${item.name}`).sort() : null;
+  if (recoveryAction === 'restore-previous-release-retaining-declared-additions'
+    && Array.isArray(declared) && retainedNames && retainedNames.join('\n') === actualNames?.join('\n')
+    && validSchemaEvidence(schemaChange, { declared })
+    && auditedSchemaChangeMatches(record.schemaBefore, record.schemaAfter, schemaChange, declared)
+    && schemaChange.classification === 'DECLARED_ADDITIVE'
+    && record.previousCodeCompatible === true && record.schemaChanged === true) return previousSha;
+  return null;
+}
+
+function validatedNoopSha(record, { allowLegacyBootstrap, priorValidatedSha }) {
+  const { requestedSha, candidateSha, deployedSha, previousSha, noopAuthorization } = record ?? {};
+  if (record?.operation !== 'PROMOTE_NOOP' || record.schemaVersion !== 2 || !isAuditTime(record.at)
+    || !isFullSha(requestedSha)
+    || requestedSha !== candidateSha || candidateSha !== deployedSha || deployedSha !== previousSha
+    || !(typeof record.requestedRef === 'string'
+      && (record.requestedRef.startsWith('refs/heads/') || record.requestedRef.startsWith('refs/tags/')))
+    || record.validation !== 'passed' || !isPlainRecord(noopAuthorization)
+    || noopAuthorization.selectedSha !== deployedSha
+    || !validServiceEvidence(record.services, { fresh: false }) || !validHttpEvidence(record.http)
+    || !validToolIdentity(record.tool, deployedSha)) return null;
+  if (!['LEGACY_EMPTY', 'VALIDATED'].includes(noopAuthorization.state)) return null;
+  if (noopAuthorization.state === 'LEGACY_EMPTY'
+    && (!allowLegacyBootstrap || noopAuthorization.selectedSha !== deployedSha)) return null;
+  if (noopAuthorization.state === 'VALIDATED'
+    && (priorValidatedSha !== deployedSha || noopAuthorization.selectedSha !== deployedSha)) return null;
+  return deployedSha;
+}
+
+// A nonempty journal authorizes a no-op only when its latest switch outcome
+// proves that this exact release was selected and validated.
+export function determineNoopReviewState(text, currentSha) {
+  if (typeof text !== 'string') return { state: 'UNRESOLVED', reason: 'journal content is not text' };
+  if (!text) return { state: 'LEGACY_EMPTY' };
+  const lines = text.split('\n').filter((line) => line.trim());
+  if (!lines.length) return { state: 'LEGACY_EMPTY' };
+  let selectedSha = null;
+  let unresolved = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    let record;
+    try { record = JSON.parse(lines[index]); }
+    catch { return { state: 'UNRESOLVED', reason: index === lines.length - 1 ? 'unreadable journal tail' : 'unreadable journal record' }; }
+    const operation = record?.operation;
+    if (!isPlainRecord(record) || typeof operation !== 'string') {
+      return { state: 'UNRESOLVED', reason: 'journal record has no valid operation name' };
+    }
+    if (isOperation(operation, /^(PROMOTE|ROLLBACK)_INTENT$/)) {
+      selectedSha = null;
+      unresolved = { state: 'INTERRUPTED', operation };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_SUCCESS$/)) {
+      const sha = validatedSwitchSha(record);
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'success lacks structured validation evidence' };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_FAILURE$/)) {
+      const sha = validatedRecoverySha(record);
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'failure recovery is not proven validated' };
+    } else if (operation === 'PROMOTE_NOOP') {
+      const priorValidatedSha = unresolved ? null : selectedSha;
+      const sha = validatedNoopSha(record, { allowLegacyBootstrap: index === 0, priorValidatedSha });
+      selectedSha = sha;
+      unresolved = sha ? null : { state: 'UNRESOLVED', operation, reason: 'no-op authorization evidence is missing or invalid' };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_(INTERRUPTED_REVIEW_REQUIRED|UNRESOLVED_REVIEW_REQUIRED)$/)) {
+      selectedSha = null;
+      unresolved = { state: operation.includes('INTERRUPTED') ? 'INTERRUPTED' : 'UNRESOLVED', operation };
+    } else if (isOperation(operation, /^(PROMOTE|ROLLBACK)_/)
+      && !['PROMOTE_COMMAND_FAILURE', 'ROLLBACK_COMMAND_FAILURE'].includes(operation)) {
+      selectedSha = null;
+      unresolved = { state: 'UNRESOLVED', operation, reason: 'unexpected release operation in audit journal' };
+    }
+  }
+  if (unresolved) return unresolved;
+  if (!isFullSha(currentSha) || selectedSha !== currentSha) return { state: 'UNRESOLVED', reason: 'journal does not validate the current release', selectedSha };
+  return { state: 'VALIDATED', selectedSha };
+}
+
+async function noopJournalState(auditPath, currentSha) {
+  let text;
+  try { text = await readFile(auditPath, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { state: 'LEGACY_EMPTY' };
+    return { state: 'UNRESOLVED', reason: `journal unreadable: ${error.message}` };
+  }
+  return determineNoopReviewState(text, currentSha);
+}
+
+async function findSwitchBackups(record, paths) {
+  if (typeof record?.at !== 'string' || !isFullSha(record.previousSha) || !isFullSha(record.candidateSha)) return [];
+  const prefix = `${record.at.replaceAll(':', '').replaceAll('-', '')}-`;
+  const suffix = `-${record.previousSha}-to-${record.candidateSha}.sqlite`;
+  const names = await readdir(paths.backups).catch(() => []);
+  return names.filter((name) => name.startsWith(prefix) && name.endsWith(suffix)).map((name) => path.join(paths.backups, name));
+}
+
+async function interruptedSwitch(context, tool, paths) {
+  const record = await lastSwitchRecord(paths.audit);
+  if (!record || !(record.torn || record.unreadable || /_INTENT$/.test(record.operation))) return null;
+  const backups = record.torn || record.unreadable ? [] : await findSwitchBackups(record, paths);
+  const outcome = {
+    state: record.unreadable ? 'UNRESOLVED_REVIEW_REQUIRED' : 'INTERRUPTED_REVIEW_REQUIRED', kind: context.kind, requestedSha: context.sha, requestedRef: context.ref,
+    lastKnownSha: context.previousSha, manualIntervention: true,
+    interrupted: record.torn || record.unreadable ? { operation: record.operation } : { operation: record.operation, at: record.at, previousSha: record.previousSha, candidateSha: record.candidateSha },
+    backupPaths: backups,
+    cause: record.unreadable
+      ? `The deployment audit journal cannot be read (${record.error}); release-switch provenance is unknown.`
+      : record.torn
+        ? 'The deployment audit journal ends with an unreadable record; the last release switch may have been interrupted.'
+      : `The last release switch (${record.operation} ${record.previousSha} -> ${record.candidateSha} at ${record.at}) never recorded a result; releases/current already names ${context.sha}, but that switch was not validated.`,
+    auditPath: paths.audit,
+  };
+  await appendAudit({
+    schemaVersion: 2, operation: `${context.kind}_${record.unreadable ? 'UNRESOLVED' : 'INTERRUPTED'}_REVIEW_REQUIRED`, tool, requestedSha: context.sha, requestedRef: context.ref,
+    previousSha: context.previousSha, candidateSha: context.sha, interrupted: outcome.interrupted, backupPaths: backups, at: iso(),
+  }, paths).catch(() => {});
+  return new DeployError(outcome.cause, outcome);
 }
 
 // The one routine operation: deploy a validated, pushed SHA to DEV. Prepares
 // the immutable release when needed, recognises an already-deployed SHA, and
 // otherwise switches releases with backup, validation, and automatic recovery.
-export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROUTES }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROUTES, schemaDeclarations = [], previousCodeCompatible = false }, { paths = PATHS, ops = hostOps(paths) } = {}) {
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'PROMOTE', expectedSha, sha: null, ref: null, previousSha: null };
   let releaseState;
+  let declarations;
+  let schemaPlan;
   try {
     context.ref = normalizeRef(ref);
     validateExpectedSha(expectedSha);
+    declarations = validateSchemaDeclarations(schemaDeclarations);
+    if (previousCodeCompatible === true && declarations.length === 0) throw new Error('--previous-code-compatible requires at least one --expect-schema-add declaration.');
+    if (previousCodeCompatible !== true && previousCodeCompatible !== false) throw new Error('previousCodeCompatible must be a boolean.');
     context.previousSha = await currentSha(paths.releases);
     if (!context.previousSha) {
       throw Object.assign(new Error(`No deployed release exists at ${paths.current}; DEV was not set up for release deployment.`), { manualIntervention: true });
@@ -818,25 +1413,46 @@ export async function deploy({ ref, expectedSha, routes = DEFAULT_VALIDATION_ROU
     context.sha = await resolveRequestedCommit(context.ref, expectedSha, paths);
     releaseState = await ensureRelease(context.sha, context.ref, { tool, paths, ops });
     if (context.sha === context.previousSha) {
+      const interrupted = await interruptedSwitch(context, tool, paths);
+      if (interrupted) throw interrupted;
+      const reviewState = await noopJournalState(paths.audit, context.sha);
+      if (!['VALIDATED', 'LEGACY_EMPTY'].includes(reviewState.state)) {
+        const outcome = {
+          state: reviewState.state === 'INTERRUPTED' ? 'INTERRUPTED_REVIEW_REQUIRED' : 'UNRESOLVED_REVIEW_REQUIRED',
+          kind: 'PROMOTE', requestedSha: context.sha, requestedRef: context.ref, lastKnownSha: context.previousSha,
+          manualIntervention: true, reviewState, cause: 'DEV deploy blocked: the selected release has unresolved review-required deployment history.', auditPath: paths.audit,
+        };
+        await appendAudit({ schemaVersion: 2, operation: 'PROMOTE_UNRESOLVED_REVIEW_REQUIRED', tool, requestedSha: context.sha, requestedRef: context.ref, selectedSha: context.sha, reviewState, at: iso() }, paths).catch(() => {});
+        throw new DeployError(outcome.cause, outcome);
+      }
+      if (declarations.length) throw new Error(`${context.sha} is already deployed; --expect-schema-add does not apply to a no-op deployment.`);
       const services = await assertApplicationServices(context.sha, { paths, ops });
       const http = await validateHttp(routes, paths.baseUrl, ops.fetch);
       const record = {
         schemaVersion: 2, operation: 'PROMOTE_NOOP', tool, requestedSha: context.sha, requestedRef: context.ref,
         previousSha: context.previousSha, candidateSha: context.sha, deployedSha: context.sha, at: iso(), services, http, validation: 'passed',
+        noopAuthorization: { state: reviewState.state, selectedSha: reviewState.selectedSha ?? context.sha },
       };
       await appendAudit(record, paths);
       return { state: 'NOOP', record, auditPath: paths.audit };
     }
+    // Pre-stop schema plan: predict the candidate's schema on disposable
+    // databases before anything is stopped. It can only refuse a deployment;
+    // the post-start classification of the real database stays authoritative.
+    try { schemaPlan = await planCandidateSchema(context.previousSha, context.sha, declarations, { paths, ops }); }
+    catch (error) { throw new Error(`Schema plan failed before any service was stopped: ${error.message}`); }
+    const rejection = schemaPlanRejection(schemaPlan, declarations);
+    if (rejection) throw Object.assign(new Error(rejection), { schemaPlan });
   } catch (error) {
     throw await rejectUnchanged(error, context, tool, paths);
   }
-  return switchRelease({ kind: 'PROMOTE', sha: context.sha, ref: context.ref, previousSha: context.previousSha, routes, tool, releaseState, paths, ops });
+  return switchRelease({ kind: 'PROMOTE', sha: context.sha, ref: context.ref, previousSha: context.previousSha, routes, tool, releaseState, paths, ops, declarations, previousCodeCompatible, schemaPlan });
 }
 
 // Explicit troubleshooting operation: switch back to a retained release using
 // the same backup, validation, and recovery path as deploy.
 export async function rollback({ sha, routes = DEFAULT_VALIDATION_ROUTES }, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   const context = { kind: 'ROLLBACK', sha, ref: null, previousSha: null };
   try {
     validateSha(sha);
@@ -856,7 +1472,7 @@ export async function rollback({ sha, routes = DEFAULT_VALIDATION_ROUTES }, { pa
 // Stop Dashboard/MCP, back up SQLite, switch releases/current, start, and
 // validate. On failure, restore the previous release only when the schema is
 // known to be unchanged; never restore the database automatically.
-async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releaseState, paths, ops }) {
+async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releaseState, paths, ops, declarations = [], previousCodeCompatible = false, schemaPlan = null }) {
   const preparedAt = iso();
   const readers = { readServiceState: ops.serviceState, readReleaseUnitState: ops.releaseUnitState, readTargetState: ops.targetState };
   const readiness = (checkRoutes) => waitForReadiness({ fetchFn: ops.fetch, baseUrl: paths.baseUrl, routes: checkRoutes, ...ops.readiness });
@@ -869,7 +1485,10 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     previousServices = await assertApplicationServices(previousSha, { paths, ops });
     preStopInvocations = await captureInvocationIds(ops.invocationId);
     herdrBefore = await ops.serviceState(HERDR_UNIT);
-    await appendAudit({ schemaVersion: 2, operation: `${kind}_INTENT`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, at: preparedAt, journalBefore }, paths);
+    await appendAudit({
+      schemaVersion: 2, operation: `${kind}_INTENT`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, at: preparedAt, journalBefore,
+      ...(kind === 'PROMOTE' ? { schemaPlan, declaredSchemaAdditions: declarations.map(formatSchemaDeclaration), previousCodeCompatible } : {}),
+    }, paths);
   } catch (error) {
     throw await rejectUnchanged(error, { kind, sha, ref, previousSha }, tool, paths);
   }
@@ -878,8 +1497,10 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
   let backupSha256;
   let beforeEvidence;
   let schemaChanged = null;
+  let schemaChange = null;
   let candidateStarted = false;
   let candidateValidated = false;
+  let recoveryAfterEvidence = null;
   try {
     await ops.serviceHelper('stop');
     beforeEvidence = databaseEvidence(paths.database);
@@ -896,8 +1517,14 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
     });
     const http = await validateHttp(routes, paths.baseUrl, ops.fetch);
     const afterEvidence = databaseEvidence(paths.database);
-    schemaChanged = !assertSchemaCompatible(beforeEvidence, afterEvidence);
-    if (schemaChanged) throw new Error(`Database schema changed during candidate validation (user_version ${beforeEvidence.userVersion} -> ${afterEvidence.userVersion}, schema ${beforeEvidence.schemaSha256} -> ${afterEvidence.schemaSha256}). Code rollback requires an operator compatibility decision.`);
+    assertSchemaCompatible(beforeEvidence, afterEvidence); // throws unless integrity_check passed before and after
+    schemaChange = classifySchemaChange(beforeEvidence, afterEvidence, declarations);
+    schemaChanged = schemaChange.classification !== 'NONE';
+    if (!schemaChangeAccepted(schemaChange, declarations)) {
+      throw new Error(declarations.length
+        ? `Database schema change during candidate validation is not exactly the declared additions (${schemaChange.classification}: ${schemaChange.problems.join('; ') || 'no change'}).`
+        : `Database schema changed during candidate validation (user_version ${beforeEvidence.userVersion} -> ${afterEvidence.userVersion}, schema ${beforeEvidence.schemaSha256} -> ${afterEvidence.schemaSha256}; ${schemaChange.problems.join('; ')}). Code rollback requires an operator compatibility decision.`);
+    }
     const herdrAfter = await ops.serviceState(HERDR_UNIT);
     if (herdrBefore.MainPID !== herdrAfter.MainPID || herdrAfter.ActiveState !== 'active') {
       throw new Error(`Herdr changed during application deployment: before=${JSON.stringify(herdrBefore)} after=${JSON.stringify(herdrAfter)}`);
@@ -915,9 +1542,11 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
       release: releaseState,
       at: iso(),
       backup: { path: backupPath, sha256: backupSha256, integrityCheck: 'ok', data: backupEvidence },
-      dataBefore: { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, demand: beforeEvidence.demand },
-      dataAfter: { integrityCheck: afterEvidence.integrityCheck, userVersion: afterEvidence.userVersion, schemaSha256: afterEvidence.schemaSha256, demand: afterEvidence.demand },
+      dataBefore: { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, schema: beforeEvidence.schema, demand: beforeEvidence.demand },
+      dataAfter: { integrityCheck: afterEvidence.integrityCheck, userVersion: afterEvidence.userVersion, schemaSha256: afterEvidence.schemaSha256, demand: afterEvidence.demand, schema: afterEvidence.schema },
       schemaChanged,
+      schemaChange: { ...schemaChange, declared: declarations.map(formatSchemaDeclaration), previousCodeCompatible },
+      ...(kind === 'PROMOTE' ? { schemaPlan } : {}),
       previousServices,
       services,
       herdr: { before: herdrBefore, after: herdrAfter },
@@ -934,21 +1563,47 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
         ...base, state: 'AUDIT_FAILED', runningSha: sha, manualIntervention: false,
       });
     }
-    const preRecovery = await stopCandidateThenInspectSchema({
+    let preRecovery = await stopCandidateThenInspectSchema({
       candidateMayHaveRun: candidateStarted,
       stop: () => ops.serviceHelper('stop'),
       inspectSchema: () => {
         const after = databaseEvidence(paths.database);
-        return beforeEvidence ? !assertSchemaCompatible(beforeEvidence, after) : null;
+        recoveryAfterEvidence = after;
+        return beforeEvidence ? classifySchemaChange(beforeEvidence, after, declarations) : null;
       },
     });
-    schemaChanged = preRecovery.schemaChanged;
-    const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true };
+    if (!candidateStarted && !beforeEvidence) {
+      // The first stop failed before the routine had a stopped-database
+      // baseline. Retry the stop, then capture a stable current-schema
+      // snapshot. Since the symlink was never switched and the candidate was
+      // never started, the old release is the only code that could have run.
+      try {
+        await ops.serviceHelper('stop');
+        const currentEvidence = databaseEvidence(paths.database);
+        beforeEvidence = currentEvidence;
+        recoveryAfterEvidence = currentEvidence;
+        preRecovery = { stopResult: 'succeeded', schemaChanged: classifySchemaChange(currentEvidence, currentEvidence, declarations) };
+      } catch (error) {
+        preRecovery = { stopResult: `failed: ${error.message}`, schemaChanged: null };
+      }
+    }
+    if (preRecovery.schemaChanged === false) recoveryAfterEvidence = beforeEvidence;
+    // A candidate that never ran cannot have changed the schema; otherwise the
+    // classification is what was observed after the stop, or null (unknown).
+    const recoverySchema = preRecovery.schemaChanged === false
+      ? (beforeEvidence ? classifySchemaChange(beforeEvidence, beforeEvidence, declarations) : null)
+      : preRecovery.schemaChanged;
+    schemaChange = recoverySchema;
+    schemaChanged = recoverySchema ? recoverySchema.classification !== 'NONE' : null;
+    const failure = { schemaVersion: 2, operation: `${kind}_FAILURE`, tool, requestedSha: sha, requestedRef: ref, previousSha, candidateSha: sha, backupPath, backupSha256, error: error.message, recoveryAttempted: true,
+      declaredSchemaAdditions: declarations.map(formatSchemaDeclaration), previousCodeCompatible,
+      schemaBefore: beforeEvidence ? { integrityCheck: beforeEvidence.integrityCheck, userVersion: beforeEvidence.userVersion, schemaSha256: beforeEvidence.schemaSha256, schema: beforeEvidence.schema } : null,
+      schemaAfter: recoveryAfterEvidence ? { integrityCheck: recoveryAfterEvidence.integrityCheck, userVersion: recoveryAfterEvidence.userVersion, schemaSha256: recoveryAfterEvidence.schemaSha256, schema: recoveryAfterEvidence.schema } : null };
     let recovery;
     try {
       recovery = await recoverFailedPromotion({
-        schemaChanged, candidateStarted,
-        priorStopResult: candidateStarted ? preRecovery.stopResult : undefined,
+        schemaChanged, candidateStarted, schema: recoverySchema, declarations, previousCodeCompatible,
+        priorStopResult: preRecovery.stopResult === 'not-needed' ? undefined : preRecovery.stopResult,
         stop: () => ops.serviceHelper('stop'),
         setPrevious: () => atomicSetCurrent(paths.releases, previousSha),
         startPrevious: () => ops.serviceHelper('start'),
@@ -964,29 +1619,37 @@ async function switchRelease({ kind, sha, ref, previousSha, routes, tool, releas
       });
     } catch (recoveryError) {
       const lastKnownSha = await currentSha(paths.releases).catch(() => null);
-      await appendAudit({ ...failure, schemaChanged, recoveryResult: `failed: ${recoveryError.message}`, at: iso() }, paths).catch(() => {});
+      await appendAudit({ ...failure, schemaChanged, schemaChange, recoveryResult: `failed: ${recoveryError.message}`, at: iso() }, paths).catch(() => {});
       throw new DeployError(`Deployment failed (${error.message}); automatic recovery to ${previousSha} also failed (${recoveryError.message}).`, {
         ...base, state: 'RECOVERY_FAILED', lastKnownSha, manualIntervention: true, recoveryError: recoveryError.message,
       });
     }
     if (recovery.state === 'stopped-review-required') {
       const lastKnownSha = await currentSha(paths.releases).catch(() => null);
-      await appendAudit({ ...failure, schemaChanged, recoveryResult: recovery.state, recoveryAction: recovery.action, candidateStopResult: recovery.stopResult, at: iso() }, paths).catch(() => {});
+      await appendAudit({ ...failure, schemaChanged, schemaChange, recoveryResult: recovery.state, recoveryAction: recovery.action, candidateStopResult: recovery.stopResult, at: iso() }, paths).catch(() => {});
       throw new DeployError(`Candidate failed and the database schema changed or could not be verified; Dashboard/MCP were stopped (${recovery.stopResult}) and previous code was not started. ${error.message}`, {
-        ...base, state: 'STOPPED_REVIEW_REQUIRED', lastKnownSha, schemaChanged, servicesStopped: recovery.stopResult, manualIntervention: true,
+        ...base, state: 'STOPPED_REVIEW_REQUIRED', lastKnownSha, schemaChanged, schemaChange, servicesStopped: recovery.stopResult, manualIntervention: true,
       });
     }
     let auditWarning = null;
-    try { await appendAudit({ ...failure, schemaChanged: false, recoveryResult: 'validated', restored: recovery.validation, at: iso() }, paths); }
+    const retained = recovery.retainedAdditions ?? [];
+    try {
+      await appendAudit({
+        ...failure, schemaChanged, schemaChange, recoveryResult: 'validated', recoveryAction: recovery.action, selectedSha: previousSha, restored: recovery.validation,
+        ...(retained.length ? { schemaAdditionsRetained: retained, previousCodeCompatible: true } : {}), at: iso(),
+      }, paths);
+    }
     catch (auditError) { auditWarning = `recovery audit could not be written: ${auditError.message}`; }
-    throw new DeployError(`Deployment validation failed; previous release ${previousSha} was restarted and validated; database was not restored. ${error.message}`, {
+    const retainedText = retained.length ? ` Declared schema additions were retained: ${retained.map((item) => `${item.type} ${item.name}`).join(', ')}.` : '';
+    throw new DeployError(`Deployment validation failed; previous release ${previousSha} was restarted and validated; database was not restored.${retainedText} ${error.message}`, {
       ...base, state: 'RECOVERED', runningSha: previousSha, devHealthy: true, databaseRestored: false, manualIntervention: false, auditWarning, recovery: recovery.validation,
+      ...(retained.length ? { schemaAdditionsRetained: retained } : {}),
     });
   }
 }
 
 async function backupOnly(label, routes, { paths = PATHS, ops = hostOps(paths) } = {}) {
-  const tool = await deploymentToolIdentity(paths);
+  const tool = await toolIdentity(paths, ops);
   if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(label ?? '')) throw new Error('Backup label must be 1-48 lowercase letters, digits, or hyphens.');
   const at = iso();
   const services = {};
@@ -1060,6 +1723,34 @@ function unitSummary(unit, units) {
   return state && state.ActiveState === 'active' && state.Result === 'success' ? 'healthy' : 'NOT VERIFIED';
 }
 
+function schemaLine(record) {
+  const change = record.schemaChange;
+  if (change?.classification === 'DECLARED_ADDITIVE') return `ADDED (declared) ${change.added.map((item) => item.name).join(', ')}`;
+  if (change?.classification === 'NONE') return 'unchanged';
+  return record.schemaChanged ? 'CHANGED' : 'unchanged';
+}
+
+// Lines describing a candidate schema plan (prepare output, and a deploy
+// refused before any stop because of its plan).
+export function schemaPlanLines(plan) {
+  if (!plan) return [];
+  if (plan.state === 'UNAVAILABLE') return [`Schema plan: UNAVAILABLE (${plan.error})`];
+  if (plan.state === 'NONE') return ['Schema plan: none'];
+  const lines = [];
+  if (plan.state === 'NON_ADDITIVE') {
+    lines.push('Schema plan: NON-ADDITIVE (cannot be declared; deploy will refuse it)');
+    for (const problem of plan.problems) lines.push(`  - ${problem}`);
+    for (const item of plan.added.filter((object) => !DECLARABLE_TYPES.has(object.type))) lines.push(`  - ${item.type} ${item.name} added`);
+    return lines;
+  }
+  lines.push('Schema plan: additive (requires explicit approval)');
+  for (const item of plan.added) {
+    lines.push(`  ${item.type} ${item.name}  sql sha256 ${item.sqlSha256}`);
+    lines.push(`    --expect-schema-add ${item.declaration}`);
+  }
+  return lines;
+}
+
 // The routine, human-facing result. Detailed evidence stays in the audit
 // record and in --json output.
 export function formatResult(result) {
@@ -1078,7 +1769,7 @@ export function formatResult(result) {
       line('Previous', record.previousSha);
       line('Release', { built: 'built and tested in staging', reused: 'reused prepared release', retained: 'retained release' }[record.release] ?? record.release);
       line('Data backup', `OK, integrity ok (${record.backup.path})`);
-      line('Schema', record.schemaChanged ? 'CHANGED' : 'unchanged');
+      line('Schema', schemaLine(record));
       line('Dashboard', `${unitSummary(DASHBOARD_UNIT, units)} (${httpSummary(record.http)})`);
       line('MCP', unitSummary(MCP_UNIT, units));
       line('Herdr', record.herdr?.before?.MainPID === record.herdr?.after?.MainPID ? 'untouched' : 'CHANGED');
@@ -1102,6 +1793,7 @@ export function formatResult(result) {
       line('Running', result.runningSha ? `${result.runningSha} (untouched)` : 'unknown (untouched)');
       manual(result.manualIntervention);
       line('Cause', result.cause);
+      lines.push(...schemaPlanLines(result.schemaPlan));
       break;
     case 'RECOVERED':
       lines.push(`DEV ${action} FAILED — RECOVERED`);
@@ -1109,6 +1801,7 @@ export function formatResult(result) {
       line('Recovered to', result.runningSha);
       line('DEV health', 'OK (previous release restarted and validated)');
       line('Database', `not restored; pre-deploy backup at ${result.backupPath ?? 'none (failed before backup)'}`);
+      if (result.schemaAdditionsRetained?.length) line('Schema', `additions retained: ${result.schemaAdditionsRetained.map((item) => `${item.type} ${item.name}`).join(', ')} (--previous-code-compatible)`);
       manual(false);
       line('Cause', result.cause);
       if (result.auditWarning) line('Warning', result.auditWarning);
@@ -1122,6 +1815,25 @@ export function formatResult(result) {
       line('Data backup', result.backupPath ?? 'none');
       manual(true);
       line('Cause', result.cause);
+      break;
+    case 'INTERRUPTED_REVIEW_REQUIRED':
+      lines.push(`DEV ${action} INTERRUPTED — REVIEW REQUIRED`);
+      line('Requested', result.requestedSha);
+      line('Release pointer', result.lastKnownSha ?? 'unknown');
+      line('Interrupted', result.interrupted?.at ? `${result.interrupted.operation} ${result.interrupted.previousSha} -> ${result.interrupted.candidateSha} at ${result.interrupted.at}` : result.interrupted?.operation ?? 'unknown');
+      line('Data backup', result.backupPaths?.length ? result.backupPaths.join(', ') : 'none recorded');
+      manual(true);
+      line('Cause', result.cause);
+      line('Next', `wowsync-dev-deploy status; review ${result.auditPath}; then rollback to the previous release or re-validate`);
+      break;
+    case 'UNRESOLVED_REVIEW_REQUIRED':
+      lines.push('DEV DEPLOY BLOCKED — REVIEW REQUIRED');
+      line('Requested', result.requestedSha);
+      line('Selected release', result.lastKnownSha ?? 'unknown');
+      line('Reason', result.reviewState?.reason ?? result.reviewState?.operation ?? 'deployment history is unresolved');
+      manual(true);
+      line('Cause', result.cause);
+      line('Next', `wowsync-dev-deploy status; review ${result.auditPath}; then perform a validated deploy or rollback`);
       break;
     case 'RECOVERY_FAILED':
       lines.push('DEV RECOVERY FAILED');
@@ -1153,6 +1865,7 @@ export function formatResult(result) {
       line('Ref', result.ref);
       line('Release', result.release === 'built' ? `built and tested (${result.releasePath})` : `already prepared, re-verified (${result.releasePath})`);
       line('Running', result.runningSha ?? 'no deployed release');
+      lines.push(...schemaPlanLines(result.schemaPlan));
       break;
     case 'BACKUP':
       lines.push('DEV BACKUP OK');
@@ -1195,17 +1908,22 @@ export function exitCodeFor(result) {
 
 export const USAGE = `Usage:
   wowsync-dev-deploy deploy <branch|refs/heads/...|refs/tags/...> <validated-sha> [--route /path=HTTP_STATUS ...] [--json]
+      [--expect-schema-add table:<name>@<sha256> | index:<name>@<sha256> ...] [--previous-code-compatible]
   wowsync-dev-deploy status [--json]
 
 Troubleshooting, only when explicitly asked:
   wowsync-dev-deploy rollback <retained-full-sha> [--route /path=HTTP_STATUS ...] [--json]
   wowsync-dev-deploy backup <label> [--route /path=HTTP_STATUS ...] [--json]
-  wowsync-dev-deploy prepare <ref> <validated-sha> [--json]   (build a release only; DEV untouched)
+  wowsync-dev-deploy prepare <ref> <validated-sha> [--json]   (build a release and print its schema plan; DEV untouched)
 
 deploy fetches the ref, requires it to point at the validated SHA, builds and tests the
 release if it is not already prepared, backs up SQLite, restarts only Dashboard and MCP,
 validates them, and restores the previous release automatically if validation fails.
 Default checks are GET / and GET /api/versions => 200; --route adds a feature check.
+A candidate that changes the database schema is refused before anything is stopped unless
+every change is an added table/index declared exactly (copy the declarations printed by
+\`prepare\`). --previous-code-compatible additionally lets a failed candidate fall back to
+the previous release while the declared additions stay in the database.
 `;
 
 const RETIRED_COMMANDS = Object.freeze({
@@ -1220,18 +1938,31 @@ export function parseArgs(argv) {
   if (!['deploy', 'status', 'rollback', 'backup', 'prepare'].includes(command)) throw new Error(command ? `Unknown command: ${command}` : 'A command is required.');
   const positional = [];
   const routes = [...DEFAULT_VALIDATION_ROUTES];
+  const declarations = [];
+  let previousCodeCompatible = false;
   let json = false;
   while (args.length) {
     const arg = args.shift();
     if (arg === '--json') json = true;
     else if (arg === '--route' && !['status', 'prepare'].includes(command)) routes.push(parseRoute(args.shift()));
+    else if ((arg === '--expect-schema-add' || arg === '--previous-code-compatible') && command !== 'deploy') throw new Error(`${arg} is accepted only by deploy.`);
+    else if (arg === '--expect-schema-add') declarations.push(parseSchemaDeclaration(args.shift()));
+    else if (arg === '--previous-code-compatible') {
+      if (previousCodeCompatible) throw new Error('--previous-code-compatible was given more than once.');
+      previousCodeCompatible = true;
+    }
     else if (arg === '--previous-runtime-sha') throw new Error('--previous-runtime-sha belonged to the completed one-time topology migration and is not accepted.');
     else if (arg.startsWith('--')) throw new Error(`Unknown option: ${arg}`);
     else positional.push(arg);
   }
   const expected = { deploy: 2, prepare: 2, status: 0, rollback: 1, backup: 1 }[command];
   if (positional.length !== expected) throw new Error(`${command} takes ${expected} argument(s); got ${positional.length}.`);
-  if (command === 'deploy' || command === 'prepare') return { command, ref: normalizeRef(positional[0]), expectedSha: validateExpectedSha(positional[1]), routes, json };
+  if (command === 'deploy') {
+    const schemaDeclarations = validateSchemaDeclarations(declarations);
+    if (previousCodeCompatible && schemaDeclarations.length === 0) throw new Error('--previous-code-compatible requires at least one --expect-schema-add declaration.');
+    return { command, ref: normalizeRef(positional[0]), expectedSha: validateExpectedSha(positional[1]), routes, json, schemaDeclarations, previousCodeCompatible };
+  }
+  if (command === 'prepare') return { command, ref: normalizeRef(positional[0]), expectedSha: validateExpectedSha(positional[1]), routes, json };
   if (command === 'rollback') return { command, sha: validateSha(positional[0]), routes, json };
   if (command === 'backup') return { command, label: positional[0], routes, json };
   return { command, json };

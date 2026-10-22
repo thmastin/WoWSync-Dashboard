@@ -5,15 +5,17 @@ import { useAsync } from "./useAsync.ts";
 import AccountEconomy from "./components/AccountEconomy.tsx";
 import AccountProfessions from "./components/AccountProfessions.tsx";
 import AccountOverview from "./components/AccountOverview.tsx";
-import AskAccountModal from "./components/AskAccountModal.tsx";
 import CharactersRoster from "./components/CharactersRoster.tsx";
 import ItemsSearch from "./components/ItemsSearch.tsx";
 import CharacterDetail from "./components/CharacterDetail.tsx";
 import DeveloperExportModal from "./components/DeveloperExportModal.tsx";
+import ForeverCopilotModal from "./components/ForeverCopilotModal.tsx";
 import ImportModal from "./components/ImportModal.tsx";
 import SharedStorageView from "./components/SharedStorageView.tsx";
 import MidnightResearch from "./components/MidnightResearch.tsx";
 import AllocationTab from "./components/AllocationTab.tsx";
+import ForeverGearReview from "./components/ForeverGearReview.tsx";
+import ErpProjectsWorkbench from "./components/ErpProjectsWorkbench.tsx";
 import { scopeFacts } from "./scopedFacts.ts";
 import { defaultRoute, formatHash, parseHash, patchRoute, sameRoute, type AppRoute, type RouteView } from "./routing.ts";
 import type { VersionOrUnknown } from "./types.ts";
@@ -55,7 +57,7 @@ export default function App() {
   });
   const [importOpen, setImportOpen] = useState(false);
   const [devExportOpen, setDevExportOpen] = useState(false);
-  const [askOpen, setAskOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
   const navigate = useCallback((next: AppRoute, replace = false) => {
@@ -72,6 +74,10 @@ export default function App() {
     }
     // Assigning location.hash pushes history and fires hashchange.
     window.location.hash = hash.startsWith("#") ? hash.slice(1) : hash;
+    // Keep navigation responsive even if the browser's hashchange event is
+    // delayed or coalesced while the app is starting up. The event handler
+    // remains the authority for back/forward and direct URL changes.
+    setRoute(next);
   }, []);
 
   useEffect(() => {
@@ -116,6 +122,12 @@ export default function App() {
     }
   }, [scoped, route, navigate]);
 
+  useEffect(() => {
+    if (route.view === "gear-review" && route.version !== "forever") {
+      navigate(patchRoute(route, { version: "forever", view: "gear-review" }), true);
+    }
+  }, [route, navigate]);
+
   const accent = VERSION_ACCENTS[activeVersion];
   const activeVersionSummary = versionSummaries?.find((v) => v.version === activeVersion);
   const activeSyncStrip = formatVersionSyncStrip(activeVersionSummary);
@@ -133,6 +145,10 @@ export default function App() {
 
   function openSharedStorage() {
     navigate(patchRoute(route, { version: "retail", view: "shared" }));
+  }
+
+  function openForeverGearReview() {
+    navigate(patchRoute(route, { version: "forever", view: "gear-review" }));
   }
 
   function openProfessions() {
@@ -169,11 +185,13 @@ export default function App() {
           />
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {activeVersion === "forever" && (
+            <button className="primary-button" onClick={() => setCopilotOpen(true)} title="Ask the Forever Co-Pilot a goal question about a character or your stable">
+              Co-Pilot
+            </button>
+          )}
           <button className="dev-button" onClick={() => setDevExportOpen(true)} title="Developer: export the dashboard's current structured state as JSON">
             Developer
-          </button>
-          <button className="dev-button" onClick={() => setAskOpen(true)} title="Experimental: ask an external LLM a question about your account">
-            Ask My Account
           </button>
           <button className="primary-button" onClick={() => setImportOpen(true)}>
             Import WoWSync
@@ -230,6 +248,7 @@ export default function App() {
               navigate(patchRoute(route, { view: route.from ?? "characters", identityKey: undefined, from: null }));
             }}
             onOpenSharedStorage={openSharedStorage}
+            onOpenForeverGearReview={openForeverGearReview}
           />
         ) : (
           <>
@@ -253,6 +272,9 @@ export default function App() {
                 <button className={tabView === "research" ? "active" : ""} onClick={() => navigate(patchRoute(route, { version: "retail", view: "research" }))}>
                   Research
                 </button>
+                <button className={tabView === "projects" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "projects" }))}>
+                  Projects &amp; Work Orders
+                </button>
                 {activeVersion === "retail" && (
                   <>
                     <button className={tabView === "allocation" ? "active" : ""} onClick={() => navigate(patchRoute(route, { view: "allocation" }))}>
@@ -263,9 +285,14 @@ export default function App() {
                     </button>
                   </>
                 )}
+                {activeVersion === "forever" && (
+                  <button className={tabView === "gear-review" ? "active" : ""} onClick={() => navigate(patchRoute(route, { version: "forever", view: "gear-review" }))}>
+                    Gear Review
+                  </button>
+                )}
               </div>
 
-              {route.view === "shared" || route.view === "allocation" ? null : scoped && scoped.isRealmScoped ? (
+              {route.view === "shared" || route.view === "allocation" || route.view === "projects" ? null : scoped && scoped.isRealmScoped ? (
                 <div className="realm-selector">
                   <span className="realm-selector-label">Realm:</span>
                   {scoped.availableRealms.map((realm) => (
@@ -286,6 +313,8 @@ export default function App() {
             </div>
 
             {route.view === "allocation" && <AllocationTab activeVersion={activeVersion} refreshTick={refreshTick} />}
+            {route.view === "projects" && <ErpProjectsWorkbench version={activeVersion} refreshTick={refreshTick} characters={facts?.characters ?? []} onRefresh={refresh} />}
+            {scoped && route.view === "gear-review" && activeVersion === "forever" && <ForeverGearReview characters={scoped.characters} refreshTick={refreshTick} onOpenCharacter={openCharacter} />}
             {route.view === "shared" && <SharedStorageView />}
             {route.view === "research" && <MidnightResearch />}
             {scoped && route.view === "items" && (
@@ -297,10 +326,10 @@ export default function App() {
                 onOpenCharacter={openCharacter}
               />
             )}
-            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && factsLoad.state.status === "error" && (
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && route.view !== "projects" && factsLoad.state.status === "error" && (
               <ErrorNotice error={factsLoad.state.error} onRetry={factsLoad.retry} />
             )}
-            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
+            {route.view !== "shared" && route.view !== "research" && route.view !== "allocation" && route.view !== "projects" && !scoped && factsLoad.state.status === "loading" && <div className="loading">Loading…</div>}
             {scoped && route.view === "overview" && <AccountOverview scoped={scoped} onOpenCharacter={openCharacter} onOpenProfessions={openProfessions} />}
             {scoped && route.view === "characters" && (
               <CharactersRoster
@@ -329,8 +358,8 @@ export default function App() {
       )}
 
       {devExportOpen && <DeveloperExportModal onClose={() => setDevExportOpen(false)} />}
+      {copilotOpen && <ForeverCopilotModal onClose={() => setCopilotOpen(false)} />}
 
-      {askOpen && <AskAccountModal onClose={() => setAskOpen(false)} />}
     </div>
   );
 }

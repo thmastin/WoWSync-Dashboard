@@ -10,14 +10,20 @@ import type { AccountCurrencies, CharacterCurrencies, CurrencyImportOutcome } fr
 import type { ItemFacetEvidence, ItemMetadataView } from "./itemMetadata.ts";
 import type { SharedJournal, SharedSectionName, SharedStorageOwner, SharedStorageProjection, SkipReason } from "./sharedStorage.ts";
 import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput } from "./demand.ts";
+import type { ErpProject, ErpProjectDraft, ErpProjectEvent, ErpReservation, ErpWorkOrder } from "./erpProjects.ts";
+import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
+import type { ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
 
 export interface StoredCharacterSummary {
   id: number;
   version: VersionOrUnknown;
   realm: string;
   name: string;
+  surname?: string;
+  surnameSource?: string;
   identityKey: string;
   class?: string;
+  race?: string;
   faction?: string;
   latestLevel?: number;
   latestMoneyCopper?: number;
@@ -33,6 +39,16 @@ export interface StoredSnapshot {
   generatedAt?: number;
   importedAt: number;
   parsed: ParsedSnapshot;
+}
+
+/** Append-only canonical Retail equipment observations, including their arriving snapshot provenance. */
+export interface StoredEquipmentObservation {
+  snapshotId: number;
+  observedAt: number;
+  capture: number;
+  revision: number;
+  completeness: "complete" | "partial";
+  evidence: Record<string, unknown>;
 }
 
 export interface VersionSummary {
@@ -114,6 +130,12 @@ export interface ImportResult {
    */
   currencies?: CurrencyImportOutcome;
   characterState?: "recorded" | "invalid-or-unsupported";
+  /**
+   * Retail equipment observation import outcome (see equipmentObservation.ts). Absent when none was sent.
+   * Possible outcomes follow the existing characterState pattern.
+   */
+  equipmentObservation?: "recorded" | "already-recorded" | "conflict" | "projection-mismatch" | "projection-without-canonical" | "invalid-or-unsupported";
+  foreverGearObservation?: "recorded" | "updated" | "already-recorded" | "conflict" | "invalid-or-unsupported";
 }
 
 /** Optional structured data that travels with an export's text (never parsed from it). */
@@ -122,6 +144,10 @@ export interface ImportExtras {
   currencies?: unknown;
   /** Retail structured character-state sidecar; normalized and version-gated by the store. */
   characterState?: unknown;
+  /** Retail canonical sections.equipment evidence plus the latestExport projection, as plain JSON; validated, version-gated and policy-checked by the store. */
+  equipmentObservation?: unknown;
+  /** Forever 70291 structured equipment/bags/bank observations, identity- and profile-gated. */
+  foreverGearObservation?: unknown;
 }
 
 /** What a backfill pass over existing snapshots added. A second pass over unchanged data adds nothing. */
@@ -176,9 +202,12 @@ export interface SnapshotReadStore {
   getItemMetadata(version: VersionOrUnknown, baseItemIds: readonly number[]): ItemMetadataView[];
   /** The current state of every shared-storage owner, derived at read time. */
   projectSharedStorage(): SharedStorageProjection;
+  /** Immutable shared-storage observations and their export provenance, for owner-scoped history comparisons. */
+  loadSharedJournal(): SharedJournal;
   listVersions(): VersionSummary[];
   listCharacters(version: VersionOrUnknown): StoredCharacterSummary[];
   listSnapshots(identityKey: string): StoredSnapshot[];
+  listEquipmentObservations(identityKey: string): StoredEquipmentObservation[];
   /** Deterministic account-level facts for one explicit version space. */
   buildAccountFacts(version: VersionOrUnknown, now?: number): AccountFacts;
   /**
@@ -186,6 +215,13 @@ export interface SnapshotReadStore {
    * represents CURRENT USER INTENT, not an audit/event history (see demand.ts).
    */
   listDemands(version: VersionOrUnknown): ExplicitDemand[];
+  /** Explicit user-authored ERP projects for one version. No observations are inferred from this intent. */
+  listErpProjects(version: VersionOrUnknown): ErpProject[];
+  listErpProjectHistory(stableId: string, limit?: number): ErpProjectEvent[];
+  countErpProjectHistory(stableId: string): number;
+  getErpProject(stableId: string): ErpProject | undefined;
+  getErpChangeProposal(proposalId: string): ErpChangeProposal | undefined;
+  listErpChangeProposals(version: WowVersion, includeTerminal?: boolean): ErpChangeProposal[];
   /**
    * The one ACTIVE demand for this exact (version, demand type, commodity) key, if any. Persistence and
    * the API both enforce at most one; this read method simply reflects that invariant.
@@ -196,6 +232,8 @@ export interface SnapshotReadStore {
 
 /** The normal Dashboard/import store: SnapshotReadStore plus explicit mutation APIs. */
 export interface SnapshotStore extends SnapshotReadStore {
+  createErpChangeProposal(proposal: ErpChangeProposal): ErpChangeProposal;
+  transitionErpChangeProposal(proposalId: string, version: WowVersion, from: ErpChangeProposalStatus, to: ErpChangeProposalStatus, patch?: Partial<Pick<ErpChangeProposal, "approvedAt" | "completedAt" | "result" | "outcome">>): ErpChangeProposal | undefined;
   /**
    * Imports one export. Idempotent: the same export twice is a no-op
    * (`isDuplicate`). Snapshots are ordered by observation time, so an older
@@ -216,11 +254,6 @@ export interface SnapshotStore extends SnapshotReadStore {
    * its next computation with nothing further to invalidate.
    */
   deleteCharacter(identityKey: string): DeleteCharacterResult | undefined;
-  /**
-   * The persisted shared-storage journal (immutable observations + provenance), as the pure
-   * shared-storage domain model. Character deletion never removes anything from it.
-   */
-  loadSharedJournal(): SharedJournal;
   /**
    * EXPLICIT, owner-scoped, destructive: deletes that one owner's entire journal history (every
    * observation and every provenance row), atomically. The caller names the owner with the typed
@@ -277,4 +310,12 @@ export interface SnapshotStore extends SnapshotReadStore {
   updateDemand(stableId: string, input: UpdateDemandInput): ExplicitDemand | undefined;
   /** Sets a demand's status to INACTIVE. Not a delete: the row (and its history) remains. Returns undefined if stableId does not exist. */
   deactivateDemand(stableId: string): ExplicitDemand | undefined;
+  createErpProject(input: ErpProjectDraft): ErpProject;
+  /** Optimistic concurrency: returns undefined for a missing project and throws ErpProjectConflictError on stale revision. */
+  updateErpProject(project: ErpProject, expectedRevision: number, allowNewPlanningBatch?: boolean, rationale?: string): ErpProject | undefined;
+  /** Atomically reduces/releases only existing same-version reservation intent across projects; this operation cannot increase or move a reservation. */
+  replanErpReservationsAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly reservations: readonly ErpReservation[] }[]): ErpProject[] | undefined;
+  /** Atomically appends player-authored PLANNED work orders to several ACTIVE same-version projects; no other project fields can be changed. */
+  appendErpWorkOrdersAtomically(version: WowVersion, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly workOrders: readonly ErpWorkOrder[]; readonly reviewSnapshots: readonly ErpNeedReviewSnapshot[]; readonly reservations?: readonly (ErpReservation | undefined)[] }[]): ErpProject[] | undefined;
+  setErpProjectStatus(stableId: string, status: ErpProject["status"], expectedRevision: number, options?: { completionNote?: string; rationale?: string }): ErpProject | undefined;
 }

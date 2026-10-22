@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -33,5 +33,19 @@ test("capture status is durable, useful, and excludes credentials and export con
     assert.equal(parsed.lastAcknowledgement.version, "retail");
     assert.match(parsed.lastError.message, /ECONNREFUSED/);
     assert.doesNotMatch(raw, /Bearer|capture-secret|WOWSYNC_CAPTURE_TOKEN|GearExport text/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a status file that cannot be replaced never stops capture", () => {
+  const root = mkdtempSync(join(tmpdir(), "wowsync-status-locked-"));
+  try {
+    const file = join(root, "status.json");
+    const status = createCaptureStatusWriter(file);
+    // A directory where the file belongs makes every replace fail, like a reader holding status.json open.
+    mkdirSync(file);
+    assert.doesNotThrow(() => status.apply({ type: "service", state: "running", watchRoot: "C:\Games\WoW" }));
+    assert.doesNotThrow(() => status.apply({ type: "pending", count: 2, draining: true }));
+    assert.equal(status.snapshot().pendingSpoolCount, 2, "in-memory status keeps updating");
+    assert.deepEqual(readdirSync(root), ["status.json"], "no temporary files are left behind");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

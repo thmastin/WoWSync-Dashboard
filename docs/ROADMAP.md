@@ -1,6 +1,6 @@
 # WoWSync Roadmap
 
-Last updated: 2026-10-04 (Azeroth ERP Vertical Slice 3 shipped, merged and live-validated; see
+Last updated: 2026-10-09 (Azeroth ERP Phase 27–28 procurement planning extension implemented on the isolated feature branch; see
 [`CURRENT_STATE.md`](CURRENT_STATE.md) for the full
 current baseline and [`START_HERE.md`](START_HERE.md) for document routing).
 Historical product baseline (2026-09-23; not a description of today's full branch state):
@@ -114,21 +114,29 @@ Work happening now.
 
 Work intended next, in this order.
 
-- [ ] **Azeroth ERP Slice 4+ (not scoped here; do not design in detail in this document).**
-  Slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
+- [x] **Azeroth ERP Slice 4 — version-scoped project planning, resource reservations, manual work orders, and observation reconciliation** (implemented on `feature/forever-gear-observation`; see [`ERP_PLANNING.md`](ERP_PLANNING.md)). Persistent planning intent is separate from observations; exact-item/base-item/gold/profession needs and evidence-qualified Retail character currency and shared-owner item needs are projected; item and gold deltas compare supported complete observations; work orders never execute in game. Shared owners remain separate from characters; observed location does not imply character access. This feature branch has not been deployed to persistent DEV or validated through the browser.
+- [x] **Azeroth ERP Slice 5 — append-only project revision history across the planning interfaces** (same feature branch). Create/edit/status writes atomically record revision, changed field names, and status transitions; REST/MCP expose bounded recent history with total/truncation metadata, AccountContext includes the latest revision and event count, and the workbench presents the timeline. The history records saved Dashboard intent, not game outcomes. Automated-tested, not browser-validated or deployed to persistent DEV.
+- [x] **Azeroth ERP Slice 6 — exact Retail recipe-knowledge project need** (same feature branch). An explicitly observed exact learned/not-learned recipe row may satisfy or report a shortfall for a single recipe-knowledge requirement; missing rows in partial catalogs, LAST_SEEN rows, and non-Retail versions remain UNKNOWN or historical potential. This does not infer skill, unlocks, reagents, or craftability. Automated-tested with synthetic contract-shaped data; not live-validated.
+- [x] **Azeroth ERP Slice 7 — work-order dependency and evidence readiness** (same feature branch). Player-authored work orders can link resource needs and prerequisites. Shared core read projection reports prerequisite blocks, current observed shortfalls, missing/stale evidence, terminal/paused state, or a manual-review step with action-specific limits. This does not infer game prerequisites or execute anything. Automated-tested, not browser/live validated.
+- [x] **Azeroth ERP Slice 8 — player-controlled work-order status lifecycle** (same feature branch). The Dashboard can record planned, in-progress, and waiting-for-evidence intent, and requires a player note to mark completion. These controls persist plan state only; no game actions execute. Automated UI-tested, not browser/live validated.
+- [x] **Azeroth ERP Slice 9 — explicit manual work-order instructions and transition history** (same feature branch). Players can record instructions, assignee, source and intended destination; explicit identities remain planning context, not proof of access or transfer. The shared REST/MCP read model and UI history expose task status transitions by stable work-order ID, labelled as saved plan state. Core, REST, MCP and UI tests pass; not browser/live validated.
+- [x] **Azeroth ERP Phase 25 — assigned-gatherer observation review** (same feature branch). A GATHER order scoped to an explicit same-version gatherer and same-character item need can show a non-causal delta between recent, complete OBSERVED bag sections. Unknown, partial, stale, future-dated, unordered, and identity-mismatched evidence remains UNKNOWN. REST, MCP, AccountContext schema 20, and the workbench share the core projection; synthetic browser acceptance passed. Not live-game or production validated.
+- [x] **Azeroth ERP Phase 26 — evidence-gated manual supply quick-start.** Eligible recent, complete same-character item gaps can prefill guarded manual GATHER/PURCHASE plans; hidden prefill is reset on close/reopen. Browser regression covers default reset. No route, price, purchase, or gameplay action is inferred. See [ERP_CHECKPOINT_20261009_PHASE26.md](ERP_CHECKPOINT_20261009_PHASE26.md).
+- [x] **Azeroth ERP Phases 27–28 — linked procurement budget and quote review.** PURCHASE plans may reference a separately declared buyer-scoped gold need; quote comparison against ceiling, planned need, and observed gold remains independent. No auto-reservation, affordability claim, availability, or purchase action. See [ERP_CHECKPOINT_20261009_PHASE27-28.md](ERP_CHECKPOINT_20261009_PHASE27-28.md).
+- [x] **Azeroth ERP Phase 29 — exception-first commitment review.** The existing version-scoped resource commitment panel prioritizes unknown/stale/overlapping/conflicting scopes and can filter recorded reservations and search resources, sources, and projects. It remains read-only and does not claim ownership/access or total overlapping identities. See [ERP_CHECKPOINT_20261009_PHASE29.md](ERP_CHECKPOINT_20261009_PHASE29.md).
+  The wider ERP roadmap remains open: crafting/reagent feasibility, automatic goal reconciliation and history, procurement pricing, version-specific shared storage beyond existing Retail sources, and verified transfer access. This feature branch has not been deployed to persistent DEV or browser-validated.
+  Historical slices 1 (durable `STOCK_TARGET` demands, deterministic allocation, `get_item_allocation`), 2
   (account-wide review, `get_allocation_review`), and 3 (held-item identity and binding gates) are
   shipped and live-validated — see
   [`AZEROTH_ERP_ARCHITECTURE.md`](AZEROTH_ERP_ARCHITECTURE.md) and
   [`CURRENT_STATE.md`](CURRENT_STATE.md). Demand management is the Retail
   Dashboard Allocation tab (shipped; see Recently Completed). An MCP
   mutation tool for demand CRUD remains absent by design (MCP mutation would overturn an enforced
-  invariant), and
-  a special Hellomags sale-inventory designation is undesigned. The fuller set of future ERP directions (player-intent/strategy modeling,
-  BoE utility, richer reserve policy, exact-item identity, TSM/CraftSim/Journalator integration)
-  is deliberately left exploratory — see
-  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md) rather than
-  committing to any of it here.
-
+  invariant), and a special Hellomags sale-inventory designation is undesigned. The fuller set of
+  future ERP directions (player-intent/strategy modeling, BoE utility, richer reserve policy,
+  exact-item identity, TSM/CraftSim/Journalator integration) remains exploratory — see
+  [`NON_GOALS_AND_FUTURE_ARCHITECTURE.md`](NON_GOALS_AND_FUTURE_ARCHITECTURE.md).
+  Richer external pricing/crafting integrations remain future work.
 - [ ] **GearExport: keep `latestExport` fresh in memory while playing (remove manual `/wowsync`).**
   **Repo:** GearExport only (this Dashboard repo must not modify the addon). Pairs with Slice 1
   `watch:saved` so the player's biggest friction — remembering to run a report — goes away.
@@ -498,3 +506,7 @@ Guard against re-adding. This is not a changelog.
   trust hardening, shared storage, item metadata, provider-neutral read model,
   strict read-only MCP, and Phase 6 live ChatGPT/Tunnel validation. It remains
   a feature branch and has not been merged to `main`.
+
+## Recently completed - ERP Phase 49 (2026-10-10)
+
+Grouped player-authored fulfillment review for multiple uncovered project requirements, reusing the existing work-order model and evidence projections. Synthetic browser and full ERP validation passed; no live/production validation. Current inventory and next milestone: [`ERP_CAPABILITY_INVENTORY.md`](ERP_CAPABILITY_INVENTORY.md) and [`CURRENT_STATE.md`](CURRENT_STATE.md).

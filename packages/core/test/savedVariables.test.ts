@@ -3,7 +3,8 @@
 // rejections, and that hostile-looking input is just text or an error - never run.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SavedVariablesParseError, isLuaTable, luaGet, parseSavedVariables, type LuaValue } from "../src/savedVariables.ts";
+import { SavedVariablesParseError, isLuaTable, luaGet, luaToPlain, parseSavedVariables, type LuaValue } from "../src/savedVariables.ts";
+import { normalizeEquipmentObservation } from "../src/equipmentObservation.ts";
 
 const plain = (v: LuaValue | undefined): unknown => (v instanceof Map ? Object.fromEntries([...v].map(([k, x]) => [String(k), plain(x)])) : v);
 const parse = (text: string, only?: string[]) => parseSavedVariables(text, only ? { only } : {});
@@ -165,4 +166,26 @@ test("a realistic large table parses quickly", () => {
   const vars = parse(`WoWSyncDB = {\r\n${rows.join("\r\n")}\r\n}`);
   assert.equal((vars.WoWSyncDB as Map<unknown, unknown>).size, 20000);
   assert.ok(Date.now() - started < 3000, "20k entries parse well under 3s");
+});
+
+test("A39 equipment slots: a gapless Lua table becomes a 0-based array, a gapped one a slot-keyed object, and both normalize to WoW slot numbers", () => {
+  const read = (slots: string) => {
+    const v = parseSavedVariables(`WoWSyncDB = {\r\n["slots"] = ${slots},\r\n}\r\n`, { only: ["WoWSyncDB"] });
+    return luaToPlain(luaGet(v.WoWSyncDB, "slots") as LuaValue);
+  };
+  const positional = read('{\r\n{\r\n["itemID"] = 101,\r\n}, -- [1]\r\n{\r\n["itemID"] = 102,\r\n}, -- [2]\r\n}');
+  const keyed = read('{\r\n[1] = {\r\n["itemID"] = 101,\r\n},\r\n[2] = {\r\n["itemID"] = 102,\r\n},\r\n}');
+  const gapped = read('{\r\n[1] = {\r\n["itemID"] = 101,\r\n},\r\n[16] = {\r\n["itemID"] = 116,\r\n},\r\n}');
+  assert.ok(Array.isArray(positional));
+  assert.ok(Array.isArray(keyed));
+  assert.ok(!Array.isArray(gapped));
+  assert.deepEqual(read("{\r\n}"), {});
+  const slotsOf = (slots: unknown) => {
+    const result = normalizeEquipmentObservation({ envelope: { observedAt: 1, capture: 1, revision: 1, completeness: "complete", data: { slots } } }, "retail");
+    assert.equal(result.ok, true);
+    return (result as Extract<typeof result, { ok: true }>).value.slots;
+  };
+  assert.deepEqual(slotsOf(positional), { "1": { itemID: 101 }, "2": { itemID: 102 } });
+  assert.deepEqual(slotsOf(keyed), slotsOf(positional));
+  assert.deepEqual(slotsOf(gapped), { "1": { itemID: 101 }, "16": { itemID: 116 } });
 });

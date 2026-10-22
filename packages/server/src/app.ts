@@ -8,6 +8,7 @@ import express, { type Express } from "express";
 import {
   VERSION_LABELS,
   WOW_VERSIONS,
+  DashboardReadModel,
   SharedStorageIntegrityError,
   WowSyncParseError,
   diffSnapshots,
@@ -19,10 +20,14 @@ import {
   type TrainerUnlock,
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
-import { askOpenAI, AskError, DEFAULT_MODEL, MAX_QUESTION_LENGTH } from "./llm.ts";
 import { hostGuard } from "./net.ts";
 import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
 import { registerDemandRoutes } from "./demandRoutes.ts";
+import { registerErpProjectRoutes } from "./erpProjectRoutes.ts";
+import { registerErpChangeProposalRoutes } from "./erpChangeProposalRoutes.ts";
+import { registerCopilotRoutes } from "./copilotRoutes.ts";
+import { ForeverKnowledgeStore } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
+import { ForeverPriceStore } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 
 // Attaches a computed, non-authoritative `summary` to each trainer
 // category (STORE EVERYTHING, SURFACE WHAT MATTERS): the raw `services`
@@ -49,6 +54,10 @@ function isKnownVersion(v: string): v is VersionOrUnknown {
 }
 
 export interface CreateAppOptions {
+  /** File holding the private Forever knowledge bundle used by the co-pilot (optional). */
+  foreverKnowledgePath?: string;
+  /** File holding the Forever Auction House price bundle (AHledger), optional. */
+  foreverPricesPath?: string;
   /**
    * Where THIS server can reach itself (used by /api/ask to fetch its own
    * /api/account-context). Defaults to http://127.0.0.1:<port>; index.ts derives
@@ -69,6 +78,9 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   const selfOrigin = options.selfOrigin ?? `http://127.0.0.1:${port}`;
   if (options.allowedHosts) app.use(hostGuard(options.allowedHosts));
   app.use(express.json({ limit: "10mb" }));
+  registerErpProjectRoutes(app, store);
+  registerCopilotRoutes(app, store, options.foreverKnowledgePath ? new ForeverKnowledgeStore(options.foreverKnowledgePath) : undefined, options.foreverPricesPath ? new ForeverPriceStore(options.foreverPricesPath) : undefined);
+  registerErpChangeProposalRoutes(app, store, selfOrigin);
 
   app.get("/api/versions", (_req, res) => {
     const summaries = store.listVersions();
@@ -153,71 +165,68 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     res.json(store.buildAccountContext(now));
   });
 
-  // "Ask My Account" (POC). Every request is independent - no conversation
-  // history is kept or persisted. The ONLY data that leaves this machine is
-  // the system prompt, the current AccountContext JSON, and the user's
-  // question, sent once to the configured LLM provider. The API key never
-  // reaches the browser; it's read from the server's own environment.
-  //
-  // The context is retrieved via an actual HTTP call to this server's own
-  // GET /api/account-context (not a second, divergent call path) - the
-  // exact same canonical document the Copy/Download feature produces. If
-  // that call fails, the request fails outright; it never silently falls
-  // back to a stale or differently-built context.
-  app.post("/api/ask", async (req, res) => {
-    const question = typeof req.body?.question === "string" ? req.body.question.trim() : "";
-    if (question.length === 0) {
-      return res.status(400).json({ error: "Missing question." });
-    }
-    if (question.length > MAX_QUESTION_LENGTH) {
-      return res.status(400).json({ error: `Question is too long (max ${MAX_QUESTION_LENGTH} characters).` });
-    }
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          "OPENAI_API_KEY is not configured on the server. Set it in a local .env file (see README) or as an environment variable, then restart the server.",
-      });
-    }
-
-    let context: AccountContext;
-    try {
-      const contextRes = await fetch(`${selfOrigin}/api/account-context`);
-      if (!contextRes.ok) throw new Error(`account-context request returned HTTP ${contextRes.status}`);
-      context = (await contextRes.json()) as AccountContext;
-    } catch (err) {
-      console.error("Ask My Account: failed to retrieve the account context:", err instanceof Error ? err.message : String(err));
-      return res.status(502).json({ error: "Could not retrieve the current account context. Try again." });
-    }
-
-    const model = process.env.WOWSYNC_LLM_MODEL?.trim() || DEFAULT_MODEL;
-    try {
-      const result = await askOpenAI(question, context, { apiKey, model });
-      const contextSummary = {
-        characterCount: Object.values(context.versions).reduce((sum, v) => sum + v.characters.length, 0),
-        versions: Object.keys(context.versions),
-      };
-      res.json({
-        answer: result.answer,
-        model: result.model,
-        contextGeneratedAt: result.contextGeneratedAt,
-        contextSummary,
-        usage: result.usage,
-      });
-    } catch (err) {
-      if (err instanceof AskError) {
-        return res.status(err.status).json({ error: err.publicMessage });
-      }
-      console.error("Ask My Account: unexpected error:", err instanceof Error ? err.message : String(err));
-      res.status(502).json({ error: "The LLM provider request failed unexpectedly." });
-    }
-  });
-
   app.get("/api/characters/:identityKey", (req, res) => {
     const character = store.getCharacter(req.params.identityKey);
     if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
     res.json({ character });
+  });
+
+  app.get("/api/characters/:identityKey/forever-gear-observation", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    const result = new DashboardReadModel(store).getForeverGearObservation({ version: character.version, name: character.name, realm: character.realm });
+    if (result.status !== "FOUND") return res.status(404).json({ error: "Forever gear observation is not available for this character.", code: result.status });
+    res.json(result);
+  });
+
+  app.get("/api/characters/:identityKey/forever-crafted-upgrade-assessment", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    if (character.version !== "forever") return res.status(404).json({ error: "Forever crafted-upgrade assessments are not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
+    let snapshotId: number | undefined;
+    if (req.query.snapshotId !== undefined) {
+      if (typeof req.query.snapshotId !== "string" || !/^\d+$/.test(req.query.snapshotId)) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+      snapshotId = Number(req.query.snapshotId);
+      if (!Number.isSafeInteger(snapshotId) || snapshotId < 1) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+    }
+    let result: ReturnType<DashboardReadModel["getForeverCraftedUpgradeAssessment"]>;
+    try {
+      result = new DashboardReadModel(store).getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+    } catch (error) {
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
+      throw error;
+    }
+    res.json(result);
+  });
+
+  app.get("/api/characters/:identityKey/forever-quests", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    if (character.version !== "forever") return res.status(404).json({ error: "Forever quest observations are not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
+    let snapshotId: number | undefined;
+    if (req.query.snapshotId !== undefined) {
+      if (typeof req.query.snapshotId !== "string" || !/^\d+$/.test(req.query.snapshotId)) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+      snapshotId = Number(req.query.snapshotId);
+      if (!Number.isSafeInteger(snapshotId) || snapshotId < 1) return res.status(400).json({ error: 'Invalid "snapshotId" query parameter: expected a positive integer.' });
+    }
+    let result: ReturnType<DashboardReadModel["getForeverQuestObservation"]>;
+    try {
+      result = new DashboardReadModel(store).getForeverQuestObservation({ version: character.version, name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+    } catch (error) {
+      if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
+      throw error;
+    }
+    if (result.status !== "FOUND") return res.status(404).json({ error: "Forever quest observations are not available for this character.", code: result.status });
+    res.json(result);
+  });
+
+  app.get("/api/characters/:identityKey/forever-gear-allocation", (req, res) => {
+    const character = store.getCharacter(req.params.identityKey);
+    if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
+    if (character.version !== "forever") return res.status(404).json({ error: "Forever allocation is not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
+    const result = new DashboardReadModel(store).getForeverGearAllocation({ version: character.version, name: character.name, realm: character.realm });
+    if (result.status !== "FOUND") return res.status(404).json({ error: "Forever allocation evidence is not available for this character.", code: result.status });
+    res.json(result);
   });
 
   // Permanently deletes ONE character and its entire snapshot history.
@@ -291,8 +300,10 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     // It never changes how the text is parsed; the store validates it and reports what it did in result.currencies.
     const currencies: unknown = req.body?.currencies;
     const characterState: unknown = req.body?.characterState;
+    const equipmentObservation: unknown = req.body?.equipmentObservation;
+    const foreverGearObservation: unknown = req.body?.foreverGearObservation;
     try {
-      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }) });
+      const result = store.importSnapshot(text, { ...(currencies == null ? {} : { currencies }), ...(characterState == null ? {} : { characterState }), ...(equipmentObservation == null ? {} : { equipmentObservation }), ...(foreverGearObservation == null ? {} : { foreverGearObservation }) });
       res.json({
         result: {
           ...result,

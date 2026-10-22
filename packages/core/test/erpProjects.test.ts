@@ -1,0 +1,1701 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { buildWowSyncExport } from "./fixtureBuilder.ts";
+import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
+import { DashboardReadModel } from "../src/readModel.ts";
+import { assessErpNeed, buildErpResourceCommitmentSummary, ErpProjectConflictError, ErpProjectValidationError, evaluateErpProject, validateErpProject, type ErpProject } from "../src/erpProjects.ts";
+import { buildErpNeedObservationChangeReview } from "../src/erpObservationChanges.ts";
+import { buildErpNeedReviewSnapshot, buildErpSavedPlanningBatchReview } from "../src/erpFulfillmentTriage.ts";
+import { guildOwner, ownerKey, warbandOwner, type SharedStorageProjection } from "../src/sharedStorage.ts";
+import { guild, itemRow, warband } from "./sharedStorageBuilders.ts";
+import { renderExport } from "./sharedStorageExports.ts";
+
+const ITEM = "item:159";
+function seedStore(options: Parameters<typeof buildWowSyncExport>[0] = {}) {
+  const store = new SqliteSnapshotStore(":memory:");
+  const raw = buildWowSyncExport({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true }, ...options });
+  const imported = store.importSnapshot(raw);
+  return { store, identityKey: imported.character.identityKey };
+}
+function seedRetailCurrency(options: { isAccountWide?: boolean; quantity?: number | null; lastSeen?: boolean } = {}) {
+  const store = new SqliteSnapshotStore(":memory:");
+  const raw = buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "Crafter", realm: "Realm A", clientFamily: "Retail", clientVersion: "12.1.0", moneyCopper: 5000 } });
+  const imported = store.importSnapshot(raw, { currencies: { observedAt: 1_700_000_000, completeness: "complete", data: { listRead: true, formatVersion: 1, currencies: [{ currencyID: 1822, name: "Flightstones", quantity: options.quantity === undefined ? 8 : options.quantity, isAccountWide: options.isAccountWide ?? false }] } } });
+  if (options.lastSeen) store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientFamily: "Retail", clientVersion: "12.1.0", moneyCopper: 5000 } }));
+  return { store, identityKey: imported.character.identityKey };
+}
+function seedRetailRecipes(recipes: Array<{ recipeID: number; learned?: boolean; learnedState: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN"; evidence?: "OBSERVED" | "LAST_SEEN" }>, options: { second?: typeof recipes; characterName?: string } = {}) {
+  const store = new SqliteSnapshotStore(":memory:");
+  const observedAt = 1_700_000_000;
+  const capture = (rows: typeof recipes, generatedAt: number) => {
+    const raw = buildWowSyncExport({ generatedAt, character: { name: options.characterName ?? "Recipe Keeper", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" } });
+    const recipeRows = rows.map((row) => ({ recipeID: row.recipeID, ...(row.learned === undefined ? {} : { learned: row.learned }), learnedState: row.learnedState, recipeInfoResult: row.learned === undefined ? "NIL_RESULT" : "OBSERVED_VALUE", skillLineAssociationState: "OBSERVED", skillLineIDs: [], evidence: row.evidence ?? "OBSERVED", observedAt }));
+    const profession = { baseSkillLineID: 171, skillLineID: 171, professionID: 171, parentProfessionID: 171, professionName: "Alchemy", evidence: "OBSERVED", observedAt, client: { clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: 69933 }, coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, recipes: recipeRows };
+    const data = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", enumeration: "OBSERVED", candidateCompleteness: "UNKNOWN", filteredEnumerationUsed: false, returnedRecipeCount: recipeRows.length }, professions: [profession] };
+    return store.importSnapshot(raw, { characterState: { formatVersion: 1, clientFamily: "Retail", professionRecipes: { formatVersion: 1, observedAt, completeness: "partial", data } } });
+  };
+  const imported = capture(recipes, observedAt);
+  if (options.second) capture(options.second, observedAt + 10);
+  return { store, identityKey: imported.character.identityKey };
+}
+function project(identityKey: string): ErpProject {
+  return {
+    stableId: "project_test", version: "classic-era", title: "Prepare first craft", status: "ACTIVE", priority: 4,
+    createdAt: 1_700_000_000, updatedAt: 1_700_000_000, revision: 1,
+    needs: [{ stableId: "need_stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey }],
+    reservations: [{ stableId: "reserve_stone", needId: "need_stone", sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }],
+    workOrders: [{ stableId: "gather_stone", kind: "GATHER", status: "PLANNED", title: "Gather one more Rough Stone", resourceNeedIds: ["need_stone"], dependsOn: [] }],
+  };
+}
+function sharedFixture(options: { owner?: "warband" | "guild"; live?: boolean; completeness?: "complete" | "partial"; items?: Array<{ itemRef?: string; qty?: number }>; inaccessibleTabs?: number[]; conflict?: boolean } = {}): SharedStorageProjection {
+  const owner = options.owner === "guild" ? guildOwner("84606081") : warbandOwner();
+  const key = ownerKey(owner);
+  const effectiveObservedAt = 1_700_000_000;
+  const current = { identity: "fixture-observation", ownerKey: key, claimedObservedAt: effectiveObservedAt, effectiveObservedAt, claimedAfterCarrier: false, completeness: options.completeness ?? "complete", informative: true, contentHash: "fixture", contentHashVersion: 1, liveAtExport: options.live ?? true, carrierStates: [options.live === false ? "LAST_SEEN" : "OBSERVED"], sourceCharacterKeys: [], coverage: { observedTabs: options.owner === "guild" && !options.inaccessibleTabs?.length ? [1] : [], inaccessibleTabs: options.inaccessibleTabs ?? [], unconfirmedTabs: [], unidentifiedTabs: 0, observedContainerIds: [] }, sources: [], content: { tabs: options.owner === "guild" ? [{ id: 1, viewable: true, state: options.inaccessibleTabs?.length ? "INACCESSIBLE" : "OBSERVED" }] : [], containers: [], itemsKnownEmpty: !(options.items?.length), items: options.items ?? [] } };
+  const view = { basis: "DERIVED", owner, ownerKey: key, current, latestPartial: undefined, broaderCoverageEarlier: undefined, conflict: options.conflict ? { effectiveObservedAt, others: [] } : undefined, observationCount: { total: 1, complete: options.completeness === "partial" ? 0 : 1, partial: options.completeness === "partial" ? 1 : 0, informationless: 0 } };
+  return (owner.kind === "guild" ? { guilds: [view] } : { warband: view, guilds: [] }) as unknown as SharedStorageProjection;
+}
+
+test("Forever exact recipe rows can reconcile learned state without claiming craftability", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const at = Math.floor(Date.now() / 1000) - 30;
+  try {
+    const raw = buildWowSyncExport({ generatedAt: at, character: { name: "Rordin", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+    const recipeRows = [
+      { recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: at, skillLineIDs: [2938] },
+      { recipeID: 2661, learned: false, learnedState: "OBSERVED_FALSE", evidence: "OBSERVED", observedAt: at, skillLineIDs: [2938] },
+    ];
+    const imported = store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Rordin", realm: "Classic Beta PvP 2", generatedAt: at, professionRecipes: { observedAt: at, data: { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN" }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, name: "Blacksmithing", observedAt: at, evidence: "OBSERVED", recipes: recipeRows }] } } } });
+    const learned = assessErpNeed({ stableId: "learned_recipe", kind: "RECIPE", resourceKey: "2660", label: "Rough Sharpening Stone recipe", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "forever");
+    assert.equal(learned.state, "COVERED_BY_OBSERVED");
+    assert.match(learned.reason, /Forever structured recipe observation reports recipe 2660 as learned/);
+    assert.match(learned.reason, /does not establish current profession skill.*crafting is presently possible/);
+    const unknown = assessErpNeed({ stableId: "absent_recipe", kind: "RECIPE", resourceKey: "999999", label: "Missing candidate", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "forever");
+    assert.equal(unknown.state, "UNKNOWN", "an ID absent from an incomplete candidate list is not unlearned");
+    assert.match(unknown.reason, /absence does not mean unlearned/);
+    const retail = assessErpNeed({ stableId: "wrong_version", kind: "RECIPE", resourceKey: "2660", label: "Other client", requiredQuantity: 1, sourceIdentityKey: imported.character.identityKey }, store.listSnapshots(imported.character.identityKey), at + 1, undefined, "retail");
+    assert.equal(retail.state, "UNKNOWN", "Forever recipe evidence must not become Retail evidence");
+  } finally { store.close(); }
+});
+
+test("changed-need portfolio review is version-scoped, bounded, and preserves snapshot comparison evidence", () => {
+  const baseAt = Math.floor(Date.now() / 1000) - 1000;
+  const { store, identityKey } = seedStore({ generatedAt: baseAt, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 1 }] }] }, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:0:0", name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } }));
+    store.createErpProject({ version: "classic-era", title: "Current change", priority: 5, needs: [{ stableId: "rough_stone", kind: "ITEM_REF", resourceKey: "item:159:0:0", label: "Exact Rough Stone variant", requiredQuantity: 5, sourceIdentityKey: identityKey }] });
+    store.createErpProject({ version: "classic-era", title: "Paused change", status: "PAUSED", needs: [{ stableId: "paused_stone", kind: "ITEM_ID", resourceKey: "159", label: "Base item demand", requiredQuantity: 4, sourceIdentityKey: identityKey }] });
+    const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const bounded = buildErpNeedObservationChangeReview(views, "classic-era", 1);
+    assert.equal(bounded.totalCount, 2);
+    assert.equal(bounded.returnedCount, 1);
+    assert.equal(bounded.affectedProjectCount, 2);
+    assert.equal(bounded.truncated, true);
+    assert.equal(bounded.items[0]?.resourceKey, "item:159:0:0");
+    assert.equal(bounded.items[0]?.needKind, "ITEM_REF");
+    assert.deepEqual(bounded.items[0]?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 1, 3, 2]]);
+    const wrongVersion = views.map((view) => ({ ...view, version: "forever" as const }));
+    assert.equal(buildErpNeedObservationChangeReview(wrongVersion, "classic-era").totalCount, 0);
+    assert.equal(buildErpNeedObservationChangeReview(views, "classic-era", 0).returnedCount, 1, "limit is clamped to a safe minimum just like related bounded views");
+  } finally { store.close(); }
+});
+
+test("project requirements preserve observed lower bounds, unknown bank, and explicit reservations", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
+  try {
+    const p = project(identityKey);
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(read.needEvidence[0]?.state, "UNKNOWN", "observed 4 is below 5 and the unobserved bank might add supply");
+    assert.equal(read.needEvidence[0]?.observedQuantity, 4);
+    assert.deepEqual(read.needEvidence[0]?.unresolvedSections, ["character bank", "storage completeness is partial or unconfirmed"]);
+    assert.equal(read.reservationReview[0]?.state, "WITHIN_OBSERVED_SUPPLY");
+    assert.equal(read.reservationReview[0]?.reservedQuantity, 2);
+    assert.equal(read.fulfillment.state, "EVIDENCE_REVIEW_REQUIRED", "unknown bank evidence remains visible even when the observed lower bound covers recorded reservations");
+    assert.equal(read.fulfillment.requirementCount, 1);
+    assert.equal(read.fulfillment.unresolvedEvidenceCount, 1);
+    assert.equal(read.fulfillment.activeWorkOrderCount, 1);
+    assert.equal(read.fulfillment.interpretation, "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY");
+    assert.equal(read.workOrders[0]?.status, "PLANNED", "an inventory snapshot never auto-completes a manual work order");
+    const lowerBoundCovered = { ...p, needs: p.needs.map((need) => ({ ...need, requiredQuantity: 3 })) };
+    const coveredSummary = evaluateErpProject(lowerBoundCovered, (key) => store.listSnapshots(key), [lowerBoundCovered], 1_700_000_001).fulfillment;
+    assert.equal(coveredSummary.state, "CURRENT_OBSERVATIONS_COVER_NEEDS", "a sufficient observed lower bound can cover a requirement while unknown bank access remains outside the claim");
+    assert.equal(coveredSummary.currentObservedCoverageCount, 1);
+    assert.equal(coveredSummary.unresolvedEvidenceCount, 0);
+  } finally { store.close(); }
+});
+
+test("cross-project work-order append rolls every project and audit event back when any project update is invalid", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const first = store.createErpProject({ version: "classic-era", title: "First project", needs: [{ stableId: "first_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1 }] });
+    const second = store.createErpProject({ version: "classic-era", title: "Second project", needs: [{ stableId: "second_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1 }], workOrders: [{ stableId: "duplicate_id", kind: "INVESTIGATE", status: "PLANNED", title: "Existing task", resourceNeedIds: ["second_need"], dependsOn: [] }] });
+    const order = (stableId: string, needId: string) => ({ stableId, kind: "INVESTIGATE" as const, status: "PLANNED" as const, title: "Check current evidence", assignedIdentityKey: identityKey, resourceNeedIds: [needId], dependsOn: [] });
+    const views = new DashboardReadModel(store).getErpProjects({ version: "classic-era" });
+    const firstReview = buildErpNeedReviewSnapshot(views.find((entry) => entry.stableId === first.stableId)!, "first_need")!;
+    const secondReview = buildErpNeedReviewSnapshot(views.find((entry) => entry.stableId === second.stableId)!, "second_need")!;
+    assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [
+      { projectId: first.stableId, expectedRevision: 1, workOrders: [order("new_first_order", "first_need")], reviewSnapshots: [firstReview] },
+      { projectId: second.stableId, expectedRevision: 1, workOrders: [order("duplicate_id", "second_need")], reviewSnapshots: [secondReview] },
+    ]), ErpProjectValidationError);
+    const firstAfter = store.getErpProject(first.stableId)!;
+    const secondAfter = store.getErpProject(second.stableId)!;
+    assert.deepEqual([firstAfter.revision, firstAfter.workOrders.length], [1, 0], "the earlier project update is rolled back");
+    assert.deepEqual([secondAfter.revision, secondAfter.workOrders.length], [1, 1]);
+    assert.deepEqual(store.listErpProjectHistory(first.stableId).map((event) => event.kind), ["CREATED"], "rolled-back project history is not retained");
+  } finally { store.close(); }
+});
+
+test("the atomic work-order transaction rechecks reviewed evidence after the route's initial read", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const project = store.createErpProject({ version: "classic-era", title: "Freshness race", needs: [{ stableId: "stone_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 8, sourceIdentityKey: identityKey }] });
+    const initialView = new DashboardReadModel(store).getErpProjects({ version: "classic-era" }).find((entry) => entry.stableId === project.stableId)!;
+    const review = buildErpNeedReviewSnapshot(initialView, "stone_need")!;
+    const later = Math.floor(Date.now() / 1000) + 2;
+    store.importSnapshot(buildWowSyncExport({ generatedAt: later, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: project.stableId, expectedRevision: project.revision, reviewSnapshots: [review], workOrders: [{ stableId: "stale_review_order", kind: "GATHER", status: "PLANNED", title: "Review the shortage", resourceNeedIds: ["stone_need"], dependsOn: [] }] }]), (error: unknown) => error instanceof ErpProjectConflictError && error.code === "NEED_REVIEW_STALE");
+    const unchanged = store.getErpProject(project.stableId)!;
+    assert.deepEqual([unchanged.revision, unchanged.workOrders.length], [project.revision, 0], "the new observation wins and no stale plan is written");
+  } finally { store.close(); }
+});
+
+test("atomic provisioning work orders revalidate alternate exact sources inside the transaction", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const recipient = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Recipient", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { containers: [] } })).character.identityKey;
+    const currentSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Current Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const reservedSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Reserved Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const staleSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now - 30 * 86400, character: { name: "Stale Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    const mismatchSource = store.importSnapshot(buildWowSyncExport({ generatedAt: now, character: { name: "Variant Source", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:159:42", name: "Variant Rough Stone", qty: 2 }] }] }, bank: { containers: [] } })).character.identityKey;
+    store.createErpProject({ version: "classic-era", title: "Existing source commitment", needs: [{ stableId: "held_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: reservedSource }], reservations: [{ stableId: "held_reservation", needId: "held_need", sourceIdentityKey: reservedSource, quantity: 1, status: "ACTIVE", createdAt: now, updatedAt: now }] });
+
+    function reviewedOrder(sourceIdentityKey: string, suffix: string) {
+      const plan = store.createErpProject({ version: "classic-era", title: `Provision ${suffix}`, needs: [{ stableId: `need_${suffix}`, kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, destinationIdentityKey: recipient }] });
+      const view = new DashboardReadModel(store).getErpProjects({ version: "classic-era" }).find((entry) => entry.stableId === plan.stableId)!;
+      const review = buildErpNeedReviewSnapshot(view, `need_${suffix}`)!;
+      const order: ErpProject["workOrders"][number] = { stableId: `order_${suffix}`, kind: "PROVISION", status: "PLANNED", title: "Review manual source", assignedIdentityKey: recipient, sourceIdentityKey, destinationIdentityKey: recipient, resourceNeedIds: [`need_${suffix}`], dependsOn: [] };
+      return { plan, review, order };
+    }
+
+    const valid = reviewedOrder(currentSource, "valid_alt_source");
+    const appended = store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: valid.plan.stableId, expectedRevision: valid.plan.revision, workOrders: [valid.order], reviewSnapshots: [valid.review] }]);
+    assert.equal(appended?.[0]?.workOrders[0]?.sourceIdentityKey, currentSource, "a recent exact observed source is accepted as a conditional manual plan");
+
+    for (const [source, suffix] of [[reservedSource, "reserved_candidate"], [staleSource, "stale_candidate"], [mismatchSource, "wrong_variant"]] as const) {
+      const attempted = reviewedOrder(source, suffix);
+      assert.throws(() => store.appendErpWorkOrdersAtomically("classic-era", [{ projectId: attempted.plan.stableId, expectedRevision: attempted.plan.revision, workOrders: [attempted.order], reviewSnapshots: [attempted.review] }]), (error: unknown) => error instanceof ErpProjectConflictError && error.code === "PROVISIONING_SOURCE_EVIDENCE_UNAVAILABLE");
+      const unchanged = store.getErpProject(attempted.plan.stableId)!;
+      assert.deepEqual([unchanged.revision, unchanged.workOrders.length], [attempted.plan.revision, 0], "rejected direct store calls do not append work or change project revisions");
+    }
+  } finally { store.close(); }
+});
+
+test("stale inventory preserves reservation intent but cannot establish current coverage or new availability", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000 });
+  try {
+    const p = project(identityKey);
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_000 + 5 * 86400);
+    const evidence = view.needEvidence[0]!;
+    assert.equal(evidence.freshness, "stale");
+    assert.equal(evidence.observedQuantity, 4, "historical observed quantity remains visible as source evidence");
+    assert.equal(evidence.reservationAssessment?.activeQuantity, 2, "the player's saved reservation intent remains visible");
+    assert.equal(evidence.reservationAssessment?.state, "UNKNOWN", "stale stock cannot establish current reservation coverage");
+    assert.equal(evidence.reservationAssessment?.availableObservedLowerBound, undefined, "stale stock cannot enable a new reservation");
+    assert.match(evidence.reservationAssessment?.reason ?? "", /stale and not current/);
+    assert.equal(view.reservationReview[0]?.state, "SUPPLY_UNKNOWN");
+    assert.match(view.reservationReview[0]?.reason ?? "", /observation is stale/);
+    assert.equal(view.fulfillment.state, "RESERVATIONS_NEED_REVIEW");
+    assert.equal(view.fulfillment.historicalOrStaleEvidenceCount, 1);
+    assert.equal(view.fulfillment.currentObservedShortfallCount, 0, "stale stock never becomes a current shortfall");
+  } finally { store.close(); }
+});
+
+test("gather review reports assigned character bag deltas without claiming cause or requiring unrelated bank access", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 7 }] }] }, bank: { unknown: true } }));
+    const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather stone", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+    const progress = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0];
+    assert.deepEqual(progress?.gatherObservationReviews?.map((review) => [review.gathererIdentityKey, review.state, review.freshness, review.comparisons.map((entry) => [entry.section, entry.delta]), review.interpretation]), [[identityKey, "RESOURCE_INCREASED", "recent", [["bags", 3]], "CAUSE_UNKNOWN"]]);
+    assert.equal(progress?.completionRecorded, false);
+    assert.match(progress?.gatherObservationReviews?.[0]?.reason ?? "", /does not establish gathering as the cause/);
+  } finally { store.close(); }
+});
+
+test("gather review leaves another character's resource change UNKNOWN", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "PLANNED", title: "Gather stone", resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+    const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderProgress[0]?.gatherObservationReviews?.[0];
+    assert.equal(review?.state, "UNKNOWN");
+    assert.match(review?.reason ?? "", /No gatherer is assigned/);
+  } finally { store.close(); }
+});
+
+test("gather review keeps stale, future, partial, unordered, wrong-version, and cross-character evidence UNKNOWN", () => {
+  const now = 1_700_000_200;
+  const cases = [
+    { name: "stale earlier bags", earlierBagAt: now - 4 * 86400, laterBagAt: now - 100 },
+    { name: "future-dated later bags", earlierBagAt: now - 200, laterBagAt: now + 600 },
+    { name: "partial later bags", earlierBagAt: now - 200, laterBagAt: now - 100, laterPartial: true },
+    { name: "unordered section timestamps", earlierBagAt: now - 100, laterBagAt: now - 200 },
+  ] as const;
+  for (const scenario of cases) {
+    const { store, identityKey } = seedStore({ generatedAt: now - 200, bags: { observedAt: scenario.earlierBagAt, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } });
+    try {
+      store.importSnapshot(buildWowSyncExport({ generatedAt: now - 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: scenario.laterBagAt, partial: "laterPartial" in scenario && scenario.laterPartial, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } }));
+      const p: ErpProject = { ...project(identityKey), workOrders: [{ stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather stone", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }] };
+      const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now).workOrderProgress[0]?.gatherObservationReviews?.[0];
+      assert.equal(review?.state, "UNKNOWN", scenario.name);
+    } finally { store.close(); }
+  }
+
+  const { store, identityKey } = seedStore();
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: now - 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } }));
+    const base = project(identityKey);
+    for (const [name, workOrder] of [
+      ["wrong version", { stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather", assignedIdentityKey: "retail::character", resourceNeedIds: ["need_stone"], dependsOn: [] }],
+      ["need belongs to another character", { stableId: "gather_review", kind: "GATHER", status: "IN_PROGRESS", title: "Gather", assignedIdentityKey: identityKey, resourceNeedIds: ["need_stone"], dependsOn: [] }],
+    ] as const) {
+      const p: ErpProject = { ...base, ...(name === "need belongs to another character" ? { needs: [{ ...base.needs[0]!, sourceIdentityKey: "classic-era::realm-a::other" }] } : {}), workOrders: [workOrder as ErpProject["workOrders"][number]] };
+      const review = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now).workOrderProgress[0]?.gatherObservationReviews?.[0];
+      assert.equal(review?.state, "UNKNOWN", name);
+    }
+  } finally { store.close(); }
+});
+
+test("LAST_SEEN stock is potential, never current coverage", () => {
+  const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { lastSeen: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 7 }] }] } });
+  try {
+    const p = project(identityKey);
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(read.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(read.needEvidence[0]?.potentialQuantity, 7);
+  } finally { store.close(); }
+});
+
+test("planned craft output checks only the explicitly assigned character and stays separate from task completion", () => {
+  const { store, identityKey } = seedStore({ bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2901::::::::", name: "Fixture item", qty: 2 }] }] }, bank: { unknown: true } });
+  try {
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_output", kind: "CRAFT", status: "IN_PROGRESS", title: "Craft a planned item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: "item:2901::::::::", label: "Fixture item", quantity: 1 } }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const output = result.workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(output?.state, "COVERED_BY_OBSERVED");
+    assert.equal(output?.observedQuantity, 2);
+    assert.equal(output?.plannedOutput.resourceKey, "item:2901::::::::", "the exact item variant is retained");
+    assert.equal(output?.observationChange, "UNKNOWN", "one observation does not establish a change");
+    assert.equal(result.workOrders[0]?.status, "IN_PROGRESS");
+    assert.equal(result.workOrderProgress[0]?.completionRecorded, false, "output stock does not auto-complete manual work");
+  } finally { store.close(); }
+});
+
+test("planned craft output conflicts and absent targets stay UNKNOWN instead of selecting a recipient", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const otherKey = "classic-era::realm-b::other";
+    const baseOrder = { stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], plannedOutput: { kind: "ITEM_ID" as const, resourceKey: "159", label: "Rough Stone", quantity: 2 } };
+    const noTarget: ErpProject = { ...project(identityKey), reservations: [], workOrders: [baseOrder] };
+    assert.equal(evaluateErpProject(noTarget, (key) => store.listSnapshots(key), [noTarget], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment?.state, "UNKNOWN");
+    const conflict: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ ...baseOrder, assignedIdentityKey: identityKey, destinationIdentityKey: otherKey }] };
+    const result = evaluateErpProject(conflict, (key) => store.listSnapshots(key), [conflict], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(result?.state, "UNKNOWN");
+    assert.match(result?.reason ?? "", /assigned crafter and intended destination differ/);
+    assert.equal(result?.observedQuantity, undefined);
+  } finally { store.close(); }
+});
+
+test("CRAFT output can be checked on an explicitly selected crafter while keeping intended recipient separate", () => {
+  const { store, identityKey } = seedStore({ bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } });
+  try {
+    const destinationIdentityKey = "classic-era::realm-b::recipient";
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_to_other", kind: "CRAFT", status: "PLANNED", title: "Craft for recipient", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, destinationIdentityKey, outputObservationIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", quantity: 1 } }] };
+    const output = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(output?.state, "COVERED_BY_OBSERVED");
+    assert.equal(output?.observedQuantity, 2);
+    assert.equal(output?.recipientIdentityKey, destinationIdentityKey);
+    assert.equal(output?.intendedRecipientIdentityKey, destinationIdentityKey);
+    assert.equal(output?.observedOnIdentityKey, identityKey);
+    assert.match(output?.reason ?? "", /does not prove that crafting occurred/);
+
+    store.importSnapshot(buildWowSyncExport({ character: { name: "Output Observer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] }, bank: { unknown: true } }));
+    const observerIdentityKey = store.listCharacters("classic-era").find((character) => character.name === "Output Observer")!.identityKey;
+    const observerOnlyPlan: ErpProject = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_observe_elsewhere", kind: "CRAFT", status: "PLANNED", title: "Check output on another character", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, outputObservationIdentityKey: observerIdentityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", quantity: 1 } }] };
+    const observerOutput = evaluateErpProject(observerOnlyPlan, (key) => store.listSnapshots(key), [observerOnlyPlan], 1_700_000_001).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(observerOutput?.recipientIdentityKey, identityKey, "legacy compatibility keeps the sole assigned character when there is no intended destination");
+    assert.equal(observerOutput?.intendedRecipientIdentityKey, undefined, "the selected observation character is never described as an intended recipient");
+    assert.equal(observerOutput?.observedOnIdentityKey, observerIdentityKey);
+    assert.equal(observerOutput?.observedQuantity, 1);
+  } finally { store.close(); }
+});
+
+test("planned craft output validation rejects malformed and non-crafting declarations", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const base = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF" as const, resourceKey: "item:159:variant", label: "Rough Stone", quantity: 2 } }] };
+    validateErpProject(base, (key) => store.getCharacter(key)?.version === "classic-era");
+    validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, destinationIdentityKey: "classic-era::realm-a::recipient", outputObservationIdentityKey: identityKey }] }, (key) => key === identityKey || key === "classic-era::realm-a::recipient");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, outputObservationIdentityKey: "retail::realm-a::recipient" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROJECT_CHARACTER");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, plannedOutput: { ...base.workOrders[0]!.plannedOutput!, resourceKey: "159" } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PLANNED_CRAFT_OUTPUT");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "GATHER", outputObservationIdentityKey: identityKey }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_CRAFT_OUTPUT_OBSERVATION_TARGET");
+  } finally { store.close(); }
+});
+
+test("investigation source leads are version-checked player-review context and only valid on INVESTIGATE work", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const lead = "classic-era::realm-a::observed-candidate";
+    const base = { ...project(identityKey), reservations: [], workOrders: [{ stableId: "inspect_candidate", kind: "INVESTIGATE" as const, status: "PLANNED" as const, title: "Review observed location", resourceNeedIds: [], dependsOn: [], investigationSourceLeadIdentityKey: lead }] };
+    validateErpProject(base, (key) => key === identityKey || key === lead);
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, investigationSourceLeadIdentityKey: "retail::realm-a::candidate" }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROJECT_CHARACTER");
+    assert.throws(() => validateErpProject({ ...base, workOrders: [{ ...base.workOrders[0]!, kind: "TRANSFER" }] }, (key) => key === identityKey || key === lead), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_INVESTIGATION_SOURCE_LEAD");
+  } finally { store.close(); }
+});
+
+test("planned output change remains non-causal and stale output evidence is not current", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, bags: { containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { unknown: true } });
+  try {
+    const output = { stableId: "craft_output", kind: "CRAFT" as const, status: "PLANNED" as const, title: "Craft item", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", quantity: 1 } };
+    const p: ErpProject = { ...project(identityKey), reservations: [], workOrders: [output] };
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] }, bank: { unknown: true } }));
+    const changed = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]?.plannedOutputAssessment;
+    assert.equal(changed?.state, "COVERED_BY_OBSERVED");
+    assert.equal(changed?.observationChange, "CHANGED");
+    assert.match(changed?.reason ?? "", /cause is unknown/);
+    assert.equal(evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_100 + 5 * 86400).workOrderProgress[0]?.plannedOutputAssessment?.freshness, "stale");
+    assert.equal(evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]?.recordedStatus, "PLANNED");
+  } finally { store.close(); }
+});
+
+test("CRAFT progress pairs only the assigned crafter's explicitly sourced item-input observations", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }, { itemRef: "item:999", name: "Declared output", qty: 1 }] }] }, bank: { containers: [] } }));
+    const itemNeed = { stableId: "craft_input", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [itemNeed], reservations: [], workOrders: [{ stableId: "craft_review", kind: "CRAFT", status: "IN_PROGRESS", title: "Review planned crafting", resourceNeedIds: [itemNeed.stableId], dependsOn: [], assignedIdentityKey: identityKey, plannedOutput: { kind: "ITEM_REF", resourceKey: "item:999", label: "Declared output", quantity: 1 } }] };
+    const progress = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101).workOrderProgress[0]!;
+    const input = progress.craftInputObservationReviews?.[0];
+    assert.equal(input?.state, "CHANGED");
+    assert.equal(input?.crafterIdentityKey, identityKey);
+    assert.equal(input?.freshness, "recent");
+    assert.deepEqual(input?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 4, 2, -2], ["character bank", 0, 0, 0]]);
+    assert.equal(progress.plannedOutputAssessment?.observationChange, "CHANGED");
+    assert.equal(progress.completionRecorded, false, "paired input/output changes never auto-complete a manual task");
+    assert.match(input?.reason ?? "", /does not establish consumption or a craft/);
+
+    const otherSource = { ...p, needs: [{ ...itemNeed, sourceIdentityKey: "retail::another realm::other" }] };
+    const wrongSource = evaluateErpProject(otherSource, (key) => store.listSnapshots(key), [otherSource], 1_700_000_101).workOrderProgress[0]?.craftInputObservationReviews?.[0];
+    assert.equal(wrongSource?.state, "UNKNOWN", "another character's supply is never reinterpreted as the assigned crafter's input");
+    assert.deepEqual(wrongSource?.comparisons, []);
+  } finally { store.close(); }
+});
+
+test("CRAFT input freshness keeps a future-dated prior section from being masked by another section", () => {
+  const baseAt = 1_700_000_000;
+  const { store, identityKey } = seedStore({ generatedAt: baseAt, bags: { observedAt: baseAt + 1_000, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { observedAt: baseAt, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: baseAt + 100, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { observedAt: baseAt + 100, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } }));
+    const need = { stableId: "craft_input", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [{ stableId: "craft_freshness", kind: "CRAFT", status: "PLANNED", title: "Review inputs", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey }] };
+    const input = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 101).workOrderProgress[0]?.craftInputObservationReviews?.[0];
+    assert.equal(input?.state, "UNKNOWN", "a future-dated prior section makes the paired before/after result unreliable");
+    assert.equal(input?.freshness, "recent", "current section timestamps are evaluated separately from historical freshness");
+    assert.equal(input?.previousFreshness, "unknown", "the future-dated earlier bag observation cannot be hidden by its recent bank timestamp");
+    assert.deepEqual(input?.comparisons.map(({ section }) => section), ["bags", "character bank"]);
+  } finally { store.close(); }
+});
+
+test("SELL_MANUALLY pairs same-seller item and gold evidence without attributing a sale", () => {
+  const { store, identityKey } = seedStore({ generatedAt: 1_700_000_000, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } });
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5200 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { containers: [] } }));
+    const need = { stableId: "sale_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [{ stableId: "manual_sale", kind: "SELL_MANUALLY", status: "IN_PROGRESS", title: "Review manual sale", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey }] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_101).workOrderProgress[0]!;
+    const review = progress.sellObservationReviews?.[0];
+    assert.equal(review?.sellerIdentityKey, identityKey);
+    assert.equal(review?.state, "GOLD_INCREASED");
+    assert.equal(review?.itemState, "ITEM_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.goldComparison && [review.goldComparison.previousQuantity, review.goldComparison.currentQuantity, review.goldComparison.delta], [5000, 5200, 200]);
+    assert.equal(review?.itemComparisons.find((entry) => entry.section === "bags")?.delta, -2);
+    assert.equal(progress.completionRecorded, false);
+    assert.match(review?.reason ?? "", /do not establish a sale, buyer, amount received for this item, or cause/);
+
+    const differentSource: ErpProject = { ...plan, needs: [{ ...need, sourceIdentityKey: "classic-era::other realm::another" }] };
+    const unsupported = evaluateErpProject(differentSource, (key) => store.listSnapshots(key), [differentSource], 1_700_000_101).workOrderProgress[0]?.sellObservationReviews?.[0];
+    assert.equal(unsupported?.state, "UNKNOWN");
+    assert.deepEqual(unsupported?.itemComparisons, []);
+
+    const incomplete = seedStore({ generatedAt: 1_700_000_000, character: { name: "Partial Seller", realm: "Realm B", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 100 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true } });
+    try {
+      incomplete.store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Partial Seller", realm: "Realm B", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 200 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+      const partialNeed = { ...need, sourceIdentityKey: incomplete.identityKey, destinationIdentityKey: incomplete.identityKey };
+      const partialPlan: ErpProject = { ...project(incomplete.identityKey), needs: [partialNeed], reservations: [], workOrders: [{ stableId: "partial_sale", kind: "SELL_MANUALLY", status: "PLANNED", title: "Review incomplete sale evidence", resourceNeedIds: [partialNeed.stableId], dependsOn: [], assignedIdentityKey: incomplete.identityKey }] };
+      const partial = evaluateErpProject(partialPlan, (key) => incomplete.store.listSnapshots(key), [partialPlan], 1_700_000_101).workOrderProgress[0]?.sellObservationReviews?.[0];
+      assert.equal(partial?.itemState, "UNKNOWN", "a bank section missing on either side prevents claiming a whole character item change");
+    } finally { incomplete.store.close(); }
+  } finally { store.close(); }
+});
+
+test("procurement ceiling is a limit, not a gold resource requirement or reservation", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 300 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 3 }] }] }, bank: { containers: [] } });
+  try {
+    const targetNeed = { stableId: "target_stone", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase_stone", kind: "PURCHASE", status: "PLANNED", title: "Review purchase manually", assignedIdentityKey: identityKey, resourceNeedIds: [targetNeed.stableId], dependsOn: [], procurementPlan: { targetNeedId: targetNeed.stableId, spendingCeilingCopper: 500 } }] };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const readiness = read.workOrderReadiness[0]!;
+    const assessment = readiness.procurementAssessment;
+    assert.equal(assessment?.reviewState, "OBSERVED_ITEM_GAP");
+    assert.equal(assessment?.targetNeed.observedQuantity, 3);
+    assert.equal(assessment?.budgetState, "GROSS_OBSERVED_GOLD_BELOW_CEILING");
+    assert.equal(assessment?.budgetEvidence.observedCopper, 300);
+    assert.equal(assessment?.spendingCeilingCopper, 500);
+    assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED", "a spending ceiling is not incorrectly surfaced as a missing gold requirement");
+    const commitmentView = { ...read, history: [], historyEventCount: 0, historyTruncated: false };
+    assert.equal(buildErpResourceCommitmentSummary([commitmentView]).items.some((line) => line.kind === "GOLD_COPPER"), false, "the ceiling creates no resource demand or commitment");
+    assert.deepEqual([assessment?.marketAvailability, assessment?.quotedPrice, assessment?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+    assert.match(assessment?.reason ?? "", /A ceiling is not a minimum balance or resource requirement/);
+    assert.match(assessment?.reason ?? "", /not a purchase recommendation or action/);
+  } finally { store.close(); }
+});
+
+test("procurement declarations validate the positive copper ceiling and explicit same-character item need", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const target = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [target], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Purchase manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    validateErpProject(p, (key) => store.getCharacter(key)?.version === "classic-era");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 0 } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100, playerQuote: { amountCopper: -1, quantity: 1, recordedAt: 1 } } }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    assert.throws(() => validateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, assignedIdentityKey: undefined }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+    const differentBuyer = "classic-era::realm b::another buyer";
+    assert.throws(() => validateErpProject({ ...p, needs: [{ ...target, destinationIdentityKey: differentBuyer }] }, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_PLAN");
+  } finally { store.close(); }
+});
+
+test("procurement can link an explicit buyer gold need without conflating ceiling, observed balance, or reservation", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const target = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const budget = { stableId: "budget", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Procurement budget", requiredQuantity: 400, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [target, budget], reservations: [{ stableId: "budget-reservation", needId: "budget", sourceIdentityKey: identityKey, quantity: 300, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "target", budgetNeedId: "budget", spendingCeilingCopper: 500 } }] };
+    validateErpProject(p, (key) => store.getCharacter(key)?.version === "classic-era");
+    const assessment = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.budgetState, "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING");
+    assert.equal(assessment?.budgetNeedAssessment?.ceilingCoverage, "PLANNED_NEED_BELOW_CEILING");
+    assert.deepEqual([assessment?.budgetNeedAssessment?.need.state, assessment?.budgetNeedAssessment?.need.reservationState], ["COVERED_BY_OBSERVED", "WITHIN_OBSERVED_SUPPLY"]);
+    assert.match(assessment?.budgetNeedAssessment?.reason ?? "", /plans 400 copper against a 500 copper ceiling/);
+    assert.match(assessment?.reason ?? "", /does not establish a complete budget, reserved funds, or affordability/);
+    assert.equal(assessment?.affordability, "UNKNOWN");
+    const wrongCharacterBudget = { ...p, needs: [target, { ...budget, destinationIdentityKey: "classic-era::realm a::other" }] };
+    assert.throws(() => validateErpProject(wrongCharacterBudget, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_BUDGET_NEED");
+    const unlinkedBudget = { ...p, workOrders: [{ ...p.workOrders[0]!, resourceNeedIds: ["target"] }] };
+    assert.throws(() => validateErpProject(unlinkedBudget, () => true), (error: unknown) => error instanceof ErpProjectValidationError && error.code === "INVALID_PROCUREMENT_BUDGET_NEED");
+  } finally { store.close(); }
+});
+
+test("procurement keeps incomplete item and gold evidence unknown", () => {
+  const { store, identityKey } = seedStore({ bags: { partial: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { unknown: true }, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" } });
+  try {
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(result?.reviewState, "ITEM_GAP_UNKNOWN", "partial storage is not treated as a confirmed shortage");
+    assert.equal(result?.targetNeed.observedQuantity, 4, "the observed lower bound remains visible");
+    assert.equal(result?.budgetState, "GOLD_EVIDENCE_UNKNOWN");
+    assert.equal(result?.budgetEvidence.observedCopper, undefined);
+    assert.deepEqual([result?.marketAvailability, result?.quotedPrice, result?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+  } finally { store.close(); }
+});
+
+test("procurement reports item coverage separately from a gross gold amount below the ceiling", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_000, character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 50 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 6 }] }] }, bank: { containers: [] } }));
+    const identityKey = imported.character.identityKey;
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review manually", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100 } }] };
+    const readiness = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]!;
+    assert.equal(readiness.procurementAssessment?.reviewState, "NO_OBSERVED_ITEM_GAP");
+    assert.equal(readiness.procurementAssessment?.budgetState, "GROSS_OBSERVED_GOLD_BELOW_CEILING");
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW", "gross gold below the player's ceiling is not a shortfall against a nonexistent minimum");
+    assert.deepEqual([readiness.procurementAssessment?.marketAvailability, readiness.procurementAssessment?.quotedPrice, readiness.procurementAssessment?.affordability], ["UNKNOWN", "UNKNOWN", "UNKNOWN"]);
+  } finally { store.close(); }
+});
+test("a player-reported purchase quote is compared with its ceiling but never treated as verified price or affordability", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 25 } });
+  try {
+    const targetNeed = { stableId: "target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const p: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Compare checked quote", assignedIdentityKey: identityKey, resourceNeedIds: ["target"], dependsOn: [], procurementPlan: { targetNeedId: "target", spendingCeilingCopper: 100, playerQuote: { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, sourceNote: "Town vendor, player checked" } } }] };
+    const assessment = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.quoteState, "PLAYER_REPORTED_WITHIN_CEILING");
+    assert.equal(assessment?.quoteVsPlannedBudgetState, "NO_EXPLICIT_PLANNED_BUDGET");
+    assert.deepEqual(assessment?.playerQuote, { amountCopper: 80, quantity: 1, recordedAt: 1_700_000_000, freshness: "recent", sourceNote: "Town vendor, player checked", provenance: "PLAYER_REPORTED" });
+    assert.equal(assessment?.quotedPrice, "PLAYER_REPORTED");
+    assert.equal(assessment?.marketAvailability, "UNKNOWN", "a player note does not prove current stock remains available");
+    assert.equal(assessment?.affordability, "UNKNOWN", "gross gold and a quote do not account for reservations or spendable funds");
+    assert.match(assessment?.reason ?? "", /user-entered evidence, not a live market feed/);
+    const stale = evaluateErpProject({ ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 120, quantity: 1, recordedAt: 1 } } }] }, (key) => store.listSnapshots(key), [p], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(stale?.quoteState, "PLAYER_REPORTED_ABOVE_CEILING");
+    assert.equal(stale?.playerQuote?.freshness, "stale", "the old player-entered amount remains visible with its age");
+  } finally { store.close(); }
+});
+test("procurement review exposes only the buyer's same-version recorded gold reservations and keeps stale affordability unknown", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
+  try {
+    const targetNeed = { stableId: "item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const purchase: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Review purchase", assignedIdentityKey: identityKey, resourceNeedIds: ["item"], dependsOn: [], procurementPlan: { targetNeedId: "item", spendingCeilingCopper: 500, playerQuote: { amountCopper: 400, quantity: 1, recordedAt: 1_699_999_999 } } }] };
+    const cashNeed = { stableId: "cash", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Project budget intent", requiredQuantity: 700, sourceIdentityKey: identityKey };
+    const reserve: ErpProject = { ...project(identityKey), stableId: "reserve-cash", title: "Tracked cash commitment", needs: [cashNeed], reservations: [{ stableId: "cash-reservation", needId: "cash", sourceIdentityKey: identityKey, quantity: 700, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const otherCharacter = { ...reserve, stableId: "other-character-reserve", needs: [{ ...cashNeed, stableId: "other-cash", sourceIdentityKey: "classic-era::realm a::other" }], reservations: [{ ...reserve.reservations[0]!, stableId: "other-cash-reservation", needId: "other-cash", sourceIdentityKey: "classic-era::realm a::other", quantity: 900 }] };
+    const assessment = evaluateErpProject(purchase, (key) => store.listSnapshots(key), [purchase, reserve, otherCharacter], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(assessment?.recordedGoldReservationsCopper, 700, "a different character's reservation is not combined");
+    assert.equal(assessment?.recordedGoldReservationState, "RECENT_GROSS_GOLD_COVERS_RECORDED_RESERVATIONS");
+    assert.equal(assessment?.recordedGoldAfterReservationsCopper, 300, "the remainder is derived only from the buyer's recent snapshot and exact recorded reservation");
+    assert.equal(assessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_ABOVE_RECORDED_GOLD_REMAINDER");
+    assert.equal(assessment?.quoteVsRecordedGoldRemainderCopper, 300);
+    assert.equal(assessment?.quoteVsPlannedBudgetState, "NO_EXPLICIT_PLANNED_BUDGET");
+    assert.equal(assessment?.affordability, "UNKNOWN", "the plan remainder is not asserted to be live spendable funds");
+    const lowerQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_699_999_999 } } }] };
+    assert.equal(evaluateErpProject(lowerQuote, (key) => store.listSnapshots(key), [lowerQuote, reserve], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER");
+    const sameSecondQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_700_000_000 } } }] };
+    assert.equal(evaluateErpProject(sameSecondQuote, (key) => store.listSnapshots(key), [sameSecondQuote, reserve], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "EVIDENCE_NOT_COMPARABLE", "second-resolution equal timestamps do not establish ordering");
+    const laterQuote = { ...purchase, workOrders: [{ ...purchase.workOrders[0]!, procurementPlan: { ...purchase.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 250, quantity: 1, recordedAt: 1_700_000_005 } } }] };
+    assert.equal(evaluateErpProject(laterQuote, (key) => store.listSnapshots(key), [laterQuote, reserve], 1_700_000_006).workOrderReadiness[0]?.procurementAssessment?.quoteVsRecordedGoldState, "EVIDENCE_NOT_COMPARABLE", "a quote recorded after the gold snapshot cannot be compared to it");
+    const stale = evaluateErpProject(purchase, (key) => store.listSnapshots(key), [purchase, reserve], 1_700_000_000 + 5 * 86400).workOrderReadiness[0]?.procurementAssessment;
+    assert.equal(stale?.recordedGoldReservationsCopper, 700, "recorded plan intent remains visible when the observation ages");
+    assert.equal(stale?.recordedGoldReservationState, "GROSS_GOLD_NOT_RECENT");
+    assert.equal(stale?.recordedGoldAfterReservationsCopper, undefined);
+  } finally { store.close(); }
+});
+test("a player quote compares with a linked planned budget separately from ceiling and observed gold", () => {
+  const { store, identityKey } = seedStore({ character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 1000 } });
+  try {
+    const needs = [
+      { stableId: "item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey },
+      { stableId: "budget", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Planned budget", requiredQuantity: 450, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey },
+    ];
+    const p: ErpProject = { ...project(identityKey), needs, reservations: [], workOrders: [{ stableId: "purchase", kind: "PURCHASE", status: "PLANNED", title: "Compare quote with intent", assignedIdentityKey: identityKey, resourceNeedIds: ["item", "budget"], dependsOn: [], procurementPlan: { targetNeedId: "item", budgetNeedId: "budget", spendingCeilingCopper: 600, playerQuote: { amountCopper: 500, quantity: 2, recordedAt: 1_699_999_999 } } }] };
+    const read = (candidate: ErpProject) => evaluateErpProject(candidate, (key) => store.listSnapshots(key), [candidate], 1_700_000_001).workOrderReadiness[0]?.procurementAssessment;
+    const above = read(p);
+    assert.equal(above?.quoteVsPlannedBudgetState, "PLAYER_QUOTE_ABOVE_PLANNED_BUDGET");
+    assert.equal(above?.quoteVsPlannedBudgetCopper, 450);
+    assert.equal(above?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER", "plan comparison is distinct from recorded gold comparison");
+    assert.equal(above?.affordability, "UNKNOWN");
+    assert.match(above?.reason ?? "", /above the linked planned gold need/);
+    const within = { ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: { amountCopper: 400, quantity: 2, recordedAt: 1_699_999_999 } } }] };
+    assert.equal(read(within)?.quoteVsPlannedBudgetState, "PLAYER_QUOTE_AT_OR_BELOW_PLANNED_BUDGET");
+    const noQuote = { ...p, workOrders: [{ ...p.workOrders[0]!, procurementPlan: { ...p.workOrders[0]!.procurementPlan!, playerQuote: undefined } }] };
+    assert.equal(read(noQuote)?.quoteVsPlannedBudgetState, "NO_PLAYER_REPORTED_QUOTE");
+    assert.equal(read(noQuote)?.quoteVsPlannedBudgetCopper, undefined);
+  } finally { store.close(); }
+});
+test("unobserved supply remains UNKNOWN for both need and reservation checks", () => {
+  const { store, identityKey } = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
+  try {
+    const p = project(identityKey);
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(read.needEvidence[0]?.state, "UNKNOWN");
+    assert.equal(read.needEvidence[0]?.observedQuantity, undefined, "UNKNOWN sections are not represented as an observed zero");
+    assert.equal(read.reservationReview[0]?.state, "SUPPLY_UNKNOWN");
+  } finally { store.close(); }
+});
+
+test("partial current storage cannot establish an observed shortfall", () => {
+  const { store, identityKey } = seedStore({
+    bags: { partial: true, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] },
+    bank: { partial: true, containers: [] },
+  });
+  try {
+    const p = { ...project(identityKey), reservations: [] };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(read.needEvidence[0]?.state, "UNKNOWN");
+    assert.match(read.needEvidence[0]?.reason ?? "", /completeness is partial or unconfirmed/);
+  } finally { store.close(); }
+});
+
+test("base-item and exact-variant reservations are conservatively treated as overlapping", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const exact = project(identityKey);
+    const broad: ErpProject = {
+      ...project(identityKey), stableId: "project_base_item",
+      needs: [{ stableId: "need_base", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone, any variant", requiredQuantity: 1, sourceIdentityKey: identityKey }],
+      reservations: [{ stableId: "reserve_base", needId: "need_base", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }],
+    };
+    const read = evaluateErpProject(exact, (key) => store.listSnapshots(key), [exact, broad], 1_700_000_001);
+    assert.equal(read.reservationReview[0]?.state, "SUPPLY_UNKNOWN");
+    assert.match(read.reservationReview[0]?.reason ?? "", /base item 159 and exact item variants overlap/);
+  } finally { store.close(); }
+});
+
+test("resource assessments subtract overlapping plans from observed availability without turning unknown into zero", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const consumer = { ...project(identityKey), reservations: [], needs: [{ stableId: "need_consumer", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: identityKey }] };
+    const reserved = { ...project(identityKey), stableId: "project_reserver", needs: [{ stableId: "need_reserver", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: identityKey }], reservations: [{ stableId: "reserve_other", needId: "need_reserver", sourceIdentityKey: identityKey, quantity: 3, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const evidence = evaluateErpProject(consumer, (key) => store.listSnapshots(key), [consumer, reserved], 1_700_000_001).needEvidence[0]!;
+    assert.equal(evidence.reservationAssessment?.activeQuantity, 3);
+    assert.equal(evidence.reservationAssessment?.availableObservedLowerBound, 1);
+    assert.equal(evidence.reservationAssessment?.state, "WITHIN_OBSERVED_SUPPLY");
+    const tooMuch = { ...reserved, reservations: [{ ...reserved.reservations[0]!, quantity: 5 }] };
+    const uncertain = evaluateErpProject(consumer, (key) => store.listSnapshots(key), [consumer, tooMuch], 1_700_000_001).needEvidence[0]!;
+    assert.equal(uncertain.reservationAssessment?.state, "UNKNOWN", "unknown bank prevents claiming reservations exceed total storage");
+    assert.equal(uncertain.reservationAssessment?.availableObservedLowerBound, undefined);
+  } finally { store.close(); }
+});
+
+test("generic project updates cannot increase reservations from partial source evidence", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const draft = { ...project(identityKey), reservations: [] };
+    const created = store.createErpProject(draft);
+    assert.ok(created);
+    assert.throws(() => store.updateErpProject({
+      ...created,
+      reservations: [{ stableId: "partial_hold", needId: created.needs[0]!.stableId, sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE", createdAt: 1_700_000_001, updatedAt: 1_700_000_001 }],
+    }, created.revision), /complete, quantified evidence/);
+    assert.equal(store.getErpProject(created.stableId)?.reservations.length, 0, "rejected reservation changes do not persist");
+  } finally { store.close(); }
+});
+
+test("changing a reserved need's resource revalidates the existing hold as a new allocation", () => {
+  const { store, identityKey } = seedStore({ generatedAt: Math.floor(Date.now() / 1000), bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 4 }] }] }, bank: { containers: [] } });
+  try {
+    const draft = project(identityKey);
+    const created = store.createErpProject(draft);
+    assert.ok(created);
+    const released = store.updateErpProject({ ...created, reservations: created.reservations.map((entry) => ({ ...entry, status: "RELEASED" as const })) }, created.revision);
+    assert.ok(released);
+    const reboundNeed = { ...created.needs[0]!, resourceKey: "item:160:0:0" };
+    assert.throws(() => store.updateErpProject({
+      ...released,
+      needs: [reboundNeed],
+      reservations: released.reservations.map((entry) => ({ ...entry, status: "ACTIVE" as const })),
+    }, released.revision), /Change the need's resource, source, or intended recipient separately/);
+    assert.equal(store.getErpProject(created.stableId)?.needs[0]?.resourceKey, created.needs[0]?.resourceKey, "a released reservation cannot be reactivated against an unverified resource");
+    assert.equal(store.getErpProject(created.stableId)?.reservations[0]?.status, "RELEASED", "rejected changes preserve the released reservation state");
+  } finally { store.close(); }
+});
+
+test("reconciliation reports observed per-section changes without assigning a cause", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 7000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    const p = { ...project(identityKey), reservations: [] };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_101);
+    assert.equal(read.needEvidence[0]?.state, "UNKNOWN", "unknown bank still prevents a complete supply conclusion");
+    assert.equal(read.needEvidence[0]?.observationChange?.state, "CHANGED");
+    assert.deepEqual(read.needEvidence[0]?.observationChange?.comparisons.map((c) => [c.section, c.previousQuantity, c.currentQuantity, c.delta]), [["bags", 4, 2, -2]]);
+    assert.match(read.needEvidence[0]?.observationChange?.reason ?? "", /does not establish whether a project action caused/);
+  } finally { store.close(); }
+});
+
+test("gold requirements use exact copper values and keep an observed shortfall distinct from UNKNOWN", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const p = { ...project(identityKey), reservations: [], needs: [{ stableId: "gold", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Vendor cost", requiredQuantity: 6000, sourceIdentityKey: identityKey }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(result.needEvidence[0]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(result.needEvidence[0]?.observedQuantity, 5000);
+  } finally { store.close(); }
+});
+
+test("character-scoped Retail currencies support evidence-qualified needs and reservations", () => {
+  const { store, identityKey } = seedRetailCurrency();
+  try {
+    const p: ErpProject = { ...project(identityKey), version: "retail", needs: [{ stableId: "currency", kind: "CURRENCY", resourceKey: "1822", label: "Flightstones", requiredQuantity: 6, sourceIdentityKey: identityKey }], reservations: [{ stableId: "reserve_currency", needId: "currency", sourceIdentityKey: identityKey, quantity: 3, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001, store.listVersionCurrencies("retail"));
+    assert.equal(view.needEvidence[0]?.state, "COVERED_BY_OBSERVED");
+    assert.equal(view.needEvidence[0]?.observedQuantity, 8);
+    assert.equal(view.needEvidence[0]?.sourceSections[0]?.section, "currencies");
+    assert.equal(view.needEvidence[0]?.reservationAssessment?.availableObservedLowerBound, 5);
+    assert.equal(view.reservationReview[0]?.state, "WITHIN_OBSERVED_SUPPLY");
+  } finally { store.close(); }
+});
+
+test("an explicitly listed zero Retail currency balance is a real observed shortfall", () => {
+  const { store, identityKey } = seedRetailCurrency({ quantity: 0 });
+  try {
+    const p: ErpProject = { ...project(identityKey), version: "retail", needs: [{ stableId: "currency", kind: "CURRENCY", resourceKey: "1822", label: "Flightstones", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001, store.listVersionCurrencies("retail"));
+    assert.equal(view.needEvidence[0]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(view.needEvidence[0]?.observedQuantity, 0);
+  } finally { store.close(); }
+});
+
+test("shared storage is planned under its own owner scope and exact item variant", () => {
+  const { store, identityKey } = seedStore();
+  const owner = warbandOwner();
+  const sourceOwnerKey = ownerKey(owner);
+  try {
+    const need = { stableId: "warband_item", kind: "ITEM_REF" as const, resourceKey: "item:159:variant-a", label: "Exact variant", requiredQuantity: 2, sourceOwnerKey };
+    const p: ErpProject = { ...project(identityKey), needs: [need], reservations: [{ stableId: "warband_reservation", needId: need.stableId, sourceOwnerKey, quantity: 1, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const shared = sharedFixture({ items: [{ itemRef: need.resourceKey, qty: 3 }, { itemRef: "item:159:variant-b", qty: 20 }] });
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001, undefined, shared);
+    assert.equal(view.needEvidence[0]?.state, "COVERED_BY_OBSERVED");
+    assert.equal(view.needEvidence[0]?.observedQuantity, 3);
+    assert.equal(view.needEvidence[0]?.sourceOwnerKey, sourceOwnerKey);
+    assert.equal(view.needEvidence[0]?.ownerScope, "warband-installation-local");
+    assert.equal(view.needEvidence[0]?.reservationAssessment?.availableObservedLowerBound, 2);
+    assert.match(view.needEvidence[0]?.reason ?? "", /does not establish personal ownership, character access, or a transfer route/);
+    const guildKey = ownerKey(guildOwner("84606081"));
+    const otherOwner: ErpProject = { ...p, stableId: "guild_project", needs: [{ ...need, stableId: "guild_need", sourceOwnerKey: guildKey }], reservations: [{ stableId: "guild_reservation", needId: "guild_need", sourceOwnerKey: guildKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const isolated = evaluateErpProject(p, (key) => store.listSnapshots(key), [p, otherOwner], 1_700_000_001, undefined, shared);
+    assert.equal(isolated.needEvidence[0]?.reservationAssessment?.activeQuantity, 1, "guild reservation cannot consume a Warband resource reservation");
+  } finally { store.close(); }
+});
+
+test("a partial Warband scan can prove its observed lower bound without proving an exhaustive shortfall", () => {
+  const { store, identityKey } = seedStore();
+  const sourceOwnerKey = ownerKey(warbandOwner());
+  try {
+    const need = { stableId: "partial_warband", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Observed ore", requiredQuantity: 2, sourceOwnerKey };
+    const p: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001, undefined, sharedFixture({ completeness: "partial", items: [{ itemRef: ITEM, qty: 2 }] }));
+    const evidence = view.needEvidence[0]!;
+    assert.equal(evidence.state, "COVERED_BY_OBSERVED");
+    assert.equal(evidence.observedQuantity, 2);
+    assert.equal(evidence.sourceSections[0]?.completeness, "partial");
+    assert.deepEqual(evidence.unresolvedSections, ["shared-storage completeness is partial or unconfirmed"]);
+    assert.match(evidence.reason, /location and quantity only/);
+  } finally { store.close(); }
+});
+
+test("guild contents remain guild-owned and inaccessible or LAST_SEEN shared storage cannot prove current supply", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const guildKey = ownerKey(guildOwner("84606081"));
+    const make = (sourceOwnerKey: string): ErpProject => ({ ...project(identityKey), needs: [{ stableId: "guild_need", kind: "ITEM_REF", resourceKey: ITEM, label: "Observed ore", requiredQuantity: 1, sourceOwnerKey }], reservations: [], workOrders: [] });
+    const guildProject = make(guildKey);
+    const guild = evaluateErpProject(guildProject, (key) => store.listSnapshots(key), [guildProject], 1_700_000_001, undefined, sharedFixture({ owner: "guild", items: [{ itemRef: ITEM, qty: 1 }] }));
+    assert.equal(guild.needEvidence[0]?.state, "COVERED_BY_OBSERVED");
+    assert.equal(guild.needEvidence[0]?.ownerScope, "guild");
+    assert.match(guild.needEvidence[0]?.reason ?? "", /selected guild storage observation/);
+    const inaccessible = evaluateErpProject(guildProject, (key) => store.listSnapshots(key), [guildProject], 1_700_000_001, undefined, sharedFixture({ owner: "guild", inaccessibleTabs: [2], items: [] }));
+    assert.equal(inaccessible.needEvidence[0]?.state, "UNKNOWN");
+    assert.equal(inaccessible.needEvidence[0]?.observedQuantity, undefined);
+    const old = evaluateErpProject(guildProject, (key) => store.listSnapshots(key), [guildProject], 1_700_000_001, undefined, sharedFixture({ owner: "guild", live: false, items: [{ itemRef: ITEM, qty: 3 }] }));
+    assert.equal(old.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(old.needEvidence[0]?.observedQuantity, undefined);
+    assert.equal(old.needEvidence[0]?.potentialQuantity, 3);
+  } finally { store.close(); }
+});
+
+test("conflicting shared-owner evidence and owner sources outside Retail remain UNKNOWN or invalid", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const sourceOwnerKey = ownerKey(warbandOwner());
+    const p: ErpProject = { ...project(identityKey), needs: [{ stableId: "warband_item", kind: "ITEM_REF", resourceKey: ITEM, label: "Stone", requiredQuantity: 1, sourceOwnerKey }], reservations: [], workOrders: [] };
+    const conflict = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001, undefined, sharedFixture({ conflict: true, items: [{ itemRef: ITEM, qty: 5 }] }));
+    assert.equal(conflict.needEvidence[0]?.state, "UNKNOWN");
+    assert.equal(conflict.needEvidence[0]?.observedQuantity, undefined);
+    assert.throws(() => validateErpProject({ ...p, version: "classic-era" }, () => true), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "INVALID_PROJECT_STORAGE_OWNER");
+  } finally { store.close(); }
+});
+
+test("account-wide, absent, non-Retail, and LAST_SEEN currency evidence never becomes character-owned zero", () => {
+  const account = seedRetailCurrency({ isAccountWide: true });
+  const historical = seedRetailCurrency({ lastSeen: true });
+  const classic = seedStore();
+  try {
+    const need = (identityKey: string, version: ErpProject["version"] = "retail"): ErpProject => ({ ...project(identityKey), version, needs: [{ stableId: "currency", kind: "CURRENCY", resourceKey: "1822", label: "Flightstones", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [] });
+    const accountProject = need(account.identityKey);
+    const accountView = evaluateErpProject(accountProject, (key) => account.store.listSnapshots(key), [accountProject], 1_700_000_001, account.store.listVersionCurrencies("retail"));
+    assert.equal(accountView.needEvidence[0]?.state, "UNKNOWN");
+    assert.match(accountView.needEvidence[0]?.reason ?? "", /does not establish this character's access/);
+    const absentProject = { ...accountProject, needs: [{ ...accountProject.needs[0]!, resourceKey: "999" }] };
+    const absent = evaluateErpProject(absentProject, (key) => account.store.listSnapshots(key), [absentProject], 1_700_000_001, account.store.listVersionCurrencies("retail"));
+    assert.equal(absent.needEvidence[0]?.observedQuantity, undefined);
+    assert.match(absent.needEvidence[0]?.reason ?? "", /not a zero balance/);
+    const oldProject = need(historical.identityKey);
+    const old = evaluateErpProject(oldProject, (key) => historical.store.listSnapshots(key), [oldProject], 1_700_000_001, historical.store.listVersionCurrencies("retail"));
+    assert.equal(old.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(old.needEvidence[0]?.potentialQuantity, 8);
+    const classicProject = need(classic.identityKey, "classic-era");
+    const notRetail = evaluateErpProject(classicProject, (key) => classic.store.listSnapshots(key), [classicProject], 1_700_000_001, classic.store.listVersionCurrencies("classic-era"));
+    assert.equal(notRetail.needEvidence[0]?.state, "UNKNOWN");
+    assert.match(notRetail.needEvidence[0]?.reason ?? "", /only for Retail/);
+  } finally { account.store.close(); historical.store.close(); classic.store.close(); }
+});
+
+test("profession requirements compare exact observed skill names without implying recipe ability", () => {
+  const { store, identityKey } = seedStore({ professions: { entries: [{ name: "Mining", skill: 30, maxSkill: 75 }] } });
+  try {
+    const p = { ...project(identityKey), reservations: [], needs: [{ stableId: "mining_skill", kind: "PROFESSION" as const, resourceKey: "Mining", label: "Mining skill", requiredQuantity: 35, sourceIdentityKey: identityKey }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(result.needEvidence[0]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(result.needEvidence[0]?.observedQuantity, 30);
+    assert.match(result.needEvidence[0]?.reason ?? "", /not a recipe or craftability/);
+  } finally { store.close(); }
+});
+
+test("an observed complete profession list can show a missing exact profession name", () => {
+  const { store, identityKey } = seedStore({ professions: { entries: [{ name: "Mining", skill: 30, maxSkill: 75 }] } });
+  try {
+    const p = { ...project(identityKey), reservations: [], needs: [{ stableId: "smithing", kind: "PROFESSION" as const, resourceKey: "Blacksmithing", label: "Blacksmithing capability", requiredQuantity: 1, sourceIdentityKey: identityKey }] };
+    const result = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    assert.equal(result.needEvidence[0]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(result.needEvidence[0]?.observedQuantity, 0);
+  } finally { store.close(); }
+});
+
+test("LAST_SEEN profession skill without its source timestamp stays stale-unknown in freshness", () => {
+  const { store, identityKey } = seedStore({ professions: { lastSeen: true, entries: [{ name: "Mining", skill: 30, maxSkill: 75 }] } });
+  try {
+    const p = { ...project(identityKey), reservations: [], needs: [{ stableId: "mining_skill", kind: "PROFESSION" as const, resourceKey: "Mining", label: "Mining skill", requiredQuantity: 25, sourceIdentityKey: identityKey }] };
+    const evidence = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).needEvidence[0]!;
+    assert.equal(evidence.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(evidence.observedAt, undefined);
+    assert.equal(evidence.freshness, "unknown");
+    assert.equal(evidence.sourceSections[0]?.state, "LAST_SEEN");
+  } finally { store.close(); }
+});
+
+test("missing profession evidence retains its known source state and completeness", () => {
+  const { store, identityKey } = seedStore({ professions: { partial: true, entries: [{ name: "Mining", skill: 30, maxSkill: 75 }] } });
+  try {
+    const p = { ...project(identityKey), reservations: [], needs: [{ stableId: "smithing", kind: "PROFESSION" as const, resourceKey: "Blacksmithing", label: "Blacksmithing skill", requiredQuantity: 1, sourceIdentityKey: identityKey }] };
+    const evidence = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001).needEvidence[0]!;
+    assert.equal(evidence.state, "UNKNOWN");
+    assert.equal(evidence.sourceSections[0]?.state, "OBSERVED");
+    assert.equal(evidence.sourceSections[0]?.completeness, "partial");
+  } finally { store.close(); }
+});
+
+test("Retail recipe plans evaluate only an exact explicit learned-state row", () => {
+  const { store, identityKey } = seedRetailRecipes([
+    { recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" },
+    { recipeID: 3002, learned: false, learnedState: "OBSERVED_FALSE" },
+    { recipeID: 3003, learnedState: "UNKNOWN" },
+  ]);
+  try {
+    const p: ErpProject = { ...project(identityKey), version: "retail", needs: [3001, 3002, 3003, 3999].map((recipeID) => ({ stableId: `recipe_${recipeID}`, kind: "RECIPE", resourceKey: String(recipeID), label: `Recipe ${recipeID}`, requiredQuantity: 1, sourceIdentityKey: identityKey })), reservations: [], workOrders: [] };
+    const view = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_020);
+    assert.equal(view.needEvidence[0]?.state, "COVERED_BY_OBSERVED");
+    assert.equal(view.needEvidence[0]?.observedQuantity, 1);
+    assert.match(view.needEvidence[0]?.reason ?? "", /does not establish current profession skill, unlock requirements, reagents/);
+    assert.equal(view.needEvidence[1]?.state, "SHORTFALL_OBSERVED");
+    assert.equal(view.needEvidence[1]?.observedQuantity, 0);
+    assert.equal(view.needEvidence[2]?.state, "UNKNOWN", "an explicit unknown API result stays unknown");
+    assert.equal(view.needEvidence[3]?.state, "UNKNOWN", "absence from partial candidate enumeration is not a negative result");
+    assert.match(view.needEvidence[3]?.reason ?? "", /absence does not mean unlearned/);
+  } finally { store.close(); }
+});
+
+test("Retail recipe plans preserve LAST_SEEN history and never borrow recipe evidence across versions", () => {
+  const historical = seedRetailRecipes([{ recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" }], { second: [{ recipeID: 3004, learned: true, learnedState: "OBSERVED_TRUE" }] });
+  const classic = seedStore();
+  try {
+    const retailNeed = { stableId: "old_recipe", kind: "RECIPE" as const, resourceKey: "3001", label: "Historical recipe", requiredQuantity: 1, sourceIdentityKey: historical.identityKey };
+    const retail: ErpProject = { ...project(historical.identityKey), version: "retail", needs: [retailNeed], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(retail, (key) => historical.store.listSnapshots(key), [retail], 1_700_000_020);
+    assert.equal(view.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(view.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
+    const unsupported = assessErpNeed({ ...retailNeed, sourceIdentityKey: classic.identityKey }, classic.store.listSnapshots(classic.identityKey), 1_700_000_020, undefined, "classic-era");
+    assert.equal(unsupported.state, "UNSUPPORTED_EVIDENCE");
+    assert.match(unsupported.reason, /not supported for classic-era/);
+  } finally { historical.store.close(); classic.store.close(); }
+});
+
+test("CRAFT readiness binds recipe and profession evidence to the assigned character without claiming craftability", () => {
+  const recipeFixture = seedRetailRecipes([{ recipeID: 3001, learned: true, learnedState: "OBSERVED_TRUE" }]);
+  const otherCrafterFixture = seedRetailRecipes([{ recipeID: 3001, learned: false, learnedState: "OBSERVED_FALSE" }], { characterName: "Other Crafter" });
+  const professionFixture = seedStore({ professions: { entries: [{ name: "Leatherworking", skill: 100, maxSkill: 150 }] } });
+  try {
+    const unspecifiedCraft: ErpProject = { ...project(recipeFixture.identityKey), workOrders: [{ stableId: "unspecified", kind: "CRAFT", status: "PLANNED", title: "Unspecified craft", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: recipeFixture.identityKey }] };
+    const unspecifiedReadiness = evaluateErpProject(unspecifiedCraft, (key) => recipeFixture.store.listSnapshots(key), [unspecifiedCraft], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(unspecifiedReadiness.state, "WAITING_FOR_EVIDENCE", "a material-free or otherwise unspecified craft does not appear ready without an exact profession or recipe requirement");
+    assert.match(unspecifiedReadiness.reason, /No exact profession or recipe requirement is linked/);
+    const materialsOnlyFixture = seedStore();
+    try {
+      const materialsOnlyCharacter = materialsOnlyFixture.store.listCharacters("classic-era")[0]!;
+      const materialsOnlyCraft: ErpProject = { ...project(materialsOnlyCharacter.identityKey), needs: [{ stableId: "stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 3, sourceIdentityKey: materialsOnlyCharacter.identityKey }], reservations: [], workOrders: [{ stableId: "materials-only", kind: "CRAFT", status: "PLANNED", title: "Craft with materials only", resourceNeedIds: ["stone"], dependsOn: [], assignedIdentityKey: materialsOnlyCharacter.identityKey }] };
+      const materialsOnlyReadiness = evaluateErpProject(materialsOnlyCraft, (key) => materialsOnlyFixture.store.listSnapshots(key), [materialsOnlyCraft], 1_700_000_020).workOrderReadiness[0]!;
+      assert.equal(materialsOnlyReadiness.linkedNeeds?.[0]?.state, "COVERED_BY_OBSERVED", "the fixture has enough observed material");
+      assert.equal(materialsOnlyReadiness.state, "WAITING_FOR_EVIDENCE", "material coverage alone does not establish an observed profession or recipe prerequisite");
+    } finally { materialsOnlyFixture.store.close(); }
+
+    const other = otherCrafterFixture.store.listCharacters("retail")[0]!;
+    const recipeNeed = { stableId: "recipe", kind: "RECIPE" as const, resourceKey: "3001", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: recipeFixture.identityKey };
+    const recipeProject: ErpProject = { ...project(recipeFixture.identityKey), version: "retail", needs: [recipeNeed], reservations: [], workOrders: [{ stableId: "craft", kind: "CRAFT", status: "PLANNED", title: "Craft recipe", resourceNeedIds: ["recipe"], dependsOn: [], assignedIdentityKey: other.identityKey }] };
+    const snapshotsFor = (key: string) => key === other.identityKey ? otherCrafterFixture.store.listSnapshots(key) : recipeFixture.store.listSnapshots(key);
+    let readiness = evaluateErpProject(recipeProject, snapshotsFor, [recipeProject], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.state, "OBSERVED_RESOURCE_SHORTFALL", "the assigned crafter's own observed unlearned state blocks the step even though another character knows the recipe");
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "REQUIREMENT_NOT_MET");
+    assert.equal(readiness.capabilityChecks?.[0]?.evidenceSourceIdentityKey, other.identityKey);
+    assert.equal(readiness.capabilityChecks?.[0]?.freshness, "recent");
+    assert.deepEqual(readiness.linkedNeeds?.map((need) => [need.kind, need.state, need.freshness, need.requiredQuantity, need.sourceIdentityKey]), [["RECIPE", "SHORTFALL_OBSERVED", "recent", 1, other.identityKey]], "the work-order view uses the assigned crafter's own explicit recipe evidence");
+    assert.ok(readiness.linkedNeeds?.[0]?.sourceSections.some((section) => section.section === "character" && section.state === "OBSERVED"), "the linked input retains the assigned character section provenance");
+    assert.equal(evaluateErpProject(recipeProject, snapshotsFor, [recipeProject], 1_700_000_020).needEvidence[0]?.sourceIdentityKey, recipeFixture.identityKey, "the project-level source observation remains independent from the assignee check");
+    const sameCrafter = { ...recipeProject, workOrders: [{ ...recipeProject.workOrders[0]!, assignedIdentityKey: recipeFixture.identityKey }] };
+    readiness = evaluateErpProject(sameCrafter, snapshotsFor, [sameCrafter], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE");
+    assert.equal(readiness.linkedNeeds?.[0]?.observedQuantity, 1);
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(readiness.reason, /do not establish current skill, unlocks, or craftability/);
+    const assignedOnlyNeed = { ...recipeNeed, sourceIdentityKey: undefined };
+    const assignedOnlyProject = { ...sameCrafter, needs: [assignedOnlyNeed] };
+    readiness = evaluateErpProject(assignedOnlyProject, snapshotsFor, [assignedOnlyProject], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE", "the work order reads the assigned crafter directly even when a capability need has no inventory-style source selection");
+    assert.equal(readiness.linkedNeeds?.[0]?.observedQuantity, 1);
+    assert.equal(evaluateErpProject(assignedOnlyProject, snapshotsFor, [assignedOnlyProject], 1_700_000_020).workOrderProgress[0]?.linkedNeedState, "ALL_CURRENTLY_MET");
+    const crossVersionOrder = { ...sameCrafter, workOrders: [{ ...sameCrafter.workOrders[0]!, assignedIdentityKey: "classic-era::retail realm::recipe keeper" }] };
+    const queried = new Set<string>();
+    const crossVersionView = evaluateErpProject(crossVersionOrder, (key) => { queried.add(key); return snapshotsFor(key); }, [crossVersionOrder], 1_700_000_020);
+    assert.equal(crossVersionView.workOrderReadiness[0]?.capabilityChecks?.[0]?.state, "EVIDENCE_UNKNOWN");
+    assert.ok(!queried.has("classic-era::retail realm::recipe keeper"), "an incompatible assigned-character identity is rejected before reading snapshots");
+
+    const skillNeed = { stableId: "profession", kind: "PROFESSION" as const, resourceKey: "Leatherworking", label: "Leatherworking", requiredQuantity: 90, sourceIdentityKey: professionFixture.identityKey };
+    const skillProject: ErpProject = { ...project(professionFixture.identityKey), needs: [skillNeed], reservations: [], workOrders: [{ stableId: "craft_skill", kind: "CRAFT", status: "PLANNED", title: "Craft with observed skill", resourceNeedIds: ["profession"], dependsOn: [], assignedIdentityKey: professionFixture.identityKey }] };
+    readiness = evaluateErpProject(skillProject, (key) => professionFixture.store.listSnapshots(key), [skillProject], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "SUPPORTED_FOR_ASSIGNEE");
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
+    const unmet = { ...skillProject, needs: [{ ...skillNeed, requiredQuantity: 125 }] };
+    readiness = evaluateErpProject(unmet, (key) => professionFixture.store.listSnapshots(key), [unmet], 1_700_000_020).workOrderReadiness[0]!;
+    assert.equal(readiness.capabilityChecks?.[0]?.state, "REQUIREMENT_NOT_MET");
+    assert.equal(readiness.state, "OBSERVED_RESOURCE_SHORTFALL");
+  } finally { recipeFixture.store.close(); otherCrafterFixture.store.close(); professionFixture.store.close(); }
+});
+
+test("project persistence is version-isolated, survives reopen, and rejects stale revisions", () => {
+  const { store, identityKey } = seedStore();
+  const p = project(identityKey);
+  try {
+    const created = store.createErpProject(p);
+    assert.deepEqual(store.listErpProjectHistory(created.stableId).map((event) => [event.revision, event.kind, event.changedFields]), [[1, "CREATED", ["project"]]]);
+    assert.equal(created.version, "classic-era");
+    assert.equal(store.listErpProjects("retail").length, 0);
+    assert.equal(store.listErpProjects("classic-era")[0]?.stableId, created.stableId);
+    const changed = store.updateErpProject({ ...created, title: "Prepare the craft", workOrders: created.workOrders.map((order) => ({ ...order, status: "IN_PROGRESS" as const })) }, created.revision)!;
+    assert.equal(changed.revision, 2);
+    const paused = store.setErpProjectStatus(created.stableId, "PAUSED", changed.revision)!;
+    assert.equal(paused.revision, 3);
+    const history = store.listErpProjectHistory(created.stableId);
+    assert.deepEqual(history.map((event) => [event.revision, event.kind, event.changedFields]), [[3, "STATUS_CHANGED", ["status"]], [2, "UPDATED", ["title", "workOrders"]], [1, "CREATED", ["project"]]]);
+    assert.deepEqual(history[1]?.workOrderStatusChanges, [{ workOrderId: "gather_stone", title: "Gather one more Rough Stone", fromStatus: "PLANNED", toStatus: "IN_PROGRESS" }]);
+    assert.equal(history[2]?.workOrderStatusChanges, undefined, "initial tasks are not falsely represented as status transitions");
+    assert.throws(() => store.updateErpProject({ ...changed, title: "Stale edit" }, 1), ErpProjectConflictError);
+    assert.equal(store.getErpProject(created.stableId)?.title, "Prepare the craft");
+  } finally { store.close(); }
+});
+
+test("project read model bounds recent history while reporting the full durable event count", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    let current = store.createErpProject({ version: "classic-era", title: "Plan" });
+    for (let index = 1; index <= 50; index++) current = store.updateErpProject({ ...current, title: `Plan revision ${index}` }, current.revision)!;
+    const view = new DashboardReadModel(store, () => 1_700_000_200).getErpProjects({ version: "classic-era" })[0]!;
+    assert.equal(view.historyEventCount, 51);
+    assert.equal(view.history.length, 50);
+    assert.equal(view.historyTruncated, true);
+    assert.equal(view.history[0]?.revision, 51);
+  } finally { store.close(); }
+});
+
+test("work order readiness respects recorded dependencies, evidence freshness, and manual action limits", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const plan: ErpProject = {
+      ...project(identityKey), reservations: [],
+      needs: [
+        { stableId: "gold_need", kind: "GOLD_COPPER", resourceKey: "copper", label: "Trainer gold", requiredQuantity: 7000, sourceIdentityKey: identityKey },
+        { stableId: "unknown_need", kind: "ITEM_REF", resourceKey: "item:999", label: "Unknown item", requiredQuantity: 1 },
+        { stableId: "covered_need", kind: "GOLD_COPPER", resourceKey: "copper", label: "Observed gold", requiredQuantity: 100, sourceIdentityKey: identityKey },
+      ],
+      workOrders: [
+        { stableId: "prereq", kind: "INVESTIGATE", status: "PLANNED", title: "Check the trainer", resourceNeedIds: [], dependsOn: [] },
+        { stableId: "blocked", kind: "OTHER", status: "PLANNED", title: "Continue after investigation", resourceNeedIds: ["covered_need"], dependsOn: ["prereq"] },
+        { stableId: "short", kind: "PURCHASE", status: "PLANNED", title: "Buy after saving", resourceNeedIds: ["gold_need"], dependsOn: [] },
+        { stableId: "unknown", kind: "TRANSFER", status: "PLANNED", title: "Move the unknown item", resourceNeedIds: ["unknown_need"], dependsOn: [] },
+        { stableId: "review", kind: "TRANSFER", status: "PLANNED", title: "Review source transfer", resourceNeedIds: ["covered_need"], dependsOn: [] },
+      ],
+    };
+    const read = (p: ErpProject, now = 1_700_000_020) => evaluateErpProject(p, (key) => store.listSnapshots(key), [p], now);
+    const initial = read(plan);
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "blocked")?.state, "BLOCKED_BY_DEPENDENCY");
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "short")?.state, "OBSERVED_RESOURCE_SHORTFALL");
+    assert.equal(initial.workOrderReadiness.find((entry) => entry.workOrderId === "unknown")?.state, "WAITING_FOR_EVIDENCE");
+    const review = initial.workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(review.state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(review.reason, /does not establish access or a transfer route/);
+    const completedDependency: ErpProject = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "prereq" ? { ...order, status: "COMPLETED", completionNote: "Player recorded completion." } : order) };
+    assert.equal(read(completedDependency).workOrderReadiness.find((entry) => entry.workOrderId === "blocked")?.state, "READY_FOR_PLAYER_REVIEW");
+    store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_100, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 7000 }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    const changed = read(plan, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(changed.state, "OBSERVATION_CHANGED_REQUIRES_REVIEW");
+    assert.deepEqual(changed.changedNeedIds, ["covered_need"]);
+    assert.match(changed.reason, /does not establish that this work order caused it or that the planned step is complete/);
+    const recordedComplete: ErpProject = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "review" ? { ...order, status: "COMPLETED", completionNote: "Player recorded a manual transfer." } : order) };
+    const changedAfterCompletion = read(recordedComplete, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.equal(changedAfterCompletion.state, "OBSERVATION_CHANGED_REQUIRES_REVIEW", "later inventory evidence asks for review without overwriting the player's recorded status");
+    assert.match(changedAfterCompletion.reason, /marked complete by the player/);
+    const completedWithUnknown: ErpProject = { ...recordedComplete, workOrders: recordedComplete.workOrders.map((order) => order.stableId === "review" ? { ...order, resourceNeedIds: ["covered_need", "unknown_need"] } : order) };
+    const mixedEvidence = read(completedWithUnknown, 1_700_000_101).workOrderReadiness.find((entry) => entry.workOrderId === "review")!;
+    assert.deepEqual(mixedEvidence.changedNeedIds, ["covered_need"]);
+    assert.deepEqual(mixedEvidence.unresolvedNeedIds, ["unknown_need"]);
+    assert.match(mixedEvidence.reason, /Linked evidence also remains unknown/);
+    assert.equal(read(plan, 1_900_000_000).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "WAITING_FOR_EVIDENCE", "stale observed supply is not marked ready");
+    assert.equal(read({ ...plan, status: "PAUSED" }).workOrderReadiness.find((entry) => entry.workOrderId === "review")?.state, "PROJECT_NOT_ACTIVE");
+  } finally { store.close(); }
+});
+
+test("RETRIEVE work orders are first-class manual actions and never imply storage access", () => {
+  const { store, identityKey } = seedStore({
+    bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 5 }] }] },
+    bank: { unknown: true },
+  });
+  try {
+    const p: ErpProject = {
+      ...project(identityKey),
+      needs: [{ stableId: "need_stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 5, sourceIdentityKey: identityKey }],
+      reservations: [],
+      workOrders: [{ stableId: "retrieve_stone", kind: "RETRIEVE", status: "PLANNED", title: "Retrieve Rough Stone", resourceNeedIds: ["need_stone"], dependsOn: [] }],
+    };
+    const read = evaluateErpProject(p, (key) => store.listSnapshots(key), [p], 1_700_000_001);
+    const readiness = read.workOrderReadiness[0]!;
+    assert.equal(readiness.state, "READY_FOR_PLAYER_REVIEW");
+    assert.match(readiness.reason, /does not establish current access or retrieval eligibility/);
+    assert.equal(read.workOrderProgress[0]?.transferObservationReviews, undefined, "retrieval is not treated as a character-to-character transfer");
+    assert.equal(read.workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "one snapshot and inaccessible bank data cannot establish a retrieval comparison");
+  } finally { store.close(); }
+});
+
+test("RETRIEVE reviews paired personal bags and bank observations without claiming a retrieval occurred", () => {
+  const baseAt = 1_700_300_000;
+  const capture = (bags: number, bank: number | undefined, at: number) => buildWowSyncExport({ generatedAt: at, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: bags ? [{ itemRef: ITEM, name: "Rough Stone", qty: bags }] : [] }] }, bank: bank === undefined ? { unknown: true } : { containers: [{ id: 0, capacity: 28, items: bank ? [{ itemRef: ITEM, name: "Rough Stone", qty: bank }] : [] }] } });
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const identityKey = store.importSnapshot(capture(0, 3, baseAt)).character.identityKey;
+    store.importSnapshot(capture(1, 2, baseAt + 100));
+    const need = { stableId: "retrieve_stone", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const order = { stableId: "retrieve_step", kind: "RETRIEVE" as const, status: "PLANNED" as const, title: "Review bank retrieval", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey, sourceIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), needs: [need], reservations: [], workOrders: [order] };
+    const evidence = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).needEvidence[0]!;
+    assert.equal(evidence.sourceSections.find((section) => section.section === "bags")?.matchingQuantity, 1, "complete current bags expose their own matching count");
+    assert.equal(evidence.sourceSections.find((section) => section.section === "character bank")?.matchingQuantity, 2, "complete current bank exposes its own matching count without merging locations");
+    assert.equal(evidence.sourceSections.find((section) => section.section === "bags")?.matchingPotentialQuantity, undefined, "current counts are not duplicated as historical potential supply");
+    const read = (now: number) => evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], now).workOrderProgress[0]!;
+    const review = read(baseAt + 110).retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "BAGS_AND_BANK_CHANGED", JSON.stringify(review));
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(review?.freshness, "recent");
+    assert.deepEqual(review?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 0, 1, 1], ["character bank", 3, 2, -1]]);
+    assert.deepEqual(review?.unresolvedSections, []);
+    assert.equal(read(baseAt + 110).completionRecorded, false);
+    assert.match(review?.reason ?? "", /do not establish a retrieval, access, ownership, or cause/);
+    assert.equal(read(baseAt + 5 * 86400).retrievalObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "stale pairs retain no current retrieval conclusion");
+    assert.equal(read(baseAt + 5 * 86400).retrievalObservationReviews?.[0]?.freshness, "stale");
+    store.importSnapshot(capture(1, 2, baseAt + 200));
+    assert.equal(read(baseAt + 210).retrievalObservationReviews?.[0]?.state, "NO_COMPARABLE_CHANGE", "unchanged complete storage is reported without concluding no action occurred");
+    store.importSnapshot(capture(2, undefined, baseAt + 300));
+    const partialNeed = { ...need, destinationIdentityKey: undefined };
+    const partialPlan: ErpProject = { ...plan, needs: [partialNeed] };
+    const partial = evaluateErpProject(partialPlan, (key) => store.listSnapshots(key), [partialPlan], baseAt + 310).workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(partial?.state, "PARTIAL_COMPARISON", "a fresh bag delta remains visible while an unobserved bank is explicitly unresolved");
+    assert.deepEqual(partial?.unresolvedSections, ["character bank"]);
+    assert.deepEqual(partial?.comparisons.map((entry) => entry.section), ["bags"]);
+    const conflicting: ErpProject = { ...plan, workOrders: [{ ...order, destinationIdentityKey: "classic-era::realm a::another" }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], baseAt + 210).workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "IDENTITY_CONFLICT");
+    store.importSnapshot(capture(2, 1, baseAt + 350));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 400, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { observedAt: baseAt + 1_000, containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }] }] }, bank: { observedAt: baseAt + 400, containers: [{ id: 0, capacity: 28, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] } }));
+    const mixedTimestamp = read(baseAt + 410).retrievalObservationReviews?.[0];
+    assert.equal(mixedTimestamp?.state, "EVIDENCE_UNKNOWN", "a future-dated bag section cannot be masked by a recent bank timestamp");
+    assert.equal(mixedTimestamp?.freshness, "unknown");
+    assert.deepEqual(mixedTimestamp?.comparisons.map(({ section }) => section), ["bags", "character bank"], "both independently timestamped sections participate in this regression case");
+  } finally { store.close(); }
+});
+
+test("a shared-storage RETRIEVE plan remains valid UNKNOWN instead of comparing a character as the owner", () => {
+  const { store, identityKey } = seedRetailCurrency();
+  try {
+    const need = { stableId: "shared_retrieve", kind: "ITEM_REF" as const, resourceKey: "item:159", label: "Observed item", requiredQuantity: 1, sourceOwnerKey: "retail::warband::local", destinationIdentityKey: identityKey };
+    const order = { stableId: "retrieve_shared", kind: "RETRIEVE" as const, status: "PLANNED" as const, title: "Review Warband retrieval", resourceNeedIds: [need.stableId], dependsOn: [], assignedIdentityKey: identityKey, destinationIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), version: "retail", needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "EVIDENCE_UNKNOWN");
+    assert.deepEqual(review?.comparisons, []);
+    assert.match(review?.reason ?? "", /No supported same-version observation history exists for the explicitly selected shared-storage owner/);
+    const conflicting: ErpProject = { ...plan, workOrders: [{ ...order, sourceIdentityKey: identityKey }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], 1_700_000_010).workOrderProgress[0]?.retrievalObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "a character source cannot replace the explicitly selected shared owner");
+  } finally { store.close(); }
+});
+
+test("shared-owner RETRIEVE review compares only the named Retail storage owner's live history", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_600_000;
+  const sharedItem = itemRow("Rough Stone", 1).itemRef;
+  const capture = (carrier: string, at: number, quantity: number, completeness = "complete", sectionObservedAt = at) => renderExport({ name: carrier, realm: "Retail Realm", generated: at, warband: warband({ observedAt: sectionObservedAt, completeness, items: [["Rough Stone", quantity]] }) });
+  const recipientCapture = (at: number, quantity: number, partial = false, observedAt = at) => buildWowSyncExport({ generatedAt: at, character: { name: "Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt, partial, containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: sharedItem, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { unknown: true } });
+  try {
+    store.importSnapshot(recipientCapture(baseAt - 10, 0));
+    store.importSnapshot(recipientCapture(baseAt + 25, 2));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 50, character: { name: "Touching Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt: baseAt + 50, containers: [{ id: 0, capacity: 16, items: [] }] }, bank: { unknown: true } }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: baseAt + 75, character: { name: "Touching Recipient", realm: "Retail Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { observedAt: baseAt + 75, containers: [{ id: 0, capacity: 16, items: [{ itemRef: sharedItem, name: "Rough Stone", qty: 2 }] }] }, bank: { unknown: true } }));
+    store.importSnapshot(capture("Carrier One", baseAt, 4));
+    store.importSnapshot(capture("Carrier Two", baseAt + 50, 2));
+    const recipient = store.listCharacters("retail").find((character) => character.name === "Recipient")!;
+    const sourceOwnerKey = ownerKey(warbandOwner());
+    const plan: ErpProject = { ...project(recipient.identityKey), stableId: "shared_retrieval", version: "retail", needs: [{ stableId: "shared_need", kind: "ITEM_REF", resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey, destinationIdentityKey: recipient.identityKey }], reservations: [], workOrders: [{ stableId: "shared_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review Warband retrieval", resourceNeedIds: ["shared_need"], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] };
+    const storedPlan = store.createErpProject(plan);
+    const view = new DashboardReadModel(store, () => baseAt + 60).getErpProjects({ version: "retail" })[0]!;
+    const review = view.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(review?.state, "SHARED_OWNER_CONTENT_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(review?.sourceOwnerKey, sourceOwnerKey);
+    assert.equal(review?.ownerScope, "warband-installation-local");
+    assert.deepEqual(review?.carrierCharacterKeys, ["retail::retail realm::carrier one", "retail::retail realm::carrier two"]);
+    assert.deepEqual(review?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["shared storage", 4, 2, -2]]);
+    assert.equal(review?.freshness, "recent");
+    assert.equal(review?.recipientBagObservation?.identityKey, recipient.identityKey);
+    assert.equal(review?.recipientBagObservation?.state, "COMPARABLE_CHANGED");
+    assert.deepEqual(review?.recipientBagObservation?.comparisons.map(({ section, previousQuantity, currentQuantity, delta }) => [section, previousQuantity, currentQuantity, delta]), [["bags", 0, 2, 2]]);
+    assert.deepEqual(review?.pairedObservationPattern, { state: "OWNER_DECREASE_RECIPIENT_INCREASE", interpretation: "CORRELATED_OBSERVATIONS_ONLY", ownerDelta: -2, recipientDelta: 2, overlapStartedAt: baseAt, overlapEndedAt: baseAt + 25, reason: "Recent complete observations overlap in time and show owner quantity decreasing while recipient bags increased for the declared resource scope. This is a correlation signal only; it does not establish account membership, access, transfer, item provenance, or causation." });
+    assert.match(review?.recipientBagObservation?.reason ?? "", /does not establish that retrieval occurred or that the shared owner supplied the item/);
+    assert.equal(view.workOrders[0]?.status, "PLANNED", "shared storage deltas never complete the player's manual retrieval task");
+    assert.match(review?.reason ?? "", /do not establish ownership, access, recipient, or cause/);
+    const touchingRecipient = store.listCharacters("retail").find((character) => character.name === "Touching Recipient")!;
+    const touchingPlan: ErpProject = { ...storedPlan, stableId: "shared_retrieval_touching", needs: [{ ...storedPlan.needs[0]!, stableId: "shared_need_touching", destinationIdentityKey: touchingRecipient.identityKey }], workOrders: [{ ...storedPlan.workOrders[0]!, stableId: "shared_retrieve_touching", resourceNeedIds: ["shared_need_touching"], assignedIdentityKey: touchingRecipient.identityKey, destinationIdentityKey: touchingRecipient.identityKey }] };
+    const touchingStoredPlan = store.createErpProject(touchingPlan);
+    const touchingView = new DashboardReadModel(store, () => baseAt + 60).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === touchingStoredPlan.stableId);
+    const touching = touchingView?.workOrderProgress[0]?.retrievalObservationReviews?.[0]?.pairedObservationPattern;
+    assert.equal(touching?.state, "OBSERVATION_WINDOWS_DISJOINT", JSON.stringify(touchingView?.workOrderProgress[0]));
+    assert.match(touching?.reason ?? "", /touching boundary timestamps alone do not pair/);
+
+    store.importSnapshot(capture("Carrier Three", baseAt + 70, 1, "partial"));
+    store.importSnapshot(recipientCapture(baseAt + 75, 3, true));
+    const afterPartial = new DashboardReadModel(store, () => baseAt + 80).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(afterPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial shared observation hides the previous complete comparison as current");
+    assert.equal(afterPartial?.comparisons.length, 0);
+    assert.equal(afterPartial?.pairedObservationPattern?.state, "UNKNOWN", "a newer partial owner or recipient capture prevents a paired change signal");
+    assert.equal(afterPartial?.recipientBagObservation?.state, "UNKNOWN", `an incomplete recipient bag section cannot support a current comparison: ${JSON.stringify(afterPartial?.recipientBagObservation)}`);
+
+    store.importSnapshot(capture("Carrier Four", baseAt + 90, 3));
+    store.importSnapshot(capture("Carrier Five", baseAt + 90, 1, "partial", baseAt + 91));
+    const tiedPartial = new DashboardReadModel(store, () => baseAt + 100).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(tiedPartial?.state, "EVIDENCE_UNKNOWN", "a newer partial with the same clamped effective timestamp still prevents treating a complete snapshot as current");
+    assert.equal(tiedPartial?.comparisons.length, 0);
+
+    const guildKey = ownerKey(guildOwner("retrieval-guild"));
+    const guildNeed = { stableId: "guild_shared_need", kind: "ITEM_REF" as const, resourceKey: sharedItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey: guildKey, destinationIdentityKey: recipient.identityKey };
+    const guildPlan: ErpProject = { ...plan, stableId: "guild_shared_retrieval", title: "Review guild retrieval", needs: [guildNeed], workOrders: [{ stableId: "guild_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review guild retrieval", resourceNeedIds: [guildNeed.stableId], dependsOn: [], assignedIdentityKey: recipient.identityKey, destinationIdentityKey: recipient.identityKey }] };
+    const storedGuildPlan = store.createErpProject(guildPlan);
+    const guildCapture = (at: number, inaccessible: boolean, quantity = 2) => renderExport({ name: "Guild Carrier", realm: "Retail Realm", generated: at, guild: guild({ clubId: "retrieval-guild", observedAt: at, tabs: [{ id: 1, name: "Materials", items: [["Rough Stone", quantity]] }, ...(inaccessible ? [{ id: 2, name: "Restricted", state: "INACCESSIBLE" as const }] : [])] }) });
+    store.importSnapshot(guildCapture(baseAt + 90, true, 4));
+    store.importSnapshot(guildCapture(baseAt + 100, false, 3));
+    store.importSnapshot(guildCapture(baseAt + 120, false, 2));
+    const coveredGuildProjects = new DashboardReadModel(store, () => baseAt + 125).getErpProjects({ version: "retail" });
+    const coveredGuildReview = coveredGuildProjects.find((entry) => entry.stableId === storedGuildPlan.stableId)?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(coveredGuildReview?.state, "SHARED_OWNER_CONTENT_CHANGED", "an inaccessible historical tab outside the selected comparison pair does not invalidate two fully covered observations");
+    store.importSnapshot(guildCapture(baseAt + 130, true));
+    const guildProjects = new DashboardReadModel(store, () => baseAt + 140).getErpProjects({ version: "retail" });
+    const guildView = guildProjects.find((entry) => entry.stableId === storedGuildPlan.stableId);
+    const guildReview = guildView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(guildReview?.state, "EVIDENCE_UNKNOWN", `inaccessible guild tabs prevent a whole-owner quantity delta: ${JSON.stringify({ projectCount: guildProjects.length, guildView, guildReview, owners: store.projectSharedStorage().guilds.map((owner) => owner.ownerKey) })}`);
+    assert.match(guildReview?.reason ?? "", /inaccessible, unconfirmed, or unidentified guild tab/);
+
+    store.importSnapshot(recipientCapture(baseAt + 160, 2, false, baseAt + 76));
+    store.importSnapshot(recipientCapture(baseAt + 200, 3, false, baseAt + 76));
+    const chronologyView = new DashboardReadModel(store, () => baseAt + 210).getErpProjects({ version: "retail" }).find((entry) => entry.stableId === storedPlan.stableId);
+    const chronologyReview = chronologyView?.workOrderProgress[0]?.retrievalObservationReviews?.[0];
+    assert.equal(chronologyReview?.recipientBagObservation?.state, "UNKNOWN", `a newer export with an equal section timestamp cannot establish a before/after comparison: ${JSON.stringify({ projects: chronologyView?.stableId, progress: chronologyView?.workOrderProgress, review: chronologyReview })}`);
+    assert.match(chronologyReview?.recipientBagObservation?.reason ?? "", /timestamps are equal or out of order/);
+  } finally { store.close(); }
+});
+
+test("saved Retail shared-storage intervals use the frozen exact owner and retain partial and restored quantities", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = Math.floor(Date.now() / 1000) - 100;
+  const itemRef = itemRow("Rough Stone", 1).itemRef;
+  const capture = (name: string, at: number, quantity: number, completeness: "complete" | "partial" = "complete") => renderExport({ name, realm: "Retail Realm", generated: at, warband: warband({ observedAt: at, completeness, items: [["Rough Stone", quantity]] }) });
+  try {
+    const carrier = store.importSnapshot(capture("Interval Carrier", baseAt, 4));
+    const need = { stableId: "warband_need", kind: "ITEM_REF" as const, resourceKey: itemRef, label: "Rough Stone", requiredQuantity: 5, sourceOwnerKey: "retail::warband::local" };
+    store.createErpProject({ version: "retail", title: "Warband interval review", needs: [need], workOrders: [{ stableId: "warband_review", kind: "OTHER", status: "PLANNED", title: "Review Warband stock", resourceNeedIds: [need.stableId], dependsOn: [], planningBatch: { stableId: "erp_batch_00000000-0000-4000-8000-0000000000c3", reviewedAt: baseAt + 10, version: "retail", needEvidence: { resourceKind: "ITEM_REF", resourceKey: itemRef, sourceScope: { kind: "SHARED_OWNER", ownerKey: need.sourceOwnerKey }, state: "SHORTFALL_OBSERVED", freshness: "recent", observedQuantity: 4, observedAt: baseAt } } }] });
+    store.importSnapshot(capture("Second Carrier", baseAt + 20, 2));
+    store.importSnapshot(capture("Third Carrier", baseAt + 30, 4));
+    store.importSnapshot(capture("Fourth Carrier", baseAt + 40, 1, "partial"));
+    const projectView = new DashboardReadModel(store, () => baseAt + 50).getErpProjects({ version: "retail" })[0]!;
+    const batch = buildErpSavedPlanningBatchReview([projectView], "retail").batches[0]!;
+    const step = batch.steps[0]!;
+    assert.deepEqual(step.reviewedSourceScope, { kind: "SHARED_OWNER", ownerKey: "retail::warband::local" });
+    assert.equal(step.sourceScopeReview, "MATCH");
+    assert.equal(step.observationInterval?.state, "SAMPLES_AVAILABLE");
+    assert.deepEqual(step.observationInterval?.points.map((point) => [point.sourceOwnerKey, point.sections[0]?.state, point.sections[0]?.quantity, point.sections[0]?.lowerBound]), [
+      ["retail::warband::local", "OBSERVED", 2, undefined],
+      ["retail::warband::local", "OBSERVED", 4, undefined],
+      ["retail::warband::local", "PARTIAL", undefined, 1],
+    ], "owner history shows changed/restored exact variants and a partial lower bound without merging the samples");
+    assert.equal(step.actionCausality, "UNKNOWN");
+    assert.equal(step.observationInterval?.points[0]?.sourceOwnerKey, "retail::warband::local", "the timeline names the installation-local Warband owner rather than a carrier character");
+    assert.match(projectView.needEvidence[0]?.reason ?? "", /does not identify personal ownership or a usable transfer route/);
+    assert.equal(carrier.character.version, "retail");
+  } finally { store.close(); }
+});
+
+test("work order readiness aggregates linked needs and treats saved reservations as intent", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const targetNeed = { stableId: "target_need", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone for craft", requiredQuantity: 3, sourceIdentityKey: identityKey };
+    const current: ErpProject = { ...project(identityKey), needs: [targetNeed], reservations: [], workOrders: [{ stableId: "craft_step", kind: "OTHER", status: "PLANNED", title: "Review observed resource allocation", resourceNeedIds: [targetNeed.stableId], dependsOn: [] }] };
+    const competitorNeed = { ...targetNeed, stableId: "competing_need", label: "Stone for another project" };
+    const competing: ErpProject = { ...project(identityKey), stableId: "competing_project", needs: [competitorNeed], reservations: [{ stableId: "competing_hold", needId: competitorNeed.stableId, sourceIdentityKey: identityKey, quantity: 3, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }], workOrders: [] };
+    const read = (plans: ErpProject[]) => evaluateErpProject(current, (key) => store.listSnapshots(key), plans, 1_700_000_010).workOrderReadiness[0]!;
+    const blocked = read([current, competing]);
+    assert.equal(blocked.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.deepEqual(blocked.unresolvedNeedIds, ["target_need"]);
+    assert.match(blocked.reason, /Reservations record player intent; they do not lock or prove possession/);
+    const conflictedProgress = evaluateErpProject(current, (key) => store.listSnapshots(key), [current, competing], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(conflictedProgress.linkedNeedState, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "progress must not say a linked need is independently met while another saved reservation overlaps it");
+    assert.equal(conflictedProgress.reconciliation, "RESOURCE_ALLOCATION_REQUIRES_REVIEW");
+    assert.deepEqual(conflictedProgress.allocationConflictNeedIds, ["target_need"]);
+
+    const ownReservation: ErpProject = { ...current, reservations: [{ stableId: "own_hold", needId: targetNeed.stableId, sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const enoughForBoth: ErpProject = { ...competing, reservations: [{ ...competing.reservations[0]!, quantity: 1 }] };
+    const ready = evaluateErpProject(ownReservation, (key) => store.listSnapshots(key), [ownReservation, enoughForBoth], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(ready.state, "READY_FOR_PLAYER_REVIEW", "own reserved units plus unreserved observed supply meet the linked need");
+
+    const secondNeed = { ...targetNeed, stableId: "second_target_need", label: "More stone for the same work order", requiredQuantity: 2 };
+    const duplicateNeeds: ErpProject = { ...current, needs: [targetNeed, secondNeed], workOrders: [{ ...current.workOrders[0]!, resourceNeedIds: [targetNeed.stableId, secondNeed.stableId] }] };
+    const duplicateNoReservation = evaluateErpProject(duplicateNeeds, (key) => store.listSnapshots(key), [duplicateNeeds], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(duplicateNoReservation.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "two linked needs cannot each count the same observed stack independently");
+    assert.deepEqual(duplicateNoReservation.unresolvedNeedIds, ["second_target_need", "target_need"]);
+
+    const duplicateWithExternalReservation = evaluateErpProject(duplicateNeeds, (key) => store.listSnapshots(key), [duplicateNeeds, competing], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(duplicateWithExternalReservation.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "combined linked needs and another saved reservation cannot exceed the observed lower bound");
+
+    const sufficientDuplicates: ErpProject = { ...duplicateNeeds, needs: [targetNeed, { ...secondNeed, requiredQuantity: 1 }] };
+    const sufficient = evaluateErpProject(sufficientDuplicates, (key) => store.listSnapshots(key), [sufficientDuplicates], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(sufficient.state, "READY_FOR_PLAYER_REVIEW", "aggregated linked requirements within the observed amount remain reviewable");
+
+    const unrelatedHold = { ...targetNeed, stableId: "other_need_in_same_project", label: "Separate reservation", requiredQuantity: 1 };
+    const sameProjectHold: ErpProject = { ...current, needs: [targetNeed, unrelatedHold], reservations: [{ stableId: "other_hold", needId: unrelatedHold.stableId, sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE", createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const sameProjectBlocked = evaluateErpProject(sameProjectHold, (key) => store.listSnapshots(key), [sameProjectHold], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(sameProjectBlocked.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "an unlinked reservation in the same project still competes for the source quantity");
+
+    const ambiguousNeed = { ...targetNeed, stableId: "base_target_need", kind: "ITEM_ID" as const, resourceKey: "159", requiredQuantity: 1 };
+    const overlappingNeeds: ErpProject = { ...current, needs: [targetNeed, ambiguousNeed], workOrders: [{ ...current.workOrders[0]!, resourceNeedIds: [targetNeed.stableId, ambiguousNeed.stableId] }] };
+    const ambiguous = evaluateErpProject(overlappingNeeds, (key) => store.listSnapshots(key), [overlappingNeeds], 1_700_000_010).workOrderReadiness[0]!;
+    assert.equal(ambiguous.state, "RESOURCE_ALLOCATION_REQUIRES_REVIEW", "base-item and exact-variant needs are ambiguous even without reservations");
+  } finally { store.close(); }
+});
+
+test("gather and purchase work orders surface only complete observed item gaps as manual next steps", () => {
+  const complete = seedStore({ bank: { containers: [] } });
+  try {
+    const identityKey = complete.identityKey;
+    const itemNeed = { stableId: "need_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 6, sourceIdentityKey: identityKey };
+    const make = (kind: "GATHER" | "PURCHASE", needs: ErpProject["needs"] = [itemNeed]): ErpProject => ({
+      ...project(identityKey), needs,
+      reservations: [],
+      workOrders: [{ stableId: `step_${kind}`, kind, status: "PLANNED", title: `${kind} the missing item`, resourceNeedIds: needs.map((need) => need.stableId), dependsOn: [] }],
+    });
+    for (const kind of ["GATHER", "PURCHASE"] as const) {
+      const readiness = evaluateErpProject(make(kind), (key) => complete.store.listSnapshots(key), [make(kind)], 1_700_000_010).workOrderReadiness[0]!;
+      assert.equal(readiness.state, "MANUAL_SUPPLY_STEP_RECOMMENDED");
+      assert.deepEqual(readiness.actionTargetNeedIds, ["need_item"]);
+      assert.match(readiness.reason, /does not establish a gathering route, purchase availability, price, or action completion/);
+    }
+    const gold = { stableId: "need_gold", kind: "GOLD_COPPER" as const, resourceKey: "copper", label: "Purchase budget", requiredQuantity: 7000, sourceIdentityKey: identityKey };
+    const purchaseWithInsufficientBudget = make("PURCHASE", [itemNeed, gold]);
+    assert.equal(evaluateErpProject(purchaseWithInsufficientBudget, (key) => complete.store.listSnapshots(key), [purchaseWithInsufficientBudget], 1_700_000_010).workOrderReadiness[0]?.state, "OBSERVED_RESOURCE_SHORTFALL", "an item procurement step does not bypass a linked observed gold shortfall");
+  } finally { complete.store.close(); }
+
+  const incomplete = seedStore();
+  try {
+    const itemNeed = { stableId: "need_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 6, sourceIdentityKey: incomplete.identityKey };
+    const gather = { ...project(incomplete.identityKey), needs: [itemNeed], reservations: [], workOrders: [{ stableId: "gather", kind: "GATHER" as const, status: "PLANNED" as const, title: "Gather stone", resourceNeedIds: [itemNeed.stableId], dependsOn: [] }] };
+    assert.equal(evaluateErpProject(gather, (key) => incomplete.store.listSnapshots(key), [gather], 1_700_000_010).workOrderReadiness[0]?.state, "WAITING_FOR_EVIDENCE", "unknown bank evidence means the system cannot call this a confirmed shortfall or supply action target");
+  } finally { incomplete.store.close(); }
+});
+
+test("work-order progress separates player completion, observed state, changed evidence, and unresolved data", () => {
+  const options = (generatedAt: number, quantity: number) => ({ generatedAt, character: { name: "Crafter", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 }, bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] } });
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport(options(1_700_000_000, 8)));
+    const planned = { ...project(imported.character.identityKey), workOrders: [{ ...project(imported.character.identityKey).workOrders[0]!, status: "IN_PROGRESS" as const }] };
+    const current = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(current.recordedStatus, "IN_PROGRESS");
+    assert.equal(current.completionRecorded, false);
+    assert.equal(current.linkedNeedState, "ALL_CURRENTLY_MET");
+    assert.equal(current.observationChange, "UNKNOWN", "one capture establishes current stock but no before/after change");
+    assert.equal(current.reconciliation, "CURRENT_LINKED_NEEDS_MET", "resource condition does not claim that the gather task happened");
+
+    store.importSnapshot(buildWowSyncExport(options(1_700_000_100, 7)));
+    const changed = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_110).workOrderProgress[0]!;
+    assert.equal(changed.observationChange, "CHANGED");
+    assert.equal(changed.reconciliation, "OBSERVATION_CHANGED_CAUSE_UNKNOWN");
+    assert.match(changed.reason, /does not establish whether this work order caused the change/);
+
+    const completed = { ...planned, workOrders: planned.workOrders.map((order) => ({ ...order, status: "COMPLETED" as const, completionNote: "Player recorded manual completion." })) };
+    const declared = evaluateErpProject(completed, (key) => store.listSnapshots(key), [completed], 1_700_000_110).workOrderProgress[0]!;
+    assert.equal(declared.completionRecorded, true);
+    assert.equal(declared.reconciliation, "PLAYER_RECORDED_COMPLETE", "manual completion remains separate from the observed resource change");
+
+    store.importSnapshot(buildWowSyncExport(options(1_700_000_200, 3)));
+    const currentShortfall = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_210).workOrderProgress[0]!;
+    assert.equal(currentShortfall.linkedNeedState, "CURRENT_SHORTFALL");
+    assert.equal(currentShortfall.observationChange, "CHANGED");
+    assert.equal(currentShortfall.reconciliation, "CURRENT_LINKED_NEEDS_UNMET", "the current shortfall takes precedence while change provenance stays separately visible");
+    assert.deepEqual(currentShortfall.shortfallNeedIds, ["need_stone"]);
+
+    const missingStore = new SqliteSnapshotStore(":memory:");
+    try {
+      const missing = missingStore.importSnapshot(buildWowSyncExport(options(1_700_000_000, 0)));
+      const shortPlan = { ...project(missing.character.identityKey), workOrders: [{ ...project(missing.character.identityKey).workOrders[0]!, status: "COMPLETED" as const, completionNote: "Player says complete." }] };
+      const conflict = evaluateErpProject(shortPlan, (key) => missingStore.listSnapshots(key), [shortPlan], 1_700_000_010).workOrderProgress[0]!;
+      assert.equal(conflict.linkedNeedState, "CURRENT_SHORTFALL");
+      assert.equal(conflict.reconciliation, "COMPLETION_CONFLICTS_WITH_LINKED_SHORTFALL");
+      assert.match(conflict.reason, /does not prove the task failed or identify the cause/);
+      const stale = evaluateErpProject(planned, (key) => store.listSnapshots(key), [planned], 1_700_000_000 + 4 * 86400).workOrderProgress[0]!;
+      assert.equal(stale.linkedNeedState, "STALE_OR_UNKNOWN");
+      assert.equal(stale.reconciliation, "INSUFFICIENT_EVIDENCE");
+    } finally { missingStore.close(); }
+  } finally { store.close(); }
+});
+
+test("Forever profession observations resolve assigned project goals without silently completing tasks", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const observedAt = 1_800_000_000;
+  try {
+    const imported = store.importSnapshot(buildWowSyncExport({
+      generatedAt: observedAt,
+      character: { name: "Rordin", surname: "Longbraid", realm: "Classic Beta PvP 2", class: "Warrior", level: 6, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" },
+      professions: { observedAt, entries: [{ name: "Mining", skill: 3, maxSkill: 75 }, { name: "Blacksmithing", skill: 1, maxSkill: 75 }] },
+      bank: { unknown: true },
+    }));
+    const identityKey = imported.character.identityKey;
+    const needs: ErpProject["needs"] = [
+      { stableId: "mining_profession", kind: "PROFESSION", resourceKey: "Mining", label: "Mining skill at least 1", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "blacksmithing_profession", kind: "PROFESSION", resourceKey: "Blacksmithing", label: "Blacksmithing skill at least 1", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "recipe_unknown", kind: "RECIPE", resourceKey: "unknown-recipe", label: "Exact Forever recipe", requiredQuantity: 1, destinationIdentityKey: identityKey },
+      { stableId: "ore_unknown", kind: "ITEM_ID", resourceKey: "2770", label: "Copper Ore", requiredQuantity: 1, destinationIdentityKey: identityKey },
+    ];
+    const plan: ErpProject = {
+      stableId: "rordin-profession-evidence", version: "forever", title: "Rordin skills", status: "ACTIVE", priority: 3,
+      createdAt: observedAt, updatedAt: observedAt, revision: 2, needs, reservations: [],
+      workOrders: [
+        { stableId: "review", kind: "INVESTIGATE", status: "IN_PROGRESS", title: "Review latest evidence", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: identityKey },
+        { stableId: "mine", kind: "OTHER", status: "PLANNED", title: "Learn Mining", resourceNeedIds: ["mining_profession"], dependsOn: ["review"], assignedIdentityKey: identityKey },
+        { stableId: "smith", kind: "OTHER", status: "PLANNED", title: "Learn Blacksmithing", resourceNeedIds: ["blacksmithing_profession"], dependsOn: ["review"], assignedIdentityKey: identityKey },
+      ],
+    };
+    const evaluation = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], observedAt + 30);
+    assert.deepEqual(evaluation.needEvidence.slice(0, 2).map((entry) => [entry.state, entry.observedQuantity, entry.sourceIdentityKey]), [
+      ["COVERED_BY_OBSERVED", 3, identityKey], ["COVERED_BY_OBSERVED", 1, identityKey],
+    ], "profession needs use the explicitly intended character when legacy plans omit sourceIdentityKey");
+    assert.equal(evaluation.needEvidence.find((entry) => entry.needId === "ore_unknown")?.state, "UNKNOWN", "destination identity never scopes inventory ownership");
+    assert.equal(evaluation.needEvidence.find((entry) => entry.needId === "recipe_unknown")?.state, "UNKNOWN", "observed profession skills do not imply recipe knowledge");
+    const mining = evaluation.workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(mining.professionGoalStateReview?.state, "CURRENTLY_MET");
+    assert.equal(mining.professionGoalStateReview?.proposalReadiness, "REVIEW_DEPENDENCIES_FIRST");
+    assert.equal(mining.professionGoalStateReview?.suggestedStatus, undefined);
+    assert.equal(mining.recordedStatus, "PLANNED", "evidence projection cannot mutate persisted status");
+    assert.equal(mining.professionGoalStateReview?.requiresDashboardApproval, true);
+    assert.match(mining.professionGoalStateReview?.reason ?? "", /does not establish when or how the professions were learned/);
+    assert.equal(plan.workOrders.find((order) => order.stableId === "mine")?.status, "PLANNED");
+
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], observedAt + 4 * 86400).workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(stale.professionGoalStateReview?.state, "UNKNOWN");
+    assert.equal(stale.professionGoalStateReview?.suggestedStatus, undefined, "stale skill evidence cannot propose completion");
+    const alreadyCompletedPlan = { ...plan, workOrders: plan.workOrders.map((order) => order.stableId === "mine" ? { ...order, status: "COMPLETED" as const } : order) };
+    const alreadyCompleted = evaluateErpProject(alreadyCompletedPlan, (key) => store.listSnapshots(key), [alreadyCompletedPlan], observedAt + 30).workOrderProgress.find((entry) => entry.workOrderId === "mine")!;
+    assert.equal(alreadyCompleted.professionGoalStateReview?.state, "CURRENTLY_MET");
+    assert.equal(alreadyCompleted.professionGoalStateReview?.proposalReadiness, "NO_STATUS_SUGGESTION", "terminal work orders do not receive duplicate completion suggestions");
+    assert.equal(alreadyCompleted.professionGoalStateReview?.suggestedStatus, undefined);
+  } finally { store.close(); }
+});
+
+test("transfer reconciliation compares explicitly planned source and destination changes without claiming causality", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_100_000;
+  const capture = (name: string, realm: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt,
+    character: { name, realm, clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] },
+    bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Sender", "Realm A", 2, baseAt)).character.identityKey;
+    const destination = store.importSnapshot(capture("Receiver", "Realm A", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Sender", "Realm A", 1, baseAt + 100));
+    store.importSnapshot(capture("Receiver", "Realm A", 1, baseAt + 100));
+    const need = { stableId: "mail_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source, destinationIdentityKey: destination };
+    const order = { stableId: "mail_step", kind: "TRANSFER" as const, status: "WAITING_FOR_EVIDENCE" as const, title: "Review item movement", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: destination };
+    const plan = { ...project(source), needs: [need], reservations: [], workOrders: [order] };
+    const read = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110);
+    const review = read.workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    const sourceBagChange = review?.source.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    const destinationBagChange = review?.destination.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    assert.deepEqual(sourceBagChange && [sourceBagChange.previousQuantity, sourceBagChange.currentQuantity, sourceBagChange.delta], [2, 1, -1]);
+    assert.deepEqual(destinationBagChange && [destinationBagChange.previousQuantity, destinationBagChange.currentQuantity, destinationBagChange.delta], [0, 1, 1]);
+    assert.equal(sourceBagChange?.previousObservedAt, baseAt);
+    assert.equal(destinationBagChange?.currentObservedAt, baseAt + 100);
+    assert.match(review?.reason ?? "", /do not establish that the changes are related or that the planned transfer occurred/);
+    const broadIdPlan = { ...plan, needs: [{ ...need, kind: "ITEM_ID" as const, resourceKey: "159" }] };
+    const broadIdReview = evaluateErpProject(broadIdPlan, (key) => store.listSnapshots(key), [broadIdPlan], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.match(broadIdReview?.reason ?? "", /group all observed itemString variants.*do not prove the same exact variant changed/);
+    assert.equal(evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "EVIDENCE_UNKNOWN", "stale pairs do not produce a paired change conclusion");
+    const conflicting = { ...plan, workOrders: [{ ...order, sourceIdentityKey: destination }] };
+    assert.equal(evaluateErpProject(conflicting, (key) => store.listSnapshots(key), [conflicting], baseAt + 110).workOrderProgress[0]?.transferObservationReviews?.[0]?.state, "IDENTITY_CONFLICT", "order source intent conflicting with its need is surfaced rather than silently reconciled");
+  } finally { store.close(); }
+});
+
+test("provisioning progress pairs the planned source and recipient without asserting access or movement", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_150_000;
+  const capture = (name: string, realm: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt,
+    character: { name, realm, clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: 5000 },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] },
+    bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Provider", "Realm A", 2, baseAt)).character.identityKey;
+    const recipient = store.importSnapshot(capture("Provisioned", "Realm A", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Provider", "Realm A", 1, baseAt + 100));
+    store.importSnapshot(capture("Provisioned", "Realm A", 1, baseAt + 100));
+    const need = { stableId: "provision_item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: source, destinationIdentityKey: recipient };
+    const order = { stableId: "provision_step", kind: "PROVISION" as const, status: "PLANNED" as const, title: "Review provisioning observations", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: recipient };
+    const plan = { ...project(source), needs: [need], reservations: [], workOrders: [order] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]!;
+    const review = progress.provisioningObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0) && [review.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.previousQuantity, review.source.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.currentQuantity], [2, 1]);
+    assert.deepEqual(review?.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0) && [review.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.previousQuantity, review.destination.comparisons.find((entry) => entry.section === "bags" && entry.delta !== 0)?.currentQuantity], [0, 1]);
+    assert.match(review?.reason ?? "", /do not establish that the changes are related or that the planned provisioning occurred/);
+    assert.equal(progress.completionRecorded, false);
+    assert.equal(progress.transferObservationReviews, undefined, "provisioning evidence remains separately named from transfer evidence");
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(stale?.state, "EVIDENCE_UNKNOWN", "stale paired observations do not become current provisioning evidence");
+    assert.equal(stale?.source.freshness, "stale");
+  } finally { store.close(); }
+});
+
+test("an explicit provisioning source may be an alternate lead to the need's original buyer source intent", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_155_000;
+  const capture = (name: string, quantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt, character: { name, realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927" },
+    bags: { containers: [{ id: 0, capacity: 16, items: quantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: quantity }] : [] }] }, bank: { containers: [] },
+  });
+  try {
+    const source = store.importSnapshot(capture("Provider", 2, baseAt)).character.identityKey;
+    const buyer = store.importSnapshot(capture("Buyer", 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture("Provider", 1, baseAt + 100));
+    store.importSnapshot(capture("Buyer", 1, baseAt + 100));
+    const need = { stableId: "buyer-item", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, sourceIdentityKey: buyer, destinationIdentityKey: buyer };
+    const order = { stableId: "source-review", kind: "PROVISION" as const, status: "PLANNED" as const, title: "Review source lead", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: source, destinationIdentityKey: buyer };
+    const plan = { ...project(buyer), needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(review?.state, "BOTH_SIDES_CHANGED", "the explicit work-order source is evaluated as the selected alternative");
+    assert.equal(review?.sourceIntentIdentityKey, buyer, "the purchase need's original source intent remains visible");
+    assert.match(review?.reason ?? "", /keeps its original source intent; this PROVISION review compares the separately selected work-order source as an alternative/);
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN", "paired deltas do not establish a transfer or its cause");
+  } finally { store.close(); }
+});
+
+test("purchase progress pairs buyer gold and linked item changes while keeping purchase causality unknown", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const baseAt = 1_700_200_000;
+  const capture = (gold: number, itemQuantity: number, generatedAt: number) => buildWowSyncExport({
+    generatedAt, character: { name: "Buyer", realm: "Realm A", clientVersion: "1.15.7", clientBuild: "60927", moneyCopper: gold },
+    bags: { containers: [{ id: 0, capacity: 16, items: itemQuantity ? [{ itemRef: ITEM, name: "Rough Stone", qty: itemQuantity }] : [] }] }, bank: { containers: [] },
+  });
+  try {
+    const buyer = store.importSnapshot(capture(1200, 0, baseAt)).character.identityKey;
+    store.importSnapshot(capture(950, 2, baseAt + 100));
+    const need = { stableId: "purchase_target", kind: "ITEM_REF" as const, resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 2, sourceIdentityKey: buyer, destinationIdentityKey: buyer };
+    const order = { stableId: "purchase_item", kind: "PURCHASE" as const, status: "IN_PROGRESS" as const, title: "Review manual procurement", assignedIdentityKey: buyer, resourceNeedIds: [need.stableId], dependsOn: [], procurementPlan: { targetNeedId: need.stableId, spendingCeilingCopper: 500 } };
+    const plan: ErpProject = { ...project(buyer), needs: [need], reservations: [], workOrders: [order] };
+    const progress = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 110).workOrderProgress[0]!;
+    const review = progress.procurementObservationReview;
+    assert.equal(review?.buyerIdentityKey, buyer);
+    assert.equal(review?.state, "GOLD_DECREASED");
+    assert.equal(review?.freshness, "recent");
+    assert.equal(review?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(review?.comparison && [review.comparison.previousQuantity, review.comparison.currentQuantity, review.comparison.delta], [1200, 950, -250]);
+    assert.equal(review?.targetItem?.needId, need.stableId);
+    assert.equal(review?.targetItem?.resourceKey, ITEM);
+    assert.equal(review?.targetItem?.state, "ITEM_CHANGED");
+    assert.deepEqual(review?.targetItem?.comparisons.filter((entry) => entry.delta !== 0).map((entry) => [entry.section, entry.previousQuantity, entry.currentQuantity, entry.delta]), [["bags", 0, 2, 2]]);
+    assert.ok(progress.changedNeedIds.includes(need.stableId), "the linked item appearance remains separately visible");
+    assert.equal(progress.completionRecorded, false, "paired deltas do not complete a manual purchase task");
+    assert.match(review?.reason ?? "", /does not establish that a purchase occurred/);
+    const stale = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], baseAt + 5 * 86400).workOrderProgress[0]?.procurementObservationReview;
+    assert.equal(stale?.state, "GOLD_DECREASED", "the historical change remains visible");
+    assert.equal(stale?.freshness, "stale", "historical comparison cannot appear current");
+    assert.equal(stale?.targetItem?.state, "ITEM_CHANGED", "historical item appearance remains visible without being current");
+    assert.equal(stale?.targetItem?.freshness, "stale");
+  } finally { store.close(); }
+});
+
+test("shared-owner transfer need cannot be overridden by a character source on the work order", () => {
+  const { store, identityKey } = seedRetailCurrency();
+  try {
+    const need = { stableId: "warband_item", kind: "ITEM_REF" as const, resourceKey: "item:159:variant-a", label: "Exact item", requiredQuantity: 1, sourceOwnerKey: ownerKey(warbandOwner()) };
+    const order = { stableId: "retrieve", kind: "TRANSFER" as const, status: "PLANNED" as const, title: "Review shared storage manually", resourceNeedIds: [need.stableId], dependsOn: [], sourceIdentityKey: identityKey };
+    const plan: ErpProject = { ...project(identityKey), version: "retail", needs: [need], reservations: [], workOrders: [order] };
+    const review = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]?.transferObservationReviews?.[0];
+    assert.equal(review?.state, "IDENTITY_CONFLICT");
+    assert.equal(review?.source.identityKey, undefined, "the work-order character is not substituted for the owner source");
+    assert.deepEqual(review?.source.comparisons, [], "no character deltas are presented as shared-owner deltas");
+    assert.match(review?.reason ?? "", /shared-storage owner conflicts.*character source/);
+    const provisioning = { ...order, stableId: "provision", kind: "PROVISION" as const };
+    const provisioningPlan = { ...plan, workOrders: [provisioning] };
+    const provisioningReview = evaluateErpProject(provisioningPlan, (key) => store.listSnapshots(key), [provisioningPlan], 1_700_000_010).workOrderProgress[0]?.provisioningObservationReviews?.[0];
+    assert.equal(provisioningReview?.state, "IDENTITY_CONFLICT");
+    assert.equal(provisioningReview?.source.identityKey, undefined, "the work-order character is not substituted for the shared owner during provisioning review");
+    assert.deepEqual(provisioningReview?.source.comparisons, []);
+    assert.match(provisioningReview?.reason ?? "", /shared-storage owner conflicts.*character source/);
+  } finally { store.close(); }
+});
+
+test("progress preserves evidence-quality and shortfall precedence over ambiguous linked item scopes", () => {
+  const makePlan = (identityKey: string): ErpProject => {
+    const needs: ErpProject["needs"] = [
+      { stableId: "base", kind: "ITEM_ID", resourceKey: "159", label: "Any Rough Stone variant", requiredQuantity: 5, sourceIdentityKey: identityKey },
+      { stableId: "exact", kind: "ITEM_REF", resourceKey: ITEM, label: "Exact Rough Stone variant", requiredQuantity: 3, sourceIdentityKey: identityKey },
+    ];
+    return { ...project(identityKey), needs, reservations: [], workOrders: [{ stableId: "inspect", kind: "INVESTIGATE", status: "IN_PROGRESS", title: "Review linked items", resourceNeedIds: ["base", "exact"], dependsOn: [] }] };
+  };
+  const unknown = seedStore({ bags: { unknown: true }, bank: { unknown: true } });
+  try {
+    const plan = makePlan(unknown.identityKey);
+    const progress = evaluateErpProject(plan, (key) => unknown.store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "STALE_OR_UNKNOWN");
+    assert.equal(progress.reconciliation, "INSUFFICIENT_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, [], "unobserved supplies do not become an allocation conflict fact");
+  } finally { unknown.store.close(); }
+
+  const stale = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    const plan = makePlan(stale.identityKey);
+    const progress = evaluateErpProject(plan, (key) => stale.store.listSnapshots(key), [plan], 1_700_000_000 + 5 * 86400).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "STALE_OR_UNKNOWN");
+    assert.equal(progress.reconciliation, "INSUFFICIENT_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, []);
+  } finally { stale.store.close(); }
+
+  const shortfall = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    const plan = makePlan(shortfall.identityKey);
+    const progress = evaluateErpProject(plan, (key) => shortfall.store.listSnapshots(key), [plan], 1_700_000_010).workOrderProgress[0]!;
+    assert.equal(progress.linkedNeedState, "MIXED_CURRENT_EVIDENCE", "a current exact-variant lower bound can be covered while the base-item target has a confirmed shortfall");
+    assert.equal(progress.reconciliation, "MIXED_LINKED_EVIDENCE");
+    assert.deepEqual(progress.allocationConflictNeedIds, [], "a real shortfall takes precedence over a static ambiguity claim");
+  } finally { shortfall.store.close(); }
+});
+
+test("resource commitment summary aggregates plan asks by explicit source but reports observed stock once", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const makeProject = (stableId: string, needId: string, quantity: number, status: ErpProject["status"] = "ACTIVE"): ErpProject => ({
+      ...project(identityKey), stableId, status,
+      needs: [{ stableId: needId, kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: quantity, sourceIdentityKey: identityKey }],
+      reservations: [], workOrders: [],
+    });
+    const first = { ...makeProject("plan_a", "need_a", 3), reservations: [{ stableId: "hold_a", needId: "need_a", sourceIdentityKey: identityKey, quantity: 2, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }] };
+    const second = makeProject("plan_b", "need_b", 2);
+    const variant = { ...makeProject("plan_variant", "need_variant", 1), needs: [{ stableId: "need_variant", kind: "ITEM_REF" as const, resourceKey: "item:159:123", label: "Rough Stone variant", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ stableId: "hold_variant", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_000 }, { stableId: "hold_variant_second", needId: "need_variant", sourceIdentityKey: identityKey, quantity: 1, status: "ACTIVE" as const, createdAt: 1_700_000_001, updatedAt: 1_700_000_001 }] };
+    const broad = { ...makeProject("plan_base_id", "need_base_id", 1), needs: [{ stableId: "need_base_id", kind: "ITEM_ID" as const, resourceKey: "159", label: "Rough Stone base ID", requiredQuantity: 1, sourceIdentityKey: identityKey }] };
+    const unknownA = { ...makeProject("unknown_a", "unknown_need_a", 4), needs: [{ stableId: "unknown_need_a", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source A", requiredQuantity: 4 }] };
+    const unknownB = { ...makeProject("unknown_b", "unknown_need_b", 5), needs: [{ stableId: "unknown_need_b", kind: "ITEM_REF" as const, resourceKey: "item:999", label: "Unknown source B", requiredQuantity: 5 }] };
+    const plans = [first, second, variant, broad, unknownA, unknownB];
+    const views = plans.map((plan) => ({ ...evaluateErpProject(plan, (key) => store.listSnapshots(key), plans, 1_700_000_010), history: [], historyEventCount: 0, historyTruncated: false }));
+    const summary = buildErpResourceCommitmentSummary(views);
+    const exact = summary.items.find((line) => line.sourceIdentityKey === identityKey && line.kind === "ITEM_REF" && line.resourceKey === ITEM)!;
+    assert.equal(exact.activeNeedCount, 2);
+    assert.equal(exact.activeNeedQuantity, 5, "planned quantities aggregate across active projects");
+    assert.equal(exact.observedQuantity, 4, "the same character observation appears once, not once per project");
+    assert.equal(exact.activeReservationQuantity, 2, "reservation intent stays separate from planned requirement totals");
+    assert.equal(exact.availableObservedLowerBound, 2);
+    assert.deepEqual(exact.overlappingResourceKeys, ["159"], "an exact base itemString overlaps only the broader ITEM_ID scope, not another exact variant");
+    const exactVariant = summary.items.find((line) => line.resourceKey === "item:159:123")!;
+    assert.deepEqual(exactVariant.overlappingResourceKeys, ["159"]);
+    assert.equal(exactVariant.activeReservationQuantity, 2);
+    const broadItem = summary.items.find((line) => line.kind === "ITEM_ID" && line.resourceKey === "159")!;
+    assert.equal(broadItem.activeReservationQuantity, 0);
+    assert.equal(broadItem.overlappingReservationQuantity, 4, "a base-ID line calls out reservations on matching exact-itemString scopes");
+    assert.deepEqual(broadItem.overlappingReservations.map((entry) => [entry.projectId, entry.needId, entry.reservationId, entry.resourceKey, entry.quantity, entry.ambiguous]), [["plan_a", "need_a", "hold_a", ITEM, 2, true], ["plan_variant", "need_variant", "hold_variant", "item:159:123", 1, true], ["plan_variant", "need_variant", "hold_variant_second", "item:159:123", 1, true]], "the line identifies each active reservation and project behind the overlap without combining distinct item identities");
+    assert.deepEqual(exact.overlappingReservations, [], "an exact itemString is not considered ambiguous with a different exact variant");
+    assert.equal(summary.linesWithReservations, 3);
+    const unknownSourceLines = summary.items.filter((line) => line.sourceScope === "UNKNOWN_SOURCE" && line.resourceKey === "item:999");
+    assert.equal(unknownSourceLines.length, 2, "unsourced plans are not merged as though they share a source");
+    const manyUnknown = Array.from({ length: 105 }, (_, index) => ({
+      ...makeProject(`unscoped_${index}`, `unscoped_need_${index}`, 1),
+      needs: [{ stableId: `unscoped_need_${index}`, kind: "ITEM_REF" as const, resourceKey: `item:${10000 + index}`, label: `Unknown ${index}`, requiredQuantity: 1 }],
+    }));
+    const manyViews = manyUnknown.map((plan) => ({ ...evaluateErpProject(plan, (key) => store.listSnapshots(key), manyUnknown, 1_700_000_010), history: [], historyEventCount: 0, historyTruncated: false }));
+    const bounded = buildErpResourceCommitmentSummary(manyViews);
+    assert.equal(bounded.returnedCount, 100);
+    assert.equal(bounded.totalCount, 105);
+    assert.equal(bounded.unknownSourceLines, 105, "whole-set summary counters are exact even when the returned rows are truncated");
+    assert.equal(bounded.truncated, true);
+  } finally { store.close(); }
+});
+
+test("project source screening finds same-version observed item holders but preserves access and transfer as unknown", () => {
+  const { store, identityKey: recipientIdentity } = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    const otherRaw = buildWowSyncExport({ generatedAt: 1_700_000_010, character: { name: "Supply Alt", realm: "Other Realm", clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 2 }, { itemRef: "item:159:42", name: "Rough Stone variant fixture", qty: 1 }] }] }, bank: { containers: [] } });
+    store.importSnapshot(otherRaw);
+    const retailRaw = buildWowSyncExport({ generatedAt: 1_700_000_020, character: { name: "Retail Alt", realm: "Other Realm", clientFamily: "Retail", clientVersion: "12.1.0" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 99 }] }] }, bank: { containers: [] } });
+    store.importSnapshot(retailRaw);
+    const plan: ErpProject = { ...project(recipientIdentity), needs: [{ stableId: "gift_stone", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, destinationIdentityKey: recipientIdentity }, { stableId: "gift_stone_base", kind: "ITEM_ID", resourceKey: "159", label: "Rough Stone base search", requiredQuantity: 1, destinationIdentityKey: recipientIdentity }], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_030, undefined, undefined, [...store.listCharacters("classic-era"), ...store.listCharacters("retail")]);
+    const screen = view.resourceSourceScreens[0]!;
+    assert.equal(screen.needId, "gift_stone");
+    assert.equal(screen.scannedCharacterCount, 1, "the recipient is excluded and other versions are never scanned");
+    assert.equal(screen.unresolvedCharacterCount, 0, "both source bags and bank were completely observed in this fixture");
+    assert.equal(screen.candidates.length, 1);
+    assert.equal(screen.candidateCount, 1);
+    assert.equal(screen.candidatesTruncated, false);
+    assert.equal(screen.candidates[0]?.sourceName, "Supply Alt");
+    assert.equal(screen.candidates[0]?.sourceRealm, "Other Realm");
+    assert.equal(screen.candidates[0]?.state, "OBSERVED");
+    assert.equal(screen.candidates[0]?.observedQuantity, 2);
+    assert.deepEqual(screen.candidates[0]?.locations.map((location) => [location.section, location.state, location.quantity]), [["bags", "OBSERVED", 2], ["character bank", "OBSERVED", 0]]);
+    assert.deepEqual(screen.candidates[0]?.matchingItems.map((item) => [item.itemRef, item.section, item.state, item.quantity]), [[ITEM, "bags", "OBSERVED", 2]], "source leads preserve the exact observed itemString variant");
+    assert.equal(screen.candidates[0]?.accountMembership, "UNKNOWN");
+    assert.equal(screen.candidates[0]?.access, "UNKNOWN");
+    assert.equal(screen.candidates[0]?.transferability, "UNKNOWN");
+    const baseScreen = view.resourceSourceScreens.find((entry) => entry.needId === "gift_stone_base")!;
+    assert.equal(baseScreen.candidates[0]?.observedQuantity, 3);
+    assert.deepEqual(baseScreen.candidates[0]?.matchingItems.map((item) => item.itemRef), ["item:159", "item:159:42"], "base-item discovery preserves every exact matched variant and does not merge their identities");
+  } finally { store.close(); }
+});
+
+test("project source screening bounds candidate output while retaining exact candidate counts", () => {
+  const { store, identityKey: recipientIdentity } = seedStore({ generatedAt: 1_700_000_000, bank: { containers: [] } });
+  try {
+    for (let index = 0; index < 30; index++) store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_000_010 + index, character: { name: `Holder ${index}`, realm: `Realm ${index}`, clientVersion: "1.15.7", clientBuild: "60927" }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: ITEM, name: "Rough Stone", qty: 1 }] }] }, bank: { containers: [] } }));
+    const plan: ErpProject = { ...project(recipientIdentity), needs: [{ stableId: "many_sources", kind: "ITEM_REF", resourceKey: ITEM, label: "Rough Stone", requiredQuantity: 1, destinationIdentityKey: recipientIdentity }], reservations: [], workOrders: [] };
+    const view = evaluateErpProject(plan, (key) => store.listSnapshots(key), [plan], 1_700_000_100, undefined, undefined, store.listCharacters("classic-era"));
+    const screen = view.resourceSourceScreens[0]!;
+    assert.equal(screen.candidateCount, 30);
+    assert.equal(screen.candidates.length, 25);
+    assert.equal(screen.candidatesTruncated, true);
+  } finally { store.close(); }
+});
+
+test("validation rejects cross-version character references, unsupported assumptions, and unrecorded completion", () => {
+  const { store, identityKey } = seedStore();
+  try {
+    const valid = project(identityKey);
+    assert.throws(() => validateErpProject({ ...valid, version: "forever" }, (key) => store.getCharacter(key)?.version === "forever"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "INVALID_PROJECT_CHARACTER");
+    assert.throws(() => validateErpProject({ ...valid, status: "COMPLETED" }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "COMPLETION_EVIDENCE_REQUIRED");
+    validateErpProject({ ...valid, status: "COMPLETED", completionNote: "Observed the final planned state in game." }, (key) => store.getCharacter(key)?.version === "classic-era");
+    assert.throws(() => validateErpProject({ ...valid, workOrders: [{ ...valid.workOrders[0]!, status: "COMPLETED" }] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "COMPLETION_EVIDENCE_REQUIRED");
+    assert.throws(() => validateErpProject({ ...valid, workOrders: [{ ...valid.workOrders[0]!, dependsOn: ["unknown"] }] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "UNKNOWN_WORK_ORDER_DEPENDENCY");
+    assert.throws(() => validateErpProject({ ...valid, needs: [{ stableId: "recipe", kind: "RECIPE", resourceKey: "9007199254740993", label: "Unsafe recipe ID", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [], workOrders: [] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "INVALID_RECIPE_NEED");
+    assert.throws(() => validateErpProject({ ...valid, needs: [{ stableId: "profession", kind: "PROFESSION", resourceKey: "Mining", label: "Mining", requiredQuantity: 1, sourceIdentityKey: identityKey }], reservations: [{ ...valid.reservations[0]!, needId: "profession" }], workOrders: [] }, (key) => store.getCharacter(key)?.version === "classic-era"), (e: unknown) => e instanceof ErpProjectValidationError && e.code === "NON_QUANTIFIABLE_RESERVATION");
+  } finally { store.close(); }
+});

@@ -704,3 +704,40 @@ never deleted; no direct SQLite write). No ACTIVE validation demand remained.
 WoW evidence -> DEV SQLite -> explicit demand (API) -> DashboardReadModel.getAllocationReview
              -> read-only MCP get_allocation_review -> Secure MCP Tunnel -> ChatGPT
 ```
+
+## Feature-branch extension: persistent ERP planning
+
+The Forever development branch adds an additive planning layer documented in
+[`ERP_PLANNING.md`](ERP_PLANNING.md). It extends the existing evidence/read-model architecture with
+version-scoped project intent, resource needs, reservations, manual work orders, and append-only
+revision events. Detailed semantics and validation are implemented in
+`packages/core/src/erpProjects.ts`; persistence uses additive `erp_projects` and
+`erp_project_events` tables with optimistic revision checks and atomic event writes. AccountContext
+schema 9 carries a compact revision/history and work-order reconciliation summary, while REST, read-only MCP, and the Projects &
+Work Orders tab use the same core projection. The projection includes manual work-order readiness
+from explicit dependencies and linked resource needs. Current observed shortfalls, stale/unknown
+evidence, and incomplete prerequisites are distinguished from a manual-review state. A fresh linked
+observation change after player-marked completion triggers review without assigning causality or
+overwriting the saved completion state. Players can record planned/in-progress/waiting status in the
+Dashboard; these controls change plan state only.
+
+This branch supports evidence checks for exact itemString, declared base item ID, gold copper,
+exact-name profession skill, and explicitly character-scoped Retail currency IDs. Retail item needs
+may select an existing Warband or guild owner as a distinct storage source. Shared owner evidence is
+reused from the immutable journal projection; Warband remains installation-local, guild contents
+remain guild-owned, and observed location/quantity does not establish character access or a transfer
+route. Partial scans can prove positive lower bounds but not exhaustive shortfalls. Currency and
+recipe needs in other versions remain unsupported. Item changes compare only complete OBSERVED
+sections from adjacent snapshots of the same selected character and are explicitly non-causal.
+Reservations aggregate only across matching version/resource/explicit source scopes; unseen storage
+and overlapping base-item/variant reservations remain UNKNOWN. History captures only successful
+Dashboard intent revisions, never game outcomes; it retains all revisions but exposes the latest 50
+per project with count/truncation metadata. Completion requires player-entered notes. Nothing in
+this layer moves or uses game resources.
+
+This is feature-branch development, not a main-branch or persistent-DEV capability. It has automated
+coverage but no browser, DEV, game, or production validation. The broader ERP roadmap remains open
+for crafting feasibility, non-Retail currency and shared-storage evidence, account/access scope,
+procurement economics, persistent observation-reconciliation events, and evidence-based completion
+reconciliation. Exact Retail learned-recipe evidence is supported as a planning need; it does not
+establish current craftability, and other versions remain unsupported for recipe-state projection.

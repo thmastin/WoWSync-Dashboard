@@ -3,13 +3,15 @@
 This is the fixed onboarding entry point for WoWSync Dashboard and Azeroth ERP. Read this first;
 it routes you to the right document for whatever you're trying to do.
 
+For the Retail gear-allocation capability, start with [`RETAIL_GEAR_ALLOCATION.md`](RETAIL_GEAR_ALLOCATION.md).
+
 ## What WoWSync is, in plain language
 
 WoWSync Dashboard is a local-first tool that turns a World of Warcraft addon's text export into
 durable, queryable account history. A companion addon (GearExport, a separate repository) exports
 a character's current state as text; you paste or pipe that text in; WoWSync remembers it forever,
 alongside every earlier export, and lets you ask questions about it — through a web UI, or through
-ChatGPT via a read-only MCP connection.
+ChatGPT via the default read-only MCP retrieval connection; opt-in ERP planning tools can record player intent through local REST.
 
 Azeroth ERP is a small, deliberately narrow reasoning layer built on top of that durable history:
 given what the account actually holds and what you've explicitly said you want ("I want 450 of

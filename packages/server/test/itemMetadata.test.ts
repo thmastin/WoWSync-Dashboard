@@ -8,7 +8,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { SqliteSnapshotStore, buildLlmContext, type AccountContext } from "@wowsync-dashboard/core";
+import { SqliteSnapshotStore, type AccountContext } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
 import { LOOPBACK_HOSTNAMES, listenOnce } from "../src/net.ts";
 import { ITEM_INFO_NOTE, buildItemInfoLookup, describeItemInfo, itemInfoSuffix } from "../../web/src/itemMetadata.ts";
@@ -142,7 +142,6 @@ test("EXCLUSIONS UNCHANGED: with metadata, the shared-storage API, AccountFacts,
         shared: (await call("GET", `/api/shared-storage?now=${NOW}`)).text,
         facts: JSON.stringify(context.versions),
         context: JSON.stringify(context),
-        llm: JSON.stringify(buildLlmContext(context)),
         recent: (await call("GET", "/api/versions/retail/recent-changes")).text,
         characters: JSON.stringify(((await call("GET", "/api/versions/retail/characters")).body as { characters: unknown[] }).characters),
       };
@@ -154,7 +153,6 @@ test("EXCLUSIONS UNCHANGED: with metadata, the shared-storage API, AccountFacts,
   assert.equal(withMeta.shared, without.shared, "GET /api/shared-storage");
   assert.equal(withMeta.facts, without.facts, "AccountFacts");
   assert.equal(withMeta.context, without.context, "AccountContext");
-  assert.equal(withMeta.llm, without.llm, "LLM context");
   assert.equal(withMeta.recent, without.recent, "recent changes");
   assert.equal(withMeta.characters, without.characters, "character summaries");
   // And nothing metadata-shaped leaked into any of them.

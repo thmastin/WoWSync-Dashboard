@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "./app.ts";
+import { foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
+import { foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { createCaptureApp } from "./captureReceiver.ts";
 import {
   ConfigError,
@@ -76,6 +78,8 @@ const app = createApp(store, port, webDist, {
   // Loopback binds also get the Host/Origin guard (DNS-rebinding hardening), allowing the
   // bind's own address too. A deliberate wider bind serves whatever Host it is reached by.
   allowedHosts: allowedHostsFor(bind),
+  foreverKnowledgePath: foreverKnowledgePath(dbPath),
+  foreverPricesPath: foreverPricesPath(dbPath),
 });
 
 let server: http.Server | undefined;
@@ -115,9 +119,6 @@ if (typeof address === "string") {
 console.log(`Database: ${dbPath}`);
 if (!existsSync(webDist)) {
   console.log(`(Web UI not built yet — run "npm run build:web", or run "npm run dev:web" for the dev server.)`);
-}
-if (!process.env.OPENAI_API_KEY) {
-  console.log(`(Ask My Account is disabled — set OPENAI_API_KEY to enable it. See README.)`);
 }
 
 function shutdown() {

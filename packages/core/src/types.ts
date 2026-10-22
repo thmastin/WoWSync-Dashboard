@@ -8,6 +8,8 @@ export type SectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 
 export interface SectionStatus {
   state: SectionState;
+  /** Set when a LAST_SEEN section was carried forward from an earlier snapshot by read-time resolution. */
+  carriedFromSnapshotId?: number;
   completeness?: string;
   observedAt?: number;
   categories?: number;
@@ -24,6 +26,11 @@ export interface SectionStatus {
 export interface CharacterSection {
   status: SectionStatus;
   name?: string;
+  /** Optional Forever display surname. Never part of canonical identity. */
+  surname?: string;
+  /** API return tuple(s) supporting the surname candidate; semantics still need live build validation. */
+  surnameSource?: string;
+  race?: string;
   realm?: string;
   class?: string;
   level?: number;
@@ -37,6 +44,9 @@ export interface CharacterSection {
   clientBuild?: string;
   clientFamily?: string;
   interface?: string;
+  /** Forever only: the exporter's own compatibility claim (VERIFIED_PROFILE / UNVERIFIED_BUILD), verbatim. */
+  exporterCompatibility?: string;
+  exporterCompatibilityNote?: string;
 }
 
 export interface LocationSection {
@@ -54,6 +64,8 @@ export interface EquipmentSlot {
   empty: boolean;
   itemRef?: string;
   name?: string;
+  /** Observed source for an item name; omitted on legacy WOWSYNC v1 exports. */
+  nameSource?: string;
   itemLevel?: string;
   requiredLevel?: string;
   effectiveStats?: string;
@@ -269,7 +281,20 @@ export interface CapturedCharacterDomain<T = Record<string, unknown>> {
 
 export interface CapturedCharacterState {
   formatVersion: 1;
-  clientFamily: "Retail";
+  /**
+   * Retail: SavedVariables state domains (specialization, profession trees, recipes, reputation).
+   * Classic: Classic Era / TBC Anniversary legacy-UI observations (open-window recipes, quests,
+   * visible reputation rows, talents). The two families never share a validator or merge rule.
+   */
+  clientFamily: "Retail" | "Classic";
+  /** WoWSyncDB record GUID that produced this sidecar; guards carry-forward across recreated characters. */
+  sourceCharacterGuid?: string;
+  /** Classic only: "Classic:<projectID>:<interface>" profile stated by the collectors. */
+  clientProfile?: string;
+  /** Classic only: legacy quest log, objectives, and client-returned completed quest IDs. */
+  quests?: CapturedCharacterDomain;
+  /** Classic only: legacy talent trees and ranks. */
+  talents?: CapturedCharacterDomain;
   combatSpecialization?: CapturedCharacterDomain;
   professionSpecializations?: CapturedCharacterDomain;
   /** Retail profession recipe learned-state observations. Candidate coverage is intentionally partial/unknown. */
@@ -305,6 +330,8 @@ export interface ParsedSnapshot {
   itemMetadata?: ItemMetadataSection;
   /** Optional Retail-only sidecar. Its rows remain scoped to this snapshot and observed locations. */
   gearCandidates?: GearCandidatesSection;
+  /** Forever 70291 structured observation timestamps; never interpreted with Retail allocation rules. */
+  foreverGearObservation?: import("./foreverGearObservation.ts").ForeverStructuredObservation;
 }
 
 /** WoW version spaces. Data must never be aggregated across these. */

@@ -13,3 +13,14 @@ data/*.sqlite-shm
 /tools/tunnel-client/
 .DS_Store
 Thumbs.db
+
+# Local runtime and generated build artifacts
+.env
+.env.*
+data/*.sqlite
+data/*.sqlite-*
+data/backups/
+*.log
+tools/tunnel-client/*.exe
+packages/web/dist/
+*.tsbuildinfo

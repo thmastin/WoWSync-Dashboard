@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import {
   ApiError,
-  askAccount,
   deleteCharacter,
   describeApiError,
   fetchAccountContext,
@@ -99,7 +98,6 @@ test("valid JSON of the wrong shape is kind 'shape' for every fetcher - never a 
     ["fetchSnapshots", () => fetchSnapshots("k")],
     ["importExport", () => importExport("text")],
     ["fetchAccountContext", () => fetchAccountContext()],
-    ["askAccount", () => askAccount("q")],
     ["deleteCharacter", () => deleteCharacter("k")],
   ];
   for (const [name, call] of calls) {

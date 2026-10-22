@@ -1,7 +1,6 @@
 import type {
   AccountContext,
   AccountFacts,
-  AskAccountResponse,
   DeleteCharacterResult,
   DeleteSharedStorageOwnerResponse,
   ImportResult,
@@ -17,6 +16,36 @@ import type {
   ExplicitDemand,
 } from "./types.ts";
 import { ALLOCATION_RESOLUTIONS } from "./types.ts";
+import type { ErpFulfillmentTriage, ErpNeedFulfillmentOptionKind, ErpPortfolioFulfillmentReview, ErpPortfolioNextActionReview, ErpSourceFulfillmentReview, ErpProcurementBudgetPortfolioReview, ErpProcurementBuyerPortfolioReview, ErpNeedReviewSnapshot, ErpProject, ErpProjectDraft, ErpProjectView, ErpResourceCommitmentSummary, ErpWorkOrder } from "@wowsync-dashboard/core";
+import type { CharacterResolution, ForeverQuestObservation, ReadValue } from "@wowsync-dashboard/core";
+
+export interface GearCandidateEvidenceApi {
+  data?: { characters: Array<{ identity: { identityKey: string; name: string; realm: string }; captured: boolean; snapshot?: { snapshotId: number; observedAt: number; candidateObservedAt: number }; sidecar?: { completeness: string; rows: Array<{ observationState: string; candidateState: string; itemID: { state: string; value?: number }; itemString: { state: string; value?: string }; currentItemLevel: { state: string; value?: number }; baseEquipLocation: { state: string; value?: string }; locationType: { state: string; value?: string } }> } }> };
+  provenance: { state: string; warning?: string };
+}
+export interface GearAllocationApi {
+  status: string;
+  value?: { recommendation: string; candidate: { itemID?: number; itemLevel?: number; baseEquipLocation?: string; validity: string }; assessments: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; spec: { specID: number; name: string; role: string }; eligibility: string; suitability: string; primaryStatSuitability: string; comparison: string; deltaItemLevel?: number; reasons: string[]; currentSnapshotObservation: { state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; latestStoredObservation: { relationship: string; state: string; sourceSnapshotId?: number; observedAt?: number; specID?: number; reason: string }; retained: { state: "QUALIFIED"; snapshotId: number; observedAt: number; capture: number; revision: number } | { state: "UNKNOWN"; reason: string } }>; excludedRecipients: Array<{ identityKey: string; name: string; realm: string; reason: string }>; limitations: string[] };
+}
+export interface ForeverGearAllocationApi {
+  status: "FOUND" | "NOT_FOUND" | "AMBIGUOUS";
+  value?: {
+    data?: {
+      version: "forever";
+      ruleset: "forever-70291-allocation-screen-v2";
+      scope: { accountMembership: "UNKNOWN"; reason: string };
+      recipient: { identityKey: string; name: string; surname?: string; realm: string; observedAt?: number; freshness: string; class?: { value: string; provenance: string; observedAt?: number; source: string }; level?: { value: number; provenance: string; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: string }>; equipment: { state: string; source: string; observedAt?: number; freshness?: string; items: Array<{ slot: number; slotName: string; itemRef?: string; itemIdentity?: string; provenance: string }> } };
+      candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: unknown[]; unclassifiedItems: Array<{ name?: string; itemRef?: string; itemIdentity?: string; container?: number; slot?: number; quantity?: number; provenance: string; reason: string }> }>;
+      recipientEvaluations: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; itemRef?: string; recipients: Array<{ identityKey: string; name: string; surname?: string; realm: string; eligibility: string; armorProficiency: string; slotCompatibility: string; upgradeStatus: string; transferability: string; fit: string; reasons: string[] }> }>; assessments: Array<{ candidate: { itemRef?: string; name?: string; itemType?: string; itemSubType?: string; equipLocation?: string; container?: number; slot?: number; quantity?: number; bound?: boolean; binding?: { state: string; value?: boolean }; itemApiEvidence?: { semanticInterpretation: string; playerEquipability: { api: string; state: string; itemString: string; value?: boolean; observedAt?: number; freshness?: string; reason: string }; playerCanUseItem?: { state: string; value?: boolean; api: string; itemString: string; itemID?: number; identityScope?: string; observedAt?: number; freshness?: string; reason: string }; itemSpecInfo?: { state: string; api: string; itemString: string; specializationIDs: number[]; complete: boolean; observedAt?: number; freshness?: string; provenance?: string; reason?: string }; statDeltaEvidence?: { api: string; state: string; completeness: string; observedAt?: number; freshness?: string; reason: string }; bindingEvidence?: { state: string; semanticInterpretation: string; freshness?: string }; statDeltaComparisons?: Array<{ api: string; state: string; candidateItemString: string; equippedItemString: string; observedAt?: number; freshness?: string; complete?: boolean; entries: Array<{ key: string; observation: { state: string; value?: unknown } }>; interpretation: string }>; validatedFields?: { contractState: string; itemLevel: { state: string; value?: unknown }; requiredLevel: { state: string; value?: unknown }; itemClass: { state: string; value?: unknown }; itemSubclass: { state: string; value?: unknown }; equipLocation: { state: string; value?: unknown } }; itemStats: { state: string; entryCount: number | null; entries: Array<{ key: string; observation: { state: string; value?: unknown } }> }; itemInfo: { state: string; returnCount: number | null } } }; source: { identityKey: string; name: string; surname?: string; realm: string }; recipient: { identityKey: string; name: string; surname?: string; realm: string }; eligibility: string; playerApiSignal: "TRUE" | "FALSE" | "UNKNOWN"; playerCanUseSignal: "TRUE" | "FALSE" | "UNKNOWN"; eligibilityAssessment: { state: string; confidence: string; reasons: string[] }; eligibilityChecks: { requiredLevel: { state: "MET" | "NOT_MET" | "UNKNOWN"; itemRequiredLevel?: number; recipientLevel?: number; reason: string }; classRestriction: { state: string; reason: string }; armorProficiency: { state: string; armor?: string; confidence: string; reason: string }; weaponProficiency: { state: string; matchingObservedSkill?: string; observedSkillLines: string[]; reason: string }; slotCompatibility: { state: string; equipLocation: string; possibleSlots: number[]; currentlyOccupiedSlots: number[]; knownEmptySlots: number[]; conflicts: Array<{ slot: number; itemRef?: string; equipLocation?: string; state: string; reason: string }>; reason: string } }; suitability: string; suitabilityEvidence: { state: string; reason: string }; upgradeStatus: string; upgradeConfidence: string; rawStatComparisons: Array<{ slot: number; equippedItemRef: string; values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; labelProvenance: "LIVE_VALIDATED_FOREVER_70291" | "FOREVER_GLOBALSTRINGS_70205" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>; classification: string; provenance: string; reason: string; weaponMetrics?: { dps: Array<{ key: string; candidate: number; equipped: number; delta: number }>; speed: { state: string; reason: string } } }>; statDeltaCalibrations: Array<{ state: string; matchedKeys: string[]; reason: string }>; bindingAssessment: { state: string; reason: string }; transferability: string; transferabilityReason: string; allocationPriority: string; decision: string; missingEvidence: string[]; reason: string }>;
+      allocationPlan?: Array<{ disposition: "EQUIP_CANDIDATE" | "KEEP" | "POSSIBLE_OTHER_CHARACTER" | "NOT_AN_UPGRADE_ON_OBSERVED_METRICS" | "INSUFFICIENT_EVIDENCE"; item: { name?: string; itemRef?: string; itemIdentity?: string }; source: { identityKey: string; name: string; surname?: string; realm: string; location: "CARRIED_INVENTORY" | "EQUIPPED" | "UNKNOWN"; provenance: "OBSERVED" | "LAST_SEEN" | "UNKNOWN"; observedAt?: number; freshness: string }; recipient: { identityKey: string; name: string; surname?: string; realm: string }; comparison?: { upgradeStatus: string; confidence: string; rawComparisons: Array<{ slot: number; equippedItemRef: string; values: Array<{ key: string; label: string; labelState: "KNOWN" | "UNKNOWN"; labelProvenance: "LIVE_VALIDATED_FOREVER_70291" | "FOREVER_GLOBALSTRINGS_70205" | "UNKNOWN"; candidate: number; equipped: number; delta: number }>; classification: string; reason: string }> }; evidence: { provenance: "DERIVED" | "HYPOTHESIS" | "UNKNOWN"; eligibility: string; suitability: string; transferability: string; confidence: "LIMITED" | "UNKNOWN"; reasons: string[]; whatWouldChange: string[] } }>;
+      exclusions: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; state: string; reason: string }>;
+      conclusion: "LOCAL_REVIEW_CANDIDATE_AVAILABLE" | "INSUFFICIENT_EVIDENCE";
+      reason: string;
+    };
+    provenance: { state: string; observedAt?: number; freshness?: string; source?: string; reason?: string };
+  };
+}
+export interface GearCandidateRef { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }
 
 /**
  * What went wrong, in terms a caller can act on:
@@ -189,20 +218,6 @@ export function fetchAccountContext(signal?: AbortSignal) {
   });
 }
 
-/**
- * "Ask My Account" (POC): sends a single question to the server, which
- * retrieves the same canonical account context (above) and forwards it,
- * the question, and a system prompt to a configured LLM provider. Each
- * call is independent - no conversation history is kept on either side.
- */
-export function askAccount(question: string) {
-  return request<AskAccountResponse>(
-    "/api/ask",
-    { method: "POST", body: JSON.stringify({ question }) },
-    { validate: (body) => isRecord(body) && typeof body.answer === "string" },
-  );
-}
-
 // --- Shared storage (Warband + Guild Bank) -----------------------------------------------------------------
 
 /** validate: the reply is a GET /api/shared-storage document (stable even when empty: warband null, guilds []). */
@@ -305,6 +320,24 @@ export function fetchAllocationReview(version: VersionOrUnknown, params: Allocat
   return request<AllocationReviewRead>(`/api/versions/${encodeURIComponent(version)}/allocation-review${qs ? `?${qs}` : ""}`, undefined, { signal, validate: isAllocationReviewRead });
 }
 
+export function fetchGearCandidateEvidence(version: VersionOrUnknown, signal?: AbortSignal): Promise<GearCandidateEvidenceApi> {
+  return request(`/api/versions/${encodeURIComponent(version)}/gear-candidates`, undefined, { signal, validate: (body) => isRecord(body) && isRecord(body.provenance) });
+}
+
+export function fetchGearAllocation(version: VersionOrUnknown, ref: { exporterIdentityKey: string; snapshotId: number; rowOrdinal: number }, signal?: AbortSignal): Promise<GearAllocationApi> {
+  const qs = new URLSearchParams({ exporterIdentityKey: ref.exporterIdentityKey, snapshotId: String(ref.snapshotId), rowOrdinal: String(ref.rowOrdinal) });
+  return request(`/api/versions/${encodeURIComponent(version)}/gear-allocation?${qs}`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+}
+
+export function fetchForeverGearAllocation(identityKey: string, signal?: AbortSignal): Promise<ForeverGearAllocationApi> {
+  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-gear-allocation`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+}
+
+export function fetchForeverQuests(identityKey: string, snapshotId?: number, signal?: AbortSignal): Promise<CharacterResolution<ReadValue<ForeverQuestObservation>>> {
+  const query = snapshotId === undefined ? "" : `?snapshotId=${encodeURIComponent(String(snapshotId))}`;
+  return request(`/api/characters/${encodeURIComponent(identityKey)}/forever-quests${query}`, undefined, { signal, validate: (body) => isRecord(body) && typeof body.status === "string" });
+}
+
 /** Every demand for a version, any status (the removed-target history and conflict lookups read this). */
 export function fetchDemands(version: VersionOrUnknown, signal?: AbortSignal) {
   return request<{ demands: ExplicitDemand[] }>(`/api/versions/${encodeURIComponent(version)}/demands`, undefined, { signal, validate: hasArray("demands") });
@@ -343,4 +376,98 @@ export function deactivateDemand(version: VersionOrUnknown, stableId: string) {
     { method: "POST", body: "{}" },
     { validate: hasObject("demand") },
   );
+}
+
+export function fetchErpProjects(version: VersionOrUnknown, signal?: AbortSignal) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; resourceCommitments: ErpResourceCommitmentSummary; fulfillmentTriage: ErpFulfillmentTriage; portfolioFulfillment: ErpPortfolioFulfillmentReview; sourceFulfillment: ErpSourceFulfillmentReview; portfolioNextActions: ErpPortfolioNextActionReview; procurementBudgetReview: ErpProcurementBudgetPortfolioReview; procurementBuyerReview: ErpProcurementBuyerPortfolioReview }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.projects) && isRecord(body.resourceCommitments) && isRecord(body.fulfillmentTriage) && isRecord(body.portfolioFulfillment) && isRecord(body.sourceFulfillment) && isRecord(body.portfolioNextActions) && isRecord(body.procurementBudgetReview) && isRecord(body.procurementBuyerReview) });
+}
+
+export function fetchErpChangeProposals(version: VersionOrUnknown, signal?: AbortSignal) {
+  return request<{ version: VersionOrUnknown; proposals: import("@wowsync-dashboard/core").ErpChangeProposal[] }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals`, undefined, { signal, validate: (body) => isRecord(body) && Array.isArray(body.proposals) });
+}
+
+export function approveErpChangeProposal(version: VersionOrUnknown, proposalId: string, digest: string) {
+  return request<{ proposal: import("@wowsync-dashboard/core").ErpChangeProposal; message: string }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId)}/approve`, { method: "POST", body: JSON.stringify({ digest }) }, { validate: hasObject("proposal") });
+}
+
+export function rejectErpChangeProposal(version: VersionOrUnknown, proposalId: string, digest: string) {
+  return request<{ proposal: import("@wowsync-dashboard/core").ErpChangeProposal; message: string }>(`/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId)}/reject`, { method: "POST", body: JSON.stringify({ digest }) }, { validate: hasObject("proposal") });
+}
+
+export interface ErpWorkOrderBatchTaskDraft {
+  readonly needId: string;
+  readonly reviewSnapshot: ErpNeedReviewSnapshot;
+  /** Pathway reviewed in the UI; the server re-resolves it against current same-version evidence. */
+  readonly pathwayKind?: ErpNeedFulfillmentOptionKind;
+  readonly kind: ErpWorkOrder["kind"];
+  readonly title: string;
+  readonly instructions: string;
+  readonly assignedIdentityKey?: string;
+  /** Player-requested quantity to reserve atomically with this work order; absent means no reservation. */
+  readonly reservationQuantity?: number;
+  /** For explicit alternate-source provisioning only; this scopes a planning hold to that observed location. */
+  readonly reservationSourceIdentityKey?: string;
+  /** Optional player-set purchase ceiling, valid only for an explicitly same-buyer item requirement. */
+  readonly spendingCeilingCopper?: number;
+  /** For an INVESTIGATE step only: a version-scoped, observed source-screen lead; not an ownership/access claim. */
+  readonly sourceLeadIdentityKey?: string;
+  /** For a PROVISION review: exact, current source-screen lead selected by the player. This records plan intent only. */
+  readonly provisioningSourceIdentityKey?: string;
+  /** Same-version requirement gates selected for a player-authored portfolio package. */
+  readonly portfolioPrerequisites?: readonly { readonly projectId: string; readonly needId: string }[];
+}
+
+export function appendErpWorkOrderBatch(version: VersionOrUnknown, updates: readonly { readonly projectId: string; readonly expectedRevision: number; readonly tasks: readonly ErpWorkOrderBatchTaskDraft[] }[], replanFrom?: { readonly batchId: string; readonly needReferences: readonly { readonly projectId: string; readonly needId: string }[] }) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; createdCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/work-order-batches`,
+    { method: "POST", body: JSON.stringify({ updates, ...(replanFrom ? { replanFrom } : {}) }) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.createdCount === "number" && body.atomic === true },
+  );
+}
+
+/** Creates supplemental manual provisioning reviews for one exact observed source across linked buyer needs. It records intent only. */
+export function appendErpProvisioningReviewBatch(version: VersionOrUnknown, input: {
+  readonly buyerIdentityKey: string;
+  readonly resourceKey: string;
+  readonly sourceIdentityKey: string;
+  readonly tasks: readonly { readonly projectId: string; readonly expectedRevision: number; readonly needId: string }[];
+}) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; createdCount: number; skippedExistingCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/provisioning-review-batches`,
+    { method: "POST", body: JSON.stringify(input) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.createdCount === "number" && typeof body.skippedExistingCount === "number" && body.atomic === true },
+  );
+}
+
+export function createErpProject(version: VersionOrUnknown, input: Omit<ErpProjectDraft, "version">) {
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(version)}/erp/projects`, { method: "POST", body: JSON.stringify(input) }, { validate: hasObject("project") });
+}
+
+export function updateErpProject(project: ErpProjectView) {
+  const { needEvidence: _needEvidence, reservationReview: _reservationReview, ...intent } = project;
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}`, { method: "PUT", body: JSON.stringify({ expectedRevision: project.revision, project: intent }) }, { validate: hasObject("project") });
+}
+
+/** Atomically reduces or releases the existing reservation records frozen in a cross-project player review. */
+export function replanErpReservations(version: VersionOrUnknown, projects: readonly { stableId: string; revision: number; reservations: ErpProjectView["reservations"] }[]) {
+  return request<{ version: VersionOrUnknown; projects: ErpProjectView[]; changedReservationCount: number; atomic: true }>(
+    `/api/versions/${encodeURIComponent(version)}/erp/reservation-replans`,
+    { method: "POST", body: JSON.stringify({ projects: projects.map((project) => ({ projectId: project.stableId, expectedRevision: project.revision, reservations: project.reservations.map(({ stableId, quantity, status }) => ({ stableId, quantity, status })) })) }) },
+    { validate: (body) => isRecord(body) && Array.isArray(body.projects) && typeof body.changedReservationCount === "number" && body.atomic === true },
+  );
+}
+
+export function setErpProjectStatus(project: ErpProjectView, status: ErpProject["status"]) {
+  return request<{ project: ErpProjectView }>(`/api/versions/${encodeURIComponent(project.version)}/erp/projects/${encodeURIComponent(project.stableId)}/status`, { method: "PATCH", body: JSON.stringify({ expectedRevision: project.revision, status }) }, { validate: hasObject("project") });
+}
+
+export interface ForeverCopilotApiAnswer {
+  status: string;
+  markdown: string;
+  recommendations: Array<{ id: string; title: string }>;
+}
+
+/** Read-only Forever Co-Pilot question. */
+export function askForeverCopilot(question: string, options: RequestOptions = {}): Promise<ForeverCopilotApiAnswer> {
+  return request<ForeverCopilotApiAnswer>("/api/versions/forever/copilot", { method: "POST", body: JSON.stringify({ question }) }, options);
 }

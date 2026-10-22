@@ -10,6 +10,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SqliteSnapshotStore, type SnapshotStore } from "@wowsync-dashboard/core";
 import { createApp } from "../src/app.ts";
+import { observation } from "../../core/test/equipmentObservationFixtures.ts";
 
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${fixtures}${path}`, "utf8");
@@ -93,7 +94,7 @@ test("a malformed percent-encoded URL is a JSON 400 (Express's default is an HTM
 
 test("malformed JSON bodies are a JSON 400 on every route that reads one", async () => {
   await withApp(async (base) => {
-    for (const [method, path] of [["POST", "/api/import"], ["POST", "/api/ask"], ["DELETE", "/api/characters/x"]] as const) {
+    for (const [method, path] of [["POST", "/api/import"], ["DELETE", "/api/characters/x"]] as const) {
       const res = await fetch(base + path, { method, headers: { "Content-Type": "application/json" }, body: "{ not json" });
       assert.equal(res.status, 400, `${method} ${path}`);
       assert.match((await json(res)).error, /JSON/);
@@ -200,11 +201,11 @@ test("/api/versions never fabricates a 0 total: empty and unobserved versions ha
   });
 });
 
-test("the canonical account context declares schema 4 and explains realm-partitioned totals in-band", async () => {
+test("the canonical account context declares its current schema and explains realm-partitioned totals in-band", async () => {
   await withApp(async (base) => {
     await post(base, read("classic-era/bromrik-1789171621.wowsync.txt"));
     const ctx = await json(await fetch(`${base}/api/account-context`));
-    assert.equal(ctx.schemaVersion, "4");
+    assert.equal(ctx.schemaVersion, "49");
     assert.match(ctx.versions["classic-era"].scopeNote, /realm-partitioned/);
     assert.equal("scopeNote" in ctx.versions["retail"], false);
     assert.match(ctx.currency.note, /NOT zero gold/);
@@ -229,5 +230,23 @@ test("array/object query values are rejected like any other invalid limit/now (l
       assert.match((await json(res)).error, /now/);
     }
     assert.equal((await fetch(`${base}/api/account-context?now=1790000000`)).status, 200);
+  });
+});
+
+test("A16 POST /api/import forwards equipmentObservation to the store, which validates it (the route trusts nothing)", async () => {
+  await withApp(async (base) => {
+    const text = read("retail/ezaller-1789477879.wowsync.txt");
+    const send = (equipmentObservation: unknown) =>
+      fetch(`${base}/api/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, equipmentObservation }) });
+    const first = await json(await send(observation({ projection: true })));
+    assert.equal(first.result.equipmentObservation, "recorded");
+    assert.equal(first.result.isDuplicate, false);
+    const again = await json(await send(observation({ projection: true })));
+    assert.equal(again.result.equipmentObservation, "already-recorded");
+    assert.equal(again.result.isDuplicate, true);
+    const garbage = await json(await send({ envelope: { observedAt: "soon" } }));
+    assert.equal(garbage.result.equipmentObservation, "invalid-or-unsupported", "a bad observation is reported, never a failed import");
+    const absent = await json(await send(null));
+    assert.equal(absent.result.equipmentObservation, undefined, "null is treated as absent, like the other sidecars");
   });
 });

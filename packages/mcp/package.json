@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Read-only local STDIO MCP adapter for WoWSync Dashboard deterministic retrieval.",
+  "description": "Local STDIO MCP adapter for WoWSync retrieval with opt-in loopback-only ERP planning writes.",
   "dependencies": {
     "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/server": "^2.2.0",

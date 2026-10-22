@@ -103,7 +103,7 @@ test("PORT is parsed strictly: empty means the default, anything else invalid is
   }
 });
 
-test("private Unix listener requires an explicit absolute path and serves HTTP without a TCP bind", async () => {
+test("private Unix listener requires an explicit absolute path and serves HTTP without a TCP bind", { skip: process.platform === "win32" && "Unix-domain listener test is unsupported on this Windows host." }, async () => {
   assert.equal(resolveListenSocket({}), undefined);
   assert.equal(resolveListenSocket({ WOWSYNC_LISTEN_SOCKET: "  " }), undefined);
   for (const bad of ["relative.sock", "../socket", "/tmp/bad\npath", "/tmp/bad\0path"]) {
@@ -138,7 +138,6 @@ test("only a non-loopback bind produces the exposure warning, and it says what i
     assert.match(w, /WARNING/);
     assert.match(w, /NO authentication/);
     assert.match(w, /DELETE/);
-    assert.match(w, /OPENAI_API_KEY/);
     assert.match(w, /Unset WOWSYNC_HOST/);
   }
   assert.match(exposureWarning(resolveHost({ WOWSYNC_HOST: "0.0.0.0" }), 4173)!, /EVERY network interface/);
@@ -204,32 +203,6 @@ test("a bind address that does not belong to this machine fails with a plain-lan
     () => listenOnce((_req, res) => res.end(), "203.0.113.77", 0), // TEST-NET-3: never a local address
     (e: unknown) => e instanceof ConfigError && /WOWSYNC_HOST/.test(e.message),
   );
-});
-
-test("/api/ask's request to its own /api/account-context uses the configured self origin, not a hardcoded address", async () => {
-  const store = new SqliteSnapshotStore(":memory:");
-  const saved = { key: process.env.OPENAI_API_KEY, log: console.error };
-  process.env.OPENAI_API_KEY = "sk-test-fake-key-do-not-use";
-  console.error = () => {};
-  // selfOrigin points at a port nothing listens on: if it is honoured, the context fetch fails (502)...
-  const app = createApp(store, 0, undefined, { selfOrigin: "http://127.0.0.1:1" });
-  const server = await listenOnce(app, "127.0.0.1", 0);
-  try {
-    const { port } = server.address() as AddressInfo;
-    const res = await fetch(`http://127.0.0.1:${port}/api/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: "hello" }),
-    });
-    assert.equal(res.status, 502);
-    assert.match(((await res.json()) as { error: string }).error, /account context/i);
-  } finally {
-    console.error = saved.log;
-    if (saved.key === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = saved.key;
-    await closeServer(server);
-    store.close();
-  }
 });
 
 // --- Host / Origin guard --------------------------------------------------------------------------
@@ -385,7 +358,7 @@ test("allowedHostsFor: a loopback bind allows the loopback names PLUS its own ad
   assert.equal(allowedHostsFor(resolveHost({ WOWSYNC_HOST: "0.0.0.0" })), undefined);
   assert.equal(allowedHostsFor(resolveHost({ WOWSYNC_HOST: "192.168.1.5" })), undefined);
 
-  // End to end: a server really bound to 127.0.0.5 answers requests addressed to it, and its own /api/ask self-fetch passes the guard.
+  // End to end: a server really bound to 127.0.0.5 answers requests addressed to it, and loopback self-requests pass the guard.
   const bind = resolveHost({ WOWSYNC_HOST: "127.0.0.5" });
   const store = new SqliteSnapshotStore(":memory:");
   const app = createApp(store, 0, undefined, { allowedHosts: allowedHostsFor(bind), selfOrigin: loopbackOrigin(bind.host, 0) });

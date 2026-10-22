@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { DashboardReadModel, SqliteSnapshotReadStore, SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { buildErpNeedObservationChangeReview, type ErpNeedObservationChangeReview } from "@wowsync-dashboard/core/erpObservationChanges.ts";
+import { buildErpFulfillmentTriage } from "@wowsync-dashboard/core/erpFulfillmentTriage.ts";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
+import { guild, itemRow } from "../../core/test/sharedStorageBuilders.ts";
+import { renderExport } from "../../core/test/sharedStorageExports.ts";
+import { assertForeverAllocationContract } from "../../core/test/foreverAllocationContract.ts";
+import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "../../core/test/fixtures/foreverSnapshot180.ts";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const entrypoint = path.join(packageRoot, "src", "index.ts");
@@ -40,6 +46,18 @@ function retail(name: string, realm: string, professions = false, moneyCopper?: 
   return gearCandidates ? withMetadata.replace(/\n\[END\]$/, `\n\n[GEAR CANDIDATES]\nState: partial; observed=${generatedAt}\nContractVersion: 1\n${candidateHeader}\nEQUIPPABLE\tCONTAINER_SLOT\t0\t1\t123\titem:123\t?\t1\t0\t0\t4\t4\tINVTYPE_HEAD\tno\t?\tyes\tno\t?\t9\tno\tLAST_SEEN\n\n[END]`) : withMetadata;
 }
 
+function retailItemQuantity(name: string, realm: string, quantity: number, generatedAt: number, itemID = 777) {
+  return buildWowSyncExport({ generatedAt, character: { name, realm, clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933" }, bags: { containers: [{ id: 0, capacity: 20, items: quantity ? [{ itemRef: `item:${itemID}`, name: "Observed Bag Item", qty: quantity }] : [] }] }, bank: { containers: [] } });
+}
+
+function forever(name: string, realm: string, surname?: string, surnameSource?: string) {
+  const generatedAt = now - 15;
+  const text = buildWowSyncExport({ generatedAt, character: { name, surname, surnameSource, realm, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:901:0:0:0:0:0:0:0:123:0:0:0", name: "Observed Forever Variant", qty: 2 }] }] }, bank: { unknown: true } });
+  const itemString = "item:901:0:0:0:0:0:0:0:123:0:0:0";
+  const factValue = (value: string | number | boolean) => ({ state: "OBSERVED", type: typeof value, value });
+  return { text, sidecar: { clientProfile: "Forever:1.60.1:70291:16001", name, realm, generatedAt, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: generatedAt + 1, completeness: "complete", data: { slots: { "16": { itemID: 900, itemString: "item:900:0:0:0:0:0:0:0", name: "Observed Forever Weapon" } } } }, bags: { observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 901, itemString, name: "Observed Forever Variant", count: 2 } } }] } }, bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "Not visited", data: {} }, itemMetadata: {}, itemEvidence: { observedAt: generatedAt + 3, completeness: "complete", source: "Forever item API capture", data: { sourceSections: { bags: { observedAt: generatedAt + 2, state: "complete" } }, items: [{ itemID: 901, itemString, itemInfoInstant: { api: "C_Item.GetItemInfoInstant", state: "OBSERVED_VALUE", input: { itemString }, returns: [901, "Armor", "Cloth", "INVTYPE_CHEST"].map((value) => ({ observation: factValue(value) })) }, isEquippableItem: { api: "C_Item.IsEquippableItem", state: "OBSERVED_VALUE", returns: [{ observation: factValue(true) }] } }] } } } };
+}
+
 function structured<T>(result: { isError?: boolean; structuredContent?: unknown }): T {
   assert.equal(result.isError, undefined);
   assert.notEqual(result.structuredContent, undefined);
@@ -53,8 +71,15 @@ function digest(pathname: string): string {
 test("the local STDIO MCP server exposes only bounded read tools over the read-only store", async () => {
   const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-"));
   const databasePath = path.join(temporaryDirectory, "fixture.sqlite");
+  const fixedClockModule = path.join(temporaryDirectory, "fixed-clock.mjs");
+  const clockFile = path.join(temporaryDirectory, "clock.txt");
+  const actualNow = Math.floor(Date.now() / 1000);
+  writeFileSync(clockFile, String(actualNow));
+  writeFileSync(fixedClockModule, `import { readFileSync } from "node:fs"; import { fileURLToPath } from "node:url"; const clock = fileURLToPath(new URL("./clock.txt", import.meta.url)); const NativeDate = Date; globalThis.Date = class extends NativeDate { static now() { return Number(readFileSync(clock, "utf8")) * 1000; } };`);
   const writer = new SqliteSnapshotStore(databasePath);
+  let operationsContextProjectId = "";
   try {
+    assert.equal(seedRordinSnapshot180(writer), RORDIN_SNAPSHOT_180.id);
     writer.importSnapshot(retail("Virek", "Cairne", true, 100, true, now - 20, 89), {
       currencies: {
         observedAt: now,
@@ -74,6 +99,15 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     });
     writer.importSnapshot(retail("Virek", "Thrall"));
     writer.importSnapshot(retail("Zero", "Cairne", false, 0));
+    const observedForever = forever("Hallo", "Forever Realm", "Emberstone", "UnitName[2]+GetUnitName suffix");
+    const questObservedAt = Math.floor(Date.now() / 1000) - 4;
+    Object.assign(observedForever.sidecar, { quests: { observedAt: questObservedAt, completeness: "partial", data: {
+      formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: questObservedAt,
+      activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 },
+      active: [{ questID: 445, title: "MCP Quest", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }],
+      completedHistory: { state: "OBSERVED", questIDs: [444], quests: [{ questID: 444, title: "Old MCP Quest", titleState: "OBSERVED" }], returnedCount: 1 }, issues: ["objective data unavailable"],
+    } } });
+    writer.importSnapshot(observedForever.text, { foreverGearObservation: observedForever.sidecar });
     writer.importSnapshot(buildWowSyncExport({ character: { name: "Virek", realm: "Era", clientVersion: "1.15.9" }, bank: { unknown: true }, professions: { unknown: true }, bags: { unknown: true } }));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/sanitized/virek-warband-last-seen-1789965777.wowsync.txt", import.meta.url), "utf8"));
     writer.importSnapshot(readFileSync(new URL("../../core/test/fixtures/derived/ezaller-shared-storage-1789478317.wowsync.txt", import.meta.url), "utf8"));
@@ -81,6 +115,46 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     writer.createDemand({ baseItemId: 777, requiredQuantity: 1 });
     // Slice 3: a second ACTIVE demand on a full-item-string item so the protocol also carries a RESOLVED result.
     writer.createDemand({ baseItemId: 4242, requiredQuantity: 5 });
+    const currencyCharacter = writer.listCharacters("retail").find((character) => character.name === "Virek" && character.realm === "Cairne");
+    const otherRealmCharacter = writer.listCharacters("retail").find((character) => character.name === "Virek" && character.realm === "Thrall");
+    assert.ok(currencyCharacter);
+    assert.ok(otherRealmCharacter);
+    const transferAt = Math.floor(Date.now() / 1000);
+    writer.importSnapshot(retailItemQuantity("Transfer Source", "Cairne", 3, transferAt - 10, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Destination", "Thrall", 0, transferAt - 10, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Source", "Cairne", 2, transferAt, 779));
+    writer.importSnapshot(retailItemQuantity("Transfer Destination", "Thrall", 1, transferAt, 779));
+    const transferSource = writer.listCharacters("retail").find((character) => character.name === "Transfer Source");
+    const transferDestination = writer.listCharacters("retail").find((character) => character.name === "Transfer Destination");
+    assert.ok(transferSource);
+    assert.ok(transferDestination);
+    writer.createErpProject({ version: "retail", title: "Currency reservation protocol fixture", needs: [{ stableId: "currency_4", kind: "CURRENCY", resourceKey: "4", label: "Currency 4", requiredQuantity: 4, sourceIdentityKey: currencyCharacter.identityKey }] });
+    const operationsContextProject = writer.createErpProject({ version: "retail", title: "Fresh chat context fixture", rationale: "Carry the planning decision into a new Operations conversation.", objective: "Review one current project.", workOrders: [{ stableId: "context_review", kind: "INVESTIGATE", status: "PLANNED", title: "Review the current project", instructions: "Check current version-scoped evidence.", resourceNeedIds: [], dependsOn: [] }] });
+    operationsContextProjectId = operationsContextProject.stableId;
+    writer.createErpProject({ version: "retail", title: "Same-version source screen protocol fixture", needs: [{ stableId: "source_need", kind: "ITEM_REF", resourceKey: "item:777", label: "Observed Bag Item", requiredQuantity: 1, destinationIdentityKey: otherRealmCharacter.identityKey }, { stableId: "recipe_check", kind: "RECIPE", resourceKey: "1229853", label: "Observed recipe", requiredQuantity: 1, sourceIdentityKey: currencyCharacter.identityKey }, { stableId: "craft_input_check", kind: "ITEM_REF", resourceKey: "item:159", label: "Observed craft input", requiredQuantity: 1, sourceIdentityKey: currencyCharacter.identityKey }], workOrders: [{ stableId: "craft_check", kind: "CRAFT", status: "PLANNED", title: "Craft on assigned character", resourceNeedIds: ["recipe_check"], dependsOn: [], assignedIdentityKey: otherRealmCharacter.identityKey, destinationIdentityKey: currencyCharacter.identityKey, outputObservationIdentityKey: otherRealmCharacter.identityKey, plannedOutput: { kind: "ITEM_ID", resourceKey: "777", label: "Observed Bag Item", quantity: 1 } }, { stableId: "unspecified_craft", kind: "CRAFT", status: "PLANNED", title: "Craft without recorded prerequisites", resourceNeedIds: [], dependsOn: [], assignedIdentityKey: otherRealmCharacter.identityKey }, { stableId: "craft_input_check_order", kind: "CRAFT", status: "PLANNED", title: "Review crafter inputs", resourceNeedIds: ["craft_input_check"], dependsOn: [], assignedIdentityKey: currencyCharacter.identityKey }] });
+    const procurementObservedAt = Math.floor(Date.now() / 1000);
+    writer.importSnapshot(buildWowSyncExport({ generatedAt: procurementObservedAt, character: { name: "Procurement Buyer", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933", moneyCopper: 500 }, bags: { containers: [{ id: 0, capacity: 20, items: [{ itemRef: "item:12345", name: "Procurement Fixture Item", qty: 2 }] }] }, bank: { containers: [] } }));
+    const procurementBuyer = writer.listCharacters("retail").find((character) => character.name === "Procurement Buyer" && character.realm === "Cairne");
+    assert.ok(procurementBuyer);
+    writer.createErpProject({ version: "retail", title: "Manual procurement protocol fixture", needs: [{ stableId: "procurement_target", kind: "ITEM_REF", resourceKey: "item:12345", label: "Procurement Fixture Item", requiredQuantity: 5, sourceIdentityKey: procurementBuyer.identityKey, destinationIdentityKey: procurementBuyer.identityKey }, { stableId: "procurement_budget", kind: "GOLD_COPPER", resourceKey: "copper", label: "Explicit procurement budget", requiredQuantity: 200, sourceIdentityKey: procurementBuyer.identityKey, destinationIdentityKey: procurementBuyer.identityKey }], workOrders: [{ stableId: "procurement_review", kind: "PURCHASE", status: "PLANNED", title: "Review item gap manually", resourceNeedIds: ["procurement_target", "procurement_budget"], dependsOn: [], assignedIdentityKey: procurementBuyer.identityKey, procurementPlan: { targetNeedId: "procurement_target", budgetNeedId: "procurement_budget", spendingCeilingCopper: 300, playerQuote: { amountCopper: 250, quantity: 2, recordedAt: procurementObservedAt - 1, sourceNote: "Player checked quote" } } }, { stableId: "manual_sale_review", kind: "SELL_MANUALLY", status: "PLANNED", title: "Review possible manual sale", resourceNeedIds: ["procurement_target"], dependsOn: [], assignedIdentityKey: procurementBuyer.identityKey }] });
+    writer.createErpProject({ version: "retail", title: "Transfer observation protocol fixture", needs: [{ stableId: "transfer_need", kind: "ITEM_REF", resourceKey: "item:779", label: "Observed Bag Item", requiredQuantity: 1, sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }], workOrders: [{ stableId: "transfer_check", kind: "TRANSFER", status: "PLANNED", title: "Review paired source and destination evidence", resourceNeedIds: ["transfer_need"], dependsOn: [], sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }] });
+    writer.createErpProject({ version: "retail", title: "Provisioning observation protocol fixture", needs: [{ stableId: "provision_need", kind: "ITEM_REF", resourceKey: "item:779", label: "Observed Bag Item", requiredQuantity: 1, sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }], workOrders: [{ stableId: "provision_check", kind: "PROVISION", status: "PLANNED", title: "Review paired provisioning observations", resourceNeedIds: ["provision_need"], dependsOn: [], sourceIdentityKey: transferSource.identityKey, destinationIdentityKey: transferDestination.identityKey }] });
+    const retrievalAt = Math.floor(Date.now() / 1000);
+    const retrievalSnapshot = (bags: number, bank: number, generatedAt: number) => buildWowSyncExport({ generatedAt, character: { name: "Retrieval Planner", realm: "Cairne", clientFamily: "Retail", clientVersion: "12.1.0", clientBuild: "69933" }, bags: { containers: [{ id: 0, capacity: 20, items: bags ? [{ itemRef: "item:779", name: "Observed Bag Item", qty: bags }] : [] }] }, bank: { containers: [{ id: 0, capacity: 28, items: bank ? [{ itemRef: "item:779", name: "Observed Bag Item", qty: bank }] : [] }] } });
+    writer.importSnapshot(retrievalSnapshot(0, 2, retrievalAt - 10));
+    const retrievalCharacter = writer.listCharacters("retail").find((character) => character.name === "Retrieval Planner")!;
+    writer.importSnapshot(retrievalSnapshot(1, 1, retrievalAt));
+    writer.createErpProject({ version: "retail", title: "Personal bank retrieval protocol fixture", needs: [{ stableId: "retrieve_need", kind: "ITEM_REF", resourceKey: "item:779", label: "Observed Bag Item", requiredQuantity: 1, sourceIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }], workOrders: [{ stableId: "retrieve_check", kind: "RETRIEVE", status: "PLANNED", title: "Review personal retrieval evidence", resourceNeedIds: ["retrieve_need"], dependsOn: [], assignedIdentityKey: retrievalCharacter.identityKey, sourceIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }] });
+    const sharedRetrievalItem = itemRow("Rough Stone", 1).itemRef;
+    const sharedRetrievalCapture = (generated: number, quantity: number) => renderExport({ name: "Retrieval Planner", realm: "Cairne", generated, guild: guild({ clubId: "mcp-retrieval-guild", observedAt: generated, tabs: [{ id: 1, name: "Materials", items: [["Rough Stone", quantity]] }] }) });
+    writer.importSnapshot(sharedRetrievalCapture(retrievalAt - 30, 4));
+    writer.importSnapshot(sharedRetrievalCapture(retrievalAt - 20, 2));
+    writer.createErpProject({ version: "retail", title: "Shared owner retrieval protocol fixture", needs: [{ stableId: "guild_retrieve_need", kind: "ITEM_REF", resourceKey: sharedRetrievalItem, label: "Rough Stone", requiredQuantity: 1, sourceOwnerKey: "retail::guild::mcp-retrieval-guild", destinationIdentityKey: retrievalCharacter.identityKey }], workOrders: [{ stableId: "guild_retrieve_check", kind: "RETRIEVE", status: "PLANNED", title: "Review guild-owned observations", resourceNeedIds: ["guild_retrieve_need"], dependsOn: [], assignedIdentityKey: retrievalCharacter.identityKey, destinationIdentityKey: retrievalCharacter.identityKey }] });
+    let ownerPlan = writer.createErpProject({ version: "retail", title: "Shared owner protocol fixture", needs: [{ stableId: "warband_leather", kind: "ITEM_REF", resourceKey: "item:2318::::::::85:253:::::::::", label: "Light Leather", requiredQuantity: 3, destinationIdentityKey: currencyCharacter.identityKey, sourceOwnerKey: "retail::warband::local" }], workOrders: [{ stableId: "manual_retrieve", kind: "RETRIEVE", status: "PLANNED", title: "Review storage access manually", resourceNeedIds: ["warband_leather"], dependsOn: [] }] });
+    ownerPlan = writer.updateErpProject({ ...ownerPlan, workOrders: ownerPlan.workOrders.map((order) => ({ ...order, status: "WAITING_FOR_EVIDENCE" })) }, ownerPlan.revision)!;
+    const staleReservationAt = Math.floor(Date.now() / 1000) - 5 * 86400;
+    const staleReservationCharacter = writer.importSnapshot(retailItemQuantity("Stale Reservation Holder", "Cairne", 3, staleReservationAt, 780)).character;
+    writer.createErpProject({ version: "retail", title: "Stale reservation protocol fixture", needs: [{ stableId: "stale_stock", kind: "ITEM_REF", resourceKey: "item:780", label: "Stale observed stock", requiredQuantity: 2, sourceIdentityKey: staleReservationCharacter.identityKey }], reservations: [{ stableId: "stale_hold", needId: "stale_stock", sourceIdentityKey: staleReservationCharacter.identityKey, quantity: 2, status: "ACTIVE", createdAt: staleReservationAt, updatedAt: staleReservationAt }] });
   } finally {
     writer.close();
   }
@@ -89,7 +163,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const client = new Client({ name: "wowsync-mcp-protocol-test", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [entrypoint],
+    args: ["--import", pathToFileURL(fixedClockModule).href, entrypoint],
     cwd: packageRoot,
     env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
     stderr: "pipe",
@@ -97,7 +171,17 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   try {
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    const registeredQuestTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_character_quests");
+    const registeredCraftedUpgradeTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_crafted_upgrade_assessment");
+    assert.ok(registeredQuestTool, "quest operation is present in the actual MCP tools/list protocol response");
+    assert.ok((registeredQuestTool.inputSchema as any).properties?.snapshotId, "MCP exposes historical snapshot selection");
+    assert.ok(registeredCraftedUpgradeTool, "crafted-upgrade assessment is present in the actual MCP tools/list protocol response");
+    assert.ok((registeredCraftedUpgradeTool.inputSchema as any).properties?.snapshotId, "MCP exposes pinned snapshot assessment");
+    assert.equal(toolNames.includes("create_erp_project_from_goal"), false, "goal persistence remains hidden in the read-only MCP profile");
     assert.deepEqual(toolNames, [
+      "analyze_retail_gear_candidate",
+      "ask_forever_copilot",
+      "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
@@ -107,16 +191,29 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_progression",
+      "get_character_quests",
       "get_character_spells",
       "get_character_state",
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_erp_change_proposal",
+      "get_erp_change_proposals",
+      "get_erp_operations_context",
+      "get_erp_project",
+      "get_erp_projects",
+      "get_forever_character_quests",
+      "get_forever_crafted_upgrade_assessment",
+      "get_forever_gear_allocation",
+      "get_forever_gear_observation",
+      "get_forever_market_prices",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
+      "get_recipe_reagent_availability",
       "get_renown",
       "get_research_document",
       "get_research_section",
@@ -124,17 +221,224 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_forever_knowledge",
       "search_items",
       "search_research",
     ]);
+    const crafters = structured<{ data?: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }));
+    assert.equal(crafters.provenance.state, "DERIVED");
+    assert.ok(crafters.data?.charactersWithoutRecipeEvidence.some((row) => row.name === "Hallo"), "characters without captures are reported as unresolved, not unable");
+    const eraCrafters = structured<{ data?: { learned: unknown[] }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "classic-era", recipeID: 2663 } }));
+    assert.equal(eraCrafters.data?.learned.length, 0, "Forever recipe rows never appear in Classic Era");
     const tools = (await client.listTools()).tools;
     assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
+    assert.equal(toolNames.includes("update_erp_project_plan"), false, "player-authored writes remain absent from the default read-only profile");
 
     const versions = structured<{ versions: Array<{ version: string }> }>(await client.callTool({ name: "list_versions", arguments: {} }));
-    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "retail"]);
+    assert.deepEqual(versions.versions.map((entry) => entry.version).sort(), ["classic-era", "forever", "retail"]);
+    const operationsContext = structured<{ version: string; characters: Array<{ identityKey: string }>; projects: Array<{ stableId: string; revision: number; workOrders: Array<{ stableId: string }> }>; accountEvidence: { data: { version: string } } }>(await client.callTool({ name: "get_erp_operations_context", arguments: { version: "retail", projectLimit: 20 } }));
+    assert.equal(operationsContext.version, "retail");
+    assert.equal(operationsContext.accountEvidence.data.version, "retail");
+    assert.ok(operationsContext.characters.some((entry) => entry.identityKey === "retail::cairne::virek"));
+    const contextPlan = operationsContext.projects.find((entry) => entry.stableId === operationsContextProjectId);
+    assert.equal(contextPlan?.revision, 1);
+    assert.equal(contextPlan?.workOrders[0]?.stableId, "context_review");
+    const focusedProject = structured<{ version: string; project: { stableId: string; history: Array<{ rationale?: string }> } }>(await client.callTool({ name: "get_erp_project", arguments: { version: "retail", projectId: operationsContextProjectId } }));
+    assert.equal(focusedProject.project.stableId, operationsContextProjectId);
+    assert.equal(focusedProject.project.history[0]?.rationale, "Carry the planning decision into a new Operations conversation.");
+    const crossVersionProject = await client.callTool({ name: "get_erp_project", arguments: { version: "forever", projectId: operationsContextProjectId } });
+    assert.equal(crossVersionProject.isError, true, "read tools keep project lookup inside the caller's explicit version");
+    const emptyErpProjects = structured<{ version: string; projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: unknown[]; totalCount: number; returnedCount: number; truncated: boolean }; observationChanges: { items: unknown[]; totalCount: number; returnedCount: number; affectedProjectCount: number; truncated: boolean }; fulfillmentTriage: { version: string; items: unknown[]; totalCount: number; returnedCount: number; affectedProjectCount: number; counts: Record<string, number>; truncated: boolean; interpretation: string }; portfolioFulfillment: { version: string; packages: unknown[]; totalPackageCount: number; returnedPackageCount: number; savedPlanningBatches: unknown[]; totalSavedPlanningBatchCount: number; returnedSavedPlanningBatchCount: number; savedPlanningBatchesTruncated: boolean; savedNeedHistories: unknown[]; totalSavedNeedHistoryCount: number; returnedSavedNeedHistoryCount: number; savedNeedHistoriesTruncated: boolean; totalStepCount: number; stepsNeedingReview: number; stepsWithPrerequisiteReview: number; truncated: boolean; interpretation: string }; portfolioNextActions: { version: string; items: unknown[]; totalCount: number; returnedCount: number; counts: Record<string, number>; sourceReviewTruncated: boolean; triageTruncated: boolean; savedHistoryReviewTruncated: boolean; truncated: boolean; interpretation: string }; sourceFulfillment: { version: string; sources: unknown[]; totalSourceCount: number; returnedSourceCount: number; totalNeedCount: number; needsReviewCount: number; nextReviewCounts: Record<string, number>; groupsWithAlternativeLocations: number; alternativeLocationCount: number; groupsWithIncompleteSourceScan: number; openProvisioningPlanCount: number; truncated: boolean; interpretation: string } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "forever" } }));
+    assert.deepEqual(emptyErpProjects, { version: "forever", projects: [], returnedCount: 0, totalCount: 0, truncated: false, resourceCommitments: { items: [], totalCount: 0, returnedCount: 0, truncated: false, linesWithReservations: 0, unknownSourceLines: 0, overlappingScopeLines: 0 }, observationChanges: { items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, truncated: false }, fulfillmentTriage: { version: "forever", items: [], totalCount: 0, returnedCount: 0, affectedProjectCount: 0, counts: { CHANGED_OBSERVATION: 0, UNWORKED_REQUIREMENT: 0, RESERVATION_REVIEW: 0, OPEN_WORK_ORDER: 0 }, truncated: false, interpretation: "PLANNING_AND_EVIDENCE_REVIEW_ONLY" }, portfolioFulfillment: { version: "forever", packages: [], totalPackageCount: 0, returnedPackageCount: 0, savedPlanningBatches: [], totalSavedPlanningBatchCount: 0, returnedSavedPlanningBatchCount: 0, savedPlanningBatchesTruncated: false, savedNeedHistories: [], totalSavedNeedHistoryCount: 0, returnedSavedNeedHistoryCount: 0, savedNeedHistoriesTruncated: false, totalStepCount: 0, stepsNeedingReview: 0, stepsWithPrerequisiteReview: 0, pathwayReviewTruncated: false, truncated: false, interpretation: "PLAYER_AUTHORED_SEQUENCE_AND_EVIDENCE_REVIEW_ONLY" }, sourceFulfillment: { version: "forever", sources: [], totalSourceCount: 0, returnedSourceCount: 0, totalNeedCount: 0, needsReviewCount: 0, nextReviewCounts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, PLAN_MANUAL_WORK: 0, REVIEW_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0 }, groupsWithAlternativeLocations: 0, alternativeLocationCount: 0, groupsWithIncompleteSourceScan: 0, openProvisioningPlanCount: 0, truncated: false, interpretation: "EXPLICIT_SOURCE_SCOPE_AND_MANUAL_REVIEW_ONLY" }, portfolioNextActions: { version: "forever", items: [], totalCount: 0, returnedCount: 0, counts: { REVIEW_EVIDENCE: 0, REVIEW_RESERVATIONS: 0, RECONCILE_OBSERVATIONS: 0, REVIEW_MANUAL_WORK: 0, PLAN_MANUAL_WORK: 0, REVIEW_SOURCE_AND_ACCESS: 0, REVIEW_UNSCOPED_ITEM: 0 }, sourceReviewTruncated: false, triageTruncated: false, savedHistoryReviewTruncated: false, truncated: false, interpretation: "DETERMINISTIC_PLAYER_REVIEW_QUEUE_ONLY" }, procurementBudgetReview: { version: "forever", lines: [], totalLineCount: 0, returnedLineCount: 0, linesOverPlannedBudget: 0, truncated: false }, procurementBuyerReview: { version: "forever", buyers: [], totalBuyerCount: 0, returnedBuyerCount: 0, unresolvedBuyerOrderCount: 0, truncated: false } }, "MCP exposes planning and shared core fulfillment reviews through the bounded read-only contract");
+    assert.deepEqual((emptyErpProjects as unknown as { procurementBudgetReview: unknown }).procurementBudgetReview, { version: "forever", lines: [], totalLineCount: 0, returnedLineCount: 0, linesOverPlannedBudget: 0, truncated: false }, "MCP returns an empty version-isolated budget review rather than omitting the contract");
+    const retailObservationChanges = structured<{ observationChanges: ErpNeedObservationChangeReview; fulfillmentTriage: ReturnType<typeof buildErpFulfillmentTriage> }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
+    const readOnlyStore = new SqliteSnapshotReadStore(databasePath);
+    try {
+      const expectedChanges = buildErpNeedObservationChangeReview(new DashboardReadModel(readOnlyStore).getErpProjects({ version: "retail" }), "retail");
+      const expectedTriage = buildErpFulfillmentTriage(new DashboardReadModel(readOnlyStore).getErpProjects({ version: "retail" }), "retail");
+      assert.deepEqual(retailObservationChanges.observationChanges, expectedChanges, "MCP uses the same bounded core changed-need review projection");
+      assert.deepEqual(retailObservationChanges.fulfillmentTriage, expectedTriage, "MCP uses the shared deterministic cross-domain triage projection");
+      assert.ok(expectedChanges.items.some((entry) => entry.projectTitle === "Transfer observation protocol fixture" && entry.needId === "transfer_need" && entry.comparisons.some((comparison) => comparison.section === "bags" && comparison.delta === -1)));
+    } finally { readOnlyStore.close(); }
+    const retailErpProjects = structured<{ version: string; projects: Array<{ title: string; history: Array<{ revision: number; kind: string; changedFields: string[]; workOrderStatusChanges?: Array<{ workOrderId: string; title: string; fromStatus?: string; toStatus: string }> }>; historyEventCount: number; historyTruncated: boolean; needEvidence: Array<{ state: string; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; sourceOwnerKey?: string; sourceSections: Array<{ state: string; observedAt?: number }>; freshness: string }>; resourceSourceScreens: Array<{ candidateCount: number; candidatesTruncated: boolean; candidates: Array<{ sourceIdentityKey: string; observedQuantity?: number; transferability: string; access: string; accountMembership: string }> }>; workOrderReadiness: Array<{ workOrderId: string; procurementAssessment?: { reviewState: string; budgetState: string; budgetEvidence: { observedCopper?: number; freshness: string }; spendingCeilingCopper: number; budgetNeedAssessment?: { ceilingCoverage: string; need: { needId: string; requiredQuantity: number; state: string } }; quoteState: string; playerQuote?: { amountCopper: number; provenance: string; freshness: string; sourceNote?: string }; marketAvailability: string; quotedPrice: string; affordability: string; reason: string }; state: string; capabilityChecks?: Array<{ needId: string; kind: string; state: string; evidenceSourceIdentityKey?: string; assignedIdentityKey?: string }>; linkedNeeds?: Array<{ needId: string; kind: string; state: string; requiredQuantity: number; observedQuantity?: number; potentialQuantity?: number; sourceIdentityKey?: string; freshness: string; unresolvedSections: string[] }> }>; workOrderProgress: Array<{ workOrderId: string; recordedStatus: string; linkedNeedState: string; observationChange: string; reconciliation: string; transferObservationReviews?: Array<{ state: string; interpretation: string; resourceKey: string; source: { identityKey?: string; state: string; comparisons: Array<{ section: string; previousQuantity: number; currentQuantity: number; delta: number }> }; destination: { identityKey?: string; state: string; comparisons: Array<{ section: string; previousQuantity: number; currentQuantity: number; delta: number }> }; reason: string }>; retrievalObservationReviews?: Array<{ state: string; interpretation: string; comparisons: Array<{ section: string; delta: number }> }> }>; workOrders: Array<{ stableId: string; kind: string }> }>; returnedCount: number; totalCount: number; truncated: boolean; resourceCommitments: { items: Array<{ resourceKey: string; kind: string; sourceScope: string; observedQuantity?: number; sourceOwnerKey?: string }>; totalCount: number; returnedCount: number; truncated: boolean } }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail" } }));
+    const currencyPlan = retailErpProjects.projects.find((entry) => entry.title === "Currency reservation protocol fixture");
+    assert.equal(currencyPlan?.needEvidence[0]?.state, "UNKNOWN", "MCP preserves the currency section's LAST_SEEN provenance instead of presenting it as current");
+    assert.equal(currencyPlan?.needEvidence[0]?.potentialQuantity, 3);
+    assert.equal(currencyPlan?.needEvidence[0]?.sourceIdentityKey, "retail::cairne::virek");
+    assert.equal(currencyPlan?.needEvidence[0]?.sourceSections[0]?.state, "LAST_SEEN");
+    assert.equal(currencyPlan?.needEvidence[0]?.sourceSections[0]?.observedAt, now);
+    assert.equal(currencyPlan?.needEvidence[0]?.freshness, "stale");
+    const staleReservationPlan = retailErpProjects.projects.find((entry) => entry.title === "Stale reservation protocol fixture") as unknown as { needEvidence: Array<{ observedQuantity?: number; freshness: string; reservationAssessment?: { state: string; activeQuantity: number; availableObservedLowerBound?: number } }>; reservationReview: Array<{ state: string; reservedQuantity: number }>; fulfillment: { state: string; historicalOrStaleEvidenceCount: number; unresolvedEvidenceCount: number; reservationReviewStates: Record<string, number>; interpretation: string } } | undefined;
+    assert.deepEqual([staleReservationPlan?.needEvidence[0]?.observedQuantity, staleReservationPlan?.needEvidence[0]?.freshness], [3, "stale"], "MCP preserves historical quantity and its freshness");
+    assert.deepEqual(staleReservationPlan?.needEvidence[0]?.reservationAssessment, { state: "UNKNOWN", activeQuantity: 2, reason: "Reservation availability is unknown because the source or relevant supply evidence is stale and not current." }, "MCP preserves explicit reservation intent without offering current availability");
+    assert.deepEqual(staleReservationPlan?.reservationReview.map((entry) => [entry.state, entry.reservedQuantity]), [["SUPPLY_UNKNOWN", 2]]);
+    assert.deepEqual(staleReservationPlan?.fulfillment, { state: "RESERVATIONS_NEED_REVIEW", projectStatus: "ACTIVE", requirementCount: 1, currentObservedCoverageCount: 0, currentObservedShortfallCount: 0, historicalOrStaleEvidenceCount: 1, unresolvedEvidenceCount: 0, activeWorkOrderCount: 0, reservationReviewStates: { SUPPLY_UNKNOWN: 1 }, changedObservationCauseUnknownCount: 0, interpretation: "OBSERVATIONS_AND_PLAN_SUMMARY_ONLY", reason: "At least one active reservation has unknown or excessive coverage; review reservation scope and current source evidence." }, "MCP returns the same read-time fulfillment status and preserves stale stock uncertainty");
+    const sharedOwnerPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner protocol fixture");
+    assert.equal(sharedOwnerPlan?.workOrders[0]?.kind, "RETRIEVE", "MCP exposes the distinct manual retrieval action type");
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.state, "POTENTIAL_COVERAGE_LAST_SEEN");
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.potentialQuantity, 3);
+    assert.equal(sharedOwnerPlan?.needEvidence[0]?.sourceOwnerKey, "retail::warband::local");
+    assert.deepEqual(sharedOwnerPlan?.history.map((event) => [event.revision, event.kind]), [[2, "UPDATED"], [1, "CREATED"]], "MCP exposes the same project audit timeline as REST through the read-only contract");
+    assert.deepEqual(sharedOwnerPlan?.history[0]?.workOrderStatusChanges, [{ workOrderId: "manual_retrieve", title: "Review storage access manually", fromStatus: "PLANNED", toStatus: "WAITING_FOR_EVIDENCE" }]);
+    const sharedOwnerProgress = sharedOwnerPlan?.workOrderProgress[0];
+    assert.deepEqual(sharedOwnerProgress && (({ transferObservationReviews: _transferReviews, retrievalObservationReviews: _retrievalReviews, ...base }) => base)(sharedOwnerProgress), { workOrderId: "manual_retrieve", recordedStatus: "WAITING_FOR_EVIDENCE", completionRecorded: false, linkedNeedState: "STALE_OR_UNKNOWN", observationChange: "UNKNOWN", reconciliation: "INSUFFICIENT_EVIDENCE", coveredNeedIds: [], shortfallNeedIds: [], unresolvedNeedIds: ["warband_leather"], allocationConflictNeedIds: [], changedNeedIds: [], reason: "Linked resource evidence is stale, incomplete, unsupported, or unknown for: warband_leather. Refresh or clarify evidence before drawing an outcome." });
+    assert.equal(sharedOwnerProgress?.transferObservationReviews, undefined, "retrieval is not interpreted as a character-to-character transfer");
+    const sourceScreenPlan = retailErpProjects.projects.find((entry) => entry.title === "Same-version source screen protocol fixture");
+    const craftOutputProgress = sourceScreenPlan?.workOrderProgress.find((entry) => entry.workOrderId === "craft_check") as unknown as { plannedOutputAssessment?: { state: string; recipientIdentityKey?: string; intendedRecipientIdentityKey?: string; observedOnIdentityKey?: string; observedQuantity?: number; observationChange: string } } | undefined;
+    const craftInputProgress = sourceScreenPlan?.workOrderProgress.find((entry) => entry.workOrderId === "craft_input_check_order") as unknown as { craftInputObservationReviews?: Array<{ needId: string; resourceKey: string; crafterIdentityKey?: string; state: string; comparisons: unknown[] }> } | undefined;
+    const craftOutputIntent = sourceScreenPlan?.workOrders.find((entry) => entry.stableId === "craft_check") as unknown as { plannedOutput?: { kind: string; resourceKey: string; label: string; quantity: number } } | undefined;
+    assert.deepEqual(craftOutputIntent?.plannedOutput, { kind: "ITEM_ID", resourceKey: "777", label: "Observed Bag Item", quantity: 1 }, "MCP preserves player-declared craft output intent");
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.recipientIdentityKey, "retail::cairne::virek");
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.intendedRecipientIdentityKey, "retail::cairne::virek");
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.observedOnIdentityKey, "retail::thrall::virek");
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.state, "COVERED_BY_OBSERVED");
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.observedQuantity, 2);
+    assert.equal(craftOutputProgress?.plannedOutputAssessment?.observationChange, "UNKNOWN", "MCP does not invent a before/after craft outcome");
+    assert.equal(sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.sourceIdentityKey, "retail::cairne::virek");
+    assert.equal(sourceScreenPlan?.resourceSourceScreens[0]?.candidateCount, 2, "both matching same-version characters are retained as possible sources");
+    assert.equal(sourceScreenPlan?.resourceSourceScreens[0]?.candidatesTruncated, false);
+    assert.deepEqual([sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.transferability, sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.access, sourceScreenPlan?.resourceSourceScreens[0]?.candidates[0]?.accountMembership], ["UNKNOWN", "UNKNOWN", "UNKNOWN"], "MCP source screening never turns same-version roster co-location into a transfer assertion");
+    assert.equal(sourceScreenPlan?.workOrderReadiness[0]?.state, "WAITING_FOR_EVIDENCE");
+    assert.deepEqual(sourceScreenPlan?.workOrderReadiness[0]?.capabilityChecks?.map((check) => [check.kind, check.state, check.evidenceSourceIdentityKey, check.assignedIdentityKey]), [["RECIPE", "EVIDENCE_UNKNOWN", "retail::thrall::virek", "retail::thrall::virek"]], "MCP checks the assigned character's own observation and does not substitute the requirement's other source");
+    assert.ok(sourceScreenPlan?.needEvidence.some((need) => need.state === "POTENTIAL_COVERAGE_LAST_SEEN" && need.sourceIdentityKey === "retail::cairne::virek" && need.freshness === "stale"), "MCP retains the explicit project need's historical source evidence");
+    assert.deepEqual(sourceScreenPlan?.workOrderReadiness[0]?.linkedNeeds?.map((need) => [need.kind, need.state, need.requiredQuantity, need.sourceIdentityKey, need.freshness]), [["RECIPE", "UNKNOWN", 1, "retail::thrall::virek", "unknown"]], "MCP checks the assigned crafter without borrowing the stale recipe observation from another character");
+    assert.equal(sourceScreenPlan?.workOrderReadiness[1]?.state, "WAITING_FOR_EVIDENCE", "MCP does not describe a CRAFT step without a linked exact profession or recipe requirement as ready");
+    assert.deepEqual(craftInputProgress?.craftInputObservationReviews?.map((review) => [review.needId, review.resourceKey, review.crafterIdentityKey, review.state]), [["craft_input_check", "item:159", "retail::cairne::virek", "UNCHANGED"]], "MCP carries the assigned-crafter input comparison from the shared core projection using that character's observed history");
+    const procurementPlan = retailErpProjects.projects.find((entry) => entry.title === "Manual procurement protocol fixture");
+    const procurementReview = procurementPlan?.workOrderReadiness.find((entry) => entry.workOrderId === "procurement_review")?.procurementAssessment as { buyerIdentityKey: string; reviewState: string; budgetState: string; budgetEvidence: { observedCopper?: number; freshness: string }; spendingCeilingCopper: number; budgetNeedAssessment?: { ceilingCoverage: string; need: { needId: string; requiredQuantity: number; state: string } }; quoteState: string; recordedGoldReservationState: string; recordedGoldReservationsCopper: number; recordedGoldAfterReservationsCopper?: number; quoteVsRecordedGoldState: string; quoteVsRecordedGoldRemainderCopper?: number; quoteVsPlannedBudgetState: string; quoteVsPlannedBudgetCopper?: number; playerQuote?: { amountCopper: number; quantity: number; provenance: string; freshness: string; sourceNote?: string }; marketAvailability: string; quotedPrice: string; affordability: string; reason: string } | undefined;
+    assert.deepEqual(procurementReview && [procurementReview.reviewState, procurementReview.budgetState, procurementReview.spendingCeilingCopper], ["OBSERVED_ITEM_GAP", "GROSS_OBSERVED_GOLD_AT_OR_ABOVE_CEILING", 300]);
+    assert.deepEqual(procurementReview?.budgetNeedAssessment && [procurementReview.budgetNeedAssessment.need.needId, procurementReview.budgetNeedAssessment.need.requiredQuantity, procurementReview.budgetNeedAssessment.ceilingCoverage], ['procurement_budget', 200, 'PLANNED_NEED_BELOW_CEILING']);
+    assert.deepEqual(procurementReview && [procurementReview.quoteState, procurementReview.playerQuote?.amountCopper, procurementReview.playerQuote?.provenance], ["PLAYER_REPORTED_WITHIN_CEILING", 250, "PLAYER_REPORTED"]);
+    assert.equal(procurementReview?.playerQuote?.quantity, 2, "MCP preserves the exact quantity covered by the player-reported total quote");
+    assert.deepEqual([procurementReview?.recordedGoldReservationState, procurementReview?.recordedGoldReservationsCopper], ["NO_RECORDED_RESERVATIONS", 0]);
+    assert.equal(procurementReview?.quoteVsRecordedGoldState, "PLAYER_QUOTE_AT_OR_BELOW_RECORDED_GOLD_REMAINDER");
+    assert.equal(procurementReview?.quoteVsRecordedGoldRemainderCopper, 500);
+    assert.equal(procurementReview?.quoteVsPlannedBudgetState, "PLAYER_QUOTE_ABOVE_PLANNED_BUDGET");
+    assert.equal(procurementReview?.quoteVsPlannedBudgetCopper, 200);
+    const procurementGoldProgress = procurementPlan?.workOrderProgress.find((entry) => entry.workOrderId === "procurement_review") as unknown as { procurementObservationReview?: { buyerIdentityKey: string; state: string; interpretation: string; targetItem?: { needId: string; resourceKey: string; state: string; freshness: string } } } | undefined;
+    assert.equal(procurementGoldProgress?.procurementObservationReview?.buyerIdentityKey, procurementReview?.buyerIdentityKey);
+    assert.equal(procurementGoldProgress?.procurementObservationReview?.state, "UNKNOWN", "MCP has only one export and does not invent a gold delta");
+    assert.equal(procurementGoldProgress?.procurementObservationReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(procurementGoldProgress?.procurementObservationReview?.targetItem && [procurementGoldProgress.procurementObservationReview.targetItem.needId, procurementGoldProgress.procurementObservationReview.targetItem.resourceKey, procurementGoldProgress.procurementObservationReview.targetItem.state, procurementGoldProgress.procurementObservationReview.targetItem.freshness], ["procurement_target", "item:12345", "UNKNOWN", "recent"], "MCP carries the linked buyer item observation from the shared core projection without inventing a before/after comparison");
+    assert.deepEqual(procurementReview && [procurementReview.marketAvailability, procurementReview.quotedPrice, procurementReview.affordability], ["UNKNOWN", "PLAYER_REPORTED", "UNKNOWN"]);
+    assert.match(procurementReview?.reason ?? "", /not a purchase recommendation or action/);
+    const saleProgress = procurementPlan?.workOrderProgress.find((entry) => entry.workOrderId === "manual_sale_review") as unknown as { sellObservationReviews?: Array<{ sellerIdentityKey?: string; state: string; itemState: string; interpretation: string; resourceKey: string }> } | undefined;
+    assert.deepEqual(saleProgress?.sellObservationReviews?.map((review) => [review.sellerIdentityKey, review.resourceKey, review.state, review.itemState, review.interpretation]), [["retail::cairne::procurement buyer", "item:12345", "UNKNOWN", "UNKNOWN", "CAUSE_UNKNOWN"]], "MCP preserves missing before/after sale evidence as UNKNOWN");
+    const transferPlan = retailErpProjects.projects.find((entry) => entry.title === "Transfer observation protocol fixture");
+    const transferReview = transferPlan?.workOrderProgress.find((entry) => entry.workOrderId === "transfer_check")?.transferObservationReviews?.[0];
+    assert.equal(transferReview?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(transferReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(transferReview?.source.identityKey, "retail::cairne::transfer source");
+    assert.equal(transferReview?.destination.identityKey, "retail::thrall::transfer destination");
+    const transferSourceBag = transferReview?.source.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    const transferDestinationBag = transferReview?.destination.comparisons.find((comparison) => comparison.section === "bags" && comparison.delta !== 0);
+    assert.deepEqual(transferSourceBag && [transferSourceBag.previousQuantity, transferSourceBag.currentQuantity, transferSourceBag.delta], [3, 2, -1]);
+    assert.deepEqual(transferDestinationBag && [transferDestinationBag.previousQuantity, transferDestinationBag.currentQuantity, transferDestinationBag.delta], [0, 1, 1]);
+    assert.match(transferReview?.reason ?? "", /do not establish that the changes are related or that the planned transfer occurred/);
+    const provisioningPlan = retailErpProjects.projects.find((entry) => entry.title === "Provisioning observation protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; provisioningObservationReviews?: Array<{ state: string; interpretation: string; source: { identityKey?: string }; destination: { identityKey?: string }; reason: string }> }> } | undefined;
+    const provisioningReview = provisioningPlan?.workOrderProgress.find((entry) => entry.workOrderId === "provision_check")?.provisioningObservationReviews?.[0];
+    assert.equal(provisioningReview?.state, "BOTH_SIDES_CHANGED");
+    assert.equal(provisioningReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.equal(provisioningReview?.source.identityKey, transferReview?.source.identityKey);
+    assert.equal(provisioningReview?.destination.identityKey, transferReview?.destination.identityKey);
+    assert.match(provisioningReview?.reason ?? "", /planned provisioning occurred/);
+    const retrievalPlan = retailErpProjects.projects.find((entry) => entry.title === "Personal bank retrieval protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; recordedStatus: string; retrievalObservationReviews?: Array<{ state: string; interpretation: string; comparisons: Array<{ section: string; delta: number }> }> }> } | undefined;
+    const retrievalReview = retrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "retrieve_check")?.retrievalObservationReviews?.[0];
+    assert.equal(retrievalReview?.state, "BAGS_AND_BANK_CHANGED");
+    assert.equal(retrievalReview?.interpretation, "CAUSE_UNKNOWN");
+    assert.deepEqual(retrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["bags", 1], ["character bank", -1]]);
+    assert.equal(retrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "retrieve_check")?.recordedStatus, "PLANNED");
+    const sharedRetrievalPlan = retailErpProjects.projects.find((entry) => entry.title === "Shared owner retrieval protocol fixture") as unknown as { workOrderProgress: Array<{ workOrderId: string; retrievalObservationReviews?: Array<{ state: string; sourceOwnerKey: string; ownerScope: string; carrierCharacterKeys: string[]; comparisons: Array<{ section: string; delta: number }>; recipientBagObservation?: { state: string; freshness: string; comparisons: Array<{ section: string; delta: number }>; reason: string }; reason: string }> }> } | undefined;
+    const sharedRetrievalReview = sharedRetrievalPlan?.workOrderProgress.find((entry) => entry.workOrderId === "guild_retrieve_check")?.retrievalObservationReviews?.[0];
+    assert.equal(sharedRetrievalReview?.state, "SHARED_OWNER_CONTENT_CHANGED");
+    assert.equal(sharedRetrievalReview?.sourceOwnerKey, "retail::guild::mcp-retrieval-guild");
+    assert.equal(sharedRetrievalReview?.ownerScope, "guild");
+    assert.deepEqual(sharedRetrievalReview?.comparisons.map((comparison) => [comparison.section, comparison.delta]), [["shared storage", -2]]);
+    assert.equal(sharedRetrievalReview?.recipientBagObservation?.state, "COMPARABLE_UNCHANGED");
+    assert.match(sharedRetrievalReview?.recipientBagObservation?.reason ?? "", /does not establish that no retrieval occurred/);
+    assert.match(sharedRetrievalReview?.reason ?? "", /Carrier character identities show which exports delivered observations/);
+    assert.equal(retailErpProjects.resourceCommitments.totalCount, 11, "the explicit procurement budget need joins retrieval, crafter-input, and stale-reservation commitments; the spending ceiling alone does not; MCP exposes the same version-scoped core commitment view as REST");
+    assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.kind === "CURRENCY" && line.resourceKey === "4" && line.sourceScope === "CHARACTER"));
+    assert.ok(retailErpProjects.resourceCommitments.items.some((line) => line.resourceKey === "item:2318::::::::85:253:::::::::" && line.sourceScope === "SHARED_OWNER" && line.sourceOwnerKey === "retail::warband::local"));
+    assert.equal(retailErpProjects.truncated, false);
+    const limitedProjects = structured<{ projects: unknown[]; returnedCount: number; totalCount: number; truncated: boolean }>(await client.callTool({ name: "get_erp_projects", arguments: { version: "retail", limit: 1 } }));
+    assert.deepEqual([limitedProjects.returnedCount, limitedProjects.totalCount, limitedProjects.truncated], [1, 10, true], "MCP callers can bound ERP project results without losing the total count");
 
-    const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
+    const foreverCharacters = structured<{ characters: Array<{ name: string; surname?: string; surnameSource?: string; realm: string }> }>(await client.callTool({ name: "list_characters", arguments: { version: "forever" } }));
+    assert.deepEqual(foreverCharacters.characters.map(({ name, surname, surnameSource }) => [name, surname, surnameSource]), [["Hallo", "Emberstone", "UnitName[2]+GetUnitName suffix"], ["Rordin", "Longbraid", "Fixture API candidate"]]);
+    const foreverSummary = structured<{ status: string; value?: { data?: { name: string; surname?: string; surnameSource?: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverSummary.value?.data?.name, "Hallo");
+    assert.equal(foreverSummary.value?.data?.surname, "Emberstone");
+    assert.equal(foreverSummary.value?.data?.surnameSource, "UnitName[2]+GetUnitName suffix");
+
+    const foreverView = structured<{ status: string; value?: { data?: { identity: { version: string; surname?: string }; equipment: { items: Array<{ provenance: string }> }; carried: { items: Array<{ itemRef: string }> }; evaluationCandidates: { state: string; items: Array<{ itemRef: string; eligibility: string; upgradeStatus: string }> }; unknowns: { eligibility: string; transferability: string }; bank: { state: string } }; provenance: { source?: string; freshness?: string } } }>(await client.callTool({ name: "get_forever_gear_observation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverView.status, "FOUND");
+    assert.equal(foreverView.value?.data?.identity.version, "forever");
+    assert.equal(foreverView.value?.data?.identity.surname, "Emberstone");
+    assert.equal(foreverView.value?.data?.equipment.items[0]?.provenance, "OBSERVED");
+    assert.equal(foreverView.value?.data?.carried.items[0]?.itemRef, "item:901:0:0:0:0:0:0:0:123:0:0:0");
+    assert.equal(foreverView.value?.data?.evaluationCandidates.state, "LAST_SEEN");
+    assert.equal(foreverView.value?.data?.evaluationCandidates.items[0]?.itemRef, "item:901:0:0:0:0:0:0:0:123:0:0:0");
+    assert.equal(foreverView.value?.data?.evaluationCandidates.items[0]?.eligibility, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.evaluationCandidates.items[0]?.upgradeStatus, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.unknowns.eligibility, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.unknowns.transferability, "UNKNOWN");
+    assert.equal(foreverView.value?.data?.bank.state, "UNKNOWN");
+    const foreverQuests = structured<{ status: string; value?: { data?: { activeState: string; active?: Array<{ questID: number; completionState: string; turnInReadinessState: string }>; completedHistory: { questIDs?: number[]; quests?: Array<{ title?: string }> }; completeness: string } } }>(await client.callTool({ name: "get_forever_character_quests", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverQuests.status, "FOUND");
+    assert.equal(foreverQuests.value?.data?.activeState, "OBSERVED");
+    assert.deepEqual(foreverQuests.value?.data?.active?.map((quest) => [quest.questID, quest.completionState, quest.turnInReadinessState]), [[445, "OBSERVED", "UNKNOWN"]]);
+    assert.deepEqual(foreverQuests.value?.data?.completedHistory.questIDs, [444]);
+    assert.equal(foreverQuests.value?.data?.completedHistory.quests?.[0]?.title, "Old MCP Quest");
+    assert.equal(foreverQuests.value?.data?.completeness, "partial");
+    writeFileSync(clockFile, String(RORDIN_SNAPSHOT_180.generatedAt + 30));
+    const realForeverQuests = structured<{ status: string; value?: { provenance: { identityKey: string; snapshotId: number; state: string }; data?: { active?: Array<{ questID: number; objectiveState: string; objectives?: unknown[] }>; completedHistory: { questIDs?: number[] } } } }>(await client.callTool({ name: "get_forever_character_quests", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
+    assert.equal(realForeverQuests.status, "FOUND");
+    assert.equal(realForeverQuests.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(realForeverQuests.value?.provenance.snapshotId, 180);
+    assert.equal(realForeverQuests.value?.provenance.state, "OBSERVED");
+    assert.deepEqual(realForeverQuests.value?.data?.active?.map((row) => row.questID), RORDIN_SNAPSHOT_180.questIDs);
+    assert.deepEqual(realForeverQuests.value?.data?.completedHistory.questIDs, RORDIN_SNAPSHOT_180.completedQuestIDs);
+    assert.deepEqual(realForeverQuests.value?.data?.active?.find((row) => row.questID === 98322)?.objectives, []);
+    const questReadStore = new SqliteSnapshotReadStore(databasePath);
+    try {
+      const questNow = RORDIN_SNAPSHOT_180.generatedAt + 30;
+      const expectedQuestProjection = new DashboardReadModel(questReadStore, () => questNow).getForeverQuestObservation({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: 180 });
+      assert.deepEqual(realForeverQuests, expectedQuestProjection, "the registered MCP protocol handler returns the canonical read model result unchanged");
+    } finally { questReadStore.close(); }
+    writeFileSync(clockFile, String(actualNow));
+    const realCraftedUpgrade = structured<{ status: string; value?: any }>(await client.callTool({ name: "get_forever_crafted_upgrade_assessment", arguments: { version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id } }));
+    assert.equal(realCraftedUpgrade.status, "FOUND");
+    assert.equal(realCraftedUpgrade.value?.provenance.identityKey, RORDIN_SNAPSHOT_180.identity.identityKey);
+    assert.equal(realCraftedUpgrade.value?.provenance.snapshotId, 180);
+    assert.deepEqual(realCraftedUpgrade.value?.data?.candidates.map((candidate: any) => [candidate.recipe.recipeID, candidate.recipe.state, candidate.output.itemID, candidate.upgradeConclusion.state, candidate.upgradeConclusion.provenUpgrade]), [[2663, "OBSERVED_TRUE", 2853, "UNKNOWN", false], [12260, "OBSERVED_TRUE", 10421, "UNKNOWN", false]]);
+    assert.equal(realCraftedUpgrade.value?.data?.recipeCoverage.state, "PARTIAL");
+    assert.equal(realCraftedUpgrade.value?.data?.bank.state, "UNKNOWN");
+    const craftedReadStore = new SqliteSnapshotReadStore(databasePath);
+    try {
+      const expectedCraftedProjection = new DashboardReadModel(craftedReadStore, () => Math.floor(Date.now() / 1000)).getForeverCraftedUpgradeAssessment({ version: "forever", name: RORDIN_SNAPSHOT_180.identity.name, realm: RORDIN_SNAPSHOT_180.identity.realm, snapshotId: RORDIN_SNAPSHOT_180.id });
+      assert.deepEqual(realCraftedUpgrade, expectedCraftedProjection, "the registered MCP protocol handler returns the canonical read-model result unchanged");
+    } finally { craftedReadStore.close(); }
+    assert.equal((await client.callTool({ name: "get_forever_crafted_upgrade_assessment", arguments: { name: "Rordin", realm: "Classic Beta PvP 2" } })).isError, true, "Forever version is explicit and mandatory");
+    assert.equal((await client.callTool({ name: "get_forever_character_quests", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "the Forever quest reader requires its explicit version");
+    assert.equal(foreverView.value?.provenance.freshness, "stale");
+    const foreverAllocation = structured<{ status: string; value?: { data?: { version: string; conclusion: string; scope: { accountMembership: string }; allocationPlan?: Array<{ disposition: string; item: { itemRef?: string }; recipient: { identityKey: string }; evidence: { transferability: string } }>; assessments: Array<{ eligibility: string; suitability: string; upgradeStatus: string; transferability: string; allocationPriority: string; decision: string }> } } }>(await client.callTool({ name: "get_forever_gear_allocation", arguments: { version: "forever", name: "Hallo", realm: "Forever Realm" } }));
+    assert.equal(foreverAllocation.status, "FOUND");
+    if (foreverAllocation.value?.data) assertForeverAllocationContract(foreverAllocation.value.data);
+    assert.equal(foreverAllocation.value?.data?.version, "forever");
+    assert.equal(foreverAllocation.value?.data?.scope.accountMembership, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.conclusion, "INSUFFICIENT_EVIDENCE");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.eligibility, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.upgradeStatus, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.transferability, "UNKNOWN");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.allocationPriority, "UNRANKED");
+    assert.equal(foreverAllocation.value?.data?.assessments[0]?.decision, "NO_RECOMMENDATION");
+    assert.ok(foreverAllocation.value?.data?.allocationPlan?.length, "MCP exposes the product plan projection");
+    assert.ok(foreverAllocation.value?.data?.allocationPlan?.every((entry) => entry.item.itemRef?.startsWith("item:") && entry.recipient.identityKey && (entry.disposition !== "POSSIBLE_OTHER_CHARACTER" || entry.evidence.transferability === "UNKNOWN")));
+    assert.equal((await client.callTool({ name: "get_forever_gear_observation", arguments: { name: "Hallo", realm: "Forever Realm" } })).isError, true, "Forever version is explicit and mandatory");
+
+    const candidateRead = structured<{ data?: { selection: string; characters: Array<{ identity: { name: string; identityKey: string }; captured: boolean; snapshot?: { snapshotId: number; freshness: string }; sidecar?: { rows: Array<{ observationState: string; currentCharacterCanUse: { state: string; value?: boolean } }> } }> }; provenance: { state: string; version: string; warning?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "retail" } }));
     assert.equal(candidateRead.provenance.state, "DERIVED");
     assert.equal(candidateRead.provenance.version, "retail");
     assert.match(candidateRead.provenance.warning ?? "", /not necessarily current inventory/);
@@ -144,6 +448,10 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(candidateVirek?.sidecar?.rows[0]?.currentCharacterCanUse.value, false);
     const candidateZero = candidateRead.data?.characters.find((entry) => entry.identity.name === "Zero");
     assert.equal(candidateZero?.captured, false, "missing sidecar is not an empty candidate list");
+    const candidateAllocation = structured<{ status: string; value?: { recommendation: string; candidate: { validity: string }; assessments: unknown[] } }>(await client.callTool({ name: "analyze_retail_gear_candidate", arguments: { version: "retail", exporterIdentityKey: candidateVirek!.identity.identityKey, snapshotId: candidateVirek!.snapshot!.snapshotId, rowOrdinal: 1 } }));
+    assert.equal(candidateAllocation.status, "FOUND");
+    assert.equal(candidateAllocation.value?.candidate.validity, "UNKNOWN_OR_NOT_ALLOCATABLE", "LAST_SEEN candidate evidence cannot be recommended as a current candidate");
+    assert.equal(candidateAllocation.value?.recommendation, "UNKNOWN");
     const unsupportedCandidates = structured<{ data?: unknown; provenance: { state: string; reason?: string } }>(await client.callTool({ name: "get_gear_candidate_evidence", arguments: { version: "classic-era" } }));
     assert.equal(unsupportedCandidates.provenance.state, "UNKNOWN");
     assert.match(unsupportedCandidates.provenance.reason ?? "", /Retail-only/);
@@ -195,7 +503,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
 
     const listed = structured<{ version: string; totalCount: number; truncated: boolean }>(await client.callTool({ name: "list_characters", arguments: { version: "retail" } }));
     assert.equal(listed.version, "retail");
-    assert.equal(listed.totalCount, 4);
+    assert.equal(listed.totalCount, 9);
     assert.equal(listed.truncated, false);
 
     const summary = structured<{ status: string; value?: { provenance: { state: string; version: string } } }>(await client.callTool({ name: "get_character_summary", arguments: { version: "retail", name: "Virek", realm: "Cairne" } }));
@@ -264,13 +572,13 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.equal(unknownState.value?.data?.professions.state, "UNKNOWN");
     assert.equal(unknownState.value?.data?.currencies.state, "UNKNOWN");
     assert.equal(unknownState.value?.data?.playtime.playedSeconds, undefined);
-    assert.equal(accountOverview.data?.storageCoverage.sharedStorage.guilds.owners.length, 1);
+    assert.equal(accountOverview.data?.storageCoverage.sharedStorage.guilds.owners.length, 2, "the independently observed retrieval fixture guild remains a separate owner");
     assert.equal(accountOverview.data?.currencies.returnedCount, 20);
     const detailedCurrencies = structured<{ data?: { aggregationScope: string; coverage: { unknownCharacters: number }; currencies: { items: Array<{ currencyID: number; scope: string; account?: { quantity?: number | null } | null; characterTotalCount: number; charactersTruncated: boolean }> } }; provenance: { state: string } }>(await client.callTool({ name: "get_account_currencies", arguments: { version: "retail", currencyID: 1, characterLimit: 1 } }));
     assert.equal(detailedCurrencies.data?.aggregationScope, "account-wide");
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.scope, "ACCOUNT");
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.account?.quantity, 0, "an observed account-wide zero is preserved and not summed with other characters");
-    assert.equal(detailedCurrencies.data?.currencies.items[0]?.characterTotalCount, 4);
+    assert.equal(detailedCurrencies.data?.currencies.items[0]?.characterTotalCount, 9);
     assert.equal(detailedCurrencies.data?.currencies.items[0]?.charactersTruncated, true);
     assert.equal(detailedCurrencies.provenance.state, "DERIVED");
     const realmCurrencyWithoutRealm = await client.callTool({ name: "get_account_currencies", arguments: { version: "classic-era" } });
@@ -282,7 +590,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     assert.ok((accountChanges.data?.totalCount ?? 0) > 0);
     assert.equal(accountChanges.data?.items.length, 1);
     assert.equal(accountChanges.data?.items[0]?.realm, "Cairne");
-    assert.equal(accountChanges.data?.truncated, false);
+    assert.equal(accountChanges.data?.truncated, true, "additional paired-transfer fixture changes remain visible through the existing bounded account-change contract");
     assert.equal(accountOverview.data?.currencies.truncated, true);
     const eraOverview = structured<{ data?: { version: string; aggregationScope: string; gold: Array<{ realm: string; gold: { totalKnownCopper?: number } }>; playtime: Array<{ realm: string; playtime: { totalKnownPlayedSeconds?: number } }>; currencies: { scope: string; byRealm?: Array<{ realm: string; coverage: { unknownCharacters: number } }> } } }>(await client.callTool({ name: "get_account_overview", arguments: { version: "classic-era" } }));
     assert.equal(eraOverview.data?.version, "classic-era");
@@ -552,6 +860,9 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
     assert.equal(toolListResponse.error, undefined, JSON.stringify(toolListResponse.error));
     const listedTools = (toolListResponse.result as { tools: Array<{ name: string }> }).tools;
     assert.deepEqual(listedTools.map((tool) => tool.name).sort(), [
+      "analyze_retail_gear_candidate",
+      "ask_forever_copilot",
+      "find_recipe_crafters",
       "get_account_changes",
       "get_account_currencies",
       "get_account_overview",
@@ -561,16 +872,29 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_character_equipment",
       "get_character_history",
       "get_character_professions",
+      "get_character_progression",
+      "get_character_quests",
       "get_character_spells",
       "get_character_state",
       "get_character_storage",
       "get_character_summary",
       "get_character_trainer",
+      "get_erp_change_proposal",
+      "get_erp_change_proposals",
+      "get_erp_operations_context",
+      "get_erp_project",
+      "get_erp_projects",
+      "get_forever_character_quests",
+      "get_forever_crafted_upgrade_assessment",
+      "get_forever_gear_allocation",
+      "get_forever_gear_observation",
+      "get_forever_market_prices",
       "get_gear_candidate_evidence",
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
       "get_profession_coverage",
+      "get_recipe_reagent_availability",
       "get_renown",
       "get_research_document",
       "get_research_section",
@@ -578,6 +902,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "list_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_forever_knowledge",
       "search_items",
       "search_research",
     ]);
