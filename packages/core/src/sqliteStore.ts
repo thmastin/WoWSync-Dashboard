@@ -841,6 +841,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
             if (!normalizedForeverObservation) foreverGearOutcome = "invalid-or-unsupported";
             else {
               const merged = mergeForeverStructuredObservation(existingParsed.foreverGearObservation, normalizedForeverObservation);
+              if (!existingParsed.character.race && normalizedForeverObservation.race) existingParsed.character.race = normalizedForeverObservation.race;
               existingParsed.foreverGearObservation = merged.value;
               existing.parsed_json = JSON.stringify(existingParsed);
               this.stmts.updateParsedSnapshot.run(existing.parsed_json, existing.id);

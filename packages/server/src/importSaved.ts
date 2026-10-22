@@ -400,13 +400,16 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
       : undefined;
     const equipmentObservation = typeof text === "string" && isRetailExportText(text) ? readEquipmentObservation(equipment, luaGet(latest, "specEquipmentObservation")) : undefined;
     const captureProfile = luaGet(record, "captureProfile");
+    // The addon writes race under sections.character.data (UnitRace); identity.race is only a fallback.
+    const foreverRace = [luaGet(luaGet(luaGet(sections, "character"), "data"), "race"), luaGet(identity, "race")]
+      .find((value): value is string => typeof value === "string" && value.trim() !== "")?.trim();
     const foreverGearObservation = typeof text === "string" && isForeverProfile(captureProfile) && foreverExportProfile(text) === captureProfile
       ? {
           clientProfile: captureProfile,
           name: typeof name === "string" ? name : "",
           realm: typeof realm === "string" ? realm : "",
           generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
-          ...(typeof luaGet(identity, "race") === "string" && (luaGet(identity, "race") as string).trim() ? { race: (luaGet(identity, "race") as string).trim() } : {}),
+          ...(foreverRace ? { race: foreverRace } : {}),
           ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
           ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && typeof luaGet(professionRecipes, "changedAt") === "number"
             ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") } }

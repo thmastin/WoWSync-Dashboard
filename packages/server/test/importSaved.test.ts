@@ -789,6 +789,46 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
   } finally { store.close(); }
 });
 
+test("Forever race is read from sections.character.data.race, with identity.race as fallback and an observed Race: line winning", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  assert.match(text, /^Race: \?$/m);
+  const base = { guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001" };
+  const observation = (extra: Record<string, string>) => parseSavedExports(savedVariables([{ ...base, ...extra }]), "fixture")[0];
+  const raceOf = (extra: Record<string, string>) => (observation(extra).foreverGearObservation as { race?: string } | undefined)?.race;
+  assert.equal(raceOf({ sectionRace: "Dwarf" }), "Dwarf");
+  assert.equal(raceOf({ race: "Gnome" }), "Gnome");
+  assert.equal(raceOf({ sectionRace: "Dwarf", race: "Gnome" }), "Dwarf");
+  assert.equal(raceOf({}), undefined);
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const saved = observation({ sectionRace: "Dwarf" });
+    assert.equal(store.importSnapshot(saved.text!, { foreverGearObservation: saved.foreverGearObservation }).character.race, "Dwarf");
+    // An observed Race: text line still wins over the structured observation.
+    const withLine = text.replace("Race: ?", "Race: Human");
+    assert.match(withLine, /^Race: Human$/m);
+    const lineStore = new SqliteSnapshotStore(":memory:");
+    try {
+      assert.equal(lineStore.importSnapshot(withLine, { foreverGearObservation: saved.foreverGearObservation }).character.race, "Human");
+    } finally { lineStore.close(); }
+  } finally { store.close(); }
+});
+
+test("Forever duplicate-text re-sync persists race observed after the first import", () => {
+  const generatedAt = 1_791_500_000;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+  const base = { guid: "Player-1-HALLO", name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001" };
+  const first = parseSavedExports(savedVariables([base]), "fixture")[0];
+  const second = parseSavedExports(savedVariables([{ ...base, sectionRace: "Dwarf" }]), "fixture")[0];
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    assert.equal(store.importSnapshot(first.text!, { foreverGearObservation: first.foreverGearObservation }).character.race, undefined);
+    const resync = store.importSnapshot(second.text!, { foreverGearObservation: second.foreverGearObservation });
+    assert.equal(resync.isDuplicate, true);
+    assert.equal(resync.character.race, "Dwarf");
+  } finally { store.close(); }
+});
+
 test("Forever skill rows do not inherit a timestamp from unrelated fresh item evidence", () => {
   const generatedAt = 1_791_500_000;
   const text = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });

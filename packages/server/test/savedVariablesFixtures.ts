@@ -10,6 +10,8 @@ export interface SavedRecord {
   name?: string;
   realm?: string;
   race?: string;
+  /** Race as the addon really writes it: `sections.character.data.race`. */
+  sectionRace?: string;
   /** The export text persisted as latestExport.text; omit for a character with no saved export. */
   text?: string;
   generatedAt?: number;
@@ -38,6 +40,7 @@ export function savedVariables(records: SavedRecord[], opts: { schemaVersion?: n
     if (r.realm !== undefined) lines.push(`["realm"] = ${q(r.realm)},`);
     if (r.race !== undefined) lines.push(`["race"] = ${q(r.race)},`);
     lines.push("},", '["sections"] = {');
+    if (r.sectionRace !== undefined) lines.push('["character"] = {', '["data"] = {', `["race"] = ${q(r.sectionRace)},`, "},", "},");
     if (r.currencies !== undefined) lines.push(`["currencies"] = ${r.currencies},`);
     if (r.professionRecipes !== undefined) lines.push(`["professionRecipes"] = ${r.professionRecipes},`);
     if (r.quests !== undefined) lines.push(`["quests"] = ${r.quests},`);
