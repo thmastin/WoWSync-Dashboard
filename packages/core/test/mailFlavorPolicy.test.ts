@@ -3,12 +3,12 @@ import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
-import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES } from "../src/mailFlavorPolicy.ts";
+import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "../src/mailFlavorPolicy.ts";
 
 test("flavor policies keep build verification and AH sources isolated", () => {
   assert.equal(classicEraBuildVerification({ clientVersion: "1.15.9", clientBuild: "70003" }), "VERIFIED");
-  assert.equal(classicEraBuildVerification({ clientVersion: "1.15.9", clientBuild: "70004" }), "UNVERIFIED_BUILD");
-  assert.equal(classicEraBuildVerification({ clientVersion: "1.60.1", clientBuild: "70338" }), "UNSUPPORTED");
+  assert.equal(classicEraBuildVerification({ clientVersion: "1.15.10", clientBuild: "70004" }), "UNVERIFIED_BUILD");
+  assert.equal(classicEraBuildVerification({ clientVersion: "1.60.1", clientBuild: "70338", clientFamily: "Forever" }), "UNSUPPORTED");
   assert.equal(MAIL_FLAVOR_POLICIES["classic-era"].auctionPriceSource, "UNKNOWN");
   assert.equal(MAIL_FLAVOR_POLICIES.forever.auctionPriceSource, "FOREVER_MARKET");
 });
@@ -17,6 +17,18 @@ test("Classic Era identity requires a stable observed GUID", () => {
   assert.equal(classicEraGuidContinuity("Player-1-A", ["Player-1-A"]).state, "OBSERVED");
   assert.equal(classicEraGuidContinuity(undefined, []).state, "UNKNOWN");
   assert.equal(classicEraGuidContinuity("Player-1-A", ["Player-1-B"]).state, "UNKNOWN");
+});
+
+test("shared flavor orchestrator preserves Forever step order and stamps the selected ruleset", () => {
+  const groups = { gear: ["gear"], materials: ["material"], pouches: ["pouch"], sale: ["sale"], keep: ["keep"] };
+  const forever = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES.forever, groups);
+  assert.equal(forever.version, "forever");
+  assert.equal(forever.ruleset, "forever-min-70291-allocation-screen-v3");
+  assert.deepEqual(forever.steps.map((step) => step.kind), ["GEAR_MAIL", "MATERIAL_MAIL", "POUCH_MAIL", "SALE", "KEEP"]);
+  const era = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], groups);
+  assert.equal(era.version, "classic-era");
+  assert.equal(era.ruleset, "classic-era-build-70003-mail-v1");
+  assert.deepEqual(era.steps, forever.steps);
 });
 
 test("Classic Era freshness is 72 hours and talent spec is DERIVED only from an unambiguous observed tree", () => {

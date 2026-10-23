@@ -14,13 +14,35 @@ export interface FlavorMailPolicy {
   auctionPriceSource: "UNKNOWN" | "FOREVER_MARKET";
 }
 
+export interface MailPlanGroups {
+  gear: unknown[];
+  materials: unknown[];
+  pouches?: unknown[];
+  sale: unknown[];
+  keep: unknown[];
+}
+
+export function orchestrateFlavorMailPlan(policy: FlavorMailPolicy, groups: MailPlanGroups): { version: MailFlavor; ruleset: string; steps: Array<{ kind: string; action: unknown }> } {
+  return {
+    version: policy.flavor,
+    ruleset: policy.ruleset,
+    steps: [
+      ...groups.gear.map((action) => ({ kind: "GEAR_MAIL", action })),
+      ...groups.materials.map((action) => ({ kind: "MATERIAL_MAIL", action })),
+      ...(groups.pouches ?? []).map((action) => ({ kind: "POUCH_MAIL", action })),
+      ...groups.sale.map((action) => ({ kind: "SALE", action })),
+      ...groups.keep.map((action) => ({ kind: "KEEP", action })),
+    ],
+  };
+}
+
 export const MAIL_FLAVOR_POLICIES = Object.freeze({
   "classic-era": { flavor: "classic-era", ruleset: CLASSIC_ERA_MAIL_RULESET, freshnessSeconds: 72 * 60 * 60, verifiedBuilds: CLASSIC_ERA_VERIFIED_BUILDS, auctionPriceSource: "UNKNOWN" },
   forever: { flavor: "forever", ruleset: FOREVER_MAIL_RULESET, freshnessSeconds: RECENT_THRESHOLD_SECONDS, verifiedBuilds: ["70291", "70338", "70450"], auctionPriceSource: "FOREVER_MARKET" },
 } satisfies Readonly<Record<MailFlavor, FlavorMailPolicy>>);
 
-export function classicEraBuildVerification(character: Pick<CharacterSection, "clientVersion" | "clientBuild">): "VERIFIED" | "UNVERIFIED_BUILD" | "UNSUPPORTED" {
-  if (character.clientVersion !== "1.15.9" || !/^\d+$/.test(character.clientBuild ?? "")) return "UNSUPPORTED";
+export function classicEraBuildVerification(character: Pick<CharacterSection, "clientVersion" | "clientBuild" | "clientFamily">): "VERIFIED" | "UNVERIFIED_BUILD" | "UNSUPPORTED" {
+  if (character.clientFamily !== undefined || !/^1\.\d+\.\d+$/.test(character.clientVersion ?? "") || !/^\d+$/.test(character.clientBuild ?? "")) return "UNSUPPORTED";
   const build = Number(character.clientBuild);
   if (!Number.isSafeInteger(build) || build < 70003) return "UNSUPPORTED";
   return CLASSIC_ERA_VERIFIED_BUILDS.includes(character.clientBuild as "70003") ? "VERIFIED" : "UNVERIFIED_BUILD";

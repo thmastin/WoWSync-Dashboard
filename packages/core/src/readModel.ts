@@ -33,9 +33,9 @@ import { findRecipeCrafters, knowledgeRows, matchesRecipeFilter, matchTrainerSer
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 import { marketPrice } from "./foreverPrices.ts";
-import { eligibleMailRecipients, orderMailPlanSteps, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
+import { eligibleMailRecipients, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
 import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
-import { CLASSIC_ERA_MAIL_RULESET, classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES } from "./mailFlavorPolicy.ts";
+import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
 import { resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
@@ -1537,7 +1537,7 @@ export class DashboardReadModel {
   }
 
   /** A mailbox errand projection over the canonical Forever gear evaluator. */
-  getForeverMailPlan(query: CharacterQuery, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>> } = {}) {
+  getForeverMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>> } = {}) {
     if (query.version !== "forever") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Mail planning is isolated to Forever 1.60.1 snapshots at or above build 70291." } } };
     const base = this.getForeverGearAllocation(query);
     if (base.status !== "FOUND" || !base.value.data) return base;
@@ -1547,7 +1547,7 @@ export class DashboardReadModel {
     const source = data.candidateSources.find((row) => row.source.identityKey === sourceCharacter.identityKey);
     const sameRealmFaction = eligibleMailRecipients(sourceCharacter, this.characters("forever"));
     const settingsScope = sourceCharacter.faction === "Alliance" || sourceCharacter.faction === "Horde"
-      ? { accountId: "default", version: "forever" as const, realm: sourceCharacter.realm, faction: sourceCharacter.faction as "Alliance" | "Horde" }
+      ? { accountId: query.accountId ?? "default", version: "forever" as const, realm: sourceCharacter.realm, faction: sourceCharacter.faction as "Alliance" | "Horde" }
       : undefined;
     const mailSettings = settingsScope ? this.store.getMailPlanSettings(settingsScope) : undefined;
     const auctionCharacter = settingsScope
@@ -1704,7 +1704,8 @@ export class DashboardReadModel {
     const buildVerification = data.buildVerification;
     const sourceProfile = (this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation as { clientProfile?: string } | undefined)?.clientProfile;
     const clientBuild = parseForeverProfile(sourceProfile)?.clientBuild;
-    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: MAIL_FLAVOR_POLICIES.forever.ruleset, buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, settings: { accountId: settingsScope?.accountId ?? "default", auctionCharacter }, steps: orderMailPlanSteps({ gear: mail, materials: materialMail, pouches: pouchMail, sale, keep }), screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons,
+    const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES.forever, { gear: mail, materials: materialMail, pouches: pouchMail, sale, keep });
+    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: orchestration.ruleset, buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, ...(mailSettings ? { settings: { accountId: settingsScope?.accountId ?? "default", auctionCharacter } } : {}), steps: orchestration.steps, screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons,
       bank: source?.bank ?? { state: "UNKNOWN", reason: "No bank evidence." }, professionChecks,
       plannedSpecs: Object.entries(FOREVER_PLANNED_SPECS).map(([identityKey, spec]) => ({ identityKey, spec, provenance: "USER_CONFIGURED" as const, informational: true as const })),
     }, provenance: { ...base.value.provenance, state: "DERIVED" as const, ...(observedAt !== undefined ? { observedAt } : {}) } } };
@@ -1788,15 +1789,21 @@ export class DashboardReadModel {
         };
       });
       const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
+      const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
+        gear: [],
+        materials: items.filter((item) => item.action === "MAIL_TO_CRAFTER"),
+        sale: [],
+        keep: items.filter((item) => item.action !== "MAIL_TO_CRAFTER"),
+      });
       return { data: {
-        version: "classic-era" as const, ruleset: CLASSIC_ERA_MAIL_RULESET, buildVerification,
+        version: orchestration.version, ruleset: orchestration.ruleset, buildVerification,
         confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" as const : "LOWERED_UNVERIFIED_BUILD" as const,
         identity, bagEvidence: { state: bags.status.state, ...(observedAt !== undefined ? { observedAt } : {}), freshness, itemsKnownEmpty: bags.itemsKnownEmpty },
         auctionHouse: { state: "UNKNOWN" as const, reason: "No Classic Era Auction House price source is available." },
         settings: { accountId: settingsScope?.accountId ?? query.accountId ?? "default", auctionCharacter, mainCharacter },
         vendorValueSource: "Captured WOWSYNC bags.vendorEachCopper",
         talentSpec: { ...spec, provenance: spec.state === "DERIVED" ? "DERIVED" as const : "UNKNOWN" as const },
-        items,
+        items, steps: orchestration.steps,
       }, provenance: { state: "DERIVED" as const, version: "classic-era" as const, identityKey: character.identityKey, snapshotId: snapshot.id, ...(observedAt !== undefined ? { observedAt, freshness } : {}), source: "Classic Era WOWSYNC character, bag, and talent observations", ...(identity.reason ? { reason: identity.reason } : {}) } };
     });
   }

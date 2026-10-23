@@ -1,0 +1,122 @@
+WOWSYNC v1
+
+Generated: 1792668982
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1792668970
+Name: Snapshot529
+Realm: AnonymizedEraRealm
+Class: HUNTER
+Level: 2
+Faction: Alliance
+MoneyCopper: 0
+PlayedSeconds: 484
+LevelPlayedSeconds: 44
+XP: 126/900
+Client: 1.15.9 build 70003
+
+[LOCATION]
+State: OBSERVED; complete; observed=1792668734
+Zone: Dun Morogh
+Subzone: Coldridge Valley
+MapID: 1426
+PositionPercent: 29.84,71.46
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1792668967
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	item:148::::::::2::::::::::	Rugged Trapper's Shirt	1	0	?
+5:Chest	EMPTY
+6:Waist	EMPTY
+7:Legs	item:147::::::::2::::::::::	Rugged Trapper's Pants	1	1	?
+8:Feet	item:129::::::::2::::::::::	Rugged Trapper's Boots	1	0	?
+9:Wrist	EMPTY
+10:Hands	EMPTY
+11:Finger 1	EMPTY
+12:Finger 2	EMPTY
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	EMPTY
+16:Main Hand	item:37::::::::2::::::::::	Worn Axe	2	1	?
+17:Off Hand	EMPTY
+18:Ranged	item:2508::::::::2::::::::::	Old Blunderbuss	2	1	?
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1792668967
+container	capacity	free	family	bagRef
+0	20	7	0	-
+1	6	5	2	item:2102::::::::2::::::::::
+2	0	0	?	-
+3	0	0	?	-
+4	0	0	?	-
+Slots: 12 free / 26
+itemRef	name	qty	bound	vendorEachCopper
+item:117::::::::2::::::::::	Tough Jerky	4	no	1
+item:159::::::::2::::::::::	Refreshing Spring Water	2	no	1
+item:1368::::::::2::::::::::	Ragged Leather Gloves	1	no	2
+item:1380::::::::2::::::::::	Frayed Robe	1	no	4
+item:2187::::::::2::::::::::	A Stack of Letters	1	yes	0
+item:2516::::::::2::::::::::	Light Shot	179	no	0
+item:2651::::::::2::::::::::	Flimsy Chain Bracers	1	no	3
+item:4865::::::::2::::::::::	Ruined Pelt	3	no	5
+item:5571::::::::2::::::::::	Small Black Pouch	1	no	250
+item:6171::::::::2::::::::::	Wolf Handler Gloves	1	yes	6
+item:6948::::::::2::::::::::	Hearthstone	1	yes	0
+item:7074::::::::2::::::::::	Chipped Claw	8	no	4
+item:9566::::::::2::::::::::	Etched Rune	1	yes	0
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1792668941
+profession	skill	maxSkill
+Professions: None identified in exposed skill lines
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1792668941
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID	name	rank
+75	Auto Shot	
+81	Dodge	Passive
+2481	Find Treasure	Racial
+2973	Raptor Strike	Rank 1
+6603	Attack	
+20594	Stoneform	Racial
+20595	Gun Specialization	Racial Passive
+20596	Frost Resistance	Racial Passive
+
+[TRAINERS]
+State: UNKNOWN
+Reason: Not observed
+
+[ITEM METADATA]
+baseItemID	classID	subclassID	bindType	expansionID	isCraftingReagent
+37	2	0	0	254	no
+117	0	0	0	254	no
+129	4	0	0	254	no
+147	4	1	0	254	no
+148	4	0	0	254	no
+159	0	0	0	254	no
+1368	4	2	0	254	no
+1380	4	1	0	254	no
+2102	11	3	0	254	no
+2187	12	0	4	254	no
+2508	2	3	0	254	no
+2516	6	3	0	254	no
+2651	4	3	0	254	no
+4865	15	0	0	254	no
+5571	1	0	0	254	no
+6171	4	2	1	254	no
+6948	15	0	1	254	no
+7074	15	0	0	254	no
+9566	12	0	4	254	no
+
+[END]
