@@ -1,0 +1,31 @@
+{
+  "fixtureKind": "anonymized DEV-derived scenario inputs",
+  "sourceSnapshotIds": [520, 538, 540],
+  "snapshotCutoff": "2026-10-22",
+  "observedForeverItemIds": {
+    "craftingMaterial": 2589,
+    "containerItem": 4496
+  },
+  "snapshot541Scenario": {
+    "snapshotId": 541,
+    "clientBuild": 70532,
+    "holder": { "class": "WARLOCK", "level": 12, "race": "Gnome", "faction": "Alliance", "professionsState": "OBSERVED", "professions": ["Tailoring", "Enchanting", "Cooking"], "recipeKnowledgeState": "LAST_SEEN", "recipeKnowledgeCompleteness": "partial" },
+    "materials": [
+      { "itemId": 2589, "name": "Linen Cloth", "usedBy": "Tailoring", "recipeEvidence": "LAST_SEEN" },
+      { "itemId": 2320, "name": "Coarse Thread", "usedBy": "Tailoring", "recipeEvidence": "LAST_SEEN" },
+      { "itemId": 10938, "name": "Lesser Magic Essence", "usedBy": "Enchanting", "recipeEvidence": "LAST_SEEN" }
+    ],
+    "containers": [4496, 5572],
+    "eligibleAltBagSlots": [20, 44]
+  },
+  "observedBagSlots": [
+    { "snapshotId": 520, "realm": "Classic Beta PvE", "faction": "Alliance", "state": "OBSERVED", "totalSlots": 20 },
+    { "snapshotId": 540, "realm": "Classic Beta PvE", "faction": "Alliance", "state": "OBSERVED", "totalSlots": 44 },
+    { "snapshotId": 513, "realm": "Classic Beta PvE", "faction": "Horde", "state": "OBSERVED", "totalSlots": 26 }
+  ],
+  "scenarioRows": [
+    { "identityKey": "fixture::crafting-alt", "name": "Alt A", "realm": "Classic Beta PvE", "faction": "Alliance", "professionsState": "OBSERVED", "observedReagentIds": [2589], "bagSlots": 20 },
+    { "identityKey": "fixture::other-alt", "name": "Alt B", "realm": "Classic Beta PvE", "faction": "Alliance", "professionsState": "OBSERVED", "observedReagentIds": [], "bagSlots": 44 },
+    { "identityKey": "fixture::other-faction", "name": "Alt C", "realm": "Classic Beta PvE", "faction": "Horde", "professionsState": "OBSERVED", "observedReagentIds": [2589], "bagSlots": 26 }
+  ]
+}
