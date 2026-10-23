@@ -42,9 +42,13 @@ test("[REAL OBSERVED FIXTURE] Forever 70338 Hallo Emberstone receives a current-
     if (result.status !== "FOUND" || !result.value.data || !("mail" in result.value.data)) throw new Error("Expected the 70338 mail-plan projection");
     assert.equal(result.value.data.ruleset, "forever-min-70291-allocation-screen-v3");
     assert.equal(result.value.data.buildVerification, "VERIFIED");
+    assert.equal(result.value.data.build, 70338, "numeric build accompanies verification");
     assert.equal(result.value.data.confidenceQualifier, "STANDARD");
     assert.deepEqual(result.value.data.plannedSpecs, []);
     assert.deepEqual(result.value.data.professionChecks.map((row) => row.character).sort(), ["Hallo", "Rordin"], "the real same-realm Forever roster is consulted");
+    assert.ok(Array.isArray(result.value.data.screenedRecipients));
+    assert.ok(result.value.data.screenedRecipients.every((row) => "name" in row && "class" in row && "level" in row && "faction" in row && "snapshotId" in row && "freshness" in row && "evaluation" in row));
+    assert.equal(result.value.data.scope.accountMembership, "UNKNOWN");
     assert.ok(result.value.data.mail.every((row) => row.buildVerification === "VERIFIED"));
   } finally {
     store.close();

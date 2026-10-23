@@ -56,6 +56,21 @@ test("Forever observation preserves exact variants and keeps evaluation claims U
   assert.match(view.bank.reason!, /not empty/);
 });
 
+test("Forever carried inventory exposes classified non-gear buckets and an UNKNOWN bucket", () => {
+  const itemString = "item:777:0";
+  const fact = itemFact(itemString, 777, "", false);
+  const values = fact.itemInfoInstant.returns;
+  values[1] = { observation: { state: "OBSERVED", type: "string", value: "Consumable" } };
+  values[2] = { observation: { state: "OBSERVED", type: "string", value: "Potion" } };
+  const view = buildForeverGearObservation({ identity, snapshotId: 80, generatedAt: 99, importedAt: 102, equipment, bank, now: 110,
+    bags: { ...bags, items: [{ itemRef: "item:777:0", name: "Potion", qty: 1 }] },
+    structured: { ...sidecar, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 777, itemString, count: 1 } } }] } }, itemEvidence: { observedAt: 101, completeness: "partial", data: { items: [fact] } } } });
+  assert.equal(view.snapshot.clientBuild, 70291);
+  assert.equal(view.evaluationCandidates.carriedBuckets.consumables[0]?.classification, "CONSUMABLES");
+  assert.equal(view.evaluationCandidates.carriedBuckets.consumables[0]?.reason, "Confirmed non-gear from observed exact-item class, subclass, and equip location.");
+  assert.equal(view.evaluationCandidates.carriedBuckets.unknown.length, 0);
+});
+
 test("missing and stale structured observations remain explicit", () => {
   const missing = buildForeverGearObservation({ identity, snapshotId: 2, importedAt: 1000, equipment, bags, bank, now: 10_000_000 });
   assert.equal(missing.equipment.source, "WOWSYNC v1 equipment");

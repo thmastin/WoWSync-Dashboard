@@ -329,7 +329,9 @@ export function buildForeverGearObservation(input: {
   const sectionTime = (kind: "equipment" | "bags" | "bank", fallback: number | undefined) => structured?.[kind]?.observedAt as number | undefined ?? fallback;
   const freshness = (at?: number) => at === undefined ? "unknown" : classifyFreshness(at, input.now);
   const equipmentAt = sectionTime("equipment", equipment.status.observedAt ?? input.generatedAt ?? input.importedAt);
-  const bagsAt = sectionTime("bags", bags.status.observedAt ?? input.generatedAt ?? input.importedAt);
+  // Bag freshness belongs to the bag capture itself. A recent character export
+  // cannot refresh an absent or failed bag section.
+  const bagsAt = sectionTime("bags", bags.status.observedAt);
   const bankAt = sectionTime("bank", bank.status.observedAt);
   const useStructuredEquipment = usableRows(structured?.equipment, "slots");
   const useStructuredBags = usableRows(structured?.bags, "containers");
@@ -471,6 +473,35 @@ export function buildForeverGearObservation(input: {
     if (apiItemType && usableEquipLocation && completeBoolean && equippable.value === true) return [];
     return [{ ...item, reason: "Exact-variant item type, equip-location, or IsEquippableItem evidence is missing or inconsistent; equipment candidacy remains UNKNOWN." }];
   });
+  // Inventory taxonomy is independent from the exact-variant gear evaluator.
+  // Only API observations for this exact item string may classify a row.
+  const carriedBuckets = { consumables: [] as Array<Record<string, unknown>>, materials: [] as Array<Record<string, unknown>>, questUtility: [] as Array<Record<string, unknown>>, unknown: [] as Array<Record<string, unknown>> };
+  for (const item of observedCarried) {
+    if (item.itemRef && candidateRefs.has(item.itemRef)) continue;
+    const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
+    const instant = object(fact?.itemInfoInstant);
+    const instantInput = object(instant?.input);
+    const returns = instant && Array.isArray(instant.returns) ? instant.returns : [];
+    const val = (i: number) => object(object(returns[i - 1])?.observation);
+    const exact = typeof item.itemRef === "string" && instant?.api === "C_Item.GetItemInfoInstant" && instant.state === "OBSERVED_VALUE" && instantInput?.itemString === item.itemRef && val(1)?.state === "OBSERVED" && val(1)?.value === (item.itemID ?? itemIdFromRef(item.itemRef));
+    const cls = exact && val(2)?.state === "OBSERVED" && val(2)?.type === "string" ? val(2)?.value as string : undefined;
+    const sub = exact && val(3)?.state === "OBSERVED" && val(3)?.type === "string" ? val(3)?.value as string : undefined;
+    const loc = exact && val(4)?.state === "OBSERVED" && val(4)?.type === "string" ? val(4)?.value as string : undefined;
+    const row = { ...item, classification: "UNKNOWN" as string, itemType: cls, itemSubType: sub, equipLocation: loc,
+      reason: !item.itemRef || item.itemIdentity !== "OBSERVED" ? "Exact item identity is UNKNOWN for this carried slot." : "Exact item class, subclass, or equip location is UNKNOWN." };
+    let bucket: keyof typeof carriedBuckets = "unknown";
+    if (cls && sub && loc !== undefined) {
+      const lower = `${cls} ${sub}`.toLowerCase();
+      if (["consumable", "potion", "elixir", "food & drink"].some((x) => lower.includes(x))) bucket = "consumables";
+      else if (["trade goods", "tradegoods", "reagent", "profession"].some((x) => lower.includes(x))) bucket = "materials";
+      else if (["quest", "key", "miscellaneous"].some((x) => lower.includes(x)) || loc === "INVTYPE_NON_EQUIP_IGNORE") bucket = "questUtility";
+      else if (fact && cls !== "Weapon" && cls !== "Armor" && loc === "") bucket = "questUtility";
+      else bucket = "unknown";
+      row.classification = bucket === "unknown" ? "UNKNOWN" : bucket === "questUtility" ? "QUEST_UTILITY" : bucket.toUpperCase();
+      row.reason = bucket === "unknown" ? "Observed item class and location do not match a supported non-gear bucket." : "Confirmed non-gear from observed exact-item class, subclass, and equip location.";
+    }
+    carriedBuckets[bucket].push(row);
+  }
   const evaluationState = itemFactsLastSeen ? "LAST_SEEN" as const
     : itemFactCoverageComplete ? "OBSERVED" as const
     : evaluationItems.length > 0 || evidence?.completeness === "partial" || (evidence !== undefined && bagsState === "OBSERVED" && structured?.bags?.completeness === "partial") ? "PARTIAL" as const : "UNKNOWN" as const;
@@ -483,13 +514,13 @@ export function buildForeverGearObservation(input: {
       : "Potential equipment classification is UNKNOWN because matching, complete Forever item API evidence is unavailable.";
   return {
     identity: { ...identity, accountScope: "UNKNOWN", accountScopeReason: "WoWSync character identity carries version, realm, and name but no WoW account identifier; this view is scoped to the Dashboard import context and does not assert Battle.net account identity." },
-    snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt, ...(structured?.clientProfile ? { clientProfile: structured.clientProfile } : {}), buildVerification: (() => { const parsed = parseForeverProfile(structured?.clientProfile); return parsed ? foreverBuildVerification(parsed) : "UNVERIFIED_BUILD"; })() },
+    snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt, ...(structured?.clientProfile ? { clientProfile: structured.clientProfile } : {}), ...(parseForeverProfile(structured?.clientProfile) ? { clientBuild: Number(parseForeverProfile(structured?.clientProfile)!.clientBuild) } : {}), buildVerification: (() => { const parsed = parseForeverProfile(structured?.clientProfile); return parsed ? foreverBuildVerification(parsed) : "UNVERIFIED_BUILD"; })() },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems.map((item) => {
       const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
       return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, structured?.clientProfile, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;
     }) },
     carried: { state: bagsState, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}), items: carriedItems?.map((item) => ({ ...item, locatedWith: { state: item.provenance, characterIdentityKey: identity.identityKey, locationScope: "CHARACTER_CARRIED_INVENTORY" as const, source: bagsSource, ...(bagsAt !== undefined ? { observedAt: bagsAt, freshness: freshness(bagsAt) } : {}) }, ownership: { state: "UNKNOWN" as const, reason: "Carried inventory location does not independently establish ownership." }, binding: typeof item.bound === "boolean" ? { state: item.provenance, value: item.bound, observedAt: bagsAt, provenance: item.provenance } : { state: "UNKNOWN" as const, reason: "The carried item binding facet was not observed." }, transferability: { state: "UNKNOWN" as const, reason: "A binding facet alone does not prove whether this item can be transferred to the requested character." } })) },
-    evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
+    evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, carriedBuckets, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: useStructuredBank ? structuredState(structured?.bank) : bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), source: useStructuredBank ? "Forever WoWSyncDB character bank tabs" : "WOWSYNC v1 character bank", items: bankItems, reason: bank.status.state === "UNKNOWN" && !useStructuredBank ? "Bank contents were not observed; unavailable is not empty." : undefined },
     quests: buildForeverQuestObservation({ section: structured?.quests, profile: structured?.clientProfile ?? "UNKNOWN", identity: { identityKey: identity.identityKey, name: identity.name, realm: identity.realm }, now: input.now }),
