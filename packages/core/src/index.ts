@@ -53,4 +53,5 @@ export { parseLuaLiteral, parseQuestieDataBlock, luaArray, LuaLiteralError } fro
 export * from "./foreverSkills.ts";
 export * from "./foreverPrices.ts";
 export * from "./mailFlavorPolicy.ts";
+export * from "./mailPlanSettings.ts";
 export * from "./foreverRecipeLearning.ts";

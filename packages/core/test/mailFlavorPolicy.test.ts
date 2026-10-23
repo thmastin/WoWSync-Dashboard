@@ -33,7 +33,7 @@ test("Classic Era mail plan reads only Era bags and never falls back to same-nam
   try {
     const now = 1_792_000_000;
     const eraRaw = buildWowSyncExport({ generatedAt: now, character: {
-      name: "SameName", realm: "SameRealm", class: "Warrior", faction: "Alliance", level: 60, clientFamily: "Classic", clientVersion: "1.15.9", clientBuild: "70003",
+    name: "SameName", realm: "SameRealm", class: "Warrior", faction: "Alliance", level: 60, clientVersion: "1.15.9", clientBuild: "70003",
     }, bags: { containers: [{ id: 0, capacity: 16, free: 15, items: [{ itemRef: "item:529", name: "Era item", qty: 1, vendorEachCopper: 47 }] }] }, professions: { entries: [] } })
       .replace("Client: 1.15.9 build 70003\n", "Client: 1.15.9 build 70003\nGUID: Player-529-ANON\nTalentStatus: OBSERVED\ntalentTree\tname\tpointsSpent\ntalentTree\tArms\t31\ntalentTree\tFury\t20\ntalentTree\tProtection\t0\n");
     const foreverRaw = buildWowSyncExport({ generatedAt: now, character: {
@@ -43,7 +43,7 @@ test("Classic Era mail plan reads only Era bags and never falls back to same-nam
     store.importSnapshot(foreverRaw);
     const plan = new DashboardReadModel(store, () => now).getClassicEraMailPlan({ version: "classic-era", name: "SameName", realm: "SameRealm" });
     assert.equal(plan.status, "FOUND");
-    if (plan.status !== "FOUND" || !plan.value.data) throw new Error("Expected Era plan data");
+    if (plan.status !== "FOUND" || !("data" in plan.value) || !plan.value.data) throw new Error("Expected Era plan data");
     assert.equal(plan.value.data.items[0]?.name, "Era item");
     assert.equal(plan.value.data.items[0]?.vendorEachCopper, 47);
     assert.equal(plan.value.data.items[0]?.auctionHouseValue, "UNKNOWN");

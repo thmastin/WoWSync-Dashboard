@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ErpProjectConflictError, validateErpProject, type ErpProject, type ErpProjectDraft, type ErpProjectEvent, type ErpReservation, type ErpWorkOrder } from "./erpProjects.ts";
 import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
 import { buildErpNeedReviewSnapshot, type ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
+import { MailSettingsValidationError, validateMailPlanSettingsInput, validateMailSettingsScope, type MailPlanSettings, type MailPlanSettingsScope } from "./mailPlanSettings.ts";
 
 function validatePortfolioNeedDependencies(projects: readonly ErpProject[]): void {
   const byId = new Map(projects.map((project) => [project.stableId, project]));
@@ -786,6 +787,35 @@ export class SqliteSnapshotStore implements SnapshotStore {
       }
       throw err;
     }
+  }
+
+  private mailSettingsKey(scope: MailPlanSettingsScope): string {
+    return "mail-plan-settings:v1:" + encodeURIComponent(JSON.stringify([scope.accountId, scope.version, scope.realm, scope.faction]));
+  }
+
+  getMailPlanSettings(input: MailPlanSettingsScope): MailPlanSettings | undefined {
+    const scope = validateMailSettingsScope(input);
+    const row = one<{ value: string }>(this.stmts.getMeta, this.mailSettingsKey(scope));
+    if (!row) return undefined;
+    let value: unknown;
+    try { value = JSON.parse(row.value); } catch { throw new MailSettingsValidationError("Stored mail settings are malformed JSON."); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new MailSettingsValidationError("Stored mail settings are malformed.");
+    const record = value as MailPlanSettings;
+    const storedScope = validateMailSettingsScope(record);
+    if (storedScope.accountId !== scope.accountId || storedScope.version !== scope.version || storedScope.realm !== scope.realm || storedScope.faction !== scope.faction
+      || !Number.isSafeInteger(record.updatedAt) || record.provenance !== "USER_CONFIGURED"
+      || (record.auctionCharacterIdentityKey !== undefined && typeof record.auctionCharacterIdentityKey !== "string")
+      || (record.mainCharacterIdentityKey !== undefined && typeof record.mainCharacterIdentityKey !== "string")) {
+      throw new MailSettingsValidationError("Stored mail settings do not match their persistence scope.");
+    }
+    return record;
+  }
+
+  setMailPlanSettings(input: MailPlanSettings): MailPlanSettings {
+    if (this.readOnly) throw new Error("The snapshot store is read-only.");
+    const normalized = validateMailPlanSettingsInput(input, this.listCharacters(input.version), input.updatedAt);
+    this.inTransaction(() => this.stmts.setMeta.run(this.mailSettingsKey(normalized), JSON.stringify(normalized)));
+    return normalized;
   }
 
   importSnapshot(raw: string, extras: ImportExtras = {}): ImportResult {
@@ -2018,6 +2048,10 @@ export class SqliteSnapshotReadStore implements SnapshotReadStore {
 
   constructor(path: string) {
     this.store = new SqliteSnapshotStore(path, { readOnly: true });
+  }
+
+  getMailPlanSettings(scope: MailPlanSettingsScope): MailPlanSettings | undefined {
+    return this.store.getMailPlanSettings(scope);
   }
 
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined {
