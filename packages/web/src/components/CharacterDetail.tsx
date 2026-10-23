@@ -133,7 +133,11 @@ export default function CharacterDetail({
 
   const snapshot = snapshots.find((s) => s.id === selectedId) ?? snapshots[0];
   const foreverIdentityIssue = character?.version === "forever" ? foreverSnapshotIdentityIssue(snapshots.map((entry) => entry.parsed.foreverGearObservation)) : undefined;
-  const foreverObservation = character?.version === "forever" && snapshot && snapshot.parsed.character.clientFamily === "Forever" && snapshot.parsed.character.clientVersion === "1.60.1" && ["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") && snapshot.parsed.character.interface === "16001"
+  const selectedForeverGuid = snapshot?.parsed.foreverGearObservation?.sourceCharacterGuid;
+  const latestForeverGuid = snapshots[0]?.parsed.foreverGearObservation?.sourceCharacterGuid;
+  const selectedForeverSourceResolved = !!selectedForeverGuid && selectedForeverGuid === latestForeverGuid && !snapshot?.parsed.foreverGearObservation?.sourceCharacterGuidConflict;
+  const selectedForeverGuidMissing = character?.version === "forever" && !!snapshot && !selectedForeverGuid && !foreverIdentityIssue;
+  const foreverObservation = character?.version === "forever" && !foreverIdentityIssue && selectedForeverSourceResolved && snapshot && snapshot.parsed.character.clientFamily === "Forever" && snapshot.parsed.character.clientVersion === "1.60.1" && ["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") && snapshot.parsed.character.interface === "16001"
     ? buildForeverGearObservation({ identity: { version: "forever", identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), ...(character.surnameSource ? { surnameSource: character.surnameSource } : {}), realm: character.realm }, snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt, equipment: snapshot.parsed.equipment, bags: snapshot.parsed.bags, bank: snapshot.parsed.bank, structured: snapshot.parsed.foreverGearObservation, now: Math.floor(Date.now() / 1000) })
     : undefined;
   // Enrichment for this character's game version (bags, Character Bank, carried Warband/Guild); never blocks the page.
@@ -287,7 +291,7 @@ export default function CharacterDetail({
               Equipment <StatusBadge state={snapshot.parsed.equipment.status.state} />
             </h3>
             <SectionFreshnessLine status={snapshot.parsed.equipment.status} />
-              {character.version === "forever" && foreverIdentityIssue ? <p role="status">Equipment withheld: {foreverIdentityIssue}</p> : snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
+              {character.version === "forever" && (foreverIdentityIssue || selectedForeverGuidMissing) ? <p role="status">Equipment withheld: {foreverIdentityIssue ?? "LAST_SEEN / unresolved: this snapshot has no WoWSyncDB character GUID and cannot be attached to the current source character."}</p> : snapshot.parsed.equipment.status.state === "UNKNOWN" ? (
               <p className="muted">Never observed.</p>
             ) : (
               <>
@@ -343,7 +347,7 @@ export default function CharacterDetail({
           {character.version === "forever" && (
             <section className="detail-card" id="detail-forever-gear-observation">
               <h3>Forever gear observations</h3>
-              {snapshot.parsed.character.clientFamily !== "Forever" || snapshot.parsed.character.clientVersion !== "1.60.1" || !["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") || snapshot.parsed.character.interface !== "16001" ? (
+              {selectedForeverGuidMissing ? <p role="status">LAST_SEEN / unresolved: this snapshot has no WoWSyncDB character GUID. Its equipment, inventory, and structured observations are withheld from the current source character.</p> : snapshot.parsed.character.clientFamily !== "Forever" || snapshot.parsed.character.clientVersion !== "1.60.1" || !["70291", "70338"].includes(snapshot.parsed.character.clientBuild ?? "") || snapshot.parsed.character.interface !== "16001" ? (
                 <p>Observation view unavailable: this view requires an allowlisted Forever 1.60.1 build 70291 or 70338 / interface 16001.</p>
               ) : <>
               <p className="muted small">
@@ -461,7 +465,7 @@ export default function CharacterDetail({
             </section>
           )}
 
-          {character.version === "forever" && foreverIdentityIssue ? <div className="detail-card" role="status">Forever inventory withheld: {foreverIdentityIssue}</div> : <>
+          {character.version === "forever" && foreverIdentityIssue ? <div className="detail-card" role="status">Forever inventory withheld: {foreverIdentityIssue}</div> : selectedForeverGuidMissing ? <div className="detail-card" role="status">LAST_SEEN / unresolved: this snapshot has no WoWSyncDB character GUID. Its inventory and structured observations are withheld from the current source character.</div> : <>
             <InventoryCard id="detail-bags" title="Bags" inv={snapshot.parsed.bags} itemInfo={itemInfo} unresolvedItemVersion={character.version} />
             <InventoryCard id="detail-bank" title="Bank" inv={snapshot.parsed.bank} itemInfo={itemInfo} unresolvedItemVersion={character.version} />
           </>}

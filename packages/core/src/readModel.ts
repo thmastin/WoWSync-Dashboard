@@ -1046,8 +1046,18 @@ export class DashboardReadModel {
         return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, source: "WOWSYNC v1 character profile", reason: "This observation view requires a well-formed Forever client profile (family, version, build, interface)." } };
       }
       const snapshots = this.snapshots(character.identityKey);
-      const sourceGuids = snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid);
-      if (sourceGuids.some((guid) => !guid) || snapshots.some((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuidConflict) || new Set(sourceGuids).size > 1) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: "The Dashboard version/realm/name history contains missing or conflicting WoWSyncDB character GUIDs; the observation cannot safely be resolved to one source character." } };
+      const latestObservation = snapshot.parsed.foreverGearObservation;
+      const latestGuid = latestObservation?.sourceCharacterGuid;
+      const hasGuidConflict = snapshots.some((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuidConflict);
+      const distinctGuids = new Set(snapshots.map((entry) => entry.parsed.foreverGearObservation?.sourceCharacterGuid).filter((guid): guid is string => !!guid));
+      const identityIssue = hasGuidConflict
+        ? "A Forever snapshot contains a WoWSyncDB character GUID conflict marker; source-character identity cannot be resolved safely."
+        : !latestGuid
+          ? "The latest Forever snapshot has no WoWSyncDB character GUID; its current source character cannot be resolved safely."
+          : distinctGuids.size > 1
+            ? "Forever snapshot history contains differing WoWSyncDB character GUIDs; source-character identity cannot be resolved safely."
+            : undefined;
+      if (identityIssue) return { provenance: { state: "UNKNOWN", version: "forever", identityKey: character.identityKey, snapshotId: snapshot.id, reason: identityIssue } };
       const data = buildForeverGearObservation({
         identity: { version: "forever", identityKey: character.identityKey, name: character.name, ...(character.surname ? { surname: character.surname } : {}), ...(character.surnameSource ? { surnameSource: character.surnameSource } : {}), realm: character.realm },
         snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, importedAt: snapshot.importedAt,
