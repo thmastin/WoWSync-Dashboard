@@ -48,6 +48,13 @@ Where a link points at another repository, the path is given relative to that re
 
 Work happening now.
 
+### Forever launch Phase 3 - LIVE environment and LLM-agnostic access (before the 2026-11-03 freeze)
+
+- [ ] **LIVE promote and rollback command**: a DEV-to-LIVE promotion of an exact CI-passed `main` SHA, with a pre-promote backup and a one-command rollback.
+- [ ] **LIVE DB and LIVE MCP**: a clean LIVE database, MCP services per profile (`forever`, `classic-era`), and the Windows watcher switched to the LIVE sync target.
+- [ ] **Dry-run promote using the Classic Era rehearsal**: sync the Mankrik characters through LIVE end to end, then rebuild LIVE clean before the freeze.
+- [ ] **Remote MCP connector (Streamable HTTP)**: the MCP is client-agnostic in protocol but stdio-only in transport today. Codex reaches it over ssh, ChatGPT through the OpenAI tunnel-client (forever profile only), and other assistants such as Grok Bot fall back to piping JSON-RPC through ssh. Add an authenticated HTTPS endpoint per profile, read-only and pointed at LIVE, with its own deploy health check, so any MCP-capable assistant can add it as a connector. The auth must be right because it exposes account data on a public URL.
+
 - [x] **Forever completion pass (GearExport): complete.** GearExport branch
   `feature/retail-bank-support-implementation`, commit
   `791cb9d33d9b979441550858a6708c61a4d4dcdd` (`feat: complete live-validated Forever support`).
