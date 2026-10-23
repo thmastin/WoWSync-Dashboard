@@ -186,7 +186,7 @@ test("snapshot 180 quests resolve canonically despite older GUID gaps and agree 
 
     const gear = read.getForeverGearObservation({ version: "forever", name: "Rordin", realm: "Classic Beta PvP 2" });
     assert.equal(gear.status, "FOUND");
-    if (gear.status === "FOUND") assert.match(gear.value.provenance.reason ?? "", /missing or conflicting WoWSyncDB character GUIDs/);
+    if (gear.status === "FOUND") assert.match(gear.value.provenance.reason ?? "", /differing WoWSyncDB character GUIDs/);
 
     const account = store.buildAccountContext(now);
     const accountCharacter = account.versions.forever.characters.find((character) => character.identityKey === RORDIN_SNAPSHOT_180.identity.identityKey);

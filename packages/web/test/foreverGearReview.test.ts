@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
@@ -19,7 +19,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   comparison: { upgradeStatus: "UNKNOWN", confidence: "UNKNOWN", rawComparisons: [{ slot: 10, equippedItemRef: "item:6171", values: [{ key: "RESISTANCE0_NAME", label: "Armor", labelState: "KNOWN", labelProvenance: "LIVE_VALIDATED_FOREVER_70291", candidate: 7, equipped: 2, delta: 5 }, { key: "ITEM_MOD_DAMAGE_PER_SECOND_SHORT", label: "damage per second", labelState: "KNOWN", labelProvenance: "FOREVER_GLOBALSTRINGS_70205", candidate: 3, equipped: 2, delta: 1 }], classification: "CANDIDATE_DOMINATES_RECORDED_STATS", reason: "Armor: candidate 7 vs equipped 2 (+5 Armor); this one metric is not a full upgrade assessment." }] },
   ...overrides,
 });
-const response = (rows: unknown[], version = "forever", ruleset = "forever-70291-allocation-screen-v2") => ({
+const response = (rows: unknown[], version = "forever", ruleset = "forever-min-70291-allocation-screen-v3") => ({
   status: "FOUND",
   value: { data: { version, ruleset, allocationPlan: rows, recipient: { identityKey: "forever::classic-beta-pvp-2::hallo", name: "Hallo", realm: "Classic Beta PvP 2", observedAt: 1_800_000_000, freshness: "FRESH", class: { value: "Hunter", provenance: "OBSERVED" }, level: { value: 9, provenance: "OBSERVED" }, equipment: { state: "OBSERVED", observedAt: 1_800_000_000, freshness: "FRESH", items: [] } } } },
 }) as unknown as ForeverGearAllocationApi;
@@ -67,7 +67,7 @@ test("surname is displayed in roster cards and Forever gear review without affec
     recipient: { ...row().recipient, surname: "Emberstone" },
   });
   const groups = buildForeverGearReview([{ recipientIdentityKey: "forever::classic-beta-pvp-2::hallo", result: response([surnameRow]) }]);
-  assert.equal(groups[0]?.sourceLabel, "Fizzwick Stormstep · Classic Beta PvP 2");
+  assert.equal(groups[0]?.sourceLabel, "Fizzwick Stormstep Â· Classic Beta PvP 2");
   assert.equal(groups[0]?.recipients[0]?.surname, "Emberstone");
   assert.equal(characterDisplayName({ name: "Hallo", surname: "Emberstone" }), "Hallo Emberstone");
   const rosterMarkup = renderToStaticMarkup(createElement(CharactersGrid, {

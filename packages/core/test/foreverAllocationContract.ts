@@ -1,4 +1,4 @@
-type AllocationPlanRow = {
+﻿type AllocationPlanRow = {
   disposition?: string;
   item?: { itemRef?: string };
   source?: { identityKey?: string; location?: string };
@@ -41,7 +41,7 @@ export function foreverAllocationContractViolations(value: ForeverAllocation): s
     }
   };
   if (value.version !== "forever") violations.push("VERSION_ISOLATION: allocation response must identify version=forever");
-  if (value.ruleset !== "forever-70291-allocation-screen-v2") violations.push("RULESET_IDENTITY: allocation response must name the Forever 70291 ruleset");
+  if (value.ruleset !== "forever-min-70291-allocation-screen-v3") violations.push("RULESET_IDENTITY: allocation response must name the Forever 70291 ruleset");
   if (value.scope?.accountMembership !== "UNKNOWN") violations.push("ACCOUNT_MEMBERSHIP_NOT_OBSERVED: allocation response must preserve UNKNOWN membership unless supported evidence says otherwise");
   for (const [index, row] of (value.allocationPlan ?? []).entries()) {
     checkTransferability(row.source?.identityKey, row.recipient?.identityKey, row.evidence?.transferability, `allocationPlan[${index}]`);

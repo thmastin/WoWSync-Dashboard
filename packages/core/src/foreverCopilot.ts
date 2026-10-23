@@ -320,7 +320,7 @@ function resolveSubject(request: CopilotRequest, characters: Loose[]): { status:
     const realm = request.realm?.toLowerCase();
     const onRealm = realm ? mentioned.filter((character) => String(character.realm).toLowerCase() === realm) : [];
     if (onRealm.length === 1) return { status: "FOUND", summary: onRealm[0] };
-    // Same name on several realms: use class, race and realm words in the question ("Hallo the druid on the PvE realm").
+    // Same name on several realms: ask for a distinguishing realm or identity detail; never guess.
     const question = request.question.toLowerCase();
     const realmWords = (realmName: string) => realmName.toLowerCase().replace(/^classic beta\s*/, "").trim();
     const scored = mentioned.map((character) => {
