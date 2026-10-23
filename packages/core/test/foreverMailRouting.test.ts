@@ -16,14 +16,14 @@ test("recent anonymized DEV fixture routes a captured material to its OBSERVED c
   if (result[0]?.disposition === "MAIL_TO_CRAFTER") assert.equal(result[0].recipient.name, "Alt A");
 });
 
-test("no captured recipe user selects AH when AH net exceeds vendor", () => {
-  const result = routeMaterial(material, [rows[1]!], { ahMedianUnitCopper: 100, vendorUnitCopper: 40 });
+test("no captured recipe user with complete recipe coverage selects AH when AH net exceeds vendor", () => {
+  const result = routeMaterial(material, [{ ...rows[1]!, recipeKnowledgeComplete: true }], { ahMedianUnitCopper: 100, vendorUnitCopper: 40 });
   assert.equal(result[0]?.disposition, "SELL_AH");
   assert.match(result[0]?.reason ?? "", /AH net 182 copper.*vendor 80 copper/);
 });
 
-test("no captured recipe user selects vendor when vendor exceeds AH net", () => {
-  const result = routeMaterial(material, [rows[1]!], { ahMedianUnitCopper: 20, vendorUnitCopper: 40 });
+test("no captured recipe user with complete recipe coverage selects vendor when vendor exceeds AH net", () => {
+  const result = routeMaterial(material, [{ ...rows[1]!, recipeKnowledgeComplete: true }], { ahMedianUnitCopper: 20, vendorUnitCopper: 40 });
   assert.equal(result[0]?.disposition, "VENDOR");
   assert.match(result[0]?.reason ?? "", /AH net 30 copper.*vendor 80 copper/);
 });
@@ -52,6 +52,25 @@ test("LAST_SEEN professions remain distinct and also block sale", () => {
 test("held material stays KEEP with the exact configured reason", () => {
   const result = routeMaterial(material, eligible, { heldItemIds: new Set([material.itemId]) });
   assert.deepEqual(result.map((row) => [row.disposition, row.reason]), [["KEEP", "on hold list"]]);
+});
+
+test("anonymized snapshot-541 holder professions keep own known reagents and incomplete recipe coverage blocks sale", () => {
+  const scenario = fixture.snapshot541Scenario as { snapshotId: number; materials: Array<{ itemId: number; usedBy: string; recipeEvidence: "OBSERVED" | "LAST_SEEN" }> };
+  assert.equal(scenario.snapshotId, 541);
+  const holder: MailRoutingRecipient = {
+    identityKey: "fixture::holder", name: "Holder", realm: "Classic Beta PvE", faction: "Alliance",
+    professionsState: "OBSERVED", observedReagentIds: [], recipeKnowledgeComplete: false,
+    reagentProfessions: scenario.materials.map(({ itemId, usedBy, recipeEvidence }) => ({ itemId, profession: usedBy, evidence: recipeEvidence })),
+  };
+  for (const { itemId, usedBy } of scenario.materials) {
+    const result = routeMaterial({ itemId, quantity: 1 }, [holder, ...eligible], { holderIdentityKey: holder.identityKey, ahMedianUnitCopper: 200, vendorUnitCopper: 1 });
+    assert.equal(result[0]?.disposition, "KEEP");
+    assert.match(result[0]?.reason ?? "", new RegExp(`used by your own ${usedBy}`));
+  }
+  const possibleUse = routeMaterial({ itemId: 900001, quantity: 1 }, [holder, ...eligible], { holderIdentityKey: holder.identityKey, ahMedianUnitCopper: 200, vendorUnitCopper: 1 });
+  assert.equal(possibleUse[0]?.disposition, "KEEP");
+  assert.match(possibleUse[0]?.reason ?? "", /recipe data is incomplete/);
+  assert.doesNotMatch(possibleUse[0]?.reason ?? "", /SELL_AH|VENDOR/);
 });
 
 test("pouch goes to the eligible alt with fewest OBSERVED bag slots; UNKNOWN and cross-faction are skipped", () => {

@@ -6,6 +6,12 @@ export interface MailRoutingRecipient {
   professionsState: "OBSERVED" | "LAST_SEEN" | "UNKNOWN" | "DERIVED";
   /** Recipe/reagent uses from current captured rows only. */
   observedReagentIds: number[];
+  /** Captured recipe/reagent uses, retaining their own profession and freshness. */
+  reagentProfessions?: Array<{ itemId: number; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }>;
+  /** True only when this character's profession recipe coverage is complete and current. */
+  recipeKnowledgeComplete?: boolean;
+  /** Distinguishes an OBSERVED empty profession list from unobserved profession skills. */
+  hasObservedProfessions?: boolean;
   observedBagSlots?: number;
 }
 
@@ -43,6 +49,7 @@ export function routePouch(item: MailRoutingItem, recipients: MailRoutingRecipie
 }
 
 export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingRecipient[], options: {
+  holderIdentityKey?: string;
   heldItemIds?: ReadonlySet<number>;
   ahMedianUnitCopper?: number;
   vendorUnitCopper?: number;
@@ -51,7 +58,14 @@ export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingReci
 } = {}): MailDisposition[] {
   if (item.itemId !== undefined && options.heldItemIds?.has(item.itemId)) return [{ disposition: "KEEP", item, reason: "on hold list" }];
   if (item.itemId === undefined) return [{ disposition: "KEEP", item, reason: "Item identity UNKNOWN; crafting use and price are UNKNOWN." }];
-  const crafters = recipients.filter((row) => row.professionsState === "OBSERVED" && row.observedReagentIds.includes(item.itemId!));
+  const ownUses = recipients.filter((row) => row.identityKey === options.holderIdentityKey)
+    .flatMap((row) => (row.reagentProfessions ?? []).filter((use) => use.itemId === item.itemId));
+  if (ownUses.length) {
+    const profession = ownUses[0]!.profession;
+    return [{ disposition: "KEEP", item, reason: `used by your own ${profession}${ownUses[0]!.evidence === "LAST_SEEN" ? " (LAST_SEEN recipe evidence)" : ""}.` }];
+  }
+  const crafters = recipients.filter((row) => row.identityKey !== options.holderIdentityKey && row.professionsState === "OBSERVED" && row.observedReagentIds.includes(item.itemId!));
+  const incomplete = recipients.filter((row) => row.professionsState === "OBSERVED" && row.hasObservedProfessions !== false && row.recipeKnowledgeComplete === false);
   const nonObserved = recipients.filter((row) => row.professionsState !== "OBSERVED");
   const unknown = nonObserved.filter((row) => row.professionsState === "UNKNOWN").map((row) => row.name + " (" + row.realm + ")");
   if (crafters.length) return crafters.map((recipient) => ({
@@ -61,6 +75,7 @@ export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingReci
       + (nonObserved.length ? " Non-OBSERVED profession recipients were excluded as crafting targets: " + nonObserved.map((row) => row.name + " (" + row.realm + "; " + row.professionsState + ")").join(", ") + "." : ""),
     ...(unknown.length ? { unknownProfessionRecipients: unknown } : {}),
   }));
+  if (incomplete.length) return [{ disposition: "KEEP", item, reason: "Profession recipe data is incomplete; this material may be used by an OBSERVED profession: " + incomplete.map((row) => row.name + " (" + row.realm + ")").join(", ") + "." }];
   if (unknown.length) return [{ disposition: "KEEP", item, reason: "Recipient profession is UNKNOWN; do not sell or use as a crafting target.", unknownProfessionRecipients: unknown }];
   if (nonObserved.length) return [{ disposition: "KEEP", item, reason: "Recipient profession evidence is not OBSERVED; do not sell or use as a crafting target. " + nonObserved.map((row) => row.name + " (" + row.realm + "; " + row.professionsState + ")").join(", ") }];
   if (item.quantity === undefined || !Number.isSafeInteger(item.quantity) || item.quantity < 1

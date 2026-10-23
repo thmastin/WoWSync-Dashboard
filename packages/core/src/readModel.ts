@@ -1563,22 +1563,32 @@ export class DashboardReadModel {
       const reason = status === "SCREENED" ? "Recipient reached the supported Forever gear screening; item-specific checks are recorded per candidate." : allocation.status === "FOUND" ? allocation.value.provenance.reason ?? "Recipient evaluation data is UNKNOWN." : "Recipient snapshot or supported gear evidence could not be resolved.";
       return { name: character.name, class: profile?.class ?? "UNKNOWN", level: profile?.level ?? "UNKNOWN", faction: character.faction ?? "UNKNOWN", snapshotId: snap?.id ?? "UNKNOWN", freshness, evaluation: { status, reason } };
     });
-    const recipientProfessions = sameRealmFaction.map((character) => {
+    const materialUsers = [sourceCharacter, ...sameRealmFaction];
+    const recipientProfessions = materialUsers.map((character) => {
       const professions = this.getCharacterProfessions({ version: "forever", name: character.name, realm: character.realm });
       const observed = professions.status === "FOUND" && professions.value.provenance.state === "OBSERVED";
       const knowledge = professions.status === "FOUND" ? professions.value.data?.recipeKnowledge as any : undefined;
       const groups = knowledge?.data?.professions ?? [];
-      const observedReagentIds = groups.filter((group: any) => group.evidence === "OBSERVED")
-        .flatMap((group: any) => (group.recipes ?? []).filter((recipe: any) => recipe.evidence === "OBSERVED")
-          .flatMap((recipe: any) => (recipe.reagentSlots ?? []).filter((slot: any) => slot.required !== false)
-            .flatMap((slot: any) => slot.alternatives ?? [])))
-        .map((reagent: any) => reagent.itemID).filter((id: unknown): id is number => typeof id === "number");
+      const reagentProfessions = groups.flatMap((group: any) => (group.recipes ?? [])
+        .filter((recipe: any) => ["OBSERVED", "LAST_SEEN"].includes(recipe.evidence ?? group.evidence))
+        .flatMap((recipe: any) => (recipe.reagentSlots ?? []).filter((slot: any) => slot.required !== false)
+          .flatMap((slot: any) => slot.alternatives ?? slot.reagents ?? [])
+          .filter((reagent: any) => typeof reagent.itemID === "number")
+          .map((reagent: any) => ({ itemId: reagent.itemID as number, profession: String(group.professionName ?? group.name ?? "UNKNOWN profession"), evidence: (recipe.evidence ?? group.evidence) as "OBSERVED" | "LAST_SEEN" }))));
+      const observedReagentIds = reagentProfessions.filter((use: any) => use.evidence === "OBSERVED")
+        .map((use: any) => use.itemId);
       const snap = this.snapshots(character.identityKey)[0];
       const bags = snap?.parsed.bags as any;
       const bagObservedAt = bags?.status?.observedAt ?? snap?.generatedAt ?? snap?.importedAt;
       const observedBagSlots = bags?.status?.state === "OBSERVED" && Number.isSafeInteger(bags.totalSlots)
         && classifyFreshness(bagObservedAt, this.now()) === "recent" ? bags.totalSlots as number : undefined;
-      return { character, professions, observed, professionEvidenceState: professions.status === "FOUND" ? professions.value.provenance.state : "UNKNOWN", observedReagentIds, observedBagSlots };
+      const recipeKnowledgeComplete = professions.status === "FOUND"
+        && professions.value.provenance.state === "OBSERVED"
+        && knowledge?.completeness === "complete"
+        && knowledge?.status?.state === "OBSERVED"
+        && knowledge?.evidence?.state === "OBSERVED";
+      const hasObservedProfessions = professions.status === "FOUND" && professions.value.provenance.state === "OBSERVED" && (professions.value.data?.entries.length ?? 0) > 0;
+      return { character, professions, observed, professionEvidenceState: professions.status === "FOUND" ? professions.value.provenance.state : "UNKNOWN", observedReagentIds, reagentProfessions, recipeKnowledgeComplete, hasObservedProfessions, observedBagSlots };
     });
     const routeMaterial = (item: Record<string, any>) => {
       const itemId = typeof item.itemID === "number" ? item.itemID : typeof item.itemId === "number" ? item.itemId : item.itemRef ? itemIdFromItemRef(item.itemRef) : undefined;
@@ -1586,8 +1596,9 @@ export class DashboardReadModel {
       const vendor = itemId === undefined ? undefined : config.vendorPrices?.[itemId];
       const routed = routeMailMaterial({ ...item, itemId }, recipientProfessions.map((row) => ({
         identityKey: row.character.identityKey, name: row.character.name, realm: row.character.realm, faction: row.character.faction,
-        professionsState: row.professionEvidenceState, observedReagentIds: row.observedReagentIds, observedBagSlots: row.observedBagSlots,
-      })), { heldItemIds: holdItemIds, ahMedianUnitCopper: ah?.price.median7d ?? ah?.price.median, vendorUnitCopper: vendor });
+        professionsState: row.professionEvidenceState, observedReagentIds: row.observedReagentIds, reagentProfessions: row.reagentProfessions,
+        recipeKnowledgeComplete: row.recipeKnowledgeComplete, hasObservedProfessions: row.hasObservedProfessions, observedBagSlots: row.observedBagSlots,
+      })), { holderIdentityKey: sourceCharacter.identityKey, heldItemIds: holdItemIds, ahMedianUnitCopper: ah?.price.median7d ?? ah?.price.median, vendorUnitCopper: vendor });
       for (const action of routed) {
         const { disposition, ...details } = action;
         if (disposition === "MAIL_TO_CRAFTER") materialMail.push({ ...details, disposition });
@@ -1603,6 +1614,21 @@ export class DashboardReadModel {
       const item = { name: candidate.name ?? "UNKNOWN item", itemRef: candidate.itemRef, quantity: candidate.quantity };
       const candidateItemId = candidate.itemRef ? itemIdFromItemRef(candidate.itemRef) : undefined;
       if (candidateItemId !== undefined && holdItemIds.has(candidateItemId)) { keep.push({ item, disposition: "KEEP", reason: "on hold list" }); continue; }
+      const candidateMetadata = candidateItemId === undefined ? undefined : this.store.getItemMetadata("forever", [candidateItemId])[0];
+      const isContainer = (candidate as any).itemType === "Container"
+        || (candidateMetadata?.classId.state === "KNOWN" && candidateMetadata.classId.value === 1);
+      if (isContainer) {
+        if (source?.carried.state !== "OBSERVED" || source.carried.freshness !== "recent" || candidate.provenance === "LAST_SEEN" || candidate.bound !== false) {
+          noRecipient.push({ item, reason: candidate.bound === true ? "Observed bound container cannot be mailed to another character." : candidate.bound === undefined ? "Container binding is UNKNOWN; mail routing is withheld." : "Container observation is stale or not current; mail routing is withheld." });
+          continue;
+        }
+        const routed = routePouch({ itemId: candidateItemId, itemRef: candidate.itemRef, name: candidate.name, quantity: candidate.quantity }, recipientProfessions
+          .filter((entry) => entry.character.identityKey !== sourceCharacter.identityKey)
+          .map((entry) => ({ identityKey: entry.character.identityKey, name: entry.character.name, realm: entry.character.realm, faction: entry.character.faction, professionsState: entry.professionEvidenceState, observedReagentIds: entry.observedReagentIds, observedBagSlots: entry.observedBagSlots })));
+        if (routed.disposition === "POUCH_TO_ALT") pouchMail.push(routed);
+        else keep.push(routed);
+        continue;
+      }
       if (source?.carried.state !== "OBSERVED" || source.carried.freshness !== "recent" || candidate.provenance === "LAST_SEEN" || candidate.bound !== false || !candidate.itemRef) {
         const reason = source?.carried.state === "UNKNOWN" || source?.carried.freshness === "stale" || candidate.provenance === "LAST_SEEN" ? `Stale bag observation${source?.carried.observedAt !== undefined ? `; LAST_SEEN at ${new Date(source.carried.observedAt * 1000).toISOString()}` : "; LAST_SEEN time UNKNOWN"}.` : candidate.bound === true ? "Observed bound item cannot be mailed to another character." : candidate.bound === undefined ? "Binding is UNKNOWN." : !candidate.itemRef ? "Exact item identity is UNKNOWN." : "Item evidence is not current.";
         noRecipient.push({ item, capturedBinding: candidate.bound === undefined ? "UNKNOWN" : candidate.bound ? "OBSERVED_BOUND" : "OBSERVED_UNBOUND", reason });
@@ -1642,7 +1668,7 @@ export class DashboardReadModel {
       const itemMetadata = rowItemId === undefined ? undefined : this.store.getItemMetadata("forever", [rowItemId])[0];
       const isPouch = row.itemType === "Container" || (itemMetadata?.classId.state === "KNOWN" && itemMetadata.classId.value === 1);
       if (isPouch && source?.carried.state === "OBSERVED" && source.carried.freshness === "recent" && row.provenance !== "LAST_SEEN" && row.bound === false) {
-        const routed = routePouch({ itemId: rowItemId, itemRef: typeof row.itemRef === "string" ? row.itemRef : undefined, name: typeof row.name === "string" ? row.name : undefined, quantity: typeof row.quantity === "number" ? row.quantity : undefined }, recipientProfessions.map((entry) => ({
+        const routed = routePouch({ itemId: rowItemId, itemRef: typeof row.itemRef === "string" ? row.itemRef : undefined, name: typeof row.name === "string" ? row.name : undefined, quantity: typeof row.quantity === "number" ? row.quantity : undefined }, recipientProfessions.filter((entry) => entry.character.identityKey !== sourceCharacter.identityKey).map((entry) => ({
           identityKey: entry.character.identityKey, name: entry.character.name, realm: entry.character.realm, faction: entry.character.faction,
           professionsState: entry.professionEvidenceState, observedReagentIds: entry.observedReagentIds, observedBagSlots: entry.observedBagSlots,
         })));
@@ -1660,7 +1686,6 @@ export class DashboardReadModel {
       const result = this.getCharacterProfessions({ version: "forever", name: character.name, realm: character.realm });
       return { character: character.name, realm: character.realm, state: result.status === "FOUND" ? result.value.provenance.state : result.status, professions: result.status === "FOUND" ? result.value.data?.entries?.map((entry) => entry.name) ?? "UNKNOWN" : "UNKNOWN" };
     });
-    if (noRecipient.length) unknownReasons.push("Before selling any no-recipient item that may be a crafting material, inspect professionChecks; UNKNOWN profession data does not mean no crafter.");
     for (const entry of data.allocationPlan.filter((row) => row.source.identityKey === sourceCharacter.identityKey && row.source.location === "EQUIPPED")) keep.push({ item: entry.item, reason: "Already equipped." });
     const observedAt = data.recipient.observedAt;
     const buildVerification = data.buildVerification;

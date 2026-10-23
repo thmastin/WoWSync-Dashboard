@@ -30,7 +30,7 @@ import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS, useForeverPrices } from "@wowsync-dashboard/core/foreverPrices.ts";
 import { z } from "zod";
-import { isStaleRelease } from "./releaseGuard.ts";
+import { createReleaseGuard } from "./releaseGuard.ts";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const DEFAULT_DATABASE_PATH = path.join(REPO_ROOT, "data", "wowsync.sqlite");
@@ -53,12 +53,15 @@ const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveH
 // MCP host annotations remain advisory and are not the approval boundary.
 const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
 const MCP_FILE_AT_STARTUP = realpathSync(fileURLToPath(import.meta.url));
-function staleMcpRelease(): boolean {
-  const parts = MCP_FILE_AT_STARTUP.split(path.sep);
-  const releasesAt = parts.lastIndexOf("releases");
-  if (releasesAt < 0) return false;
-  return isStaleRelease(MCP_FILE_AT_STARTUP, path.join(parts.slice(0, releasesAt + 1).join(path.sep), "current"), realpathSync);
-}
+const MCP_STARTUP_PATH_PARTS = MCP_FILE_AT_STARTUP.replace(/\\/g, "/").split("/");
+const MCP_RELEASES_AT = MCP_STARTUP_PATH_PARTS.lastIndexOf("releases");
+const MCP_CURRENT_RELEASE_LINK = MCP_RELEASES_AT >= 0
+  ? path.join(MCP_STARTUP_PATH_PARTS.slice(0, MCP_RELEASES_AT + 1).join(path.sep), "current")
+  : "";
+const MCP_STALE_RELEASE_GUARD = MCP_CURRENT_RELEASE_LINK
+  ? createReleaseGuard(MCP_FILE_AT_STARTUP, MCP_CURRENT_RELEASE_LINK, realpathSync)
+  : () => false;
+function staleMcpRelease(): boolean { return MCP_STALE_RELEASE_GUARD(); }
 
 export interface WoWSyncMcpConfiguration {
   /** Process configuration only. MCP callers cannot select databases. */
