@@ -1,4 +1,5 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { McpServer, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/server";
@@ -27,8 +28,9 @@ import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboa
 import { recipeLearnSkills } from "@wowsync-dashboard/core/foreverRecipeLearning.ts";
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
-import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS } from "@wowsync-dashboard/core/foreverPrices.ts";
+import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS, useForeverPrices } from "@wowsync-dashboard/core/foreverPrices.ts";
 import { z } from "zod";
+import { isStaleRelease } from "./releaseGuard.ts";
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const DEFAULT_DATABASE_PATH = path.join(REPO_ROOT, "data", "wowsync.sqlite");
@@ -50,6 +52,13 @@ const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveH
 // These tools only stage or commit mutations separately approved in Dashboard.
 // MCP host annotations remain advisory and are not the approval boundary.
 const planningWriteAnnotations = { readOnlyHint: false, openWorldHint: false, destructiveHint: true } as const;
+const MCP_FILE_AT_STARTUP = realpathSync(fileURLToPath(import.meta.url));
+function staleMcpRelease(): boolean {
+  const parts = MCP_FILE_AT_STARTUP.split(path.sep);
+  const releasesAt = parts.lastIndexOf("releases");
+  if (releasesAt < 0) return false;
+  return isStaleRelease(MCP_FILE_AT_STARTUP, path.join(parts.slice(0, releasesAt + 1).join(path.sep), "current"), realpathSync);
+}
 
 export interface WoWSyncMcpConfiguration {
   /** Process configuration only. MCP callers cannot select databases. */
@@ -251,7 +260,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const started = Date.now();
     let outcome = "ok";
     try {
-      const result = await handler(...args) as { isError?: boolean };
+      const result = staleMcpRelease() ? safeFailure("STALE_SERVER", "This WoWSync MCP process is running code from a previous DEV release. Reconnect or restart the MCP service before retrying.") : await handler(...args) as { isError?: boolean };
       if (result?.isError) outcome = "error";
       return result;
     } catch (error) {
@@ -594,7 +603,16 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     description: "Builds a read-only, evidence-based mail plan from the current character's latest imported Forever gear observation, reusing the minimum-build-70291 allocation evaluator. Verified builds receive standard confidence; newer unverified builds are retained, tagged UNVERIFIED_BUILD, and lower confidence. Only same-realm/faction recipients are considered. Unknown or stale item, equipment, level, proficiency, faction, and bank facts remain UNKNOWN. The player performs each mailbox action.",
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
-  }, async (query) => textResult(readModel().getForeverMailPlan(query)));
+  }, async (query) => {
+    const holdItemIds = (process.env.WOWSYNC_FOREVER_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
+    const index = foreverKnowledge.get();
+    const vendorPrices: Record<number, number> = {};
+    if (index) for (const [itemKey, tooltip] of Object.entries(index.bundle.tooltips.items)) {
+      const itemId = Number(itemKey);
+      if (Number.isSafeInteger(itemId) && tooltip.sellPriceCopper !== undefined) vendorPrices[itemId] = tooltip.sellPriceCopper;
+    }
+    return textResult(useForeverPrices(foreverPrices.get(), () => readModel().getForeverMailPlan(query, { holdItemIds, vendorPrices } ), marketRegion));
+  });
   server.registerTool("ask_forever_copilot", {
     title: "Ask the Forever Co-Pilot a goal-oriented question",
     description: "Answers a player's Forever goal question (improve a character, make gold, develop professions, become self-sufficient, level faster) by combining the account's Forever evidence with version-correct Forever game knowledge from the Wowhead Forever database. Returns ranked recommendations, each with what to do, why, OBSERVED/DERIVED/LAST_SEEN/EXTERNAL/UNKNOWN evidence lines with sources, prerequisites, costs, alternatives/tradeoffs, unknowns, and next actions; premise challenges (for example owning a better item already); recorded ERP project goals; and limitations. Name the character in the question or pass character; stable-wide questions are answered per realm because realms are separate economies. Never invents prices, ownership, recipes, or eligibility; Auction House prices are UNKNOWN. Read-only: it never plays, buys, sells, mails, or moves items, and every transfer or /bankx move is for the player to run. Use format 'markdown' for a compact player-facing answer.",
@@ -818,6 +836,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
         config.inputSchema = z.object(profileShape).strict();
       }
       registerTool(exposedName, config as never, (async (args: Record<string, unknown>) => {
+        if (staleMcpRelease()) return safeFailure("STALE_SERVER", "This WoWSync MCP process is running code from a previous DEV release. Reconnect or restart the MCP service before retrying.");
         let result: unknown;
         if (exposedName === "get_forever_items") result = "query" in args ? await foreverHandlers.get("search_items")!.handler(args) : await foreverHandlers.get("get_character_storage")!.handler(args);
         else if (exposedName === "get_character_professions") result = compactForeverProfessions(await selected.handler({ ...args, version: "forever" }), args);

@@ -1,0 +1,19 @@
+{
+  "fixtureKind": "anonymized DEV-derived scenario inputs",
+  "sourceSnapshotIds": [520, 538, 540],
+  "snapshotCutoff": "2026-10-22",
+  "observedForeverItemIds": {
+    "craftingMaterial": 2589,
+    "containerItem": 4496
+  },
+  "observedBagSlots": [
+    { "snapshotId": 520, "realm": "Classic Beta PvE", "faction": "Alliance", "state": "OBSERVED", "totalSlots": 20 },
+    { "snapshotId": 540, "realm": "Classic Beta PvE", "faction": "Alliance", "state": "OBSERVED", "totalSlots": 44 },
+    { "snapshotId": 513, "realm": "Classic Beta PvE", "faction": "Horde", "state": "OBSERVED", "totalSlots": 26 }
+  ],
+  "scenarioRows": [
+    { "identityKey": "fixture::crafting-alt", "name": "Alt A", "realm": "Classic Beta PvE", "faction": "Alliance", "professionsState": "OBSERVED", "observedReagentIds": [2589], "bagSlots": 20 },
+    { "identityKey": "fixture::other-alt", "name": "Alt B", "realm": "Classic Beta PvE", "faction": "Alliance", "professionsState": "OBSERVED", "observedReagentIds": [], "bagSlots": 44 },
+    { "identityKey": "fixture::other-faction", "name": "Alt C", "realm": "Classic Beta PvE", "faction": "Horde", "professionsState": "OBSERVED", "observedReagentIds": [2589], "bagSlots": 26 }
+  ]
+}
