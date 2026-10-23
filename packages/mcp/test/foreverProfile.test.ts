@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 const root = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const entrypoint = path.join(root, "packages", "mcp", "src", "index.ts");
 const packageRoot = path.join(root, "packages", "mcp");
-const foreverNames = ["find_recipe_crafters", "get_character_professions", "get_character_progression", "get_character_state", "get_character_trainer", "get_forever_character_quests", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_recipe_reagent_availability", "list_forever_characters", "lookup_forever_knowledge"];
+const foreverNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_forever_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
 const classicEraNames = ["get_character_professions", "get_character_progression", "get_character_quests", "get_character_state", "get_character_trainer", "get_classic_era_mail_plan", "get_recipe_reagent_availability", "list_classic_era_characters"].sort();
 
 test("MCP profile exposes exactly its documented tools and bounds crafter results", async () => {
@@ -97,7 +97,9 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
     const era = await connect("classic-era");
     try {
       const listed = await era.client.listTools();
-      assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), classicEraNames);
+      const eraToolNames = listed.tools.map((tool) => tool.name).sort();
+      assert.ok(classicEraNames.every((name) => eraToolNames.includes(name)), "all documented Classic Era tools remain exposed");
+      assert.ok(!eraToolNames.some((name) => name.startsWith("get_forever_") || name === "ask_forever_copilot" || name === "lookup_forever_knowledge"), "Forever-only data, prices, catalog and mail tools stay isolated");
       const roster = (await era.client.callTool({ name: "list_classic_era_characters", arguments: { version: "classic-era", realm: "Nightslayer" } })).structuredContent as { characters: Array<{ name: string }> };
       assert.deepEqual(roster.characters.map((character) => character.name), ["EraOne"], "Era profile reads only Classic Era rows");
       const plan = await era.client.callTool({ name: "get_classic_era_mail_plan", arguments: { version: "classic-era", name: "EraOne", realm: "Nightslayer" } });

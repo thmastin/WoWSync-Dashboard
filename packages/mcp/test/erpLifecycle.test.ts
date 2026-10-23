@@ -83,7 +83,7 @@ test("[SYNTHETIC ACCEPTANCE] demand lifecycle survives REST -> SQLite -> MCP and
     command: process.execPath,
     args: [mcpEntrypoint],
     cwd: packageRoot,
-    env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
+    env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath },
     stderr: "pipe",
   });
     await mcpClient.connect(transport);

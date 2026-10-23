@@ -70,10 +70,14 @@ test("FOREVER WORKFLOW: a multi-character launch-build account answers crafting,
   const before = createHash("sha256").update(readFileSync(databasePath)).digest("hex");
 
   const client = new Client({ name: "wowsync-forever-workflow-test", version: "0.1.0" });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
+  const eraClient = new Client({ name: "wowsync-forever-workflow-era-test", version: "0.1.0" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
+  const eraTransport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "classic-era", WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
   try {
     await client.connect(transport);
+    await eraClient.connect(eraTransport);
     const call = async <T>(name: string, args: Record<string, unknown>) => structured<T>(await client.callTool({ name, arguments: args }));
+    const eraCall = async <T>(name: string, args: Record<string, unknown>) => structured<T>(await eraClient.callTool({ name, arguments: args }));
 
     // "Which characters do I have?" — Forever only, no Classic twin.
     const roster = await call<{ characters?: Array<{ name: string }> } | Array<{ name: string }>>("list_characters", { version: "forever" });
@@ -112,10 +116,11 @@ test("FOREVER WORKFLOW: a multi-character launch-build account answers crafting,
     assert.deepEqual(assessment.value.data.candidates.map((row) => [row.recipe.recipeID, row.crafting.state, row.upgradeConclusion.state]), [[2663, "NOT_ESTABLISHED", "UNKNOWN"], [12260, "BLOCKED_BY_OBSERVED_REAGENTS", "UNKNOWN"]]);
 
     // Version isolation: the Classic Era twin never gets Forever recipes.
-    const era = await call<{ data: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> } }>("find_recipe_crafters", { version: "classic-era", outputItemID: 2853 });
+    const era = await eraCall<{ data: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> } }>("find_recipe_crafters", { version: "classic-era", outputItemID: 2853 });
     assert.deepEqual(era.data.learned, []);
     assert.deepEqual(era.data.charactersWithoutRecipeEvidence.map((row) => row.name), ["Smith"], "the Classic twin has no recipe capture: UNKNOWN, not unable");
   } finally {
+    await eraClient.close();
     await client.close();
   }
   assert.equal(createHash("sha256").update(readFileSync(databasePath)).digest("hex"), before, "the MCP workflow is read-only");

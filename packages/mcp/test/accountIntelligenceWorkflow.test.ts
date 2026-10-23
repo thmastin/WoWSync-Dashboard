@@ -54,22 +54,26 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
   const before = createHash("sha256").update(readFileSync(databasePath)).digest("hex");
 
   const client = new Client({ name: "wowsync-account-intelligence-test", version: "0.1.0" });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
+  const eraClient = new Client({ name: "wowsync-account-intelligence-era-test", version: "0.1.0" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
+  const eraTransport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "classic-era", WOWSYNC_MCP_DB_PATH: databasePath }, stderr: "pipe" });
   try {
     await client.connect(transport);
+    await eraClient.connect(eraTransport);
     const call = async <T = Obj>(name: string, args: Record<string, unknown>) => structured<T>(await client.callTool({ name, arguments: args }));
+    const eraCall = async <T = Obj>(name: string, args: Record<string, unknown>) => structured<T>(await eraClient.callTool({ name, arguments: { ...args, ...(typeof args.name === "string" && args.realm === undefined ? { realm: "Nightslayer" } : {}) } }));
 
     // Classic Era: "What can Torahn make, and is it learned?"
-    const professions = await call("get_character_professions", { version: "classic-era", name: "Torahn" });
+    const professions = await eraCall("get_character_professions", { version: "classic-era", name: "Torahn" });
     assert.equal(professions.value.data.recipeKnowledge.evidence.state, "OBSERVED");
-    const copper = await call("find_recipe_crafters", { version: "classic-era", nameContains: "copper" });
+    const copper = await eraCall("find_recipe_crafters", { version: "classic-era", nameContains: "copper" });
     assert.ok(copper.data.learned.every((row: Obj) => row.recipe.knowledgeClass === "LEARNED" && row.name === "Torahn"));
     assert.deepEqual(copper.data.charactersWithoutRecipeEvidence.map((row: Obj) => row.name), ["Banko"], "no capture is UNKNOWN, not 'cannot craft'");
-    const enchant = await call("find_recipe_crafters", { version: "classic-era", enchantID: 7418 });
+    const enchant = await eraCall("find_recipe_crafters", { version: "classic-era", enchantID: 7418 });
     assert.deepEqual([enchant.data.learned.length, enchant.data.unresolved[0].recipe.knowledgeClass, enchant.data.unresolved[0].recipe.outputKind], [0, "VISIBLE_LEARNED_UNKNOWN", "ENCHANTMENT"]);
 
     // "Can Torahn make the vest right now? Where are the bars?"
-    const vest = await call("get_recipe_reagent_availability", { version: "classic-era", name: "Torahn", outputItemID: 10421 });
+    const vest = await eraCall("get_recipe_reagent_availability", { version: "classic-era", name: "Torahn", outputItemID: 10421 });
     const bars = vest.value.data.reagents[0].perAlternative[0];
     assert.equal(bars.carriedConclusion, "INSUFFICIENT_IN_COMPLETE_CURRENT_BAGS");
     const owner = (scope: string, name: string) => bars.holdings.find((row: Obj) => row.ownerScope === scope && row.name === name);
@@ -79,13 +83,13 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
     assert.equal(vest.value.data.craftability, "NOT_ESTABLISHED");
 
     // "Where am I on quests / reputation / talents?"
-    const eraQuests = await call("get_character_quests", { version: "classic-era", name: "Torahn", completedQuestIDs: [870, 999] });
+    const eraQuests = await eraCall("get_character_quests", { version: "classic-era", name: "Torahn", completedQuestIDs: [870, 999] });
     assert.equal(eraQuests.value.data.state, "OBSERVED");
     assert.deepEqual(eraQuests.value.data.completedHistory.lookup.map((row: Obj) => row.state), ["OBSERVED", "NOT_IN_RETURNED_HISTORY"]);
-    const progression = await call("get_character_progression", { version: "classic-era", name: "Torahn", factionQuery: "thunder" });
+    const progression = await eraCall("get_character_progression", { version: "classic-era", name: "Torahn", factionQuery: "thunder" });
     assert.deepEqual(progression.value.data.reputation.factions.map((row: Obj) => [row.name, row.standingLabel]), [["Thunder Bluff", "Honored"]]);
     assert.equal(progression.value.data.talents.distribution, "0/21/9");
-    const eraState = await call("get_character_state", { version: "classic-era", name: "Torahn" });
+    const eraState = await eraCall("get_character_state", { version: "classic-era", name: "Torahn" });
     assert.deepEqual(Object.fromEntries(Object.entries(eraState.value.data.structuredObservations).map(([key, value]) => [key, (value as Obj).state])), { recipes: "OBSERVED", quests: "OBSERVED", reputation: "OBSERVED", talents: "OBSERVED" });
 
     // TBC Anniversary: the same name on another version is a separate identity; its old capture is historical.
@@ -106,6 +110,7 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
     const retailCrafters = await call("find_recipe_crafters", { version: "retail", outputItemID: 2853 });
     assert.deepEqual(retailCrafters.data.learned, []);
   } finally {
+    await eraClient.close();
     await client.close();
   }
   assert.equal(createHash("sha256").update(readFileSync(databasePath)).digest("hex"), before, "every call is read-only");

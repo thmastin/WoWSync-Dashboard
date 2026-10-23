@@ -25,7 +25,7 @@ test("MCP ask_forever_copilot answers both acceptance questions from real Foreve
     }
   } finally { writer.close(); }
   const client = new Client({ name: "copilot-test", version: "0.0.0" });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json") }, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json") }, stderr: "pipe" });
   try {
     await client.connect(transport);
     const tool = (await client.listTools()).tools.find((entry) => entry.name === "ask_forever_copilot");
@@ -35,7 +35,7 @@ test("MCP ask_forever_copilot answers both acceptance questions from real Foreve
     const a = await client.callTool({ name: "ask_forever_copilot", arguments: { version: "forever", question: "I'm playing Rordin. What are the most valuable things I could do to improve this character, including things I haven't considered?" } });
     assert.equal(a.isError, undefined);
     const answer = a.structuredContent as { status: string; subject: { name: string }; recommendations: Array<{ id: string; evidence: Array<{ kind: string }> }>; markdown: string };
-    assert.equal(answer.status, "ANSWERED");
+    assert.equal(answer.status, "ANSWERED", JSON.stringify(a.structuredContent));
     assert.equal(answer.subject.name, "Rordin");
     assert.equal(answer.recommendations[0]?.id, "equip-10421");
     assert.ok(answer.recommendations.every((rec) => rec.evidence.length > 0));
@@ -63,7 +63,7 @@ test("MCP lookup_forever_knowledge and Forever get_character_progression are rea
     writer.importSnapshot(text, extras);
   } finally { writer.close(); }
   const client = new Client({ name: "lookup-test", version: "0.0.0" });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json"), WOWSYNC_FOREVER_PRICES_PATH: path.join(fixtureDir, "prices-fixture.json") }, stderr: "pipe" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: packageRoot, env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_FOREVER_KNOWLEDGE_PATH: path.join(fixtureDir, "knowledge-fixture.json"), WOWSYNC_FOREVER_PRICES_PATH: path.join(fixtureDir, "prices-fixture.json") }, stderr: "pipe" });
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;

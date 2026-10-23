@@ -3,16 +3,13 @@
 ## Flavor selection
 
 - The MCP process must set `WOWSYNC_MCP_PROFILE` to exactly `classic-era` or `forever`. A missing or other value is a startup error; there is no default flavor.
-- Use the Classic Era profile only for Classic Era characters and the Forever profile only for Forever characters. The profile exposes only that flavor's supported tool set; never cross-query a different version or use the other flavor's catalog or price feed.
+- Use the Classic Era profile for Classic Era-specific tools and the Forever profile for Forever-specific tools. Shared Dashboard tools remain available, but each profile's version schema prevents the Forever process from querying Era and the Era process from querying Forever. Retail-only gear screens remain Retail-scoped.
 - Each process reads the same Dashboard database in read-only mode. Flavor and stable character identity keep the data partitioned.
-
-Tools (14, read-only): `list_forever_characters`, `get_character_state`, `get_forever_gear_observation`, `get_forever_gear_allocation`, `get_forever_mail_plan`, `get_character_professions`, `get_recipe_reagent_availability`, `get_forever_character_quests`, `get_character_progression`, `get_forever_items`, `lookup_forever_knowledge`, `get_forever_market_prices`, `find_recipe_crafters`, `get_character_trainer`.
 
 ## Forever profile
 
-- Tools (14, read-only): `list_forever_characters`, `get_character_state`, `get_forever_gear_observation`, `get_forever_gear_allocation`, `get_forever_mail_plan`, `get_character_professions`, `get_recipe_reagent_availability`, `get_forever_character_quests`, `get_character_progression`, `get_forever_items`, `lookup_forever_knowledge`, `get_forever_market_prices`, `find_recipe_crafters`, `get_character_trainer`.
-- Scope: Forever only. Never use, compare with, or mention any other WoW version.
-- Forever only. Never use, compare with, or mention any other WoW version.
+- Forever-specific tools: `list_forever_characters`, `get_forever_gear_observation`, `get_forever_gear_allocation`, `get_forever_mail_plan`, `get_forever_character_quests`, `get_forever_items`, `lookup_forever_knowledge`, `get_forever_market_prices`, and `ask_forever_copilot` when registered.
+- Shared Dashboard tools are also available for non-Era version buckets. Select the version explicitly; do not use Forever data, prices, or knowledge as evidence for another bucket.
 
 ### Identity
 - Forever characters have first + last names, and the same name can exist on several realms.
@@ -61,8 +58,8 @@ Tools (14, read-only): `list_forever_characters`, `get_character_state`, `get_fo
 
 ## Classic Era profile
 
-- Tools (8, read-only): `list_classic_era_characters`, `get_character_state`, `get_character_professions`, `get_recipe_reagent_availability`, `get_character_quests`, `get_character_progression`, `get_character_trainer`, `get_classic_era_mail_plan`.
-- Scope: Classic Era only. The profile requires the explicit Classic Era version on every call.
+- Classic Era-specific tools: `list_classic_era_characters` and `get_classic_era_mail_plan`, plus shared Dashboard read tools with their version fixed to `classic-era`.
+- The profile requires the explicit Classic Era version on versioned calls. Forever-only prices, knowledge, gear, and mail tools are not exposed.
 - The mail plan requires the Classic Era GUID to remain consistent across known observations and recent OBSERVED bags (72 hours). Build 70003 is verified; newer eligible Era builds remain usable with lowered confidence. A Forever profile/build never verifies Era evidence.
 - Vendor unit value comes only from the current captured `vendorEachCopper` item fact. Auction House value is always `UNKNOWN`; no Era AH source is available. Do not use Forever market prices or Forever knowledge/catalog rows for Era.
 - Talent spec is `DERIVED` only when an OBSERVED Era `talentTree` has one uniquely highest `pointsSpent` tree. UNKNOWN talent evidence or tied trees stay `UNKNOWN`/`UNDETERMINED`.
