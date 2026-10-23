@@ -1,5 +1,7 @@
 # WoWSync Dashboard
 
+[![CI](https://github.com/thmastin/WoWSync-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/thmastin/WoWSync-Dashboard/actions/workflows/ci.yml)
+
 A Forever-first, local dashboard that imports [WoWSync](../GearExport) `WOWSYNC v1` exports and builds persistent, version-isolated character history, with Forever as the primary experience.
 
 This is a **separate project and a separate Git repository** from the
@@ -616,6 +618,10 @@ On a loopback bind the server additionally rejects requests whose `Host` (or,
 for state-changing requests, `Origin`) is not `localhost`/`127.0.0.1`/`::1`,
 which blocks "DNS rebinding" attacks from web pages you visit. This is not
 authentication: any program running on your machine can still call the API.
+
+## CI
+
+GitHub Actions runs the Dashboard test suite, TypeScript checks, and web production build on Ubuntu with Node.js 24 for pushes and pull requests. Tests use isolated fixtures and temporary or in-memory SQLite databases; no live DEV service or local database is required.
 
 ## Development setup
 
