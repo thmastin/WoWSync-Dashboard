@@ -1,4 +1,4 @@
-import type { ForeverGearAllocationApi } from "./api.ts";
+﻿import type { ForeverGearAllocationApi } from "./api.ts";
 
 export interface RecipientAllocationRead {
   recipientIdentityKey: string;
@@ -82,7 +82,7 @@ export function buildForeverGearReview(reads: readonly RecipientAllocationRead[]
   const groups = new Map<string, GearReviewItemGroup>();
   reads.forEach(({ recipientIdentityKey, result }) => {
     const data = result.status === "FOUND" ? result.value?.data : undefined;
-    if (data?.version !== "forever" || data.ruleset !== "forever-70291-allocation-screen-v2") return;
+    if (data?.version !== "forever" || data.ruleset !== "forever-min-70291-allocation-screen-v3") return;
     const entries = data.allocationPlan ?? [];
     entries.forEach((entry, index) => {
       if (entry.recipient.identityKey !== recipientIdentityKey) return;
@@ -98,7 +98,7 @@ export function buildForeverGearReview(reads: readonly RecipientAllocationRead[]
           itemLabel: entry.item.name ?? "Unidentified observed item",
           itemRef: entry.item.itemRef,
           sourceIdentityKey: entry.source.identityKey,
-          sourceLabel: `${[entry.source.name, entry.source.surname].filter(Boolean).join(" ")} · ${entry.source.realm}`,
+          sourceLabel: `${[entry.source.name, entry.source.surname].filter(Boolean).join(" ")} Â· ${entry.source.realm}`,
           location: entry.source.location,
           provenance: entry.source.provenance,
           observedAt: entry.source.observedAt,

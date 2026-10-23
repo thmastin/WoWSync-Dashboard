@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
@@ -201,6 +201,16 @@ test("Forever allocation keeps source location, unknown roster membership, and e
       assert.equal(carrierSelf.value.data.recipient.observedSkillLines[0]?.provenance, "UNKNOWN", "fresh item facts cannot make a skill row with no skill-specific timestamp observed");
       assert.equal(carrierSelf.value.data.assessments[0]?.eligibilityChecks.weaponProficiency.state, "UNKNOWN", "untimestamped positive-rank skill rows cannot pass the proficiency hypothesis");
       assert.ok(carrierSelf.value.data.allocationPlan.some((row) => row.disposition === "EQUIP_CANDIDATE" && row.item.itemRef === carriedRef), "a local candidate is presented only as a review outcome");
+    }
+    const mailPlan = new DashboardReadModel(store, () => NOW).getForeverMailPlan({ version: "forever", name: "Carrier", realm: "Classic Beta PvP 2" });
+    assert.equal(mailPlan.status, "FOUND");
+    if (mailPlan.status === "FOUND" && mailPlan.value.data && "mail" in mailPlan.value.data) {
+      const plan = mailPlan.value.data;
+      assert.equal(plan.ruleset, "forever-min-70291-allocation-screen-v3");
+      assert.equal(plan.mail.length, 0, "a cross-character row is not actionable without a fully supported fit");
+      assert.ok(plan.noRecipient.some((row) => (row.item as { itemRef?: string }).itemRef === carriedRef));
+      assert.deepEqual(plan.plannedSpecs, [], "the optional identity-keyed user configuration hook defaults to empty");
+      assert.ok(plan.unknownReasons.some((reason) => /bank/i.test(reason)));
     }
     const carrier = view.candidateSources.find((source) => source.source.name === "Carrier");
     assert.equal(carrier?.candidates[0]?.itemRef, carriedRef);

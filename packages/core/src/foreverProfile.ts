@@ -42,6 +42,13 @@ export function isForeverProfile(profile: unknown): profile is `Forever:${string
   return parseForeverProfile(profile) !== undefined;
 }
 
+/** Gear-screen intake floor: preserves capture from the supported Forever 1.60.1 client family at/after build 70291. */
+export function supportsForeverGearEvaluation(profile: unknown): boolean {
+  const parsed = parseForeverProfile(profile);
+  const build = parsed ? Number(parsed.clientBuild) : NaN;
+  return parsed?.clientVersion === "1.60.1" && parsed.interface === "16001" && Number.isSafeInteger(build) && build >= 70291;
+}
+
 /**
  * Exact version:build:interface profiles with direct compatibility evidence; mirrors GearExport's
  * VERIFIED_PROFILE table (WoWSyncCompat knownProfiles). A known build on another version or interface is not verified.

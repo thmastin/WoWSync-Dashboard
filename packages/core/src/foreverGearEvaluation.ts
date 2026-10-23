@@ -1,4 +1,4 @@
-/** Forever 1.60.1 / build 70291 only. No Retail equipment or weighting rules. */
+/** Forever 1.60.1 gear-screen rules, with snapshot/build provenance retained. No Retail equipment or weighting rules. */
 
 import { FOREVER_STAT_LABELS } from "./foreverStatLabels.ts";
 

@@ -168,19 +168,46 @@ test("Forever item API evidence exposes potential candidates without claiming el
   assert.deepEqual(unmatchedView.evaluationCandidates.items[0]?.itemApiEvidence.statDeltaComparisons, [], "pair results are withheld unless the exact equipped variant is observed");
 });
 
-test("build 70338 item API evidence remains raw until its semantics are live-validated", () => {
+test("verified 70338 item API evidence uses cross-checked tuple semantics", () => {
   const itemString = "item:999:4:5";
   const structured: ForeverStructuredObservation = { ...sidecar, clientProfile: "Forever:1.60.1:70338:16001",
     bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
     itemEvidence: { observedAt: 105, completeness: "complete", source: "raw build 70338 calls", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
   };
   const view = buildForeverGearObservation({ identity, snapshotId: 12, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
-  assert.equal(view.evaluationCandidates.items.length, 0);
-  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 1);
-  assert.match(view.evaluationCandidates.unclassifiedItems[0]?.reason ?? "", /build 70338.*raw observations/);
+  assert.equal(view.evaluationCandidates.items.length, 1);
+  assert.equal(view.evaluationCandidates.unclassifiedItems.length, 0);
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.buildVerification, "VERIFIED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.contractState, "OBSERVED");
   const equipped = (view.equipment.items[0] as { itemApiEvidence?: { clientProfile: string; validatedFields: { contractState: string } } } | undefined)?.itemApiEvidence;
   assert.equal(equipped?.clientProfile, "Forever:1.60.1:70338:16001");
-  assert.equal(equipped?.validatedFields.contractState, "UNKNOWN");
+  assert.equal(equipped?.validatedFields.contractState, "UNKNOWN", "the exact item name mismatch keeps the equipped row's tuple interpretation UNKNOWN");
+});
+
+test("verified 70450 snapshots remain eligible for the shared gear evaluator", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar, clientProfile: "Forever:1.60.1:70450:16001",
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "raw build 70450 calls", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 121, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 1);
+  assert.equal(view.snapshot.buildVerification, "VERIFIED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.buildVerification, "VERIFIED");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.validatedFields.contractState, "OBSERVED");
+});
+
+test("newer unverified Forever builds remain evaluated and lower their confidence", () => {
+  const itemString = "item:999:4:5";
+  const structured: ForeverStructuredObservation = { ...sidecar, clientProfile: "Forever:1.60.1:70999:16001",
+    bags: { observedAt: 101, completeness: "complete", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString, count: 1 } } }] } },
+    itemEvidence: { observedAt: 105, completeness: "complete", source: "raw unverified build calls", data: { sourceSections: { bags: { observedAt: 101, state: "complete" } }, items: [itemFact(itemString, 999, "INVTYPE_CHEST", true)] } },
+  };
+  const view = buildForeverGearObservation({ identity, snapshotId: 13, generatedAt: 99, importedAt: 102, equipment, bags, bank, structured, now: 110 });
+  assert.equal(view.evaluationCandidates.items.length, 1, "a newer build with matching exact-item/cross-check evidence is evaluated");
+  assert.equal(view.snapshot.buildVerification, "UNVERIFIED_BUILD");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.buildVerification, "UNVERIFIED_BUILD");
+  assert.equal(view.evaluationCandidates.items[0]?.itemApiEvidence.semanticInterpretation, "SCREENED_UNVERIFIED_BUILD");
 });
 
 test("open Forever bank contents retain item variants and empty scans remain distinct from inaccessible bank", () => {

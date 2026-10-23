@@ -1,5 +1,5 @@
 import type { VersionOrUnknown } from "./types.ts";
-import { isForeverProfile } from "./foreverProfile.ts";
+import { foreverBuildVerification, isForeverProfile, parseForeverProfile, supportsForeverGearEvaluation } from "./foreverProfile.ts";
 import { classifyFreshness } from "./freshness.ts";
 import { FOREVER_EQUIPMENT_SLOT_LABELS } from "./foreverEquipmentSlots.ts";
 import { buildForeverQuestObservation } from "./foreverQuests.ts";
@@ -177,14 +177,16 @@ function itemApiEvidence(fact: Record<string, unknown>, clientProfile: ForeverSt
     && value(infoValue(12)) === value(instantValue(6))
     && value(infoValue(13)) === value(instantValue(7));
   const nameAgreement = typeof observedName !== "string" || name === observedName;
-  const tupleShapeObserved = clientProfile === "Forever:1.60.1:70291:16001" && info?.state === "OBSERVED_VALUE" && info?.returnCount === 18
+  const tupleShapeObserved = supportsForeverGearEvaluation(clientProfile) && info?.state === "OBSERVED_VALUE" && info?.returnCount === 18
     && returnedVariantMatches && instantAgreement && nameAgreement;
+  const profile = parseForeverProfile(clientProfile);
+  const buildVerified = profile ? foreverBuildVerification(profile) === "VERIFIED" : false;
   const field = (index: number, type: string, semantic: string) => {
     const row = infoValue(index);
     if (tupleShapeObserved && row?.state === "OBSERVED" && row.type === type) {
       return { state: "OBSERVED" as const, value: row.value, api: "C_Item.GetItemInfo", observedAt: info?.observedAt };
     }
-    return { state: "UNKNOWN" as const, reason: tupleShapeObserved ? `The validated ${semantic} return was absent or had an unexpected type.` : clientProfile === "Forever:1.60.1:70338:16001" ? "Raw API return is retained, but the build 70338 item-info contract has not been live-validated." : "GetItemInfo tuple, exact item variant, or cross-API corroboration did not match the validated Forever 70291 capture contract." };
+    return { state: "UNKNOWN" as const, reason: tupleShapeObserved ? `The observed ${semantic} return was absent or had an unexpected type.` : "GetItemInfo tuple, exact item variant, or cross-API corroboration did not match the Forever gear-screen intake contract." };
   };
   const infoReturns = Array.isArray(info?.returns) ? info.returns : [];
   const statEntries = Array.isArray(statsTable?.entries) ? statsTable.entries : [];
@@ -261,13 +263,14 @@ function itemApiEvidence(fact: Record<string, unknown>, clientProfile: ForeverSt
       subclassID: field(13, "number", "item subclass ID"),
       crossChecks: { exactReturnedVariant: returnedVariantMatches, observedName: nameAgreement, instantAPIFieldsAgree: instantAgreement },
       reason: tupleShapeObserved
-        ? "Tuple positions listed here were live-corroborated against exact item links, GetItemInfoInstant fields, observed names, and equipped level fields on Forever 1.60.1 build 70291. GetItemStats entries remain raw stat keys and values."
-        : "No item metadata is interpreted unless the 70291 tuple shape and independent cross-checks pass.",
+        ? "Tuple positions are screened only when the 18-return shape, exact item link, GetItemInfoInstant cross-checks, and observed name all agree. GetItemStats entries remain raw stat keys and values."
+        : "No item metadata is interpreted unless the Forever gear-screen tuple shape and independent cross-checks pass.",
     },
-    semanticInterpretation: tupleShapeObserved ? "PARTIALLY_VALIDATED" as const : "UNKNOWN" as const,
+    semanticInterpretation: tupleShapeObserved ? buildVerified ? "PARTIALLY_VALIDATED" as const : "SCREENED_UNVERIFIED_BUILD" as const : "UNKNOWN" as const,
     reason: tupleShapeObserved
-      ? "Selected GetItemInfo fields are corroborated for Forever 70291. Raw GetItemStats keys are retained without translating them into upgrade or build conclusions."
-      : "Forever 70291 GetItemInfo/GetItemStats results are retained as raw API evidence; semantics remain UNKNOWN when tuple or cross-check evidence is incomplete.",
+      ? "Selected GetItemInfo fields pass the shape, exact-variant, and cross-API checks for this captured build. Unverified builds remain confidence-qualified. Raw GetItemStats keys are retained without translating them into weighted build conclusions."
+      : "Forever GetItemInfo/GetItemStats results are retained as raw API evidence; semantics remain UNKNOWN when tuple or cross-check evidence is incomplete.",
+    buildVerification: profile ? foreverBuildVerification(profile) : "UNVERIFIED_BUILD",
   };
 }
 
@@ -366,7 +369,7 @@ export function buildForeverGearObservation(input: {
   const factsByRef = new Map(factRows.flatMap((row) => typeof row.itemString === "string" ? [[row.itemString, row] as const] : []));
   const observedCarried = carriedItems ?? [];
   const itemFactsAvailable = evidence !== undefined && evidenceData !== undefined;
-  const itemSemanticsValidated = structured?.clientProfile === "Forever:1.60.1:70291:16001";
+  const itemSemanticsValidated = supportsForeverGearEvaluation(structured?.clientProfile);
   const carriedCovered = observedCarried.filter((item) => item.itemRef && factsByRef.has(item.itemRef)).length;
   const itemFactCoverageComplete = itemSemanticsValidated && itemFactsAvailable && evidenceBagComplete && carriedItems !== undefined && carriedCovered === observedCarried.length
     && observedCarried.every((item) => {
@@ -426,7 +429,7 @@ export function buildForeverGearObservation(input: {
       itemSubType: itemSubType?.state === "OBSERVED" && itemSubType.type === "string" ? itemSubType.value as string : undefined,
       equipLocation: equipLocation.value as string,
       itemApiEvidence: itemApiEvidence(fact, structured?.clientProfile, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now),
-      evidenceSource: evidence?.source ?? "Forever 70291 C_Item item facts",
+      evidenceSource: evidence?.source ?? "Forever C_Item item facts",
       ...(typeof evidence?.observedAt === "number" ? { evidenceObservedAt: evidence.observedAt } : {}),
       provenance: itemFactsLastSeen ? "LAST_SEEN" as const : "DERIVED" as const,
       eligibility: "UNKNOWN" as const, suitability: "UNKNOWN" as const,
@@ -438,7 +441,7 @@ export function buildForeverGearObservation(input: {
   // evidence is absent or malformed. Explicit non-equipment/projectile and
   // observed IsEquippableItem=false rows remain outside the gear plan.
   const unclassifiedItems = observedCarried.flatMap((item) => {
-    if (!itemSemanticsValidated) return [{ ...item, reason: "Forever 1.60.1 build 70338 API results are retained as raw observations; item classification semantics are not yet live-validated for this build." }];
+    if (!itemSemanticsValidated) return [{ ...item, reason: "The Forever client profile is below the supported gear-screen intake floor; raw item observations are retained without classification." }];
     if (item.itemRef && candidateRefs.has(item.itemRef)) return [];
     if (!item.itemRef || item.itemIdentity !== "OBSERVED") return [{ ...item, reason: "An exact item variant and matching exact-variant Forever item API result were not captured for this carried row; its item identity and equipment class are UNKNOWN." }];
     const fact = factsByRef.get(item.itemRef);
@@ -480,7 +483,7 @@ export function buildForeverGearObservation(input: {
       : "Potential equipment classification is UNKNOWN because matching, complete Forever item API evidence is unavailable.";
   return {
     identity: { ...identity, accountScope: "UNKNOWN", accountScopeReason: "WoWSync character identity carries version, realm, and name but no WoW account identifier; this view is scoped to the Dashboard import context and does not assert Battle.net account identity." },
-    snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt },
+    snapshot: { snapshotId: input.snapshotId, ...(input.generatedAt !== undefined ? { generatedAt: input.generatedAt } : {}), importedAt: input.importedAt, ...(structured?.clientProfile ? { clientProfile: structured.clientProfile } : {}), buildVerification: (() => { const parsed = parseForeverProfile(structured?.clientProfile); return parsed ? foreverBuildVerification(parsed) : "UNVERIFIED_BUILD"; })() },
     equipment: { state: equipmentState, source: equipmentSource, ...(equipmentAt !== undefined ? { observedAt: equipmentAt, freshness: freshness(equipmentAt) } : {}), items: equipmentItems.map((item) => {
       const fact = item.itemRef ? factsByRef.get(item.itemRef) : undefined;
       return fact && item.itemRef ? { ...item, itemApiEvidence: itemApiEvidence(fact, structured?.clientProfile, item.itemRef, item.name, typeof evidence?.observedAt === "number" ? evidence.observedAt : undefined, statDeltaComparisons, statDeltaSourceCurrent, statDeltaPairContextCurrent, equippedItemRefs, input.now) } : item;

@@ -236,7 +236,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     search_items: "get_forever_items",
   };
   const foreverNames = new Set([
-    "list_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation",
+    "list_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan",
     "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests",
     "get_character_progression", "lookup_forever_knowledge", "get_forever_market_prices",
     "find_recipe_crafters", "get_character_trainer", "get_character_storage", "search_items",
@@ -585,10 +585,16 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   }, async ({ version: _version, ...query }) => textResult(lookupForeverKnowledge(foreverKnowledge.get(), query)));
   server.registerTool("get_forever_gear_allocation", {
     title: "Evaluate observed Forever gear candidates",
-    description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",
+    description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Accepts Forever 1.60.1 profiles at or above build 70291. Verified builds receive standard confidence; newer unverified builds remain included, tagged UNVERIFIED_BUILD, and have lower confidence. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",
     inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getForeverGearAllocation(query)));
+  server.registerTool("get_forever_mail_plan", {
+    title: "Build a Forever mailbox errand plan",
+    description: "Builds a read-only, evidence-based mail plan from the current character's latest imported Forever gear observation, reusing the minimum-build-70291 allocation evaluator. Verified builds receive standard confidence; newer unverified builds are retained, tagged UNVERIFIED_BUILD, and lower confidence. Only same-realm/faction recipients are considered. Unknown or stale item, equipment, level, proficiency, faction, and bank facts remain UNKNOWN. The player performs each mailbox action.",
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel().getForeverMailPlan(query)));
   server.registerTool("ask_forever_copilot", {
     title: "Ask the Forever Co-Pilot a goal-oriented question",
     description: "Answers a player's Forever goal question (improve a character, make gold, develop professions, become self-sufficient, level faster) by combining the account's Forever evidence with version-correct Forever game knowledge from the Wowhead Forever database. Returns ranked recommendations, each with what to do, why, OBSERVED/DERIVED/LAST_SEEN/EXTERNAL/UNKNOWN evidence lines with sources, prerequisites, costs, alternatives/tradeoffs, unknowns, and next actions; premise challenges (for example owning a better item already); recorded ERP project goals; and limitations. Name the character in the question or pass character; stable-wide questions are answered per realm because realms are separate economies. Never invents prices, ownership, recipes, or eligibility; Auction House prices are UNKNOWN. Read-only: it never plays, buys, sells, mails, or moves items, and every transfer or /bankx move is for the player to run. Use format 'markdown' for a compact player-facing answer.",
@@ -796,7 +802,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   });
 
   if (foreverProfile) {
-    const profileToolNames = ["list_forever_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests", "get_character_progression", "get_forever_items", "lookup_forever_knowledge", "get_forever_market_prices", "find_recipe_crafters", "get_character_trainer"];
+    const profileToolNames = ["list_forever_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests", "get_character_progression", "get_forever_items", "lookup_forever_knowledge", "get_forever_market_prices", "find_recipe_crafters", "get_character_trainer"];
     for (const exposedName of profileToolNames) {
       const sourceName = exposedName === "list_forever_characters" ? "list_characters" : exposedName === "get_forever_items" ? "get_character_storage" : exposedName;
       const selected = foreverHandlers.get(sourceName);

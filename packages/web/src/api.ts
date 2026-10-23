@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AccountContext,
   AccountFacts,
   DeleteCharacterResult,
@@ -32,7 +32,7 @@ export interface ForeverGearAllocationApi {
   value?: {
     data?: {
       version: "forever";
-      ruleset: "forever-70291-allocation-screen-v2";
+      ruleset: "forever-min-70291-allocation-screen-v3";
       scope: { accountMembership: "UNKNOWN"; reason: string };
       recipient: { identityKey: string; name: string; surname?: string; realm: string; observedAt?: number; freshness: string; class?: { value: string; provenance: string; observedAt?: number; source: string }; level?: { value: number; provenance: string; observedAt?: number; source: string }; observedSkillLines: Array<{ name: string; rank?: number; maxRank?: number; rawCategoryID?: number; observedAt?: number; provenance: string }>; equipment: { state: string; source: string; observedAt?: number; freshness?: string; items: Array<{ slot: number; slotName: string; itemRef?: string; itemIdentity?: string; provenance: string }> } };
       candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; bank: { state: string; observedAt?: number; freshness?: string; reason?: string }; candidates: unknown[]; unclassifiedItems: Array<{ name?: string; itemRef?: string; itemIdentity?: string; container?: number; slot?: number; quantity?: number; provenance: string; reason: string }> }>;

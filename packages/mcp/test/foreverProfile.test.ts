@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,8 +11,8 @@ import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
 const root = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const entrypoint = path.join(root, "packages", "mcp", "src", "index.ts");
 const packageRoot = path.join(root, "packages", "mcp");
-const defaultNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
-const foreverNames = ["find_recipe_crafters", "get_character_professions", "get_character_progression", "get_character_state", "get_character_trainer", "get_forever_character_quests", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_market_prices", "get_recipe_reagent_availability", "list_forever_characters", "lookup_forever_knowledge"];
+const defaultNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
+const foreverNames = ["find_recipe_crafters", "get_character_professions", "get_character_progression", "get_character_state", "get_character_trainer", "get_forever_character_quests", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_recipe_reagent_availability", "list_forever_characters", "lookup_forever_knowledge"];
 
 test("MCP profile exposes exactly its documented tools and bounds crafter results", async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-profile-"));
@@ -65,6 +65,12 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       const hallo = roster.characters.find((character) => character.name === "Hallo");
       assert.equal(hallo?.race, "Gnome");
       assert.equal(hallo?.sex, "UNKNOWN");
+      const mailPlan = await forever.client.callTool({ name: "get_forever_mail_plan", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } });
+      assert.equal(mailPlan.isError, undefined);
+      const mailPlanData = (mailPlan.structuredContent as { value?: { data?: { ruleset?: string; plannedSpecs?: Array<{ provenance: string; informational: boolean }>; recipientNotObserved?: string[] } } }).value?.data;
+      assert.equal(mailPlanData?.ruleset, "forever-min-70291-allocation-screen-v3");
+      assert.ok(mailPlanData?.plannedSpecs?.every((spec) => spec.provenance === "USER_CONFIGURED" && spec.informational));
+      assert.deepEqual(mailPlanData?.plannedSpecs, [], "the optional user configuration hook is empty by default");
       const state = (await forever.client.callTool({ name: "get_character_state", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } })).structuredContent as { value: { data: { identity: { race: string; sex: string } } } };
       assert.equal(state.value.data.identity.race, "Gnome");
       assert.equal(state.value.data.identity.sex, "UNKNOWN");
