@@ -16,6 +16,25 @@ test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   assert.equal(snapshot.character.status.state, "OBSERVED");
 });
 
+test("parses optional Classic Era GUID and observed talent tree while legacy exports remain UNKNOWN", () => {
+  const legacy = parseWowSyncExport(buildWowSyncExport({ character: {
+    name: "EraOne", realm: "Azeroth", class: "Warrior", level: 60, clientVersion: "1.15.9", clientBuild: "70003", clientFamily: "Classic",
+  } }));
+  assert.equal(legacy.character.guid, undefined);
+  assert.equal(legacy.character.talentStatus, undefined);
+  assert.equal(legacy.character.talentTree, undefined);
+
+  const raw = buildWowSyncExport({ character: {
+    name: "EraOne", realm: "Azeroth", class: "Warrior", level: 60, clientVersion: "1.15.9", clientBuild: "70003", clientFamily: "Classic",
+  } }).replace("Client: 1.15.9 build 70003\n", "Client: 1.15.9 build 70003\nGUID: Player-1234-ABCDEFGH\nTalentStatus: OBSERVED\ntalentTree\tname\tpointsSpent\ntalentTree\tArms\t31\ntalentTree\tFury\t20\ntalentTree\tProtection\t0\n");
+  const parsed = parseWowSyncExport(raw);
+  assert.equal(parsed.character.guid, "Player-1234-ABCDEFGH");
+  assert.equal(parsed.character.talentStatus, "OBSERVED");
+  assert.deepEqual(parsed.character.talentTree, [
+    { name: "Arms", pointsSpent: 31 }, { name: "Fury", pointsSpent: 20 }, { name: "Protection", pointsSpent: 0 },
+  ]);
+});
+
 test("Forever 70291 and 70338 surnames are optional display metadata and legacy exports remain valid", () => {
   const forever = parseWowSyncExport(buildWowSyncExport({ character: {
     name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "Classic Beta PvP 2", clientFamily: "Forever",

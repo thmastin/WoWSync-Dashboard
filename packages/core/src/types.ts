@@ -47,6 +47,10 @@ export interface CharacterSection {
   /** Forever only: the exporter's own compatibility claim (VERIFIED_PROFILE / UNVERIFIED_BUILD), verbatim. */
   exporterCompatibility?: string;
   exporterCompatibilityNote?: string;
+  /** Stable GUID reported by Classic Era exports; UNKNOWN is represented by absence. */
+  guid?: string;
+  talentStatus?: "OBSERVED" | "UNKNOWN";
+  talentTree?: Array<{ name: string; pointsSpent?: number }>;
 }
 
 export interface LocationSection {
