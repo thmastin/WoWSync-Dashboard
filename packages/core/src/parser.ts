@@ -205,6 +205,29 @@ function parseCharacter(lines: string[]): CharacterSection {
   // trusted over the Dashboard's own build verification.
   const exporterCompatibility = clientFamily !== undefined ? fieldValue(get("Compatibility: ", false)) : undefined;
   const exporterCompatibilityNote = exporterCompatibility !== undefined ? fieldValue(get("CompatibilityNote: ", false)) : undefined;
+  // Classic Era additions are optional so snapshots captured by older addon builds
+  // remain valid. Unknown markers stay absent rather than becoming empty identities/data.
+  const guidRaw = get("GUID: ", false);
+  const guid = guidRaw !== undefined && guidRaw !== "UNKNOWN" ? fieldValue(guidRaw) : undefined;
+  const talentStatusRaw = get("TalentStatus: ", false);
+  let talentStatus: CharacterSection["talentStatus"];
+  let talentTree: CharacterSection["talentTree"];
+  if (talentStatusRaw === "OBSERVED" || talentStatusRaw === "UNKNOWN") {
+    talentStatus = talentStatusRaw;
+    if (talentStatusRaw === "OBSERVED") {
+      const headerLine = lines[i];
+      if (headerLine?.startsWith("talentTree\t")) {
+        i++;
+        const trees: NonNullable<CharacterSection["talentTree"]> = [];
+        while (i < lines.length && lines[i].startsWith("talentTree\t")) {
+          const cols = splitRow(lines[i], 3, "talentTree row");
+          trees.push({ name: fieldValue(cols[1]) ?? "", pointsSpent: fieldNumber(cols[2]) });
+          i++;
+        }
+        talentTree = trees;
+      }
+    }
+  }
   if (surname !== undefined && !isForeverClient({ clientFamily, clientVersion, clientBuild, interface: iface })) {
     fail("Surname is only supported for a well-formed Forever client profile");
   }
@@ -230,6 +253,9 @@ function parseCharacter(lines: string[]): CharacterSection {
     interface: iface,
     ...(exporterCompatibility !== undefined ? { exporterCompatibility } : {}),
     ...(exporterCompatibilityNote !== undefined ? { exporterCompatibilityNote } : {}),
+    ...(guid !== undefined ? { guid } : {}),
+    ...(talentStatus !== undefined ? { talentStatus } : {}),
+    ...(talentTree !== undefined ? { talentTree } : {}),
   };
 }
 

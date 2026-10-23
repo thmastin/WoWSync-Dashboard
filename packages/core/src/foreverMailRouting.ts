@@ -1,3 +1,5 @@
+import { MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
+
 export interface MailRoutingRecipient {
   identityKey: string;
   name: string;
@@ -28,13 +30,7 @@ export type MailDisposition =
   | { disposition: "KEEP"; item: MailRoutingItem; reason: string; unknownProfessionRecipients?: string[] };
 
 export function orderMailPlanSteps(groups: { gear: unknown[]; materials: unknown[]; pouches?: unknown[]; sale: unknown[]; keep: unknown[] }): Array<{ kind: string; action: unknown }> {
-  return [
-    ...groups.gear.map((action) => ({ kind: "GEAR_MAIL", action })),
-    ...groups.materials.map((action) => ({ kind: "MATERIAL_MAIL", action })),
-    ...(groups.pouches ?? []).map((action) => ({ kind: "POUCH_MAIL", action })),
-    ...groups.sale.map((action) => ({ kind: "SALE", action })),
-    ...groups.keep.map((action) => ({ kind: "KEEP", action })),
-  ];
+  return orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES.forever, groups).steps;
 }
 
 export function eligibleMailRecipients<T extends Pick<MailRoutingRecipient, "identityKey" | "realm" | "faction">>(source: Pick<MailRoutingRecipient, "identityKey" | "realm" | "faction">, recipients: T[]): T[] {
@@ -90,3 +86,4 @@ export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingReci
     ? [{ disposition: "SELL_AH", item, ahNetCopper, vendorCopper, reason: compare }]
     : [{ disposition: "VENDOR", item, ahNetCopper, vendorCopper, reason: compare }];
 }
+

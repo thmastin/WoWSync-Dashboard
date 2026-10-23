@@ -70,8 +70,8 @@ export interface WoWSyncMcpConfiguration {
   researchRoot?: string;
   /** Optional process-owned loopback Dashboard origin. Enables planning-record writes through the existing REST validation boundary. */
   planningApiBaseUrl?: string;
-  /** Exposes the bounded Forever-only tool profile selected by process configuration. */
-  profile?: "forever";
+  /** Exposes one bounded flavor profile selected by process configuration. */
+  profile?: "classic-era" | "forever";
 }
 
 export interface WoWSyncMcpServer {
@@ -124,7 +124,7 @@ function compactForeverProfessions(result: unknown, args: Record<string, unknown
     return summary;
   });
   const { recipeKnowledge: _discarded, specialization: _specialization, ...rest } = data;
-  return textResult({ ...root, value: { ...value, data: { ...rest, entries: summaries, ...(recipeDomain ? { recipeKnowledge: { status: recipeDomain.status, ...(recipeDomain.evidence ? { evidence: recipeDomain.evidence } : {}), completeness: recipeDomain.completeness } } : {}) } } });
+  return textResult({ ...root, value: { ...value, data: { ...rest, entries: summaries, ...(recipeDomain ? { recipeKnowledge: recipeDomain } : {}) } } });
 }
 
 function safeFailure(code: string, message: string) {
@@ -229,6 +229,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     },
   );
   const foreverProfile = configuration.profile === "forever";
+  const classicEraProfile = configuration.profile === "classic-era";
   let storeClosed = false;
   const closeStore = () => {
     if (storeClosed) return;
@@ -242,21 +243,22 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   // the Secure MCP Tunnel leaves verifiable evidence of which tools a connected client actually used.
   const registerTool = server.registerTool.bind(server);
   const foreverHandlers = new Map<string, { config: Record<string, unknown>; handler: (...args: unknown[]) => unknown }>();
+  const classicEraHandlers = new Map<string, { config: Record<string, unknown>; handler: (...args: unknown[]) => unknown }>();
   const foreverAliases: Record<string, string> = {
     list_characters: "list_forever_characters",
     get_character_storage: "get_forever_items",
     search_items: "get_forever_items",
   };
-  const foreverNames = new Set([
-    "list_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan",
-    "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests",
-    "get_character_progression", "lookup_forever_knowledge", "get_forever_market_prices",
-    "find_recipe_crafters", "get_character_trainer", "get_character_storage", "search_items",
-  ]);
+  const foreverExclusiveNames = new Set(["ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_items", "get_forever_market_prices", "lookup_forever_knowledge", "create_erp_project_from_goal"]);
+  const retailExclusiveNames = new Set(["analyze_retail_gear_candidate", "get_gear_candidate_recipient_screen"]);
   server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) => {
     const typedConfig = config as Record<string, unknown>;
-    if (foreverProfile) {
-      if (foreverNames.has(name)) foreverHandlers.set(name, { config: typedConfig, handler });
+    if (foreverProfile || classicEraProfile) {
+      // The Forever MCP retains the shared non-Era Dashboard tools for existing
+      // workflows. The final schema excludes Classic Era, whose data and policy
+      // are available only through its separately selected profile.
+      if (foreverProfile && name !== "get_classic_era_mail_plan" && name !== "list_classic_era_characters") foreverHandlers.set(name, { config: typedConfig, handler });
+      if (classicEraProfile && !foreverExclusiveNames.has(name) && !retailExclusiveNames.has(name) && name !== "list_classic_era_characters") classicEraHandlers.set(name, { config: typedConfig, handler });
       return server;
     }
     return registerTool(name, config as never, (async (...args: unknown[]) => {
@@ -604,7 +606,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   server.registerTool("get_forever_mail_plan", {
     title: "Build a Forever mailbox errand plan",
     description: "Builds a read-only, evidence-based mail plan from the current character's latest imported Forever gear observation, reusing the minimum-build-70291 allocation evaluator. Verified builds receive standard confidence; newer unverified builds are retained, tagged UNVERIFIED_BUILD, and lower confidence. Only same-realm/faction recipients are considered. Unknown or stale item, equipment, level, proficiency, faction, and bank facts remain UNKNOWN. The player performs each mailbox action.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => {
     const holdItemIds = (process.env.WOWSYNC_FOREVER_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
@@ -616,6 +618,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     }
     return textResult(useForeverPrices(foreverPrices.get(), () => readModel().getForeverMailPlan(query, { holdItemIds, vendorPrices } ), marketRegion));
   });
+  server.registerTool("get_classic_era_mail_plan", {
+    title: "Build a Classic Era mailbox errand plan",
+    description: "Builds a read-only plan from Classic Era WOWSYNC observations only. Requires a stable GUID, OBSERVED bags within 72 hours, and an Era client build at or above 70003; build 70003 is verified and newer builds remain usable with lowered confidence. Vendor unit value comes only from captured vendorEachCopper. Auction House value is always UNKNOWN because no Era price source is available. Talent spec is DERIVED only from an unambiguous observed legacy talent tree. Missing or ineligible settings and skill ties remain UNDETERMINED. The player performs any mailbox action.",
+    inputSchema: z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel().getClassicEraMailPlan(query)));
   server.registerTool("ask_forever_copilot", {
     title: "Ask the Forever Co-Pilot a goal-oriented question",
     description: "Answers a player's Forever goal question (improve a character, make gold, develop professions, become self-sufficient, level faster) by combining the account's Forever evidence with version-correct Forever game knowledge from the Wowhead Forever database. Returns ranked recommendations, each with what to do, why, OBSERVED/DERIVED/LAST_SEEN/EXTERNAL/UNKNOWN evidence lines with sources, prerequisites, costs, alternatives/tradeoffs, unknowns, and next actions; premise challenges (for example owning a better item already); recorded ERP project goals; and limitations. Name the character in the question or pass character; stable-wide questions are answered per realm because realms are separate economies. Never invents prices, ownership, recipes, or eligibility; Auction House prices are UNKNOWN. Read-only: it never plays, buys, sells, mails, or moves items, and every transfer or /bankx move is for the player to run. Use format 'markdown' for a compact player-facing answer.",
@@ -823,27 +831,31 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   });
 
   if (foreverProfile) {
-    const profileToolNames = ["list_forever_characters", "get_character_state", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_character_professions", "get_recipe_reagent_availability", "get_forever_character_quests", "get_character_progression", "get_forever_items", "lookup_forever_knowledge", "get_forever_market_prices", "find_recipe_crafters", "get_character_trainer"];
+    const profileToolNames = [...new Set([...foreverHandlers.keys(), ...Object.keys(foreverAliases).map((name) => foreverAliases[name]!)])].filter((name) => name !== "get_classic_era_mail_plan" && name !== "list_classic_era_characters");
     for (const exposedName of profileToolNames) {
       const sourceName = exposedName === "list_forever_characters" ? "list_characters" : exposedName === "get_forever_items" ? "get_character_storage" : exposedName;
       const selected = foreverHandlers.get(sourceName);
       if (!selected) continue;
       const config = { ...selected.config };
       const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
-      const profileShape = { ...shape, version: z.literal("forever") };
+      const nonEraVersion = z.enum(READ_MODEL_VERSIONS.filter((version) => version !== "classic-era") as [VersionOrUnknown, ...VersionOrUnknown[]]);
+      const foreverOnly = new Set(["list_forever_characters", "ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_items", "lookup_forever_knowledge", "get_forever_market_prices"]);
+      const retailOnly = new Set(["analyze_retail_gear_candidate", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen"]);
+      const profileShape = { ...shape, ...(shape.version ? { version: foreverOnly.has(exposedName) ? z.literal("forever") : retailOnly.has(exposedName) || exposedName === "get_gear_candidate_evidence" ? z.literal("retail") : nonEraVersion } : {}) };
       if (exposedName === "list_forever_characters") config.inputSchema = z.object({ version: z.literal("forever"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
-      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
+      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: nonEraVersion, name: nameSchema, realm: realmSchema.optional(), profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
       else if (exposedName === "get_forever_items") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema.optional(), realm: realmSchema.optional(), storage: z.enum(["bags", "bank"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.query !== undefined && args.name === undefined && args.realm === undefined && args.storage === undefined) || (args.query === undefined && args.name !== undefined && args.realm !== undefined && args.storage !== undefined), "Pass query alone or name, realm, and storage together.");
+      else if (exposedName === "get_forever_market_prices") config.inputSchema = z.object({ version: z.literal("forever"), items: z.array(z.union([z.number().int().positive(), z.string().trim().min(2).max(100)])).min(1).max(25), character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(), market: z.string().regex(/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/).optional() }).strict().refine((args) => args.character !== undefined || args.market !== undefined, "Pass character or market.");
+      else if (exposedName === "lookup_forever_knowledge") config.inputSchema = z.object({ version: z.literal("forever"), kind: z.enum(["item", "quest", "npc", "spell", "dungeon", "zone"]), id: z.number().int().positive().optional(), name: z.string().trim().min(2).max(100).optional(), limit: z.number().int().min(1).max(10).optional() }).strict().refine((args) => args.id !== undefined || args.name !== undefined, "Pass id or name.");
       else {
-        if ("realm" in profileShape) profileShape.realm = realmSchema;
         config.inputSchema = z.object(profileShape).strict();
       }
       registerTool(exposedName, config as never, (async (args: Record<string, unknown>) => {
         if (staleMcpRelease()) return safeFailure("STALE_SERVER", "This WoWSync MCP process is running code from a previous DEV release. Reconnect or restart the MCP service before retrying.");
         let result: unknown;
         if (exposedName === "get_forever_items") result = "query" in args ? await foreverHandlers.get("search_items")!.handler(args) : await foreverHandlers.get("get_character_storage")!.handler(args);
-        else if (exposedName === "get_character_professions") result = compactForeverProfessions(await selected.handler({ ...args, version: "forever" }), args);
-        else result = await selected.handler({ ...args, version: "forever" });
+        else if (exposedName === "get_character_professions") result = compactForeverProfessions(await selected.handler(args), args);
+        else result = await selected.handler(foreverOnly.has(exposedName) || exposedName === "list_forever_characters" ? { ...args, version: "forever" } : args);
         if (exposedName === "list_forever_characters") {
           const listed = result as { structuredContent?: { characters?: Array<Record<string, unknown>> } };
           const structured = listed.structuredContent;
@@ -852,7 +864,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
             result = textResult({ ...structured, characters });
           }
         }
-        if (exposedName === "get_character_state") {
+        if (exposedName === "get_character_state" && args.version === "forever") {
           const stateResult = result as { structuredContent?: Record<string, any> };
           const state = stateResult.structuredContent;
           const identity = state?.value?.data?.identity as Record<string, unknown> | undefined;
@@ -862,7 +874,32 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
           }
         }
         const serialized = JSON.stringify((result as { structuredContent?: unknown })?.structuredContent ?? result);
-        return serialized.length <= MAX_DOCUMENT_CHARACTERS ? result : textResult({ error: { code: "RESULT_TOO_LARGE", message: "The result exceeds the 40,000-character Forever MCP limit." }, truncated: true });
+        const resultLimit = exposedName === "ask_forever_copilot" || exposedName === "create_erp_project_from_goal" ? 200_000 : foreverOnly.has(exposedName) ? MAX_DOCUMENT_CHARACTERS : Number.POSITIVE_INFINITY;
+        return serialized.length <= resultLimit ? result : textResult({ error: { code: "RESULT_TOO_LARGE", message: `The result exceeds the ${resultLimit.toLocaleString()}-character Forever MCP limit.` }, truncated: true });
+      }) as never);
+    }
+  }
+
+  if (classicEraProfile) {
+    const profileToolNames = [...new Set([...classicEraHandlers.keys(), "list_classic_era_characters", "get_classic_era_mail_plan"])].filter((name) => !foreverExclusiveNames.has(name));
+    for (const exposedName of profileToolNames) {
+      const sourceName = exposedName === "list_classic_era_characters" ? "list_characters" : exposedName;
+      const selected = classicEraHandlers.get(sourceName);
+      if (!selected) continue;
+      const config = { ...selected.config };
+      const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
+      if (exposedName === "list_classic_era_characters") config.inputSchema = z.object({ version: z.literal("classic-era"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
+      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
+      else if (exposedName === "get_classic_era_mail_plan") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict();
+      else {
+        const profileShape = { ...shape, ...(shape.version ? { version: z.literal("classic-era") } : {}) };
+        config.inputSchema = z.object(profileShape).strict();
+      }
+      registerTool(exposedName, config as never, (async (args: Record<string, unknown>) => {
+        if (staleMcpRelease()) return safeFailure("STALE_SERVER", "This WoWSync MCP process is running code from a previous DEV release. Reconnect or restart the MCP service before retrying.");
+        const result = await selected.handler({ ...args, version: "classic-era" });
+        const serialized = JSON.stringify((result as { structuredContent?: unknown })?.structuredContent ?? result);
+        return serialized.length <= MAX_DOCUMENT_CHARACTERS ? result : textResult({ error: { code: "RESULT_TOO_LARGE", message: "The result exceeds the 40,000-character Classic Era MCP limit." }, truncated: true });
       }) as never);
     }
   }

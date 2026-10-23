@@ -52,4 +52,6 @@ export * from "./foreverKnowledgeBundle.ts";
 export { parseLuaLiteral, parseQuestieDataBlock, luaArray, LuaLiteralError } from "./luaLiteral.ts";
 export * from "./foreverSkills.ts";
 export * from "./foreverPrices.ts";
+export * from "./mailFlavorPolicy.ts";
+export * from "./mailPlanSettings.ts";
 export * from "./foreverRecipeLearning.ts";

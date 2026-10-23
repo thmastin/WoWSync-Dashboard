@@ -23,6 +23,7 @@ import {
 import { hostGuard } from "./net.ts";
 import { integrityErrorBody, registerSharedStorageRoutes } from "./sharedStorageRoutes.ts";
 import { registerDemandRoutes } from "./demandRoutes.ts";
+import { registerMailSettingsRoutes } from "./mailSettingsRoutes.ts";
 import { registerErpProjectRoutes } from "./erpProjectRoutes.ts";
 import { registerErpChangeProposalRoutes } from "./erpChangeProposalRoutes.ts";
 import { registerCopilotRoutes } from "./copilotRoutes.ts";
@@ -326,6 +327,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
 
   registerSharedStorageRoutes(app, store);
   registerDemandRoutes(app, store);
+  registerMailSettingsRoutes(app, store);
 
   // Unknown API paths are JSON 404s like every other API error - never
   // Express's default HTML page (which the web client cannot tell from a

@@ -33,8 +33,10 @@ import { findRecipeCrafters, knowledgeRows, matchesRecipeFilter, matchTrainerSer
 import { assessForeverEligibility, assessForeverSuitability, calibrateForeverStatDelta, classifyForeverRecordedUpgrade, compareForeverStatTables, evaluateForeverSlotCompatibility, type ForeverGearAssessmentEvaluation, type ForeverSlotEvidence, type ForeverStatTable } from "./foreverGearEvaluation.ts";
 import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorProficiency, evaluateForeverExplicitClassRestriction, evaluateForeverRecipientFit, evaluateForeverWeaponProficiency } from "./foreverGearRules.ts";
 import { marketPrice } from "./foreverPrices.ts";
-import { eligibleMailRecipients, orderMailPlanSteps, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
+import { eligibleMailRecipients, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
 import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
+import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
+import { resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -1524,7 +1526,7 @@ export class DashboardReadModel {
     }
     const observedAt = resolved.value.provenance.observedAt;
     return { status: "FOUND", value: {
-      data: { version: "forever", ruleset: "forever-min-70291-allocation-screen-v3", buildVerification: recipientData.snapshot.buildVerification, scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
+      data: { version: "forever", ruleset: MAIL_FLAVOR_POLICIES.forever.ruleset, buildVerification: recipientData.snapshot.buildVerification, scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
         candidateSources, assessments, recipientEvaluations, allocationPlan, exclusions,
         conclusion: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE") ? "LOCAL_REVIEW_CANDIDATE_AVAILABLE" : "INSUFFICIENT_EVIDENCE",
         reason: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE")
@@ -1535,7 +1537,7 @@ export class DashboardReadModel {
   }
 
   /** A mailbox errand projection over the canonical Forever gear evaluator. */
-  getForeverMailPlan(query: CharacterQuery, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>> } = {}) {
+  getForeverMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>> } = {}) {
     if (query.version !== "forever") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Mail planning is isolated to Forever 1.60.1 snapshots at or above build 70291." } } };
     const base = this.getForeverGearAllocation(query);
     if (base.status !== "FOUND" || !base.value.data) return base;
@@ -1544,6 +1546,13 @@ export class DashboardReadModel {
     if (!sourceCharacter) return { status: "NOT_FOUND" as const, version: "forever" as const, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
     const source = data.candidateSources.find((row) => row.source.identityKey === sourceCharacter.identityKey);
     const sameRealmFaction = eligibleMailRecipients(sourceCharacter, this.characters("forever"));
+    const settingsScope = sourceCharacter.faction === "Alliance" || sourceCharacter.faction === "Horde"
+      ? { accountId: query.accountId ?? "default", version: "forever" as const, realm: sourceCharacter.realm, faction: sourceCharacter.faction as "Alliance" | "Horde" }
+      : undefined;
+    const mailSettings = settingsScope ? this.store.getMailPlanSettings(settingsScope) : undefined;
+    const auctionCharacter = settingsScope
+      ? resolveMailSettingsCharacter(mailSettings?.auctionCharacterIdentityKey, settingsScope, this.characters("forever"))
+      : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; auction recipient scope cannot be established." };
     const mail: Array<Record<string, unknown>> = [];
     const keep: Array<Record<string, unknown>> = [];
     const noRecipient: Array<Record<string, unknown>> = [];
@@ -1602,7 +1611,11 @@ export class DashboardReadModel {
       for (const action of routed) {
         const { disposition, ...details } = action;
         if (disposition === "MAIL_TO_CRAFTER") materialMail.push({ ...details, disposition });
-        else if (disposition === "SELL_AH" || disposition === "VENDOR") sale.push({ ...details, disposition });
+        else if (disposition === "SELL_AH") {
+          if (auctionCharacter.state === "ELIGIBLE") materialMail.push({ ...details, disposition: "MAIL_TO_AUCTION_CHARACTER", auctionCharacter: { identityKey: auctionCharacter.character.identityKey, name: auctionCharacter.character.name, realm: auctionCharacter.character.realm }, saleAction: disposition });
+          else keep.push({ ...details, disposition: "UNDETERMINED", reason: "Auction House sale is not routed: " + auctionCharacter.reason });
+        }
+        else if (disposition === "VENDOR") sale.push({ ...details, disposition });
         else keep.push({ ...details, disposition });
       }
     };
@@ -1691,10 +1704,108 @@ export class DashboardReadModel {
     const buildVerification = data.buildVerification;
     const sourceProfile = (this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation as { clientProfile?: string } | undefined)?.clientProfile;
     const clientBuild = parseForeverProfile(sourceProfile)?.clientBuild;
-    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: "forever-min-70291-allocation-screen-v3", buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, steps: orderMailPlanSteps({ gear: mail, materials: materialMail, pouches: pouchMail, sale, keep }), screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons,
+    const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES.forever, { gear: mail, materials: materialMail, pouches: pouchMail, sale, keep });
+    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: orchestration.ruleset, buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, ...(mailSettings ? { settings: { accountId: settingsScope?.accountId ?? "default", auctionCharacter } } : {}), steps: orchestration.steps, screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons,
       bank: source?.bank ?? { state: "UNKNOWN", reason: "No bank evidence." }, professionChecks,
       plannedSpecs: Object.entries(FOREVER_PLANNED_SPECS).map(([identityKey, spec]) => ({ identityKey, spec, provenance: "USER_CONFIGURED" as const, informational: true as const })),
     }, provenance: { ...base.value.provenance, state: "DERIVED" as const, ...(observedAt !== undefined ? { observedAt } : {}) } } };
+  }
+
+  /** Classic Era mail-plan projection. All facts come from Era WOWSYNC sections; AH remains UNKNOWN. */
+  getClassicEraMailPlan(query: CharacterQuery & { accountId?: string }) {
+    if (query.version !== "classic-era") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Classic Era mail planning only accepts classic-era snapshots." } } };
+    return this.resolve(query, (character, snapshot) => {
+      const snapshots = this.snapshots(character.identityKey);
+      if (!snapshot) return { provenance: { state: "UNKNOWN" as const, version: "classic-era" as const, identityKey: character.identityKey, reason: "No Classic Era snapshot exists for this character." } };
+      const profile = snapshot.parsed.character;
+      const buildVerification = classicEraBuildVerification(profile);
+      const priorGuids = snapshots.slice(1).map((row) => row.parsed.character.guid);
+      const identity = classicEraGuidContinuity(profile.guid, priorGuids);
+      const bags = snapshot.parsed.bags;
+      const observedAt = bags.status.observedAt ?? snapshot.parsed.generatedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
+      const freshness = classifyMailFreshness(MAIL_FLAVOR_POLICIES["classic-era"], observedAt, this.now());
+      const usable = identity.state === "OBSERVED" && buildVerification !== "UNSUPPORTED" && bags.status.state === "OBSERVED" && freshness === "recent";
+      const roster = this.characters("classic-era");
+      const scopedRoster = roster.filter((row) => row.realm === character.realm && !!character.faction && row.faction === character.faction);
+      const settingsScope = character.faction === "Alliance" || character.faction === "Horde"
+        ? { accountId: query.accountId ?? "default", version: "classic-era" as const, realm: character.realm, faction: character.faction as "Alliance" | "Horde" }
+        : undefined;
+      const settings = settingsScope ? this.store.getMailPlanSettings(settingsScope) : undefined;
+      const auctionCharacter = settingsScope
+        ? resolveMailSettingsCharacter(settings?.auctionCharacterIdentityKey, settingsScope, roster)
+        : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; auction recipient scope cannot be established." };
+      const mainCharacter = settingsScope
+        ? resolveMailSettingsCharacter(settings?.mainCharacterIdentityKey, settingsScope, roster)
+        : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; main-character scope cannot be established." };
+      const items = bags.items.map((item) => {
+        const itemId = itemIdFromItemRef(item.itemRef);
+        const uses: Array<{ character: StoredCharacterSummary; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }> = [];
+        if (itemId !== undefined) for (const candidate of scopedRoster) {
+          const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
+          if (professionResult.status !== "FOUND" || !professionResult.value.data) continue;
+          const knowledge = professionResult.value.data.recipeKnowledge as any;
+          for (const group of knowledge?.data?.professions ?? []) for (const recipe of group.recipes ?? []) {
+            const evidence = recipe.evidence ?? group.evidence ?? knowledge?.evidence?.state;
+            if (evidence !== "OBSERVED" && evidence !== "LAST_SEEN") continue;
+            const usesItem = (recipe.reagentSlots ?? []).filter((slot: any) => slot.required !== false)
+              .flatMap((slot: any) => slot.alternatives ?? slot.reagents ?? [])
+              .some((reagent: any) => reagent.itemID === itemId);
+            if (usesItem) uses.push({ character: candidate, profession: String(group.professionName ?? group.name ?? "UNKNOWN profession"), evidence });
+          }
+        }
+        const ownUse = uses.find((use) => use.character.identityKey === character.identityKey);
+        const observedUses = uses.filter((use) => use.character.identityKey !== character.identityKey && use.evidence === "OBSERVED");
+        const crafterCandidates = observedUses.map((use) => {
+          const row = scopedRoster.find((candidate) => candidate.identityKey === use.character.identityKey)!;
+          const profession = this.getCharacterProfessions({ version: "classic-era", name: row.name, realm: row.realm });
+          const observedSkills = profession.status === "FOUND" && profession.value.provenance.state === "OBSERVED";
+          const skill = observedSkills ? profession.value.data?.entries.find((entry) => entry.name.toLowerCase() === use.profession.toLowerCase())?.skill : undefined;
+          return { identityKey: row.identityKey, name: row.name, profession: use.profession, skill, skillState: skill === undefined ? "UNKNOWN" as const : "OBSERVED" as const };
+        });
+        const mainKey = mainCharacter.state === "ELIGIBLE" ? mainCharacter.character.identityKey : undefined;
+        const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
+        const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
+        const action = ownUse ? "KEEP_FOR_HOLDER_PROFESSION"
+          : craftChoice.state === "SELECTED" && usable && item.bound === "no" ? "MAIL_TO_CRAFTER"
+          : craftChoice.state === "UNDETERMINED" && observedUses.length ? "UNDETERMINED"
+          : usable && item.bound === "no" && item.vendorEachCopper !== undefined ? "VENDOR_VALUE_KNOWN"
+          : "UNDETERMINED";
+        const evidenceReason = !usable ? identity.reason ?? (buildVerification === "UNSUPPORTED" ? "Client build is outside the supported Classic Era mail rules." : bags.status.state !== "OBSERVED" ? "Current carried bags are not OBSERVED." : freshness !== "recent" ? "Bag evidence is outside the 72-hour freshness window." : "Required evidence is UNKNOWN.")
+          : ownUse ? "Observed recipe evidence shows this item is used by the holder's profession; keep it on the holder."
+          : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
+          : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
+          : action === "VENDOR_VALUE_KNOWN" ? "Captured vendorEachCopper is available. This is a value observation, not an automatic sale."
+          : "Item use, binding, vendor value, or eligible routing evidence is UNKNOWN.";
+        return {
+          ...(item.name !== undefined ? { name: item.name } : {}),
+          ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}),
+          ...(item.qty !== undefined ? { quantity: item.qty } : {}),
+          binding: item.bound === "no" ? "OBSERVED_UNBOUND" : item.bound === "yes" ? "OBSERVED_BOUND" : "UNKNOWN",
+          vendorEachCopper: item.vendorEachCopper,
+          auctionHouseValue: "UNKNOWN" as const,
+          action, ...(recipient ? { recipient } : {}),
+          ...(evidenceReason ? { reason: evidenceReason } : {}),
+          ...(craftChoice.state === "UNDETERMINED" && observedUses.length ? { tiedCrafterCandidates: craftChoice.candidates } : {}),
+        };
+      });
+      const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
+      const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
+        gear: [],
+        materials: items.filter((item) => item.action === "MAIL_TO_CRAFTER"),
+        sale: [],
+        keep: items.filter((item) => item.action !== "MAIL_TO_CRAFTER"),
+      });
+      return { data: {
+        version: orchestration.version, ruleset: orchestration.ruleset, buildVerification,
+        confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" as const : "LOWERED_UNVERIFIED_BUILD" as const,
+        identity, bagEvidence: { state: bags.status.state, ...(observedAt !== undefined ? { observedAt } : {}), freshness, itemsKnownEmpty: bags.itemsKnownEmpty },
+        auctionHouse: { state: "UNKNOWN" as const, reason: "No Classic Era Auction House price source is available." },
+        settings: { accountId: settingsScope?.accountId ?? query.accountId ?? "default", auctionCharacter, mainCharacter },
+        vendorValueSource: "Captured WOWSYNC bags.vendorEachCopper",
+        talentSpec: { ...spec, provenance: spec.state === "DERIVED" ? "DERIVED" as const : "UNKNOWN" as const },
+        items, steps: orchestration.steps,
+      }, provenance: { state: "DERIVED" as const, version: "classic-era" as const, identityKey: character.identityKey, snapshotId: snapshot.id, ...(observedAt !== undefined ? { observedAt, freshness } : {}), source: "Classic Era WOWSYNC character, bag, and talent observations", ...(identity.reason ? { reason: identity.reason } : {}) } };
+    });
   }
 
   getCharacterProfessions(query: CharacterQuery): CharacterResolution<ReadValue<ProfessionsSection>> {

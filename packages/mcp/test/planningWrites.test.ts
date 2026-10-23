@@ -39,7 +39,7 @@ test("MCP writes require exact separate Dashboard approval and commit idempotent
     const client = new Client({ name: "wowsync-mcp-approval-test", version: "0.1.0" });
     const transport = new StdioClientTransport({
       command: process.execPath, args: [entrypoint], cwd: root,
-      env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, ...(planning ? { WOWSYNC_MCP_PLANNING_API_URL: `http://127.0.0.1:${port}` } : { WOWSYNC_MCP_PLANNING_API_URL: "" }) },
+      env: { ...process.env, WOWSYNC_MCP_PROFILE: "classic-era", WOWSYNC_MCP_DB_PATH: databasePath, ...(planning ? { WOWSYNC_MCP_PLANNING_API_URL: `http://127.0.0.1:${port}` } : { WOWSYNC_MCP_PLANNING_API_URL: "" }) },
       stderr: "pipe",
     });
     await client.connect(transport);

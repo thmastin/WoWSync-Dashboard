@@ -161,15 +161,26 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
   const databaseBefore = digest(databasePath);
 
   const client = new Client({ name: "wowsync-mcp-protocol-test", version: "0.1.0" });
+  const eraClient = new Client({ name: "wowsync-mcp-protocol-era-test", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", pathToFileURL(fixedClockModule).href, entrypoint],
     cwd: packageRoot,
-    env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
+    env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath },
+    stderr: "pipe",
+  });
+  const eraTransport = new StdioClientTransport({
+    command: process.execPath,
+    args: ["--import", pathToFileURL(fixedClockModule).href, entrypoint],
+    cwd: packageRoot,
+    env: { ...process.env, WOWSYNC_MCP_PROFILE: "classic-era", WOWSYNC_MCP_DB_PATH: databasePath },
     stderr: "pipe",
   });
   try {
     await client.connect(transport);
+    await eraClient.connect(eraTransport);
+    const foreverCallTool = client.callTool.bind(client);
+    (client as any).callTool = (params: any) => params.arguments?.version === "classic-era" && !["analyze_retail_gear_candidate", "get_gear_candidate_recipient_screen"].includes(params.name) ? eraClient.callTool(params) : foreverCallTool(params);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     const registeredQuestTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_character_quests");
     const registeredCraftedUpgradeTool = (await client.listTools()).tools.find((tool) => tool.name === "get_forever_crafted_upgrade_assessment");
@@ -207,6 +218,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_forever_crafted_upgrade_assessment",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
+      "get_forever_items",
       "get_forever_mail_plan",
       "get_forever_market_prices",
       "get_gear_candidate_evidence",
@@ -220,6 +232,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_research_section",
       "get_shared_storage",
       "list_characters",
+      "list_forever_characters",
       "list_research_documents",
       "list_versions",
       "lookup_forever_knowledge",
@@ -771,6 +784,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const excessiveLimit = await client.callTool({ name: "list_characters", arguments: { version: "retail", limit: 101 } });
     assert.equal(excessiveLimit.isError, true);
   } finally {
+    await eraClient.close();
     await client.close();
     assert.equal(digest(databasePath), databaseBefore, "the spawned MCP process did not modify the primary fixture database");
     rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -789,7 +803,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
   const databaseBefore = digest(databasePath);
   const child = spawn(process.execPath, [entrypoint], {
     cwd: packageRoot,
-    env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath },
+    env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -889,6 +903,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_forever_crafted_upgrade_assessment",
       "get_forever_gear_allocation",
       "get_forever_gear_observation",
+      "get_forever_items",
       "get_forever_mail_plan",
       "get_forever_market_prices",
       "get_gear_candidate_evidence",
@@ -902,6 +917,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_research_section",
       "get_shared_storage",
       "list_characters",
+      "list_forever_characters",
       "list_research_documents",
       "list_versions",
       "lookup_forever_knowledge",

@@ -13,6 +13,7 @@ import type { CreateDemandInput, DemandType, ExplicitDemand, UpdateDemandInput }
 import type { ErpProject, ErpProjectDraft, ErpProjectEvent, ErpReservation, ErpWorkOrder } from "./erpProjects.ts";
 import type { ErpChangeProposal, ErpChangeProposalStatus } from "./erpChangeApproval.ts";
 import type { ErpNeedReviewSnapshot } from "./erpFulfillmentTriage.ts";
+import type { MailPlanSettings, MailPlanSettingsScope } from "./mailPlanSettings.ts";
 
 export interface StoredCharacterSummary {
   id: number;
@@ -192,6 +193,7 @@ export interface DeleteCharacterResult {
  * operation exposed by SnapshotStore.
  */
 export interface SnapshotReadStore {
+  getMailPlanSettings(scope: MailPlanSettingsScope): MailPlanSettings | undefined;
   /** The character's Retail currencies as OBSERVED / LAST_SEEN / UNKNOWN (never zero). */
   getCharacterCurrencies(identityKey: string): CharacterCurrencies | undefined;
   /** Currency capture attached to one snapshot; foreign/nonexistent snapshot IDs return undefined. */
@@ -232,6 +234,7 @@ export interface SnapshotReadStore {
 
 /** The normal Dashboard/import store: SnapshotReadStore plus explicit mutation APIs. */
 export interface SnapshotStore extends SnapshotReadStore {
+  setMailPlanSettings(settings: MailPlanSettings): MailPlanSettings;
   createErpChangeProposal(proposal: ErpChangeProposal): ErpChangeProposal;
   transitionErpChangeProposal(proposalId: string, version: WowVersion, from: ErpChangeProposalStatus, to: ErpChangeProposalStatus, patch?: Partial<Pick<ErpChangeProposal, "approvedAt" | "completedAt" | "result" | "outcome">>): ErpChangeProposal | undefined;
   /**

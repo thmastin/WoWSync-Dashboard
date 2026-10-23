@@ -40,7 +40,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
   await new Promise<void>((resolve) => api.listen(port, "127.0.0.1", resolve));
   const client = new Client({ name: "wowsync-forever-goal-acceptance", version: "0.1.0" });
   const transport = new StdioClientTransport({ command: process.execPath, args: [entrypoint], cwd: root,
-    env: { ...process.env, WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_MCP_PLANNING_API_URL: `http://127.0.0.1:${port}` }, stderr: "pipe" });
+    env: { ...process.env, WOWSYNC_MCP_PROFILE: "forever", WOWSYNC_MCP_DB_PATH: databasePath, WOWSYNC_MCP_PLANNING_API_URL: `http://127.0.0.1:${port}` }, stderr: "pipe" });
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;
@@ -53,6 +53,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     const first = await client.callTool({ name: "create_erp_project_from_goal", arguments: { goal: RORDIN_PROFESSION_GOAL } });
     assert.equal(first.isError, undefined, JSON.stringify(first.structuredContent));
     const response = first.structuredContent as { target: { identityKey: string; name: string; surname?: string }; proposal: { proposal: { proposalId: string; digest: string; status: string } }; resourceDiscovery: { accountMembership: string; sameRealmCharacterCount: number; otherRealmCharacterCount: number; leads: Array<{ character: { identityKey: string }; itemRef?: string; quantity?: number }>; characters: Array<{ identityKey: string; class?: string; professionState: string; professions: Array<{ name: string; skill?: number }> }> }; recipeEvidence: { state: string; candidateCompleteness: string; knownRecipes: Array<{ recipeID: number; name?: string; outputItemID?: number }> } };
+    assert.ok(response.proposal, JSON.stringify(first.structuredContent));
     assert.equal(response.target.identityKey, rordin.identityKey);
     assert.equal(response.target.name, "Rordin");
     assert.equal(response.target.surname, "Longbraid");
@@ -77,6 +78,7 @@ test("exact Forever natural-language goal discovers scoped evidence and creates 
     assert.equal(approved.status, 200, "the separate Dashboard approval applies only to this exact goal proposal");
     const committed = await client.callTool({ name: "commit_approved_erp_change", arguments: { version: "forever", proposalId: response.proposal.proposal.proposalId, digest: response.proposal.proposal.digest } });
     assert.equal(committed.isError, undefined, JSON.stringify(committed.structuredContent));
+    assert.ok((committed.structuredContent as any)?.result?.project, JSON.stringify(committed.structuredContent));
     const committedProject = (committed.structuredContent as { result: { project: { stableId: string; version: string; needs: Array<{ kind: string; resourceKey: string; sourceIdentityKey?: string; destinationIdentityKey?: string }>; reservations: unknown[]; workOrders: Array<{ stableId: string; kind: string; status: string; title: string; assignedIdentityKey?: string; dependsOn: string[] }> } } }).result.project;
     const project = committedProject;
     assert.equal(project.version, "forever");

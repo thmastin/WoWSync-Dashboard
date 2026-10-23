@@ -2,15 +2,18 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createWoWSyncMcpServer, defaultMcpConfiguration } from "./server.ts";
 
 const defaults = defaultMcpConfiguration();
+const requestedProfile = process.env.WOWSYNC_MCP_PROFILE;
+const profile: "forever" | "classic-era" | undefined = requestedProfile === "forever" || requestedProfile === "classic-era" ? requestedProfile : undefined;
 const configuration = {
   databasePath: process.env.WOWSYNC_MCP_DB_PATH || defaults.databasePath,
   researchRoot: process.env.WOWSYNC_MCP_RESEARCH_ROOT || defaults.researchRoot,
   planningApiBaseUrl: process.env.WOWSYNC_MCP_PLANNING_API_URL || undefined,
-  profile: process.env.WOWSYNC_MCP_PROFILE === "forever" ? "forever" as const : undefined,
+  profile,
 };
 
 let transport: ReturnType<typeof serveStdio> | undefined;
 try {
+  if (!profile) throw new Error(`WOWSYNC_MCP_PROFILE must be exactly "classic-era" or "forever" (received ${JSON.stringify(requestedProfile)}).`);
   transport = serveStdio(() => createWoWSyncMcpServer(configuration).server, {
     onerror: (error) => process.stderr.write(`WoWSync MCP transport error: ${error.message}\n`),
   });

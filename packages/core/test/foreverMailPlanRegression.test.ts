@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { DashboardReadModel } from "../src/readModel.ts";
+import { FOREVER_MAIL_RULESET } from "../src/mailFlavorPolicy.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 
@@ -65,6 +66,7 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data || !("pouchMail" in result.value.data)) throw new Error("Expected a Forever mail plan");
     const plan = result.value.data;
+    assert.equal(plan.ruleset, FOREVER_MAIL_RULESET);
     assert.deepEqual(plan.pouchMail.map((row) => [(row.item as { itemRef?: string }).itemRef, row.disposition, (row.recipient as { name?: string }).name]), [
       [holderRef(4496), "POUCH_TO_ALT", "Alt A"], [holderRef(5572), "POUCH_TO_ALT", "Alt A"],
     ]);
