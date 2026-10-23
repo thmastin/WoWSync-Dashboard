@@ -35,6 +35,7 @@ import { assessForeverBinding, combineForeverEligibility, evaluateForeverArmorPr
 import { marketPrice } from "./foreverPrices.ts";
 import { eligibleMailRecipients, orderMailPlanSteps, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
 import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
+import { CLASSIC_ERA_MAIL_RULESET, classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES } from "./mailFlavorPolicy.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -1524,7 +1525,7 @@ export class DashboardReadModel {
     }
     const observedAt = resolved.value.provenance.observedAt;
     return { status: "FOUND", value: {
-      data: { version: "forever", ruleset: "forever-min-70291-allocation-screen-v3", buildVerification: recipientData.snapshot.buildVerification, scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
+      data: { version: "forever", ruleset: MAIL_FLAVOR_POLICIES.forever.ruleset, buildVerification: recipientData.snapshot.buildVerification, scope: { accountMembership: "UNKNOWN", reason: "Characters are drawn from the Dashboard Forever import context; exports do not include a validated WoW account ID. Candidate presence on another character is not ownership sharing or transfer access." }, recipient,
         candidateSources, assessments, recipientEvaluations, allocationPlan, exclusions,
         conclusion: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE") ? "LOCAL_REVIEW_CANDIDATE_AVAILABLE" : "INSUFFICIENT_EVIDENCE",
         reason: assessments.some((assessment) => assessment.decision === "REVIEW_LOCAL_CANDIDATE")
@@ -1695,6 +1696,43 @@ export class DashboardReadModel {
       bank: source?.bank ?? { state: "UNKNOWN", reason: "No bank evidence." }, professionChecks,
       plannedSpecs: Object.entries(FOREVER_PLANNED_SPECS).map(([identityKey, spec]) => ({ identityKey, spec, provenance: "USER_CONFIGURED" as const, informational: true as const })),
     }, provenance: { ...base.value.provenance, state: "DERIVED" as const, ...(observedAt !== undefined ? { observedAt } : {}) } } };
+  }
+
+  /** Classic Era mail-plan projection. All facts come from Era WOWSYNC sections; AH remains UNKNOWN. */
+  getClassicEraMailPlan(query: CharacterQuery) {
+    if (query.version !== "classic-era") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Classic Era mail planning only accepts classic-era snapshots." } } };
+    return this.resolve(query, (character, snapshot) => {
+      const snapshots = this.snapshots(character.identityKey);
+      if (!snapshot) return { provenance: { state: "UNKNOWN" as const, version: "classic-era" as const, identityKey: character.identityKey, reason: "No Classic Era snapshot exists for this character." } };
+      const profile = snapshot.parsed.character;
+      const buildVerification = classicEraBuildVerification(profile);
+      const priorGuids = snapshots.slice(1).map((row) => row.parsed.character.guid);
+      const identity = classicEraGuidContinuity(profile.guid, priorGuids);
+      const bags = snapshot.parsed.bags;
+      const observedAt = bags.status.observedAt ?? snapshot.parsed.generatedAt ?? snapshot.generatedAt ?? snapshot.importedAt;
+      const freshness = classifyMailFreshness(MAIL_FLAVOR_POLICIES["classic-era"], observedAt, this.now());
+      const usable = identity.state === "OBSERVED" && buildVerification !== "UNSUPPORTED" && bags.status.state === "OBSERVED" && freshness === "recent";
+      const items = bags.items.map((item) => ({
+        ...(item.name !== undefined ? { name: item.name } : {}),
+        ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}),
+        ...(item.qty !== undefined ? { quantity: item.qty } : {}),
+        binding: item.bound === "no" ? "OBSERVED_UNBOUND" : item.bound === "yes" ? "OBSERVED_BOUND" : "UNKNOWN",
+        vendorEachCopper: item.vendorEachCopper,
+        auctionHouseValue: "UNKNOWN" as const,
+        action: usable && item.bound === "no" && item.vendorEachCopper !== undefined ? "VENDOR_VALUE_KNOWN" as const : "UNDETERMINED" as const,
+        ...(!usable ? { reason: identity.reason ?? (buildVerification === "UNSUPPORTED" ? "Client build is outside the supported Classic Era mail rules." : bags.status.state !== "OBSERVED" ? "Current carried bags are not OBSERVED." : freshness !== "recent" ? "Bag evidence is outside the 72-hour freshness window." : "Required evidence is UNKNOWN.") } : {}),
+      }));
+      const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
+      return { data: {
+        version: "classic-era" as const, ruleset: CLASSIC_ERA_MAIL_RULESET, buildVerification,
+        confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" as const : "LOWERED_UNVERIFIED_BUILD" as const,
+        identity, bagEvidence: { state: bags.status.state, ...(observedAt !== undefined ? { observedAt } : {}), freshness, itemsKnownEmpty: bags.itemsKnownEmpty },
+        auctionHouse: { state: "UNKNOWN" as const, reason: "No Classic Era Auction House price source is available." },
+        vendorValueSource: "Captured WOWSYNC bags.vendorEachCopper",
+        talentSpec: { ...spec, provenance: spec.state === "DERIVED" ? "DERIVED" as const : "UNKNOWN" as const },
+        items,
+      }, provenance: { state: "DERIVED" as const, version: "classic-era" as const, identityKey: character.identityKey, snapshotId: snapshot.id, ...(observedAt !== undefined ? { observedAt, freshness } : {}), source: "Classic Era WOWSYNC character, bag, and talent observations", ...(identity.reason ? { reason: identity.reason } : {}) } };
+    });
   }
 
   getCharacterProfessions(query: CharacterQuery): CharacterResolution<ReadValue<ProfessionsSection>> {
