@@ -41,12 +41,22 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
   const writer = new SqliteSnapshotStore(databasePath);
   try {
     const era = savedRecord("classic-era", now - 120);
+    (era.characterState as Obj).talents.data.unspent = 2;
+    const eraTalentTree = (era.characterState as Obj).talents.data.trees as Obj[];
+    eraTalentTree[0]!.pointsSpent = 99; // Deliberately conflict with Era [CHARACTER] talentTree to prove the adapter flags it.
+    era.text = era.text!.replace("Client: 1.15.9 build 69547\n", "Client: 1.15.9 build 69547\nGUID: Player-4385-ABCD1234\nTalentStatus: OBSERVED\ntalentTree\tname\tpointsSpent\ntalentTree\tElemental\t0\ntalentTree\tEnhancement\t21\ntalentTree\tRestoration\t9\n");
     assert.equal(writer.importSnapshot(era.text!, { characterState: era.characterState }).characterState, "recorded");
     writer.importSnapshot(buildWowSyncExport({ generatedAt: now - 300, character: { name: "Banko", realm: "Nightslayer", class: "Warrior", level: 20, clientVersion: "1.15.9", clientBuild: "69547" },
       bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:2840::::::::20:::::::::", name: "Copper Bar", qty: 40 }] }] }, bank: { unknown: true } }));
     const tbc = savedRecord("tbc-anniversary");
     assert.equal(writer.importSnapshot(tbc.text!, { characterState: tbc.characterState }).characterState, "recorded");
-    writer.importSnapshot(buildWowSyncExport({ generatedAt: now - 60, character: { name: "Smith", realm: "Forever Launch", class: "Warrior", level: 8, clientFamily: "Forever", clientVersion: "1.61.0", clientBuild: "71234", interface: "16100", compatibility: "UNVERIFIED_BUILD", compatibilityNote: "Forever project identified; this client build has not been compatibility-tested. Each observation remains API-guarded." } }));
+    const smithText = buildWowSyncExport({ generatedAt: now - 60, character: { name: "Smith", realm: "Forever Launch", class: "Warrior", level: 8, clientFamily: "Forever", clientVersion: "1.61.0", clientBuild: "71234", interface: "16100", compatibility: "UNVERIFIED_BUILD", compatibilityNote: "Forever project identified; this client build has not been compatibility-tested. Each observation remains API-guarded." } });
+    writer.importSnapshot(smithText, { foreverGearObservation: {
+      clientProfile: "Forever:1.61.0:71234:16100", name: "Smith", realm: "Forever Launch", generatedAt: now - 60,
+      quests: { observedAt: now - 60, completeness: "partial", data: { formatVersion: 1, activeState: "OBSERVED", active: [], completedHistory: { state: "UNKNOWN" } } },
+      reputation: { observedAt: now - 60, completeness: "partial", data: { formatVersion: 1, factions: [] } },
+      talents: { observedAt: now - 60, completeness: "complete", data: { formatVersion: 1, trees: [{ name: "Arms", pointsSpent: 0, talents: [] }] } },
+    } });
     writer.importSnapshot(buildWowSyncExport({ generatedAt: now - 60, character: { name: "Virek", realm: "Cairne", class: "Paladin", level: 80, clientFamily: "Retail", clientVersion: "12.0.5", clientBuild: "60000", interface: "120005" } }));
   } finally {
     writer.close();
@@ -88,7 +98,9 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
     assert.deepEqual(eraQuests.value.data.completedHistory.lookup.map((row: Obj) => row.state), ["OBSERVED", "NOT_IN_RETURNED_HISTORY"]);
     const progression = await eraCall("get_character_progression", { version: "classic-era", name: "Torahn", factionQuery: "thunder" });
     assert.deepEqual(progression.value.data.reputation.factions.map((row: Obj) => [row.name, row.standingLabel]), [["Thunder Bluff", "Honored"]]);
-    assert.equal(progression.value.data.talents.distribution, "0/21/9");
+    assert.equal(progression.value.data.talents.distribution, "99/21/9");
+    assert.equal(progression.value.data.talents.unspentPoints, 2);
+    assert.deepEqual(progression.value.data.talentTreeAgreement, { state: "DISAGREEMENT", mismatches: [{ tree: "Elemental", characterPointsSpent: 0, talentsPointsSpent: 99 }] });
     const eraState = await eraCall("get_character_state", { version: "classic-era", name: "Torahn" });
     assert.deepEqual(Object.fromEntries(Object.entries(eraState.value.data.structuredObservations).map(([key, value]) => [key, (value as Obj).state])), { recipes: "OBSERVED", quests: "OBSERVED", reputation: "OBSERVED", talents: "OBSERVED" });
 
@@ -103,6 +115,9 @@ test("ACCOUNT INTELLIGENCE: MCP answers practical questions per version with hon
     // Forever launch build: accepted, unverified by the Dashboard, and the exporter agrees.
     const smith = await call("get_character_state", { version: "forever", name: "Smith" });
     assert.deepEqual(smith.value.data.structuredObservations.clientCompatibility, { dashboard: "UNVERIFIED_BUILD", exporter: "UNVERIFIED_BUILD", exporterNote: "Forever project identified; this client build has not been compatibility-tested. Each observation remains API-guarded.", agreement: "AGREE" });
+    assert.deepEqual(Object.fromEntries(Object.entries(smith.value.data.structuredObservations).filter(([key]) => ["recipes", "quests", "reputation", "talents"].includes(key)).map(([key, value]) => [key, (value as Obj).state])), { recipes: "UNKNOWN", quests: "OBSERVED", reputation: "OBSERVED", talents: "OBSERVED" });
+    const smithProgression = await call("get_character_progression", { version: "forever", name: "Smith" });
+    assert.equal(smithProgression.value.data.talents.trees[0].pointsSpent, 0, "an observed zero point total stays distinct from UNKNOWN");
 
     // Retail: no quest/progression capture is claimed; no Classic rows leak in.
     const retailQuests = await call("get_character_quests", { version: "retail", name: "Virek" });
