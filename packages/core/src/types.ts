@@ -334,6 +334,11 @@ export interface ParsedSnapshot {
   itemMetadata?: ItemMetadataSection;
   /** Optional Retail-only sidecar. Its rows remain scoped to this snapshot and observed locations. */
   gearCandidates?: GearCandidatesSection;
+  /** Optional Classic Era / Forever text projections of SavedVariables domains. */
+  textTalents?: { status: SectionStatus; data?: { trees: Array<{ tab: number; name: string; pointsSpent: number; talents: Array<{ name: string; tier: number; column: number; currentRank: number; maxRank: number }> }> } };
+  textQuests?: { status: SectionStatus };
+  textReputation?: { status: SectionStatus };
+  textRecipes?: { status: SectionStatus };
   /** Forever 70291 structured observation timestamps; never interpreted with Retail allocation rules. */
   foreverGearObservation?: import("./foreverGearObservation.ts").ForeverStructuredObservation;
 }
