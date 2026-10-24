@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parseWowSyncExport, WowSyncParseError } from "../src/parser.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { foreverBuildVerification, foreverCompatibility } from "../src/foreverProfile.ts";
+import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
+import { DashboardReadModel } from "../src/readModel.ts";
 
 test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   const raw = buildWowSyncExport({
@@ -14,6 +17,44 @@ test("parses a valid, fully-populated WOWSYNC v1 export", () => {
   assert.equal(snapshot.character.level, 30);
   assert.equal(snapshot.character.moneyCopper, 100000);
   assert.equal(snapshot.character.status.state, "OBSERVED");
+});
+
+test("real Ashtest Classic Era export parses talent text into progression and structured state", () => {
+  const raw = readFileSync(new URL("./fixtures/ashtest-classic-era-wow-sync.txt", import.meta.url), "utf8");
+  const parsed = parseWowSyncExport(raw);
+  assert.equal(parsed.textTalents?.status.state, "OBSERVED");
+  assert.equal(parsed.textTalents?.data?.trees[0]?.name, "Affliction");
+  assert.equal(parsed.textTalents?.data?.trees[0]?.pointsSpent, 1);
+  assert.equal(parsed.textTalents?.data?.trees[0]?.talents.length, 17);
+  assert.equal(parsed.textQuests?.status.state, "OBSERVED");
+  assert.equal(parsed.textReputation?.status.state, "OBSERVED");
+  assert.equal(parsed.textRecipes?.status.state, "UNKNOWN");
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(raw);
+    const read = new DashboardReadModel(store);
+    const state = read.getCharacterState({ version: "classic-era", name: "Ashtest", realm: "Mankrik" });
+    assert.equal((state as any).value.data.structuredObservations.talents.state, "OBSERVED");
+    const progression = read.getCharacterProgression({ version: "classic-era", name: "Ashtest", realm: "Mankrik", includeTalents: true });
+    assert.equal((progression as any).value.data.talents.state, "OBSERVED");
+    assert.equal((progression as any).value.data.talents.trees[0].name, "Affliction");
+    assert.equal((progression as any).value.data.talentTreeAgreement.state, "AGREE");
+  } finally { store.close(); }
+});
+
+test("Forever text talents feed progression and structured observations without a sidecar", () => {
+  const raw = readFileSync(new URL("./fixtures/ashtest-classic-era-wow-sync.txt", import.meta.url), "utf8")
+    .replace("Client: 1.15.9 build 70003", "Client: 1.60.1 build 70291\nClientFamily: Forever\nInterface: 16001");
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    store.importSnapshot(raw);
+    const read = new DashboardReadModel(store);
+    const state = read.getCharacterState({ version: "forever", name: "Ashtest", realm: "Mankrik" });
+    assert.equal((state as any).value.data.structuredObservations.talents.state, "OBSERVED");
+    const progression = read.getCharacterProgression({ version: "forever", name: "Ashtest", realm: "Mankrik", includeTalents: true });
+    assert.equal((progression as any).value.data.talents.state, "OBSERVED");
+    assert.equal((progression as any).value.data.talents.trees[0].name, "Affliction");
+  } finally { store.close(); }
 });
 
 test("parses optional Classic Era GUID and observed talent tree while legacy exports remain UNKNOWN", () => {

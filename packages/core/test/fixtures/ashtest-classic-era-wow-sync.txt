@@ -1,0 +1,406 @@
+﻿WOWSYNC v1
+
+Generated: 1792860852
+
+Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper; itemRef preserves item variants.
+
+[CHARACTER]
+State: OBSERVED; complete; observed=1792860729
+Name: Ashtest
+Realm: Mankrik
+Class: WARLOCK
+Level: 10
+Faction: Alliance
+MoneyCopper: 774
+PlayedSeconds: 16904
+LevelPlayedSeconds: 3286
+XP: 1156/7600
+Client: 1.15.9 build 70003
+GUID: Player-5149-04E5EA53
+TalentStatus: OBSERVED
+talentTree	name	pointsSpent
+talentTree	Affliction	1
+talentTree	Demonology	0
+talentTree	Destruction	0
+
+[LOCATION]
+State: OBSERVED; complete; observed=1792860729
+Zone: Dun Morogh
+Subzone: Gol'Bolar Quarry
+MapID: 1426
+PositionPercent: 68.6,55.79
+
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1792860729
+slot	itemRef	name	ilvl	requiredLevel	effectiveStats
+1:Head	EMPTY
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	item:6097::::::::10::::::::::	Acolyte's Shirt	1	0	?
+5:Chest	item:3216::::::::10::::::::::	Warm Winter Robe	10	0	?
+6:Waist	item:3363::::::::10::::::::::	Frayed Belt	3	1	?
+7:Legs	item:79::::::::10::::::::::	Dwarven Cloth Britches	5	0	?
+8:Feet	item:6173::::::::10::::::::::	Snow Boots	5	0	?
+9:Wrist	item:2326::::::::10::::::::::	Ivy-weave Bracers	10	0	?
+10:Hands	item:10550::::::::10::::::::::	Wooly Mittens	12	0	?
+11:Finger 1	EMPTY
+12:Finger 2	EMPTY
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	item:3153::::::::10::::::::::	Oil-stained Cloak	9	0	?
+16:Main Hand	item:10547::::::::10::::::::::	Camping Knife	8	0	?
+17:Off Hand	EMPTY
+18:Ranged	EMPTY
+19:Tabard	EMPTY
+
+[BAGS]
+State: OBSERVED; complete; observed=1792860729
+container	capacity	free	family	bagRef
+0	20	2	0	-
+1	6	6	0	item:805::::::::10::::::::::
+2	6	6	0	item:828::::::::10::::::::::
+3	6	6	0	item:805::::::::10::::::::::
+4	0	0	?	-
+Slots: 20 free / 38
+itemRef	name	qty	bound	vendorEachCopper
+item:117::::::::10::::::::::	Tough Jerky	5	no	1
+item:118::::::::10::::::::::	Minor Healing Potion	2	no	5
+item:159::::::::10::::::::::	Refreshing Spring Water	10	no	1
+item:769::::::::10::::::::::	Chunk of Boar Meat	4	no	3
+item:774::::::::10::::::::::	Malachite	2	no	15
+item:2589::::::::10::::::::::	Linen Cloth	28	no	13
+item:2591::::::::10::::::::::	Dirty Trogg Cloth	1	no	5
+item:2628::::::::10::::::::::	Senir's Report	1	yes	0
+item:2672::::::::10::::::::::	Stringy Wolf Meat	1	no	4
+item:2886::::::::10::::::::::	Crag Boar Rib	9	no	5
+item:2888::::::::10::::::::::	Beer Basted Boar Ribs	5	no	10
+item:2889::::::::10::::::::::	Recipe: Beer Basted Boar Ribs	1	no	60
+item:3085::::::::10::::::::::	Barrel of Shimmer Stout	1	yes	0
+item:4540::::::::10::::::::::	Tough Hunk of Bread	2	no	1
+item:5512::::::::10::::::::::	Minor Healthstone	1	no	0
+item:6265::::::::10::::::::::	Soul Shard	1	yes	0
+item:6948::::::::10::::::::::	Hearthstone	1	yes	0
+
+[BANK]
+State: UNKNOWN
+Reason: Not observed
+
+[PROFESSIONS]
+State: OBSERVED; complete; observed=1792860734
+profession	skill	maxSkill
+Herbalism	1	75
+
+[KNOWN SPELLS]
+State: OBSERVED; complete; observed=1792860734
+Coverage: player spellbook; exposed ranks; excludes recipe catalogues and pet spellbook
+spellID	name	rank
+81	Dodge	Passive
+172	Corruption	Rank 1
+348	Immolate	Rank 1
+686	Shadow Bolt	Rank 1
+687	Demon Skin	Rank 1
+688	Summon Imp	Summon
+695	Shadow Bolt	Rank 2
+696	Demon Skin	Rank 2
+702	Curse of Weakness	Rank 1
+707	Immolate	Rank 2
+980	Curse of Agony	Rank 1
+1120	Drain Soul	Rank 1
+1454	Life Tap	Rank 1
+2383	Find Herbs	
+5019	Shoot	
+5782	Fear	Rank 1
+6201	Create Healthstone (Minor)	
+6603	Attack	
+20589	Escape Artist	Racial
+20591	Expansive Mind	Racial Passive
+20592	Arcane Resistance	Racial Passive
+20593	Engineering Specialization	Racial Passive
+
+[TRAINERS]
+State: OBSERVED; categories=3; observed=1792855295
+CoverageNote: Filtered/collapsed trainer list
+[CLASS]
+State: LAST_SEEN; partial; observed=1792855295
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1792855287
+VisitedNPC: Gimrizz Shadowcog
+VisitedZone: Dun Morogh
+Name: Gimrizz Shadowcog
+Type: Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 831
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Banish	Rank 1	unavailable	28	5000	-
+?	Banish	Rank 2	unavailable	48	14000	Banish (Rank 1) met=no
+?	Conflagrate	Rank 2	unavailable	48	700	Conflagrate (Rank 1) met=no
+?	Conflagrate	Rank 3	unavailable	54	1000	Conflagrate (Rank 2) met=no
+?	Conflagrate	Rank 4	unavailable	60	1300	Conflagrate (Rank 3) met=no
+?	Corruption	Rank 2	unavailable	14	900	Corruption (Rank 1) met=yes
+?	Corruption	Rank 3	unavailable	24	3000	Corruption (Rank 2) met=no
+?	Corruption	Rank 4	unavailable	34	8000	Corruption (Rank 3) met=no
+?	Corruption	Rank 5	unavailable	44	12000	Corruption (Rank 4) met=no
+?	Corruption	Rank 6	unavailable	54	20000	Corruption (Rank 5) met=no
+?	Create Firestone		unavailable	36	9000	Create Firestone (Lesser) met=no
+?	Create Firestone (Greater)		unavailable	46	13000	Create Firestone met=no
+?	Create Firestone (Lesser)		unavailable	28	5000	-
+?	Create Firestone (Major)		unavailable	56	22000	Create Firestone (Greater) met=no
+?	Create Healthstone		unavailable	34	8000	Create Healthstone (Lesser) met=no
+?	Create Healthstone (Greater)		unavailable	46	13000	Create Healthstone met=no
+?	Create Healthstone (Lesser)		unavailable	22	2500	Create Healthstone (Minor) met=yes
+?	Create Healthstone (Major)		unavailable	58	24000	Create Healthstone (Greater) met=no
+?	Create Soulstone		unavailable	40	11000	Create Soulstone (Lesser) met=no
+?	Create Soulstone (Greater)		unavailable	50	15000	Create Soulstone met=no
+?	Create Soulstone (Lesser)		unavailable	30	6000	Create Soulstone (Minor) met=no
+?	Create Soulstone (Major)		unavailable	60	26000	Create Soulstone (Greater) met=no
+?	Create Soulstone (Minor)		unavailable	18	1500	Drain Soul (Rank 1) met=yes
+?	Create Spellstone		unavailable	36	9000	Drain Soul (Rank 1) met=yes
+?	Create Spellstone (Greater)		unavailable	48	14000	Create Spellstone met=no
+?	Create Spellstone (Major)		unavailable	60	26000	Create Spellstone (Greater) met=no
+?	Curse of Agony	Rank 2	unavailable	18	1500	Curse of Agony (Rank 1) met=yes
+?	Curse of Agony	Rank 3	unavailable	28	5000	Curse of Agony (Rank 2) met=no
+?	Curse of Agony	Rank 4	unavailable	38	10000	Curse of Agony (Rank 3) met=no
+?	Curse of Agony	Rank 5	unavailable	48	14000	Curse of Agony (Rank 4) met=no
+?	Curse of Agony	Rank 6	unavailable	58	24000	Curse of Agony (Rank 5) met=no
+?	Curse of Doom		unavailable	60	26000	-
+?	Curse of Recklessness	Rank 1	unavailable	14	900	-
+?	Curse of Recklessness	Rank 2	unavailable	28	5000	Curse of Recklessness (Rank 1) met=no
+?	Curse of Recklessness	Rank 3	unavailable	42	11000	Curse of Recklessness (Rank 2) met=no
+?	Curse of Recklessness	Rank 4	unavailable	56	22000	Curse of Recklessness (Rank 3) met=no
+?	Curse of Shadow	Rank 1	unavailable	44	12000	-
+?	Curse of Shadow	Rank 2	unavailable	56	22000	Curse of Shadow (Rank 1) met=no
+?	Curse of Tongues	Rank 1	unavailable	26	4000	-
+?	Curse of Tongues	Rank 2	unavailable	50	15000	Curse of Tongues (Rank 1) met=no
+?	Curse of Weakness	Rank 2	unavailable	12	600	Curse of Weakness (Rank 1) met=yes
+?	Curse of Weakness	Rank 3	unavailable	22	2500	Curse of Weakness (Rank 2) met=no
+?	Curse of Weakness	Rank 4	unavailable	32	7000	Curse of Weakness (Rank 3) met=no
+?	Curse of Weakness	Rank 5	unavailable	42	11000	Curse of Weakness (Rank 4) met=no
+?	Curse of Weakness	Rank 6	unavailable	52	18000	Curse of Weakness (Rank 5) met=no
+?	Curse of the Elements	Rank 1	unavailable	32	7000	-
+?	Curse of the Elements	Rank 2	unavailable	46	13000	Curse of the Elements (Rank 1) met=no
+?	Curse of the Elements	Rank 3	unavailable	60	26000	Curse of the Elements (Rank 2) met=no
+?	Dark Pact	Rank 2	unavailable	50	750	Dark Pact (Rank 1) met=no
+?	Dark Pact	Rank 3	unavailable	60	1300	Dark Pact (Rank 2) met=no
+?	Death Coil	Rank 1	unavailable	42	11000	-
+?	Death Coil	Rank 2	unavailable	50	15000	Death Coil (Rank 1) met=no
+?	Death Coil	Rank 3	unavailable	58	24000	Death Coil (Rank 2) met=no
+?	Demon Armor	Rank 1	unavailable	20	2000	-
+?	Demon Armor	Rank 2	unavailable	30	6000	Demon Armor (Rank 1) met=no
+?	Demon Armor	Rank 3	unavailable	40	11000	Demon Armor (Rank 2) met=no
+?	Demon Armor	Rank 4	unavailable	50	15000	Demon Armor (Rank 3) met=no
+?	Demon Armor	Rank 5	unavailable	60	26000	Demon Armor (Rank 4) met=no
+?	Detect Greater Invisibility		unavailable	50	15000	Detect Invisibility met=no
+?	Detect Invisibility		unavailable	38	10000	Detect Lesser Invisibility met=no
+?	Detect Lesser Invisibility		unavailable	26	4000	-
+?	Drain Life	Rank 1	unavailable	14	900	-
+?	Drain Life	Rank 2	unavailable	22	2500	Drain Life (Rank 1) met=no
+?	Drain Life	Rank 3	unavailable	30	6000	Drain Life (Rank 2) met=no
+?	Drain Life	Rank 4	unavailable	38	10000	Drain Life (Rank 3) met=no
+?	Drain Life	Rank 5	unavailable	46	13000	Drain Life (Rank 4) met=no
+?	Drain Life	Rank 6	unavailable	54	20000	Drain Life (Rank 5) met=no
+?	Drain Mana	Rank 1	unavailable	24	3000	-
+?	Drain Mana	Rank 2	unavailable	34	8000	Drain Mana (Rank 1) met=no
+?	Drain Mana	Rank 3	unavailable	44	12000	Drain Mana (Rank 2) met=no
+?	Drain Mana	Rank 4	unavailable	54	20000	Drain Mana (Rank 3) met=no
+?	Drain Soul	Rank 2	unavailable	24	3000	Drain Soul (Rank 1) met=yes
+?	Drain Soul	Rank 3	unavailable	38	10000	Drain Soul (Rank 2) met=no
+?	Drain Soul	Rank 4	unavailable	52	18000	Drain Soul (Rank 3) met=no
+?	Eye of Kilrogg	Summon	unavailable	22	2500	-
+?	Fear	Rank 2	unavailable	32	7000	Fear (Rank 1) met=yes
+?	Fear	Rank 3	unavailable	56	22000	Fear (Rank 2) met=no
+?	Health Funnel	Rank 1	unavailable	12	600	-
+?	Health Funnel	Rank 2	unavailable	20	2000	Health Funnel (Rank 1) met=no
+?	Health Funnel	Rank 3	unavailable	28	5000	Health Funnel (Rank 2) met=no
+?	Health Funnel	Rank 4	unavailable	36	9000	Health Funnel (Rank 3) met=no
+?	Health Funnel	Rank 5	unavailable	44	12000	Health Funnel (Rank 4) met=no
+?	Health Funnel	Rank 6	unavailable	52	18000	Health Funnel (Rank 5) met=no
+?	Health Funnel	Rank 7	unavailable	60	26000	Health Funnel (Rank 6) met=no
+?	Hellfire	Rank 1	unavailable	30	6000	-
+?	Hellfire	Rank 2	unavailable	42	11000	Hellfire (Rank 1) met=no
+?	Hellfire	Rank 3	unavailable	54	20000	Hellfire (Rank 2) met=no
+?	Howl of Terror	Rank 1	unavailable	40	11000	-
+?	Howl of Terror	Rank 2	unavailable	54	20000	Howl of Terror (Rank 1) met=no
+?	Immolate	Rank 3	unavailable	20	2000	Immolate (Rank 2) met=yes
+?	Immolate	Rank 4	unavailable	30	6000	Immolate (Rank 3) met=no
+?	Immolate	Rank 5	unavailable	40	11000	Immolate (Rank 4) met=no
+?	Immolate	Rank 6	unavailable	50	15000	Immolate (Rank 5) met=no
+?	Immolate	Rank 7	unavailable	60	26000	Immolate (Rank 6) met=no
+?	Life Tap	Rank 2	unavailable	16	1200	Life Tap (Rank 1) met=yes
+?	Life Tap	Rank 3	unavailable	26	4000	Life Tap (Rank 2) met=no
+?	Life Tap	Rank 4	unavailable	36	9000	Life Tap (Rank 3) met=no
+?	Life Tap	Rank 5	unavailable	46	13000	Life Tap (Rank 4) met=no
+?	Life Tap	Rank 6	unavailable	56	22000	Life Tap (Rank 5) met=no
+?	Rain of Fire	Rank 1	unavailable	20	2000	-
+?	Rain of Fire	Rank 2	unavailable	34	8000	Rain of Fire (Rank 1) met=no
+?	Rain of Fire	Rank 3	unavailable	46	13000	Rain of Fire (Rank 2) met=no
+?	Rain of Fire	Rank 4	unavailable	58	24000	Rain of Fire (Rank 3) met=no
+?	Ritual of Summoning		unavailable	20	2000	-
+?	Searing Pain	Rank 1	unavailable	18	1500	-
+?	Searing Pain	Rank 2	unavailable	26	4000	Searing Pain (Rank 1) met=no
+?	Searing Pain	Rank 3	unavailable	34	8000	Searing Pain (Rank 2) met=no
+?	Searing Pain	Rank 4	unavailable	42	11000	Searing Pain (Rank 3) met=no
+?	Searing Pain	Rank 5	unavailable	50	15000	Searing Pain (Rank 4) met=no
+?	Searing Pain	Rank 6	unavailable	58	24000	Searing Pain (Rank 5) met=no
+?	Sense Demons		unavailable	24	3000	-
+?	Shadow Bolt	Rank 3	unavailable	12	600	Shadow Bolt (Rank 2) met=yes
+?	Shadow Bolt	Rank 4	unavailable	20	2000	Shadow Bolt (Rank 3) met=no
+?	Shadow Bolt	Rank 5	unavailable	28	5000	Shadow Bolt (Rank 4) met=no
+?	Shadow Bolt	Rank 6	unavailable	36	9000	Shadow Bolt (Rank 5) met=no
+?	Shadow Bolt	Rank 7	unavailable	44	12000	Shadow Bolt (Rank 6) met=no
+?	Shadow Bolt	Rank 8	unavailable	52	18000	Shadow Bolt (Rank 7) met=no
+?	Shadow Bolt	Rank 9	unavailable	60	26000	Shadow Bolt (Rank 8) met=no
+?	Shadow Ward	Rank 1	unavailable	32	7000	-
+?	Shadow Ward	Rank 2	unavailable	42	11000	Shadow Ward (Rank 1) met=no
+?	Shadow Ward	Rank 3	unavailable	52	18000	Shadow Ward (Rank 2) met=no
+?	Shadowburn	Rank 2	unavailable	24	150	Shadowburn (Rank 1) met=no
+?	Shadowburn	Rank 3	unavailable	32	350	Shadowburn (Rank 2) met=no
+?	Shadowburn	Rank 4	unavailable	40	550	Shadowburn (Rank 3) met=no
+?	Shadowburn	Rank 5	unavailable	48	700	Shadowburn (Rank 4) met=no
+?	Shadowburn	Rank 6	unavailable	56	1100	Shadowburn (Rank 5) met=no
+?	Siphon Life	Rank 2	unavailable	38	500	Siphon Life (Rank 1) met=no
+?	Siphon Life	Rank 3	unavailable	48	700	Siphon Life (Rank 2) met=no
+?	Siphon Life	Rank 4	unavailable	58	1200	Siphon Life (Rank 3) met=no
+?	Soul Fire	Rank 1	unavailable	48	14000	-
+?	Soul Fire	Rank 2	unavailable	56	22000	Soul Fire (Rank 1) met=no
+?	Subjugate Demon	Rank 1	unavailable	30	6000	-
+?	Subjugate Demon	Rank 2	unavailable	44	12000	Subjugate Demon (Rank 1) met=no
+?	Subjugate Demon	Rank 3	unavailable	58	24000	Subjugate Demon (Rank 2) met=no
+?	Unending Breath		unavailable	16	1200	-
+[PROF_HERBALISM]
+State: LAST_SEEN; partial; observed=1792819122
+CoverageNote: Filtered/collapsed trainer list
+LastVisit: 1792819118
+VisitedNPC: Telurinon Moonshadow
+VisitedZone: Wetlands
+Name: Telurinon Moonshadow
+Type: Trade Skill Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=yes; known=no
+MoneyAtVisitCopper: 2001
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+?	Artisan Herbalist		unavailable	0	50000	Herbalism 200 met=no
+?	Expert Herbalist		unavailable	0	5000	Herbalism 125 met=no
+?	Journeyman Herbalist		unavailable	0	500	Herbalism 50 met=no
+[UNKNOWN]
+State: LAST_SEEN; partial; observed=1792809250
+CoverageNote: No visible services; completeness unknown
+LastVisit: 1792809244
+VisitedNPC: Gimrizz Shadowcog
+VisitedZone: Dun Morogh
+VisitStatus: Closed before capture settled
+Name: Gimrizz Shadowcog
+Type: Trainer
+Coverage: visible filtered services; spell IDs unavailable
+Filters: available=yes; unavailable=no; known=no
+MoneyAtVisitCopper: 1064
+spellID	ability	rank	statusAtVisit	requiredLevel	costCopper	requirementsAtVisit
+
+[ITEM METADATA]
+baseItemID	classID	subclassID	bindType	expansionID	isCraftingReagent
+79	4	1	1	254	no
+117	0	0	0	254	no
+118	0	0	0	254	no
+159	0	0	0	254	no
+769	7	0	0	254	no
+774	7	0	0	254	no
+805	1	0	0	254	no
+828	1	0	0	254	no
+2326	4	1	1	254	no
+2589	7	0	0	254	no
+2591	15	0	0	254	no
+2628	12	0	4	254	no
+2672	7	0	0	254	no
+2886	7	0	0	254	no
+2888	0	0	0	254	no
+2889	9	5	0	254	no
+3085	12	0	4	254	no
+3153	4	1	1	254	no
+3216	4	1	1	254	no
+3363	4	1	0	254	no
+4540	0	0	0	254	no
+5512	0	0	0	254	no
+6097	4	0	0	254	no
+6173	4	1	1	254	no
+6265	5	0	1	254	no
+6948	15	0	1	254	no
+10547	2	15	1	254	no
+10550	4	1	1	254	no
+
+[TALENTS]
+State: OBSERVED; complete; observed=1792860729
+TotalSpent: 1
+TotalSpentEvidence: OBSERVED
+Unspent: 0
+UnspentEvidence: OBSERVED
+tab	name	pointsSpent
+tab	Affliction	1
+talent	1	name	tier	column	rank	maxRank
+talent	1	Fel Concentration	3	2	0	5
+talent	1	Nightfall	4	2	0	2
+talent	1	Improved Corruption	1	3	1	5
+talent	1	Improved Drain Life	2	4	0	5
+talent	1	Suppression	1	2	0	5
+talent	1	Improved Curse of Weakness	2	1	0	3
+talent	1	Improved Life Tap	2	3	0	2
+talent	1	Grim Reach	4	1	0	2
+talent	1	Dark Pact	7	2	0	1
+talent	1	Siphon Life	5	2	0	1
+talent	1	Shadow Mastery	6	2	0	5
+talent	1	Amplify Curse	3	3	0	1
+talent	1	Curse of Exhaustion	5	3	0	1
+talent	1	Improved Curse of Exhaustion	5	4	0	4
+talent	1	Improved Drain Soul	2	2	0	2
+talent	1	Improved Drain Mana	4	4	0	2
+talent	1	Improved Curse of Agony	3	1	0	3
+tab	Demonology	0
+talent	2	name	tier	column	rank	maxRank
+talent	2	Improved Healthstone	1	1	0	2
+talent	2	Improved Imp	1	2	0	3
+talent	2	Demonic Embrace	1	3	0	5
+talent	2	Improved Health Funnel	2	1	0	2
+talent	2	Improved Voidwalker	2	2	0	3
+talent	2	Fel Domination	3	2	0	1
+talent	2	Master Summoner	4	2	0	2
+talent	2	Fel Stamina	3	3	0	5
+talent	2	Fel Intellect	2	3	0	5
+talent	2	Improved Sayaad	3	1	0	3
+talent	2	Master Demonologist	6	3	0	5
+talent	2	Improved Firestone	5	4	0	2
+talent	2	Unholy Power	4	3	0	5
+talent	2	Improved Spellstone	7	3	0	2
+talent	2	Demonic Sacrifice	5	2	0	1
+talent	2	Soul Link	7	2	0	1
+talent	2	Improved Subjugate Demon	5	1	0	5
+tab	Destruction	0
+talent	3	name	tier	column	rank	maxRank
+talent	3	Cataclysm	1	3	0	5
+talent	3	Bane	2	2	0	5
+talent	3	Improved Shadow Bolt	1	2	0	5
+talent	3	Improved Immolate	5	2	0	5
+talent	3	Shadowburn	3	4	0	1
+talent	3	Destructive Reach	4	2	0	2
+talent	3	Improved Searing Pain	4	4	0	5
+talent	3	Emberstorm	6	3	0	5
+talent	3	Ruin	5	3	0	1
+talent	3	Conflagrate	7	2	0	1
+talent	3	Devastation	3	3	0	5
+talent	3	Aftermath	2	3	0	5
+talent	3	Improved Firebolt	3	1	0	2
+talent	3	Improved Lash of Pain	3	2	0	2
+talent	3	Intensity	4	1	0	2
+talent	3	Pyroclasm	5	1	0	2
+
+[QUESTS]
+State: OBSERVED; complete; observed=1792860729
+Data: Structured section is available in SavedVariables
+
+[REPUTATION]
+State: OBSERVED; complete; observed=1792860734
+Data: Structured section is available in SavedVariables
+
+[KNOWN RECIPES]
+State: UNKNOWN
+Reason: Not observed
+
+[END]

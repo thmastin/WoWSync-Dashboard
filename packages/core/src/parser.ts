@@ -61,6 +61,10 @@ const SECTION_LABELS: Record<string, keyof ParsedSnapshot | undefined> = {
   TRAINER: "trainer",
   "ITEM METADATA": "itemMetadata",
   "GEAR CANDIDATES": "gearCandidates",
+  TALENTS: "textTalents",
+  QUESTS: "textQuests",
+  REPUTATION: "textReputation",
+  "KNOWN RECIPES": "textRecipes",
 };
 
 function fail(message: string, context?: string): never {
@@ -804,6 +808,41 @@ function parseGearCandidates(lines: string[]): GearCandidatesSection {
   return { contractVersion: 1, completeness, ...(observedAt !== undefined ? { observedAt } : {}), ...(coverage !== undefined ? { coverageNote: fieldValue(coverage) } : {}), rows };
 }
 
+function parseTextStateOnly(lines: string[]): { status: SectionStatus } {
+  const { status } = parseSectionStatus(lines, 0);
+  return { status };
+}
+
+function requiredCount(raw: string | undefined, label: string, line: string): number {
+  const value = fieldNumber(raw);
+  if (!Number.isSafeInteger(value) || value! < 0) fail(`Invalid ${label}`, line);
+  return value!;
+}
+
+function parseTextTalents(lines: string[]): NonNullable<ParsedSnapshot["textTalents"]> {
+  const { status, next } = parseSectionStatus(lines, 0);
+  if (status.state !== "OBSERVED") return { status };
+  const trees: NonNullable<NonNullable<ParsedSnapshot["textTalents"]>["data"]>["trees"] = [];
+  let i = next;
+  // Scalar totals and their evidence markers precede the tab/talent tables.
+  while (i < lines.length && !lines[i]!.startsWith("tab\t") && !lines[i]!.startsWith("tab  ") && !lines[i]!.startsWith("talent\t") && !lines[i]!.startsWith("talent  ")) i++;
+  for (; i < lines.length; i++) {
+    const line = lines[i]!;
+    const cols = splitFields(line);
+    if (cols[0] === "tab" && cols[1] !== "name") {
+      if (cols.length !== 3) fail("Expected tab <name> <pointsSpent>", line);
+      trees.push({ tab: trees.length + 1, name: fieldValue(cols[1]) ?? "", pointsSpent: requiredCount(cols[2], "pointsSpent", line), talents: [] });
+    } else if (cols[0] === "talent" && cols[2] !== "name") {
+      if (cols.length !== 7) fail("Expected talent <tabIndex> <name> <tier> <column> <rank> <maxRank>", line);
+      const tab = requiredCount(cols[1], "tabIndex", line);
+      const tree = trees.find((row) => row.tab === tab);
+      if (!tree) fail(`Talent row references missing tab ${tab}`, line);
+      tree.talents.push({ name: fieldValue(cols[2]) ?? "", tier: requiredCount(cols[3], "tier", line), column: requiredCount(cols[4], "column", line), currentRank: requiredCount(cols[5], "rank", line), maxRank: requiredCount(cols[6], "maxRank", line) });
+    }
+  }
+  return { status, ...(trees.length ? { data: { trees } } : {}) };
+}
+
 const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   character: parseCharacter,
   location: parseLocation,
@@ -817,6 +856,10 @@ const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
   trainer: parseTrainer,
   itemMetadata: parseItemMetadata,
   gearCandidates: parseGearCandidates,
+  textTalents: parseTextTalents,
+  textQuests: parseTextStateOnly,
+  textReputation: parseTextStateOnly,
+  textRecipes: parseTextStateOnly,
 };
 
 export function parseWowSyncExport(raw: string): ParsedSnapshot {
@@ -888,6 +931,12 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
   }
 
   const character = result.character!;
+  const textSectionsPresent = ["textTalents", "textQuests", "textReputation", "textRecipes"].some((key) => seen.has(key));
+  const classicEraProfile = character.clientFamily?.toLowerCase() === "classic" && /^1\.15\./.test(character.clientVersion ?? "")
+    || character.clientFamily === undefined && /^1\.15\./.test(character.clientVersion ?? "");
+  if (textSectionsPresent && !classicEraProfile && character.clientFamily?.toLowerCase() !== "forever") {
+    fail("Classic progression text sections are only valid for Classic Era or Forever exports");
+  }
   if (isForeverClient(character)) {
     for (const slot of result.equipment!.slots) {
       const known = FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot];
@@ -912,5 +961,9 @@ export function parseWowSyncExport(raw: string): ParsedSnapshot {
     // Only present when the export carried the section, so a legacy export's parsed form is unchanged.
     ...(result.itemMetadata ? { itemMetadata: result.itemMetadata } : {}),
     ...(result.gearCandidates ? { gearCandidates: result.gearCandidates } : {}),
+    ...(result.textTalents ? { textTalents: result.textTalents } : {}),
+    ...(result.textQuests ? { textQuests: result.textQuests } : {}),
+    ...(result.textReputation ? { textReputation: result.textReputation } : {}),
+    ...(result.textRecipes ? { textRecipes: result.textRecipes } : {}),
   };
 }

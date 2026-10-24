@@ -89,7 +89,7 @@ import {
   type SharedStorageOwner,
   type SharedStorageProjection,
 } from "./sharedStorage.ts";
-import { UNKNOWN_VERSION, type ParsedSnapshot, type VersionOrUnknown, type WowVersion } from "./types.ts";
+import { UNKNOWN_VERSION, type CapturedCharacterState, type ParsedSnapshot, type VersionOrUnknown, type WowVersion } from "./types.ts";
 import {
   buildAccountCurrencies,
   characterCurrenciesView,
@@ -824,10 +824,23 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const version = detectVersion(parsed.character);
     const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version, parsed.character);
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
+    if (version === "classic-era" && parsed.textTalents?.status.state === "OBSERVED" && parsed.textTalents.data) {
+      const state: CapturedCharacterState = parsed.characterState?.clientFamily === "Classic" ? parsed.characterState : { formatVersion: 1, clientFamily: "Classic" };
+      state.talents = { status: parsed.textTalents.status, completeness: parsed.textTalents.status.completeness === "partial" ? "partial" : "complete", observedAt: parsed.textTalents.status.observedAt, data: parsed.textTalents.data };
+      parsed.characterState = state;
+    }
     const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
     if (normalizedForeverObservation) {
       parsed.foreverGearObservation = normalizedForeverObservation;
       if (!parsed.character.race && normalizedForeverObservation.race) parsed.character.race = normalizedForeverObservation.race;
+    }
+    if (version === "forever" && parsed.textTalents?.status.state === "OBSERVED" && parsed.textTalents.data && !parsed.foreverGearObservation?.talents) {
+      parsed.foreverGearObservation = {
+        ...(parsed.foreverGearObservation ?? {} as any),
+        clientProfile: `Forever:${parsed.character.clientVersion ?? "unknown"}:${parsed.character.clientBuild ?? "unknown"}:${parsed.character.interface ?? "unknown"}`,
+        name: parsed.character.name ?? "", realm: parsed.character.realm ?? "", generatedAt: parsed.generatedAt ?? 0,
+        talents: { status: parsed.textTalents.status, observedAt: parsed.textTalents.status.observedAt, completeness: parsed.textTalents.status.completeness ?? "complete", data: { trees: parsed.textTalents.data.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, talents: tree.talents })) } },
+      };
     }
     const identity = characterIdentity(version, parsed.character);
     const now = Math.floor(Date.now() / 1000);
