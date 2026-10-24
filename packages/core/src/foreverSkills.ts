@@ -13,6 +13,8 @@ export interface ForeverSkillLines {
 
 export interface ForeverTalent {
   name: string;
+  /** Text-export row order within the tree; absent for SavedVariables observations. */
+  index?: number;
   currentRank?: number;
   maxRank?: number;
   /** DERIVED: row in the tree from the node's vertical position (1 = top). */
@@ -37,7 +39,7 @@ export interface ForeverTalents {
   source?: string;
   unspentPoints?: number;
   specialization?: { id?: number; name?: string };
-  trees: Array<{ name: string; pointsSpent?: number; talents: ForeverTalent[] }>;
+  trees: Array<{ name: string; pointsSpent?: number; talentCoverage?: string; talents: ForeverTalent[] }>;
 }
 
 type Loose = Record<string, unknown>;
@@ -88,11 +90,13 @@ export function extractForeverTalents(parsed: unknown, snapshotId: number): Fore
       return {
         name: String(tree.name),
         pointsSpent: num(tree.pointsSpent),
+        ...(typeof tree.talentCoverage === "string" ? { talentCoverage: tree.talentCoverage } : {}),
         talents: raw.map((talent): ForeverTalent => {
           const nodeID = num(talent.nodeID);
           const gate = list(talent.conditions).map(object).flatMap((condition) => num(condition?.spentAmountRequired) ?? []);
           return {
             name: String(talent.name),
+            ...(num(talent.index) !== undefined ? { index: num(talent.index) } : {}),
             currentRank: num(talent.currentRank),
             maxRank: num(talent.maxRank),
             tier: num(talent.tier) ?? rowOf(num(talent.posY)),

@@ -826,7 +826,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
     if (version === "classic-era" && parsed.textTalents?.status.state === "OBSERVED" && parsed.textTalents.data) {
       const state: CapturedCharacterState = parsed.characterState?.clientFamily === "Classic" ? parsed.characterState : { formatVersion: 1, clientFamily: "Classic" };
-      state.talents = { status: parsed.textTalents.status, completeness: parsed.textTalents.status.completeness === "partial" ? "partial" : "complete", observedAt: parsed.textTalents.status.observedAt, data: parsed.textTalents.data };
+      const complete = parsed.textTalents.status.completeness === "complete";
+      state.talents = { status: parsed.textTalents.status, completeness: parsed.textTalents.status.completeness === "partial" ? "partial" : "complete", observedAt: parsed.textTalents.status.observedAt, data: {
+        ...(parsed.textTalents.data.unspent !== undefined ? { unspent: parsed.textTalents.data.unspent } : {}),
+        trees: parsed.textTalents.data.trees.map((tree) => ({ ...tree, talentCoverage: complete ? "COMPLETE" : "UNKNOWN", talents: tree.talents.map((talent, index) => ({ ...talent, index: index + 1 })) })),
+      } };
       parsed.characterState = state;
     }
     const normalizedForeverObservation = normalizeForeverStructuredObservation(extras.foreverGearObservation, version, parsed.character.name, parsed.character.realm, parsed.generatedAt);
@@ -839,7 +843,10 @@ export class SqliteSnapshotStore implements SnapshotStore {
         ...(parsed.foreverGearObservation ?? {} as any),
         clientProfile: `Forever:${parsed.character.clientVersion ?? "unknown"}:${parsed.character.clientBuild ?? "unknown"}:${parsed.character.interface ?? "unknown"}`,
         name: parsed.character.name ?? "", realm: parsed.character.realm ?? "", generatedAt: parsed.generatedAt ?? 0,
-        talents: { status: parsed.textTalents.status, observedAt: parsed.textTalents.status.observedAt, completeness: parsed.textTalents.status.completeness ?? "complete", data: { trees: parsed.textTalents.data.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, talents: tree.talents })) } },
+        talents: { status: parsed.textTalents.status, observedAt: parsed.textTalents.status.observedAt, completeness: parsed.textTalents.status.completeness ?? "complete", data: {
+          ...(parsed.textTalents.data.unspent !== undefined ? { unspentPoints: parsed.textTalents.data.unspent } : {}),
+          trees: parsed.textTalents.data.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, talentCoverage: parsed.textTalents!.status.completeness === "complete" ? "COMPLETE" : "UNKNOWN", talents: tree.talents.map((talent, index) => ({ name: talent.name, index: index + 1, tier: talent.tier, column: talent.column, currentRank: talent.currentRank, maxRank: talent.maxRank })) }))
+        } },
       };
     }
     const identity = characterIdentity(version, parsed.character);

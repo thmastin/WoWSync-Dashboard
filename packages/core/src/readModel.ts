@@ -2552,7 +2552,7 @@ function foreverTalentView(talents: ForeverTalents | undefined, now: number, opt
     ...(talents.specialization ? { specialization: talents.specialization } : {}),
     ...(talents.unspentPoints !== undefined ? { unspentPoints: talents.unspentPoints } : {}),
     totalPointsSpent: total,
-    trees: talents.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, talentCount: tree.talents.length, talents: options.includeTalents ? tree.talents : tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0) })),
+    trees: talents.trees.map((tree) => ({ name: tree.name, pointsSpent: tree.pointsSpent, ...(tree.talentCoverage ? { talentCoverage: tree.talentCoverage } : {}), talentCount: tree.talents.length, talents: options.includeTalents ? tree.talents : tree.talents.filter((talent) => (talent.currentRank ?? 0) > 0) })),
     semantics,
   };
 }
