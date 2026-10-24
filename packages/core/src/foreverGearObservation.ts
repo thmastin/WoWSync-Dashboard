@@ -41,7 +41,14 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     const raw = v[key];
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const s = raw as Record<string, unknown>;
-    return typeof s.observedAt === "number" && Number.isFinite(s.observedAt) && s.data !== undefined ? s : undefined;
+    if (typeof s.observedAt !== "number" || !Number.isFinite(s.observedAt) || s.data === undefined) return undefined;
+    const data = object(s.data);
+    // Current GearExport Classic/Forever collectors identify the client in data.clientFamily
+    // and name quest rows `quests`; older adapters already use `active` plus clientProfile/source.
+    if (key === "quests" && data && Array.isArray(data.quests) && data.evidence === "OBSERVED") {
+      return { ...s, data: { ...data, clientFamily: "Forever", clientProfile: v.clientProfile, source: "C_QuestLog", activeState: "OBSERVED", activeCompleteness: s.completeness, active: data.quests, completedHistory: { state: "UNKNOWN" } } };
+    }
+    return s;
   };
   const recipeSection = section("professionRecipes");
   const recipeData = object(recipeSection?.data);
