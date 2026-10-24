@@ -115,6 +115,8 @@ export interface ClassicTalentTree {
 
 export interface ClassicTalentView extends DomainHeader {
   trees: ClassicTalentTree[];
+  /** Client-reported unspent points; absent stays UNKNOWN. */
+  unspentPoints?: number;
   /** DERIVED: points spent per tree in tab order, e.g. "31/20/0", only when every tree reported points. */
   distribution?: string;
   totalPointsSpent?: number;
@@ -123,6 +125,7 @@ export interface ClassicTalentView extends DomainHeader {
 
 export function buildClassicTalentView(domain: CapturedCharacterDomain | undefined, now: number, options: { includeTalents?: boolean } = {}): ClassicTalentView {
   const head = header(domain, now, "Talents were not captured for this character.");
+  const talentData = domain?.data && typeof domain.data === "object" ? domain.data as Obj : undefined;
   const trees: ClassicTalentTree[] = rows(object(domain?.data) ? domain!.data.trees : undefined).flatMap((tree) => {
     const tab = num(tree.tab);
     if (tab === undefined) return [];
@@ -145,6 +148,7 @@ export function buildClassicTalentView(domain: CapturedCharacterDomain | undefin
   return {
     ...head,
     trees,
+    ...(typeof talentData?.unspent === "number" && Number.isFinite(talentData.unspent) ? { unspentPoints: talentData.unspent } : {}),
     ...(complete ? { distribution: trees.map((tree) => tree.pointsSpent).join("/"), totalPointsSpent: trees.reduce((sum, tree) => sum + tree.pointsSpent!, 0) } : {}),
     semantics: "Legacy talent tabs and ranks as returned by the client. distribution is DERIVED from pointsSpent. Talents with rank 0 are omitted unless includeTalents is requested. Spec role, gear fit, and optimality are not inferred.",
   };

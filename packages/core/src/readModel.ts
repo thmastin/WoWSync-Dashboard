@@ -62,6 +62,20 @@ export interface CharacterQuery { version: VersionOrUnknown; name: string; realm
 export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
 export interface CharacterQuestQuery extends CharacterSnapshotQuery { completedQuestIDs?: number[] }
 export interface CharacterProgressionQuery extends CharacterSnapshotQuery { factionQuery?: string; includeTalents?: boolean }
+
+/** Every section surfaced by get_character_state. Keep flavor coverage explicit as parsers evolve. */
+export const STRUCTURED_OBSERVATION_COVERAGE = {
+  "classic-era": {
+    recipes: { parser: "classicState.normalizeRecipes" }, quests: { parser: "classicState.normalizeQuests" },
+    reputation: { parser: "classicState.normalizeReputation" }, talents: { parser: "classicState.normalizeTalents" },
+  },
+  forever: {
+    recipes: { parser: "foreverGearObservation.normalizeForeverStructuredObservation" },
+    quests: { parser: "foreverGearObservation.normalizeForeverStructuredObservation" },
+    reputation: { parser: "foreverGearObservation.normalizeForeverStructuredObservation" },
+    talents: { parser: "foreverGearObservation.normalizeForeverStructuredObservation" },
+  },
+} as const;
 /** One recipe chosen by exactly one identity: recipeID (Retail/Forever), recipeKey (Classic), outputItemID, enchantID, or exact name. */
 export interface RecipeSelector { recipeID?: number; recipeKey?: string; outputItemID?: number; enchantID?: number; recipeName?: string }
 export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
@@ -1043,6 +1057,23 @@ export class DashboardReadModel {
       out.reputation = summarize(state?.reputation?.character);
       out.talents = summarize(state?.talents);
     }
+    if (version === "forever") {
+      const history = this.snapshots(identityKey);
+      const summarizeForever = (key: "quests" | "reputation" | "talents") => {
+        for (let i = 0; i < history.length; i++) {
+          const section = history[i]?.parsed.foreverGearObservation?.[key] as Record<string, any> | undefined;
+          if (!section?.data || typeof section.observedAt !== "number") continue;
+          const declared = asRecord(section.status)?.state;
+          const state = declared === "UNKNOWN" ? "UNKNOWN" as const
+            : i > 0 || declared === "LAST_SEEN" || section.lastAttemptStale === true || typeof section.lastAttemptError === "string" ? "LAST_SEEN" as const : "OBSERVED" as const;
+          return { state, observedAt: section.observedAt, sourceSnapshotId: history[i]!.id };
+        }
+        return { state: "UNKNOWN" as const };
+      };
+      out.quests = summarizeForever("quests");
+      out.reputation = summarizeForever("reputation");
+      out.talents = summarizeForever("talents");
+    }
     return Object.keys(out).length ? { structuredObservations: out } : {};
   }
 
@@ -1921,10 +1952,29 @@ export class DashboardReadModel {
       if (!snapshot) return { provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No snapshot exists for this character." } };
       const state = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState : undefined;
       const reputation = buildClassicReputationView(state?.reputation?.character, this.now(), { ...(query.factionQuery ? { query: query.factionQuery } : {}) });
-      const talents = buildClassicTalentView(state?.talents, this.now(), { includeTalents: query.includeTalents === true });
+      const parsedCharacter = snapshot.parsed.character;
+      const legacyTree = query.version === "classic-era" && parsedCharacter.talentStatus === "OBSERVED" && parsedCharacter.talentTree
+        ? { status: { state: "OBSERVED" as const }, completeness: "complete" as const, data: { trees: parsedCharacter.talentTree.map((tree, index) => ({ tab: index + 1, name: tree.name, pointsSpent: tree.pointsSpent, talents: [] })) } }
+        : undefined;
+      const talents = buildClassicTalentView(state?.talents ?? legacyTree, this.now(), { includeTalents: query.includeTalents === true });
+      const talentTreeAgreement = query.version !== "classic-era" || parsedCharacter.talentStatus !== "OBSERVED" || !parsedCharacter.talentTree || !state?.talents?.data
+        ? "NOT_COMPARABLE" as const
+        : (() => {
+            const rows = (state.talents.data as Record<string, any>).trees;
+            const mismatches = parsedCharacter.talentTree!.flatMap((entry) => {
+              const other = Array.isArray(rows) ? rows.find((row: Record<string, unknown>) => row.name === entry.name) : undefined;
+              return other && entry.pointsSpent !== undefined && typeof other.pointsSpent === "number" && entry.pointsSpent !== other.pointsSpent
+                ? [{ tree: entry.name, characterPointsSpent: entry.pointsSpent, talentsPointsSpent: other.pointsSpent }] : [];
+            });
+            const comparable = parsedCharacter.talentTree!.length === rows.length && parsedCharacter.talentTree!.every((entry) => {
+              const other = rows.find((row: Record<string, unknown>) => row.name === entry.name) as Record<string, unknown> | undefined;
+              return !!other && typeof entry.pointsSpent === "number" && typeof other.pointsSpent === "number";
+            });
+            return mismatches.length ? { state: "DISAGREEMENT" as const, mismatches } : comparable ? { state: "AGREE" as const } : "NOT_COMPARABLE" as const;
+          })();
       const states = [reputation.state, talents.state];
       const overall: ReadState = states.every((value) => value === "UNKNOWN") ? "UNKNOWN" : states.includes("LAST_SEEN") ? "LAST_SEEN" : "OBSERVED";
-      return { data: { version: query.version, reputation, talents }, provenance: { state: overall, version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, importedAt: snapshot.importedAt, source: "Classic legacy reputation and talent sidecars (GearExport WoWSyncDB)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character." } : {}), ...(overall === "LAST_SEEN" ? { warning: "At least one domain is historical; each domain states its own evidence." } : {}) } };
+      return { data: { version: query.version, reputation, talents, ...(query.version === "classic-era" ? { talentTreeAgreement } : {}) }, provenance: { state: overall, version: query.version, identityKey: character.identityKey, snapshotId: snapshot.id, importedAt: snapshot.importedAt, source: "Classic legacy reputation and talent sidecars (GearExport WoWSyncDB)", ...(overall === "UNKNOWN" ? { reason: "Neither reputation nor talents have been captured for this character." } : {}), ...(overall === "LAST_SEEN" ? { warning: "At least one domain is historical; each domain states its own evidence." } : {}) } };
     });
   }
 
