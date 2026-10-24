@@ -38,6 +38,16 @@ test("real Ashtest Classic Era export parses talent text into progression and st
     const progression = read.getCharacterProgression({ version: "classic-era", name: "Ashtest", realm: "Mankrik", includeTalents: true });
     assert.equal((progression as any).value.data.talents.state, "OBSERVED");
     assert.equal((progression as any).value.data.talents.trees[0].name, "Affliction");
+    const affliction = (progression as any).value.data.talents.trees[0];
+    assert.equal(affliction.talentCoverage, "COMPLETE");
+    assert.equal(affliction.talents.find((talent: any) => talent.name === "Improved Corruption").currentRank, 1);
+    assert.equal(affliction.talents.find((talent: any) => talent.name === "Improved Corruption").maxRank, 5);
+    assert.equal(affliction.talents.find((talent: any) => talent.name === "Improved Corruption").index, 3);
+    assert.equal((progression as any).value.data.talents.unspentPoints, 0);
+    const rankedOnly = read.getCharacterProgression({ version: "classic-era", name: "Ashtest", realm: "Mankrik" }) as any;
+    assert.deepEqual(rankedOnly.value.data.talents.trees[0].talents.map((talent: any) => talent.name), ["Improved Corruption"]);
+    assert.equal(rankedOnly.value.data.talents.trees[0].talents[0].currentRank, 1);
+    assert.equal(rankedOnly.value.data.talents.trees[0].talents[0].maxRank, 5);
     assert.equal((progression as any).value.data.talentTreeAgreement.state, "AGREE");
   } finally { store.close(); }
 });
@@ -54,6 +64,11 @@ test("Forever text talents feed progression and structured observations without 
     const progression = read.getCharacterProgression({ version: "forever", name: "Ashtest", realm: "Mankrik", includeTalents: true });
     assert.equal((progression as any).value.data.talents.state, "OBSERVED");
     assert.equal((progression as any).value.data.talents.trees[0].name, "Affliction");
+    const affliction = (progression as any).value.data.talents.trees[0];
+    assert.equal(affliction.talentCoverage, "COMPLETE");
+    assert.equal(affliction.talents.find((talent: any) => talent.name === "Improved Corruption").index, 3);
+    assert.equal(affliction.talents.find((talent: any) => talent.name === "Improved Corruption").currentRank, 1);
+    assert.equal((progression as any).value.data.talents.unspentPoints, 0);
   } finally { store.close(); }
 });
 

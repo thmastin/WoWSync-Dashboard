@@ -823,9 +823,16 @@ function parseTextTalents(lines: string[]): NonNullable<ParsedSnapshot["textTale
   const { status, next } = parseSectionStatus(lines, 0);
   if (status.state !== "OBSERVED") return { status };
   const trees: NonNullable<NonNullable<ParsedSnapshot["textTalents"]>["data"]>["trees"] = [];
+  let unspent: number | undefined;
+  let unspentEvidence: string | undefined;
   let i = next;
   // Scalar totals and their evidence markers precede the tab/talent tables.
-  while (i < lines.length && !lines[i]!.startsWith("tab\t") && !lines[i]!.startsWith("tab  ") && !lines[i]!.startsWith("talent\t") && !lines[i]!.startsWith("talent  ")) i++;
+  while (i < lines.length && !lines[i]!.startsWith("tab\t") && !lines[i]!.startsWith("tab  ") && !lines[i]!.startsWith("talent\t") && !lines[i]!.startsWith("talent  ")) {
+    const line = lines[i]!;
+    if (line.startsWith("Unspent: ")) unspent = requiredCount(line.slice("Unspent: ".length), "Unspent", line);
+    if (line.startsWith("UnspentEvidence: ")) unspentEvidence = line.slice("UnspentEvidence: ".length);
+    i++;
+  }
   for (; i < lines.length; i++) {
     const line = lines[i]!;
     const cols = splitFields(line);
@@ -840,7 +847,7 @@ function parseTextTalents(lines: string[]): NonNullable<ParsedSnapshot["textTale
       tree.talents.push({ name: fieldValue(cols[2]) ?? "", tier: requiredCount(cols[3], "tier", line), column: requiredCount(cols[4], "column", line), currentRank: requiredCount(cols[5], "rank", line), maxRank: requiredCount(cols[6], "maxRank", line) });
     }
   }
-  return { status, ...(trees.length ? { data: { trees } } : {}) };
+  return { status, ...(trees.length ? { data: { ...(unspentEvidence === "OBSERVED" && unspent !== undefined ? { unspent } : {}), trees } } : {}) };
 }
 
 const SECTION_PARSERS: Record<string, (lines: string[]) => any> = {
