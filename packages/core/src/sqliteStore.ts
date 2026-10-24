@@ -823,6 +823,16 @@ export class SqliteSnapshotStore implements SnapshotStore {
     const parsed = parseWowSyncExport(raw);
     const version = detectVersion(parsed.character);
     const normalizedCharacterState = normalizeCharacterStateSidecar(extras.characterState, version, parsed.character);
+    if (version === "classic-era" || version === "tbc-anniversary") {
+      const supplied = extras.characterState as Record<string, any> | undefined;
+      const normalized = normalizedCharacterState;
+      for (const [domain, rawDomain, kept] of [
+        ["quests", supplied?.quests, normalized?.quests],
+        ["reputation", supplied?.reputation?.character, normalized?.reputation?.character],
+      ] as const) {
+        if (rawDomain && !kept) process.emitWarning(`Classic ${domain} SavedVariables section was rejected during normalization for ${parsed.character.name ?? "unknown character"} (${version}); its client profile, source, or row shape did not match the supported contract. The section remains UNKNOWN.`, { code: "WOWSYNC_CLASSIC_SECTION_REJECTED" });
+      }
+    }
     if (normalizedCharacterState) parsed.characterState = normalizedCharacterState;
     if (version === "classic-era" && parsed.textTalents?.status.state === "OBSERVED" && parsed.textTalents.data) {
       const state: CapturedCharacterState = parsed.characterState?.clientFamily === "Classic" ? parsed.characterState : { formatVersion: 1, clientFamily: "Classic" };

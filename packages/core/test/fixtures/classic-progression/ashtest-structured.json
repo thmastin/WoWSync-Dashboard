@@ -1,0 +1,35 @@
+{
+  "formatVersion": 1,
+  "clientFamily": "Classic",
+  "quests": {
+    "observedAt": 1792863031,
+    "completeness": "complete",
+    "source": "client",
+    "data": {
+      "formatVersion": 1,
+      "clientFamily": "1.15.9",
+      "evidence": "OBSERVED",
+      "observedAt": 1792863031,
+      "quests": [
+        { "title": "The Reports", "level": 10, "complete": 1, "objectives": {} },
+        { "title": "In Defense of the King's Lands", "level": 12, "complete": 1, "objectives": [{ "text": "Stonesplinter Trogg slain: 0/10" }] }
+      ],
+      "completedHistory": "SKIPPED: no bounded reliable Classic history API"
+    }
+  },
+  "reputation": {
+    "character": {
+      "observedAt": 1792863036,
+      "completeness": "complete",
+      "source": "client",
+      "data": {
+        "formatVersion": 1,
+        "clientFamily": "1.15.9",
+        "observedAt": 1792863036,
+        "evidence": "OBSERVED",
+        "collapsedHeadersRestored": 0,
+        "factions": []
+      }
+    }
+  }
+}

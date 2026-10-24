@@ -107,6 +107,12 @@ function profileMatches(data: Obj, version: "classic-era" | "tbc-anniversary"): 
   return classicProfileVersion(data.clientProfile) === version;
 }
 
+function currentCollectorMatches(data: Obj, version: "classic-era" | "tbc-anniversary"): boolean {
+  if (data.evidence !== "OBSERVED" || typeof data.clientFamily !== "string") return false;
+  const major = /^(\d+)\./.exec(data.clientFamily)?.[1];
+  return version === "classic-era" ? major === "1" : major === "2";
+}
+
 function normalizeRecipes(raw: unknown, version: "classic-era" | "tbc-anniversary"): CapturedCharacterDomain | undefined {
   const parsed = envelope(raw);
   if (!parsed) return undefined;
@@ -127,7 +133,23 @@ function normalizeQuests(raw: unknown, version: "classic-era" | "tbc-anniversary
   const parsed = envelope(raw);
   if (!parsed) return undefined;
   const { data } = parsed;
-  if (!profileMatches(data, version) || data.clientFamily !== "Classic" || data.source !== "legacy quest log APIs") return undefined;
+  const currentCollector = currentCollectorMatches(data, version);
+  if (!profileMatches(data, version) && !currentCollector) return undefined;
+  if (data.evidence === "OBSERVED" && typeof data.clientFamily === "string" && /^\d+\./.test(data.clientFamily) && !currentCollector) return undefined;
+  if (!currentCollector && (data.clientFamily !== "Classic" || data.source !== "legacy quest log APIs")) return undefined;
+  if (currentCollector) {
+    const rows = Array.isArray(data.quests) ? data.quests : undefined;
+    if (!rows || !rows.every((row) => object(row) && text(row.title, 512))) return undefined;
+    const active = rows.map((row) => ({
+      ...(positiveID(row.questID) ? { questID: row.questID } : {}), title: row.title,
+      ...(counter(row.level) ? { level: row.level } : {}),
+      ...(Array.isArray(row.objectives) ? { objectives: row.objectives.filter(object).map((objective: Obj) => ({ ...(text(objective.text, 512) ? { text: objective.text } : {}) })), objectiveState: "PARTIAL" } : {}),
+      ...(typeof row.complete === "boolean" ? { isComplete: row.complete, completionState: "OBSERVED" } : {}),
+      rowEvidence: row.evidence === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED",
+    }));
+    const observedAt = parsed.observedAt;
+    return domain(parsed.raw, { ...data, clientFamily: "Classic", clientProfile: data.clientProfile ?? "Classic:1:11509", source: "legacy quest log APIs", activeState: "OBSERVED", activeCompleteness: parsed.raw.completeness === "complete" ? "complete" : "partial", active, completedHistory: { state: "UNKNOWN" } }, observedAt, "OBSERVED", "partial");
+  }
   if (data.activeState !== undefined && data.activeState !== "OBSERVED" && data.activeState !== "UNKNOWN") return undefined;
   if (data.active !== undefined && (!Array.isArray(data.active) || !data.active.every((row) => object(row) && positiveID(row.questID)))) return undefined;
   if (data.completedHistory !== undefined && !object(data.completedHistory)) return undefined;
@@ -138,7 +160,10 @@ function normalizeReputation(raw: unknown, version: "classic-era" | "tbc-anniver
   const parsed = envelope(raw);
   if (!parsed) return undefined;
   const { data } = parsed;
-  if (!profileMatches(data, version) || data.source !== "GetFactionInfo" || !Array.isArray(data.factions)) return undefined;
+  const currentCollector = currentCollectorMatches(data, version);
+  if (!profileMatches(data, version) && !currentCollector) return undefined;
+  if (data.evidence === "OBSERVED" && typeof data.clientFamily === "string" && /^\d+\./.test(data.clientFamily) && !currentCollector) return undefined;
+  if ((!currentCollector && data.source !== "GetFactionInfo") || !Array.isArray(data.factions)) return undefined;
   for (const row of data.factions) {
     if (!object(row) || !text(row.name, 256)) return undefined;
     // Stable IDs are optional on legacy rows; missing IDs keep their client factionKey, never a synthetic ID.
@@ -146,7 +171,7 @@ function normalizeReputation(raw: unknown, version: "classic-era" | "tbc-anniver
     if (row.factionID === undefined && !text(row.factionKey, 1024)) return undefined;
   }
   // Visible-row coverage only: reputation is always partial.
-  return domain(parsed.raw, { ...data, ownerScope: "CHARACTER" }, parsed.observedAt, "OBSERVED", "partial");
+  return domain(parsed.raw, { ...data, clientFamily: "Classic", ownerScope: "CHARACTER" }, parsed.observedAt, "OBSERVED", "partial");
 }
 
 function normalizeTalents(raw: unknown, version: "classic-era" | "tbc-anniversary"): CapturedCharacterDomain | undefined {
@@ -177,7 +202,14 @@ export function normalizeClassicCharacterState(input: unknown, version: VersionO
   const reputation = normalizeReputation(object(input.reputation) ? input.reputation.character : undefined, version);
   const talents = normalizeTalents(input.talents, version);
   if (recipes) state.professionRecipes = recipes;
-  if (quests) state.quests = quests;
+  if (quests) {
+    const qdata = quests.data as Obj;
+    if (typeof qdata.clientProfile !== "string" && character?.clientVersion) {
+      const interfaceID = character.interface?.replace(/\D/g, "");
+      if (interfaceID && /^\d{5,6}$/.test(interfaceID)) qdata.clientProfile = `Classic:${version === "classic-era" ? "1" : "2"}:${interfaceID}`;
+    }
+    state.quests = quests;
+  }
   if (reputation) state.reputation = { character: reputation };
   if (talents) state.talents = talents;
   const profile = [recipes, quests, reputation, talents].map((entry) => (entry?.data as Obj | undefined)?.clientProfile).find((value): value is string => typeof value === "string");

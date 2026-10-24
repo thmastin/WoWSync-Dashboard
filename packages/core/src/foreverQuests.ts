@@ -16,7 +16,8 @@ export interface ForeverQuestObjective {
   numRequiredState: QuestEvidenceState;
 }
 export interface ForeverQuestRow {
-  questID: number;
+  /** Newer Classic collectors may expose a title without a stable client quest ID. */
+  questID?: number;
   logIndex?: number;
   title?: string;
   titleState: QuestEvidenceState;
@@ -118,7 +119,7 @@ function normalizeObjective(value: unknown): { row?: ForeverQuestObjective; part
 
 function normalizeQuest(value: unknown): { row?: ForeverQuestRow; partial: boolean } {
   const v = record(value);
-  if (!v || !validID(v.questID)) return { partial: true };
+  if (!v || !validID(v.questID) && !text(v.title)) return { partial: true };
   const titleValid = text(v.title) && v.title.length > 0;
   let objectives: ForeverQuestObjective[] | undefined;
   let objectiveState: ForeverQuestRow["objectiveState"] = "UNKNOWN";
@@ -139,7 +140,7 @@ function normalizeQuest(value: unknown): { row?: ForeverQuestRow; partial: boole
   if ((v.isComplete !== undefined && !completionValid) || (v.readyForTurnIn !== undefined && !readinessValid)) partial = true;
   const rowEvidence: QuestEvidenceState = v.evidence === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED";
   const row: ForeverQuestRow = {
-    questID: v.questID,
+    ...(validID(v.questID) ? { questID: v.questID } : {}),
     rowEvidence,
     ...(rowEvidence === "LAST_SEEN" && Number.isSafeInteger(v.lastSeenAt) ? { lastSeenAt: v.lastSeenAt as number } : {}),
     ...(v.isFailed === true ? { isFailed: true } : {}),
@@ -199,15 +200,19 @@ export function buildQuestObservation(input: {
     if (data.formatVersion !== 1 || data.clientFamily !== "Classic" || data.clientProfile !== input.profile || data.source !== "legacy quest log APIs") return reason("The quest sidecar format or source does not match its Classic profile.");
   }
   if (!observedAt || !Number.isSafeInteger(data.observedAt) || (data.observedAt as number) > observedAt || observedAt - (data.observedAt as number) > 120) return reason("Quest section timestamp is missing or inconsistent with the persisted section time.");
-  const activeAvailable = data.activeState === "OBSERVED" && Array.isArray(data.active) && data.active.length <= MAX_QUESTS;
-  if (data.activeState === "OBSERVED" && Array.isArray(data.active) && data.active.length > MAX_QUESTS) return reason("Active quest data exceeds the supported read bound.");
+  const activeRows = Array.isArray(data.active) ? data.active : Array.isArray(data.quests) ? data.quests : undefined;
+  const activeAvailable = (data.activeState === "OBSERVED" || data.evidence === "OBSERVED") && activeRows !== undefined && activeRows.length <= MAX_QUESTS;
+  if ((data.activeState === "OBSERVED" || data.evidence === "OBSERVED") && activeRows && activeRows.length > MAX_QUESTS) return reason("Active quest data exceeds the supported read bound.");
   const active: ForeverQuestRow[] = [];
   const seen = new Set<number>();
+  const seenTitles = new Set<string>();
   let partial = section.completeness !== "complete" || data.activeCompleteness !== "complete" || !activeAvailable;
-  for (const raw of activeAvailable ? data.active as unknown[] : []) {
+  for (const raw of activeAvailable ? activeRows! : []) {
     const parsed = normalizeQuest(raw);
-    if (!parsed.row || seen.has(parsed.row.questID)) { partial = true; continue; }
-    seen.add(parsed.row.questID); active.push(parsed.row); partial ||= parsed.partial;
+    const key = parsed.row?.questID !== undefined ? `id:${parsed.row.questID}` : `title:${parsed.row?.title?.toLocaleLowerCase() ?? ""}`;
+    if (!parsed.row || parsed.row.questID !== undefined && seen.has(parsed.row.questID) || parsed.row.questID === undefined && seenTitles.has(key)) { partial = true; continue; }
+    if (parsed.row.questID !== undefined) seen.add(parsed.row.questID); else seenTitles.add(key);
+    active.push(parsed.row); partial ||= parsed.partial || parsed.row.questID === undefined;
   }
   const history = record(data.completedHistory);
   let completedHistory: ForeverQuestObservation["completedHistory"] = { state: "UNKNOWN" };
