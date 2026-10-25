@@ -37,6 +37,7 @@ import { eligibleMailRecipients, routeMaterial as routeMailMaterial, routePouch 
 import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
 import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
 import { resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
+import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -73,6 +74,8 @@ function normalizeClassicEraBinding(value: unknown): "BOUND" | "UNBOUND" | "UNKN
     default: return "UNKNOWN";
   }
 }
+
+function normalizeMailItemName(value: unknown): string { return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US") : ""; }
 
 /** Every section surfaced by get_character_state. Keep flavor coverage explicit as parsers evolve. */
 export const STRUCTURED_OBSERVATION_COVERAGE = {
@@ -1803,21 +1806,30 @@ export class DashboardReadModel {
         const itemId = itemIdFromItemRef(item.itemRef);
         const bindingState = normalizeClassicEraBinding(item.bound);
         if (itemId !== undefined && holdItemIds.has(itemId)) return { ...(item.name !== undefined ? { name: item.name } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}), binding: bindingState === "UNBOUND" ? "OBSERVED_UNBOUND" : bindingState === "BOUND" ? "OBSERVED_BOUND" : "UNKNOWN", vendorEachCopper: item.vendorEachCopper, auctionHouseValue: "UNKNOWN" as const, action: "KEEP", reason: "on hold list" };
-        const uses: Array<{ character: StoredCharacterSummary; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }> = [];
-        if (itemId !== undefined) for (const candidate of scopedRoster) {
+        const uses: Array<{ character: StoredCharacterSummary; profession: string; recipe: string; evidence: "OBSERVED" | "LAST_SEEN" }> = [];
+        for (const candidate of scopedRoster) {
           const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
           if (professionResult.status !== "FOUND" || !professionResult.value.data) continue;
           const knowledge = professionResult.value.data.recipeKnowledge as any;
           for (const group of knowledge?.data?.professions ?? []) for (const recipe of group.recipes ?? []) {
             const evidence = recipe.evidence ?? group.evidence ?? knowledge?.evidence?.state;
             if (evidence !== "OBSERVED" && evidence !== "LAST_SEEN") continue;
+            const reagentMatches = (reagent: any) => reagent.itemID !== undefined && itemId !== undefined
+              ? reagent.itemID === itemId
+              : reagent.itemID === undefined && normalizeMailItemName(reagent.name) !== "" && normalizeMailItemName(reagent.name) === normalizeMailItemName(item.name);
             const usesItem = (recipe.reagentSlots ?? []).filter((slot: any) => slot.required !== false)
               .flatMap((slot: any) => slot.alternatives ?? slot.reagents ?? [])
-              .some((reagent: any) => reagent.itemID === itemId) || (recipe.reagents ?? []).some((reagent: any) => reagent.itemID === itemId);
-            if (usesItem) uses.push({ character: candidate, profession: String(group.professionName ?? group.name ?? "UNKNOWN profession"), evidence });
+              .some(reagentMatches) || (recipe.reagents ?? []).some(reagentMatches);
+            if (usesItem) uses.push({ character: candidate, profession: String(group.professionName ?? group.name ?? "UNKNOWN profession"), recipe: String(recipe.name ?? "known recipe"), evidence });
           }
         }
         const ownUse = uses.find((use) => use.character.identityKey === character.identityKey);
+        const conjured = itemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(itemId);
+        const metadata = itemId === undefined ? undefined : this.store.getItemMetadata("classic-era", [itemId])[0];
+        const metadataClass = metadata?.classId.state === "KNOWN" ? metadata.classId.value : undefined;
+        const metadataSubclass = metadata?.subclassId.state === "KNOWN" ? metadata.subclassId.value : undefined;
+        const metadataConsumable = metadataClass === 0 && [0, 1, 2, 3, 4, 5, 7].includes(metadataSubclass ?? -1);
+        const consumable = metadataConsumable || (itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId));
         const observedUses = uses.filter((use) => use.character.identityKey !== character.identityKey && use.evidence === "OBSERVED");
         const crafterCandidates = observedUses.map((use) => {
           const row = scopedRoster.find((candidate) => candidate.identityKey === use.character.identityKey)!;
@@ -1832,7 +1844,9 @@ export class DashboardReadModel {
         const action = bindingState === "BOUND" ? "KEEP"
           : bindingState === "UNKNOWN" ? "UNDETERMINED"
           : !usable ? "UNDETERMINED"
-          : ownUse ? "KEEP_FOR_HOLDER_PROFESSION"
+          : ownUse ? "KEEP"
+          : conjured ? "KEEP"
+          : consumable ? "KEEP"
           : craftChoice.state === "SELECTED" && usable && bindingState === "UNBOUND" ? "MAIL_TO_CRAFTER"
           : craftChoice.state === "UNDETERMINED" && observedUses.length ? "UNDETERMINED"
           : incompleteUseEvidence.length ? "KEEP"
@@ -1840,7 +1854,9 @@ export class DashboardReadModel {
           : auctionCharacter.state === "ELIGIBLE" ? "SELL_AH"
           : "UNDETERMINED";
         const evidenceReason = !usable ? identity.reason ?? (buildVerification === "UNSUPPORTED" ? "Client build is outside the supported Classic Era mail rules." : bags.status.state !== "OBSERVED" ? "Current carried bags are not OBSERVED." : freshness !== "recent" ? "Bag evidence is outside the 72-hour freshness window." : "Required evidence is UNKNOWN.")
-          : ownUse ? "Observed recipe evidence shows this item is used by the holder's profession; keep it on the holder."
+          : ownUse ? `used by known recipe ${ownUse.recipe}; keep on holder`
+          : conjured ? "conjured, can't be mailed"
+          : consumable ? `consumable usable by ${character.name}`
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
           : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
