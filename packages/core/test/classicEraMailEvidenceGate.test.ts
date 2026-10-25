@@ -65,6 +65,7 @@ test("Era mail keeps bound items, leaves unknown binding undetermined, and holds
     try {
       const result = ctx.read.getClassicEraMailPlan({ version: "classic-era", name: "Holder", realm: REALM }, { holdItemIds: ctx.holdItemIds });
       assert.equal(result.value.data.items[0].action, expected);
+      if (bound === true) assert.equal(result.value.data.items[0].reason, "Item is OBSERVED bound and cannot be routed to another character.");
       if (hold) assert.equal(result.value.data.items[0].reason, "on hold list");
     } finally { ctx.store.close(); }
   }
@@ -76,4 +77,36 @@ test("the configured auction character receives SELL_AH for an unused unbound ma
     const result = ctx.read.getClassicEraMailPlan({ version: "classic-era", name: "Holder", realm: REALM });
     assert.equal(result.value.data.items[0].action, "SELL_AH", result.value.data.items[0].reason);
   } finally { ctx.store.close(); }
+});
+
+test("real Classic Era recipe sidecar is complete and routes unused Linen Cloth to the auction character", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const holderText = era("Holder", { professions: [{ name: "Cooking", skill: 1, maxSkill: 75 }], itemId: 2589 });
+    const rawRecipeSidecar = { capture: 119, revision: 4, observedAt: NOW, completeness: "complete", data: {
+      formatVersion: 1, clientFamily: "1.15.9", professions: [{ name: "Cooking", professionName: "Cooking", observedAt: NOW, sessionObservedAt: NOW - 2,
+        recipes: [{ name: "Herb Baked Egg", itemID: 6888, difficulty: "optimal", reagents: [{ name: "Small Egg", count: 1 }, { name: "Mild Spices", count: 1 }] },
+          { name: "Mystery Recipe", difficulty: "optimal", reagents: [{ name: "Chunk of Boar Meat", count: 1 }] }] }] } };
+    store.importSnapshot(holderText, { characterState: { formatVersion: 1, clientFamily: "Classic", professionRecipes: rawRecipeSidecar } } as any);
+    store.importSnapshot(era("Auction"));
+    const auction = store.listCharacters("classic-era").find((row) => row.name === "Auction")!;
+    store.setMailPlanSettings({ accountId: "default", version: "classic-era", realm: REALM, faction: "Alliance", auctionCharacterIdentityKey: auction.identityKey, updatedAt: NOW, provenance: "USER_CONFIGURED" });
+    const read = new DashboardReadModel(store, () => NOW + 1);
+    const professions = read.getCharacterProfessions({ version: "classic-era", name: "Holder", realm: REALM });
+    assert.equal(professions.status, "FOUND");
+    if (professions.status === "FOUND") {
+      const knowledge = professions.value.data?.recipeKnowledge as any;
+      assert.equal(knowledge.status.state, "OBSERVED");
+      assert.equal(knowledge.completeness, "complete");
+      assert.equal(knowledge.data.professions[0].recipes[1].outputItemID, undefined, "nil output itemID is retained as unknown");
+      assert.equal(knowledge.data.professions[0].recipes[1].learnedState, "UNKNOWN");
+    }
+    const plan = read.getClassicEraMailPlan({ version: "classic-era", name: "Holder", realm: REALM });
+    assert.equal(plan.status, "FOUND");
+    if (plan.status === "FOUND") {
+      const cloth = (plan.value as any).data.items.find((item: any) => item.name === "Test material");
+      assert.equal(cloth?.action, "MAIL_TO_AUCTION_CHARACTER", cloth?.reason);
+      assert.equal(cloth?.recipient?.name, "Auction");
+    }
+  } finally { store.close(); }
 });
