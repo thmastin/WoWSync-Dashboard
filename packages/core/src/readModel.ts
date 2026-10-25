@@ -63,6 +63,17 @@ export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: nu
 export interface CharacterQuestQuery extends CharacterSnapshotQuery { completedQuestIDs?: number[] }
 export interface CharacterProgressionQuery extends CharacterSnapshotQuery { factionQuery?: string; includeTalents?: boolean }
 
+function normalizeClassicEraBinding(value: unknown): "BOUND" | "UNBOUND" | "UNKNOWN" {
+  if (value === true) return "BOUND";
+  if (value === false) return "UNBOUND";
+  if (typeof value !== "string") return "UNKNOWN";
+  switch (value.trim().toLowerCase()) {
+    case "yes": case "true": case "1": case "bound": return "BOUND";
+    case "no": case "false": case "0": case "unbound": return "UNBOUND";
+    default: return "UNKNOWN";
+  }
+}
+
 /** Every section surfaced by get_character_state. Keep flavor coverage explicit as parsers evolve. */
 export const STRUCTURED_OBSERVATION_COVERAGE = {
   "classic-era": {
@@ -1766,12 +1777,32 @@ export class DashboardReadModel {
         ? resolveMailSettingsCharacter(settings?.auctionCharacterIdentityKey, settingsScope, roster)
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; auction recipient scope cannot be established." };
       const holdItemIds = new Set(config.holdItemIds ?? []);
+      const gatheringProfessions = new Set(["herbalism", "mining", "skinning"]);
+      const incompleteUseEvidence = scopedRoster.flatMap((candidate) => {
+        const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
+        if (professionResult.status !== "FOUND" || !professionResult.value.data || professionResult.value.provenance.state !== "OBSERVED") {
+          return [{ character: candidate.name, profession: "professions" }];
+        }
+        const crafting = professionResult.value.data.entries.filter((entry) => !gatheringProfessions.has(entry.name.trim().toLowerCase()));
+        if (!crafting.length) return [];
+        const knowledge = professionResult.value.data.recipeKnowledge as any;
+        const groups = knowledge?.data?.professions ?? [];
+        return crafting.flatMap((profession) => {
+          const group = groups.find((row: any) => String(row.professionName ?? row.name ?? "").toLowerCase() === profession.name.toLowerCase());
+          const complete = group && knowledge?.completeness === "complete" && knowledge?.status?.state === "OBSERVED" && knowledge?.evidence?.state === "OBSERVED";
+          return complete ? [] : [{ character: candidate.name, profession: profession.name }];
+        });
+      });
+      const incompleteUseReason = incompleteUseEvidence.length
+        ? `Profession use UNKNOWN because recipe evidence is incomplete for ${incompleteUseEvidence.map((row) => `${row.character} (${row.profession})`).join(", ")}.`
+        : undefined;
       const mainCharacter = settingsScope
         ? resolveMailSettingsCharacter(settings?.mainCharacterIdentityKey, settingsScope, roster)
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; main-character scope cannot be established." };
       const items = bags.items.map((item) => {
         const itemId = itemIdFromItemRef(item.itemRef);
-        if (itemId !== undefined && holdItemIds.has(itemId)) return { ...(item.name !== undefined ? { name: item.name } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}), binding: item.bound === "no" ? "OBSERVED_UNBOUND" : item.bound === "yes" ? "OBSERVED_BOUND" : "UNKNOWN", vendorEachCopper: item.vendorEachCopper, auctionHouseValue: "UNKNOWN" as const, action: "KEEP", reason: "on hold list" };
+        const bindingState = normalizeClassicEraBinding(item.bound);
+        if (itemId !== undefined && holdItemIds.has(itemId)) return { ...(item.name !== undefined ? { name: item.name } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}), binding: bindingState === "UNBOUND" ? "OBSERVED_UNBOUND" : bindingState === "BOUND" ? "OBSERVED_BOUND" : "UNKNOWN", vendorEachCopper: item.vendorEachCopper, auctionHouseValue: "UNKNOWN" as const, action: "KEEP", reason: "on hold list" };
         const uses: Array<{ character: StoredCharacterSummary; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }> = [];
         if (itemId !== undefined) for (const candidate of scopedRoster) {
           const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
@@ -1798,19 +1829,13 @@ export class DashboardReadModel {
         const mainKey = mainCharacter.state === "ELIGIBLE" ? mainCharacter.character.identityKey : undefined;
         const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
         const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
-        const incompleteUseEvidence = scopedRoster.some((candidate) => {
-          const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
-          if (professionResult.status !== "FOUND" || !professionResult.value.data || professionResult.value.provenance.state !== "OBSERVED") return true;
-          const knowledge = professionResult.value.data.recipeKnowledge as any;
-          return knowledge?.completeness !== "complete" || knowledge?.status?.state !== "OBSERVED" || knowledge?.evidence?.state !== "OBSERVED";
-        });
-        const action = item.bound === "yes" ? "KEEP"
-          : item.bound !== "no" ? "UNDETERMINED"
+        const action = bindingState === "BOUND" ? "KEEP"
+          : bindingState === "UNKNOWN" ? "UNDETERMINED"
           : !usable ? "UNDETERMINED"
           : ownUse ? "KEEP_FOR_HOLDER_PROFESSION"
-          : craftChoice.state === "SELECTED" && usable && item.bound === "no" ? "MAIL_TO_CRAFTER"
+          : craftChoice.state === "SELECTED" && usable && bindingState === "UNBOUND" ? "MAIL_TO_CRAFTER"
           : craftChoice.state === "UNDETERMINED" && observedUses.length ? "UNDETERMINED"
-          : incompleteUseEvidence ? "KEEP"
+          : incompleteUseEvidence.length ? "KEEP"
           : auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== character.identityKey ? "MAIL_TO_AUCTION_CHARACTER"
           : auctionCharacter.state === "ELIGIBLE" ? "SELL_AH"
           : "UNDETERMINED";
@@ -1818,17 +1843,18 @@ export class DashboardReadModel {
           : ownUse ? "Observed recipe evidence shows this item is used by the holder's profession; keep it on the holder."
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
-          : action === "KEEP" && incompleteUseEvidence ? "Profession use UNKNOWN because roster recipe evidence is incomplete."
+          : action === "KEEP" && incompleteUseEvidence.length ? incompleteUseReason
           : action === "MAIL_TO_AUCTION_CHARACTER" ? "No observed account profession uses this; AH value UNKNOWN."
           : action === "SELL_AH" ? "Holder is the configured auction character; AH value UNKNOWN."
           : action === "UNDETERMINED" && auctionCharacter.state !== "ELIGIBLE" ? auctionCharacter.reason
-          : action === "KEEP" && item.bound === "yes" ? "Item is OBSERVED bound and cannot be routed to another character."
+          : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
+          : action === "KEEP" ? "Item is kept because the available evidence does not support a safe routing action."
           : "Item use, binding, vendor value, or eligible routing evidence is UNKNOWN.";
         return {
           ...(item.name !== undefined ? { name: item.name } : {}),
           ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}),
           ...(item.qty !== undefined ? { quantity: item.qty } : {}),
-          binding: item.bound === "no" ? "OBSERVED_UNBOUND" : item.bound === "yes" ? "OBSERVED_BOUND" : "UNKNOWN",
+          binding: bindingState === "UNBOUND" ? "OBSERVED_UNBOUND" : bindingState === "BOUND" ? "OBSERVED_BOUND" : "UNKNOWN",
           vendorEachCopper: item.vendorEachCopper,
           auctionHouseValue: "UNKNOWN" as const,
           action, ...(recipient ? { recipient } : {}),
