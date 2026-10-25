@@ -411,8 +411,8 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           generatedAt: typeof generatedAt === "number" ? generatedAt : 0,
           ...(foreverRace ? { race: foreverRace } : {}),
           ...(typeof luaGet(luaGet(record, "identity"), "guid") === "string" ? { sourceCharacterGuid: luaGet(luaGet(record, "identity"), "guid") as string } : {}),
-          ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && typeof luaGet(professionRecipes, "changedAt") === "number"
-            ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") } }
+          ...(isLuaTable(professionRecipes) && isLuaTable(luaGet(professionRecipes, "data")) && (typeof luaGet(professionRecipes, "changedAt") === "number" || typeof luaGet(professionRecipes, "observedAt") === "number")
+            ? { professionRecipes: { ...(luaToPlain(professionRecipes) as Record<string, unknown>), observedAt: luaGet(professionRecipes, "changedAt") ?? luaGet(professionRecipes, "observedAt") } }
             : {}),
           ...(isLuaTable(professionRecipes) && typeof luaGet(professionRecipes, "lastAttemptError") === "string" && typeof luaGet(professionRecipes, "lastAttemptAt") === "number"
             ? { recipeCaptureAttempt: { observedAt: luaGet(professionRecipes, "lastAttemptAt"), data: { error: luaGet(professionRecipes, "lastAttemptError") } } }

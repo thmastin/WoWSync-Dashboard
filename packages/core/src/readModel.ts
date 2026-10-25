@@ -1813,7 +1813,7 @@ export class DashboardReadModel {
             if (evidence !== "OBSERVED" && evidence !== "LAST_SEEN") continue;
             const usesItem = (recipe.reagentSlots ?? []).filter((slot: any) => slot.required !== false)
               .flatMap((slot: any) => slot.alternatives ?? slot.reagents ?? [])
-              .some((reagent: any) => reagent.itemID === itemId);
+              .some((reagent: any) => reagent.itemID === itemId) || (recipe.reagents ?? []).some((reagent: any) => reagent.itemID === itemId);
             if (usesItem) uses.push({ character: candidate, profession: String(group.professionName ?? group.name ?? "UNKNOWN profession"), evidence });
           }
         }
@@ -1843,11 +1843,11 @@ export class DashboardReadModel {
           : ownUse ? "Observed recipe evidence shows this item is used by the holder's profession; keep it on the holder."
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
+          : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
           : action === "KEEP" && incompleteUseEvidence.length ? incompleteUseReason
           : action === "MAIL_TO_AUCTION_CHARACTER" ? "No observed account profession uses this; AH value UNKNOWN."
           : action === "SELL_AH" ? "Holder is the configured auction character; AH value UNKNOWN."
           : action === "UNDETERMINED" && auctionCharacter.state !== "ELIGIBLE" ? auctionCharacter.reason
-          : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
           : action === "KEEP" ? "Item is kept because the available evidence does not support a safe routing action."
           : "Item use, binding, vendor value, or eligible routing evidence is UNKNOWN.";
         return {

@@ -31,7 +31,7 @@ export interface RecipeEvidenceResolution {
   sourceGeneratedAt?: number;
   observedAt?: number;
   clientProfile?: string;
-  completeness: "partial" | "unknown";
+  completeness: "complete" | "partial" | "unknown";
   /** Recipe section with row evidence relabelled LAST_SEEN when carried forward. */
   section?: CapturedCharacterDomain;
   excludedScopes: ExcludedRecipeScope[];
@@ -136,6 +136,7 @@ function materialize(version: VersionOrUnknown, selected: StoredSnapshot, source
   // An in-snapshot section keeps its own status (Retail import merges may
   // already have marked it LAST_SEEN); only carried sections are relabelled.
   const state: RecipeEvidenceState = carried || section.status?.state === "LAST_SEEN" ? "LAST_SEEN" : "OBSERVED";
+  const complete = !carried && section.completeness === "complete";
   const outSection: CapturedCharacterDomain = carried
     ? { ...section, status: { ...section.status, state, ...(observedAt !== undefined ? { observedAt } : {}), reason: `Carried forward from snapshot ${source.id}; not a current observation.` } as CapturedCharacterDomain["status"], completeness: "partial", data: { ...data, professions: rewritten } }
     : excludedScopes.length ? { ...section, data: { ...data, professions: rewritten } } : section;
@@ -146,13 +147,13 @@ function materialize(version: VersionOrUnknown, selected: StoredSnapshot, source
     ...(source.generatedAt !== undefined ? { sourceGeneratedAt: source.generatedAt } : {}),
     ...(observedAt !== undefined ? { observedAt } : {}),
     clientProfile: profileOf(version, source),
-    completeness: "partial",
+    completeness: carried ? "partial" : complete ? "complete" : "partial",
     section: outSection,
     excludedScopes,
     snapshotsWithoutRecipeSection: skipped,
     reason: carried
       ? `Snapshot ${selected.id} has no structured recipe section; using the freshest compatible observation from snapshot ${source.id}. Learned rows are LAST_SEEN, not current, and candidate coverage remains partial.`
-      : `Recipe rows were observed in snapshot ${selected.id}. Candidate coverage is partial; absence does not mean unlearned.`,
+      : complete ? `A complete recipe capture was observed in snapshot ${selected.id}. Missing rows are not interpreted as unlearned.` : `Recipe rows were observed in snapshot ${selected.id}. Candidate coverage is partial; absence does not mean unlearned.`,
   };
 }
 

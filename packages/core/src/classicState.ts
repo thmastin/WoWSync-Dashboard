@@ -117,6 +117,35 @@ function normalizeRecipes(raw: unknown, version: "classic-era" | "tbc-anniversar
   const parsed = envelope(raw);
   if (!parsed) return undefined;
   const { data } = parsed;
+  // Current GearExport Classic sidecar (capture/revision envelope): clientFamily
+  // is the exact client version (for example 1.15.9), and recipes are the
+  // visible profession window rows with reagent names/counts. Do not infer
+  // learned state from visibility; complete here means the captured section
+  // itself declared complete, not that absent recipes are unlearned.
+  const clientMajor = typeof data.clientFamily === "string" ? /^(\d+)\./.exec(data.clientFamily)?.[1] : undefined;
+  const currentVersionMatches = version === "classic-era" ? clientMajor === "1" : clientMajor === "2";
+  if (currentVersionMatches && Array.isArray(data.professions) && data.professions.length > 0) {
+    const professions: Obj[] = [];
+    for (const profession of data.professions) {
+      if (!object(profession) || !text(profession.professionName ?? profession.name, 128) || !Array.isArray(profession.recipes) || profession.recipes.length === 0) return undefined;
+      const recipes: Obj[] = [];
+      for (const recipe of profession.recipes) {
+        if (!object(recipe) || !text(recipe.name, 256) || recipe.itemID !== undefined && !positiveID(recipe.itemID) || !Array.isArray(recipe.reagents)) return undefined;
+        const reagents: Obj[] = [];
+        for (const reagent of recipe.reagents) {
+          if (!object(reagent) || !text(reagent.name, 256) || !positiveID(reagent.count) || reagent.itemID !== undefined && !positiveID(reagent.itemID)) return undefined;
+          reagents.push({ name: reagent.name, required: reagent.count, ...(reagent.itemID ? { itemID: reagent.itemID } : {}) });
+        }
+        recipes.push({ name: recipe.name, ...(recipe.itemID ? { outputItemID: recipe.itemID } : {}), evidence: "OBSERVED", learnedState: "UNKNOWN", reagents });
+      }
+      professions.push({ name: profession.professionName ?? profession.name, professionName: profession.professionName ?? profession.name, professionKey: profession.professionName ?? profession.name, evidence: "OBSERVED", recipes });
+    }
+    const completeness = parsed.raw.completeness === "complete" ? "complete" : "partial";
+    return {
+      status: { state: "OBSERVED", completeness, observedAt: parsed.observedAt }, formatVersion: 1, observedAt: parsed.observedAt,
+      completeness, data: { ...data, ownerScope: "CHARACTER", professions },
+    };
+  }
   if (!profileMatches(data, version) || !Array.isArray(data.professions) || data.professions.length === 0) return undefined;
   for (const profession of data.professions) {
     if (!object(profession) || !text(profession.name, 128) || !text(profession.professionKey, 512) || !Array.isArray(profession.recipes) || profession.recipes.length === 0) return undefined;

@@ -23,7 +23,7 @@ export interface ForeverStructuredObservation {
   recipeCaptureAttempt?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
   itemEvidence?: Record<string, unknown>;
-  professionRecipes?: { status: { state: "OBSERVED"; completeness: "partial"; observedAt: number }; completeness: "partial"; observedAt: number; data: Record<string, unknown> };
+  professionRecipes?: { status: { state: "OBSERVED"; completeness: "complete" | "partial"; observedAt: number }; completeness: "complete" | "partial"; observedAt: number; data: Record<string, unknown> };
 }
 
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
@@ -52,9 +52,39 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
   };
   const recipeSection = section("professionRecipes");
   const recipeData = object(recipeSection?.data);
+  const simpleProfessionRows = Array.isArray(recipeData?.professions) ? recipeData.professions : undefined;
+  const expectedClientVersion = v.clientProfile.split(":")[1];
+  const simpleRecipes = recipeSection !== undefined && recipeData?.formatVersion === 1
+    && recipeData.clientFamily === expectedClientVersion
+    && simpleProfessionRows?.length
+    && simpleProfessionRows.every((rawProfession) => {
+      const profession = object(rawProfession);
+      if (!profession || typeof (profession.professionName ?? profession.name) !== "string" || !Array.isArray(profession.recipes) || profession.recipes.length === 0) return false;
+      return profession.recipes.every((rawRecipe) => {
+        const recipe = object(rawRecipe);
+        return !!recipe && typeof recipe.name === "string" && (recipe.itemID === undefined || Number.isSafeInteger(recipe.itemID) && (recipe.itemID as number) > 0)
+          && Array.isArray(recipe.reagents) && recipe.reagents.every((rawReagent) => {
+            const reagent = object(rawReagent);
+            return !!reagent && typeof reagent.name === "string" && Number.isSafeInteger(reagent.count) && (reagent.count as number) > 0
+              && (reagent.itemID === undefined || Number.isSafeInteger(reagent.itemID) && (reagent.itemID as number) > 0);
+          });
+      });
+    });
+  if (simpleRecipes) {
+    const professions = simpleProfessionRows!.map((rawProfession) => {
+      const profession = rawProfession as Record<string, unknown>;
+      const professionName = (profession.professionName ?? profession.name) as string;
+      return { ...profession, name: professionName, professionName, professionKey: professionName, evidence: "OBSERVED", recipes: (profession.recipes as unknown[]).map((rawRecipe) => {
+        const recipe = rawRecipe as Record<string, unknown>;
+        return { ...recipe, ...(recipe.itemID ? { outputItemID: recipe.itemID } : {}), evidence: "OBSERVED", learnedState: "UNKNOWN", reagents: (recipe.reagents as Array<Record<string, unknown>>).map((reagent) => ({ ...reagent, required: reagent.count })) };
+      }) };
+    });
+    recipeData!.professions = professions;
+    recipeData!.ownerScope = "CHARACTER";
+  }
   const recipeCoverage = object(recipeData?.coverage);
   const recipeProfessions = Array.isArray(recipeData?.professions) ? recipeData.professions : undefined;
-  const validRecipes = recipeSection !== undefined
+  const validRecipes = simpleRecipes || recipeSection !== undefined
     && recipeData?.formatVersion === 1
     && recipeData.ownerScope === "CHARACTER"
     && recipeCoverage?.state === "PARTIAL"
@@ -93,8 +123,8 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("recipeCaptureAttempt") && typeof object(section("recipeCaptureAttempt")!.data)?.error === "string" ? { recipeCaptureAttempt: section("recipeCaptureAttempt") } : {}),
     ...(section("itemEvidence") ? { itemEvidence: section("itemEvidence") } : {}),
     ...(validRecipes ? { professionRecipes: {
-      status: { state: "OBSERVED" as const, completeness: "partial" as const, observedAt: recipeSection!.observedAt as number },
-      completeness: "partial" as const,
+      status: { state: "OBSERVED" as const, completeness: simpleRecipes && recipeSection!.completeness === "complete" ? "complete" as const : "partial" as const, observedAt: recipeSection!.observedAt as number },
+      completeness: simpleRecipes && recipeSection!.completeness === "complete" ? "complete" as const : "partial" as const,
       observedAt: recipeSection!.observedAt as number,
       data: recipeData!,
     } } : {}),
