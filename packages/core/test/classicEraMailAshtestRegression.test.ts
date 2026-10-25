@@ -59,3 +59,13 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     for (const name of ["Linen Cloth", "Spider Ichor", "Broken Boar Tusk"]) assert.equal(rows.find((row) => row.name === name)?.action, "MAIL_TO_AUCTION_CHARACTER");
   } finally { store.close(); }
 });
+
+test("v2 item metadata takes precedence and keeps UNKNOWN fields unresolved", () => {
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", quality: 0, vendorEachCopper: 60, itemMetadataState: "OBSERVED" }).action, "VENDOR");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 0, requiredLevel: 0, holderLevel: 12 }).reason, "consumable");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 0, requiredLevel: 25, holderLevel: 12 }).action, "ROUTE");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", requiredProfession: "Cooking", requiredSkill: 25, recipeAlreadyKnown: false }).action, "LEARN_RECIPE");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, requiredProfession: "Cooking", requiredSkill: 25, recipeAlreadyKnown: true }).action, "ROUTE");
+  assert.equal(classifyMailItem({ version: "classic-era", itemId: 118, bound: "UNBOUND", itemMetadataState: "UNKNOWN" }).reason, "consumable");
+  assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, equipLoc: "INVTYPE_NON_EQUIP_IGNORE" }).action, "ROUTE");
+});

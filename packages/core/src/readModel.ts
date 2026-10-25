@@ -1687,7 +1687,7 @@ export class DashboardReadModel {
           const knowledge = holder?.professions.status === "FOUND" ? holder.professions.value.data?.recipeKnowledge as any : undefined;
           const knownRecipe = (knowledge?.data?.professions ?? []).flatMap((group: any) => group.recipes ?? []).find((recipe: any) => norm(recipe.name ?? "") === norm(requirement.recipeName));
           return { professionState: profession ? "KNOWN" as const : "UNKNOWN" as const, hasProfession: !!profession, profession: requirement.profession, recipeName: requirement.recipeName, requiredSkill: requirement.requiredSkill, ...(typeof profession?.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: knownRecipe?.learnedState === "OBSERVED_TRUE" ? "LEARNED" as const : knownRecipe?.learnedState === "OBSERVED_FALSE" ? "NOT_LEARNED" as const : "UNKNOWN" as const }; })() : undefined,
-        reagentForUnresolvedRecipe: unresolvedOwnRecipeUse, itemClass: item.itemType === "Trade Goods" ? 7 : undefined, conjured: itemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(itemId), consumable: item.itemType === "Consumable" || itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId) });
+        reagentForUnresolvedRecipe: unresolvedOwnRecipeUse, itemClass: item.itemMetadataState === "OBSERVED" ? item.classID : item.itemType === "Trade Goods" ? 7 : undefined, subClassID: item.itemMetadataState === "OBSERVED" ? item.subClassID : undefined, equipLoc: item.itemMetadataState === "OBSERVED" ? item.equipLoc : undefined, itemMetadataState: item.itemMetadataState === "OBSERVED" || item.itemMetadataState === "UNKNOWN" ? item.itemMetadataState : "UNKNOWN", quality: item.itemMetadataState === "OBSERVED" ? item.quality : undefined, vendorEachCopper: item.vendorCopper, requiredLevel: item.itemMetadataState === "OBSERVED" ? item.requiredLevel : undefined, holderLevel: this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.level, requiredProfession: item.itemMetadataState === "OBSERVED" ? item.requiredProfession : undefined, requiredSkill: item.itemMetadataState === "OBSERVED" ? item.requiredSkill : undefined, recipeAlreadyKnown: item.itemMetadataState === "OBSERVED" ? item.recipeAlreadyKnown : undefined, conjured: itemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(itemId), consumable: item.itemMetadataState !== "OBSERVED" && (item.itemType === "Consumable" || itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId)) });
       if (sharedDecision.action !== "ROUTE") {
         keep.push({ item, disposition: sharedDecision.action === "UNDETERMINED" ? "UNDETERMINED" : sharedDecision.action, reason: ownRecipeUse ? `used by your own ${ownRecipeUse.profession}${ownRecipeUse.evidence === "LAST_SEEN" ? " (LAST_SEEN recipe evidence)" : ""}.` : sharedDecision.reason });
         return;
@@ -1836,6 +1836,7 @@ export class DashboardReadModel {
       const identity = classicEraGuidContinuity(profile.guid, priorGuids);
       const bags = snapshot.parsed.bags;
       const classicState = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState : undefined;
+      const structuredBagRows = (() => { const containers = (classicState?.bags?.data as any)?.containers; const list = Array.isArray(containers) ? containers : containers && typeof containers === "object" ? Object.values(containers) : []; return list.flatMap((container: any) => { const slots = container?.slots; return Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : []; }); })();
       const questDomain = classicState?.quests;
       const questData = questDomain?.data as any;
       const questObservedAt = questDomain?.observedAt;
@@ -1907,6 +1908,7 @@ export class DashboardReadModel {
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; main-character scope cannot be established." };
       const items = bags.items.map((item) => {
         const itemId = itemIdFromItemRef(item.itemRef);
+        const rowMeta: any = structuredBagRows.find((row: any) => row?.itemID === itemId || row?.itemString === item.itemRef);
         const bindingState = normalizeMailBinding(item.bound);
         if (itemId !== undefined && holdItemIds.has(itemId)) {
           const held = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: true, bound: bindingState });
@@ -1937,10 +1939,10 @@ export class DashboardReadModel {
         const ownUse = uses.find((use) => use.character.identityKey === character.identityKey);
         const conjured = itemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(itemId);
         const metadata = itemId === undefined ? undefined : this.store.getItemMetadata("classic-era", [itemId])[0];
-        const metadataClass = metadata?.classId.state === "KNOWN" ? metadata.classId.value : undefined;
-        const metadataSubclass = metadata?.subclassId.state === "KNOWN" ? metadata.subclassId.value : undefined;
+        const metadataClass = rowMeta ? rowMeta.itemMetadataState === "OBSERVED" ? rowMeta.classID : undefined : metadata?.classId.state === "KNOWN" ? metadata.classId.value : undefined;
+        const metadataSubclass = rowMeta ? rowMeta.itemMetadataState === "OBSERVED" ? rowMeta.subClassID : undefined : metadata?.subclassId.state === "KNOWN" ? metadata.subclassId.value : undefined;
         const metadataConsumable = metadataClass === 0 && [0, 1, 2, 3, 4, 5, 7].includes(metadataSubclass ?? -1);
-        const consumable = metadataConsumable || (itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId));
+        const consumable = rowMeta?.itemMetadataState === "OBSERVED" ? metadataConsumable : metadataConsumable || (itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId));
         const objectiveQuest = activeQuests.find((quest: any) => (quest.objectives ?? []).some((objective: any) => {
           const text = String(objective.text ?? "");
           const target = text.replace(/\s*:\s*\d+\s*\/\s*\d+\s*$/, "").trim();
@@ -1949,8 +1951,9 @@ export class DashboardReadModel {
         const questReason = objectiveQuest ? `needed for active quest ${objectiveQuest.title}` : undefined;
         const recipeItemName = item.name?.replace(/^Recipe:\s*/i, "");
         const isRecipeItem = !!item.name && /^Recipe:\s*/i.test(item.name);
-        const staticRecipeRequirement = isRecipeItem ? recipeLearningRequirement("classic-era", itemId, recipeItemName) : undefined;
-        let recipePolicy: Parameters<typeof classifyMailItem>[0]["recipeItem"] = isRecipeItem ? { professionState: "UNKNOWN", hasProfession: false, learnedState: "UNKNOWN" } : undefined;
+        const tooltipRecipeEvidence = rowMeta?.itemMetadataState === "OBSERVED" && (typeof rowMeta.requiredProfession === "string" || typeof rowMeta.requiredSkill === "number" || typeof rowMeta.recipeAlreadyKnown === "boolean");
+        const staticRecipeRequirement = isRecipeItem && !tooltipRecipeEvidence ? recipeLearningRequirement("classic-era", itemId, recipeItemName) : undefined;
+        let recipePolicy: Parameters<typeof classifyMailItem>[0]["recipeItem"] = isRecipeItem && !tooltipRecipeEvidence ? { professionState: "UNKNOWN", hasProfession: false, learnedState: "UNKNOWN" } : undefined;
         const holderProfessions = this.getCharacterProfessions({ version: "classic-era", name: character.name, realm: character.realm });
         let learnRecipe: "LEARN_RECIPE" | "UNDETERMINED" | undefined;
         let learnReason: string | undefined;
@@ -2002,7 +2005,7 @@ export class DashboardReadModel {
           recipeItem: recipePolicy,
           reagentForRecipeToLearn: recipeReagentsToProtect.some((reagent) => reagent.state === "LEARNABLE" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
           reagentForUnresolvedRecipe: potentialUses.length > 0 || recipeReagentsToProtect.some((reagent) => reagent.state === "UNKNOWN" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
-          objectiveQuest: objectiveQuest?.title, itemClass: metadataClass, consumable, conjured });
+          objectiveQuest: objectiveQuest?.title, itemClass: metadataClass, consumable, conjured, quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
         const action = bindingState === "BOUND" ? "KEEP"
           : bindingState === "UNKNOWN" ? "UNDETERMINED"
           : !usable ? "UNDETERMINED"
@@ -2464,8 +2467,22 @@ export class DashboardReadModel {
     const professions = this.getCharacterProfessions(query);
     const professionEntries = professions.status === "FOUND" && professions.value.provenance.state === "OBSERVED" ? professions.value.data?.entries ?? [] : [];
     const recipeRows = professions.status === "FOUND" ? (professions.value.data?.recipeKnowledge as any)?.data?.professions ?? [] : [];
+    const latest = storage.value.provenance.identityKey ? this.snapshots(storage.value.provenance.identityKey)[0] : undefined;
+    const structuredBag = (query.version === "forever" ? latest?.parsed.foreverGearObservation?.bags : latest?.parsed.characterState?.bags) as any;
+    const structuredRows = (section: any) => {
+      const containers = section?.data?.containers;
+      if (!containers) return [] as any[];
+      const list = Array.isArray(containers) ? containers : Object.values(containers);
+      return list.flatMap((container: any) => {
+        const slots = container?.slots;
+        return (Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : []).filter((row: any) => row && typeof row === "object");
+      });
+    };
+    const metadataRows = structuredRows(structuredBag);
     const items = (source.items ?? []).map((item) => {
       const itemID = itemIdFromItemRef(item.itemRef);
+      const structured = metadataRows.find((row: any) => row.itemID === itemID || row.itemString && row.itemString === item.itemRef);
+      const itemMetadataState = structured?.itemMetadataState === "OBSERVED" ? "OBSERVED" as const : "UNKNOWN" as const;
       const recipeItem = /^Recipe:\s*/i.test(item.name ?? "");
       const requirement = recipeItem ? recipeLearningRequirement(query.version, itemID, item.name) : undefined;
       const bound = normalizeMailBinding(item.bound);
@@ -2490,7 +2507,15 @@ export class DashboardReadModel {
       }
       return {
         ...(item.name !== undefined ? { name: item.name } : {}), ...(itemID !== undefined ? { itemID } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}),
-        quality: { state: "UNKNOWN" as const, reason: "Bag-row quality is not captured by the current WOWSYNC bag contract." },
+        quality: itemMetadataState === "OBSERVED" && typeof structured.quality === "number" ? { state: "OBSERVED" as const, value: structured.quality } : { state: "UNKNOWN" as const, reason: "Bag-row quality metadata is UNKNOWN or unavailable." },
+        classID: itemMetadataState === "OBSERVED" && typeof structured.classID === "number" ? { state: "OBSERVED" as const, value: structured.classID } : { state: "UNKNOWN" as const, reason: "Bag-row class metadata is UNKNOWN or unavailable." },
+        subClassID: itemMetadataState === "OBSERVED" && typeof structured.subClassID === "number" ? { state: "OBSERVED" as const, value: structured.subClassID } : { state: "UNKNOWN" as const, reason: "Bag-row subclass metadata is UNKNOWN or unavailable." },
+        equipLoc: itemMetadataState === "OBSERVED" && typeof structured.equipLoc === "string" ? { state: "OBSERVED" as const, value: structured.equipLoc } : { state: "UNKNOWN" as const, reason: "Bag-row equip location is UNKNOWN or unavailable." },
+        requiredLevel: itemMetadataState === "OBSERVED" && typeof structured.requiredLevel === "number" ? { state: "OBSERVED" as const, value: structured.requiredLevel } : { state: "UNKNOWN" as const, reason: "Bag-row required level is UNKNOWN or unavailable." },
+        itemMetadataState,
+        ...(typeof structured?.requiredProfession === "string" ? { requiredProfession: { state: "OBSERVED" as const, value: structured.requiredProfession } } : {}),
+        ...(typeof structured?.requiredSkill === "number" ? { requiredSkill: { state: "OBSERVED" as const, value: structured.requiredSkill } } : {}),
+        ...(typeof structured?.recipeAlreadyKnown === "boolean" ? { recipeAlreadyKnown: { state: "OBSERVED" as const, value: structured.recipeAlreadyKnown } } : {}),
         bound: bound === "BOUND" ? { state: "OBSERVED" as const, value: true } : bound === "UNBOUND" ? { state: "OBSERVED" as const, value: false } : { state: "UNKNOWN" as const, reason: "Binding is not observed on this bag row." },
         vendorValue: typeof item.vendorEachCopper === "number" ? { state: "OBSERVED" as const, copperEach: item.vendorEachCopper } : { state: "UNKNOWN" as const, reason: "Per-item vendor value is not captured." },
         ...(recipeLearning ? { recipeLearning } : {}),
