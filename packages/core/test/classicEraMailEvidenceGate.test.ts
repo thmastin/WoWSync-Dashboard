@@ -40,13 +40,13 @@ function setup(options: { holderProfessions?: Array<{ name: string; skill: numbe
   return { store, read, holder, holdItemIds: options.holdItemIds };
 }
 
-test("Era mail routes unused unbound materials past observed-empty profession alts", () => {
+test("Era mail keeps unidentified items when bag item class is UNKNOWN", () => {
   const ctx = setup({ holderProfessions: [{ name: "Blacksmithing", skill: 1, maxSkill: 75 }] });
   try {
     const result = ctx.read.getClassicEraMailPlan({ version: "classic-era", name: "Holder", realm: REALM });
     const item = result.value.data.items[0];
-    assert.equal(item.action, "MAIL_TO_AUCTION_CHARACTER", item.reason);
-    assert.equal(item.recipient.name, "Auction");
+    assert.equal(item.action, "KEEP", item.reason);
+    assert.match(item.reason, /item class UNKNOWN/);
   } finally { ctx.store.close(); }
 });
 
@@ -71,15 +71,15 @@ test("Era mail keeps bound items, leaves unknown binding undetermined, and holds
   }
 });
 
-test("the configured auction character receives SELL_AH for an unused unbound material", () => {
+test("the configured auction character does not sell an item with UNKNOWN class", () => {
   const ctx = setup({ auctionHolder: true });
   try {
     const result = ctx.read.getClassicEraMailPlan({ version: "classic-era", name: "Holder", realm: REALM });
-    assert.equal(result.value.data.items[0].action, "SELL_AH", result.value.data.items[0].reason);
+    assert.equal(result.value.data.items[0].action, "KEEP", result.value.data.items[0].reason);
   } finally { ctx.store.close(); }
 });
 
-test("real Classic Era recipe sidecar is complete and routes unused Linen Cloth to the auction character", () => {
+test("real Classic Era recipe sidecar is complete and UNKNOWN item class blocks Linen Cloth routing", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const holderText = era("Holder", { professions: [{ name: "Cooking", skill: 1, maxSkill: 75 }], itemId: 2589 });
@@ -105,8 +105,8 @@ test("real Classic Era recipe sidecar is complete and routes unused Linen Cloth 
     assert.equal(plan.status, "FOUND");
     if (plan.status === "FOUND") {
       const cloth = (plan.value as any).data.items.find((item: any) => item.name === "Test material");
-      assert.equal(cloth?.action, "MAIL_TO_AUCTION_CHARACTER", cloth?.reason);
-      assert.equal(cloth?.recipient?.name, "Auction");
+      assert.equal(cloth?.action, "KEEP", cloth?.reason);
+      assert.match(cloth?.reason ?? "", /item class UNKNOWN/);
     }
   } finally { store.close(); }
 });
