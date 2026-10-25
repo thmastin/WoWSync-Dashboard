@@ -9,7 +9,7 @@ export interface MailRoutingRecipient {
   /** Recipe/reagent uses from current captured rows only. */
   observedReagentIds: number[];
   /** Captured recipe/reagent uses, retaining their own profession and freshness. */
-  reagentProfessions?: Array<{ itemId: number; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }>;
+  reagentProfessions?: Array<{ itemId?: number; name?: string; profession: string; evidence: "OBSERVED" | "LAST_SEEN"; learnedState?: "OBSERVED_TRUE" | "OBSERVED_FALSE" | "UNKNOWN" }>;
   /** True only when this character's profession recipe coverage is complete and current. */
   recipeKnowledgeComplete?: boolean;
   /** Distinguishes an OBSERVED empty profession list from unobserved profession skills. */
