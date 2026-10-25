@@ -31,7 +31,7 @@ export function classifyMailItem(input: {
   ownRecipeUseNames?: readonly string[];
   reagentForRecipeToLearn?: boolean;
   reagentForUnresolvedRecipe?: boolean;
-  recipeItem?: { professionState: "KNOWN" | "UNKNOWN"; hasProfession: boolean; requiredSkill?: number; holderSkill?: number; learnedState?: "LEARNED" | "NOT_LEARNED" | "UNKNOWN"; reagentIds?: readonly number[] };
+  recipeItem?: { professionState: "KNOWN" | "UNKNOWN"; hasProfession: boolean; profession?: string; recipeName?: string; requiredSkill?: number; holderSkill?: number; learnedState?: "LEARNED" | "NOT_LEARNED" | "UNKNOWN"; reagentIds?: readonly number[] };
   objectiveQuest?: string;
   quality?: number;
   vendorEachCopper?: number;
@@ -50,12 +50,13 @@ export function classifyMailItem(input: {
   if (input.reagentForUnresolvedRecipe) return { action: "KEEP", reason: "possible reagent for recipe; learned state is UNKNOWN" };
   if (input.recipeItem) {
     const recipe = input.recipeItem;
-    if (recipe.professionState === "UNKNOWN" || !recipe.hasProfession || recipe.learnedState === "UNKNOWN" || recipe.learnedState === undefined || recipe.requiredSkill === undefined || recipe.holderSkill === undefined) {
+    if (recipe.professionState === "UNKNOWN" || !recipe.hasProfession || recipe.requiredSkill === undefined || recipe.holderSkill === undefined) {
       return { action: "UNDETERMINED", reason: "recipe profession, required skill, or known state is UNKNOWN" };
     }
+    if (recipe.holderSkill < recipe.requiredSkill) return { action: "KEEP", reason: `learn at ${recipe.profession ?? "profession"} ${recipe.requiredSkill} (now ${recipe.holderSkill})` };
+    if (recipe.learnedState === "UNKNOWN" || recipe.learnedState === undefined) return { action: "UNDETERMINED", reason: "recipe learned state is UNKNOWN" };
     if (recipe.learnedState === "LEARNED") return { action: "UNDETERMINED", reason: "recipe is already known (OBSERVED)" };
-    if (recipe.holderSkill < recipe.requiredSkill) return { action: "UNDETERMINED", reason: `required skill ${recipe.requiredSkill} exceeds observed skill ${recipe.holderSkill}` };
-    return { action: "LEARN_RECIPE", reason: `learn recipe at observed skill ${recipe.holderSkill}/${recipe.requiredSkill}` };
+    return { action: "LEARN_RECIPE", reason: `learn ${recipe.recipeName ?? "recipe"} at ${recipe.profession ?? "profession"} ${recipe.requiredSkill} (now ${recipe.holderSkill})` };
   }
   if (input.objectiveQuest) return { action: "KEEP", reason: `needed for active quest ${input.objectiveQuest}` };
   if (input.quality === 0) return input.vendorEachCopper === undefined

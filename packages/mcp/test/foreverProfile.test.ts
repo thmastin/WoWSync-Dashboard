@@ -13,8 +13,8 @@ import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 const root = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const entrypoint = path.join(root, "packages", "mcp", "src", "index.ts");
 const packageRoot = path.join(root, "packages", "mcp");
-const foreverNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_forever_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
-const classicEraNames = ["get_character_professions", "get_character_progression", "get_character_quests", "get_character_state", "get_character_trainer", "get_classic_era_mail_plan", "get_recipe_reagent_availability", "list_classic_era_characters"].sort();
+const foreverNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_bags", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_forever_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
+const classicEraNames = ["get_character_bags", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_state", "get_character_trainer", "get_classic_era_mail_plan", "get_recipe_reagent_availability", "list_classic_era_characters"].sort();
 
 test("MCP profile exposes exactly its documented tools and bounds crafter results", async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "wowsync-mcp-profile-"));
@@ -79,6 +79,11 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       const state = (await forever.client.callTool({ name: "get_character_state", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } })).structuredContent as { value: { data: { identity: { race: string; sex: string } } } };
       assert.equal(state.value.data.identity.race, "Gnome");
       assert.equal(state.value.data.identity.sex, "UNKNOWN");
+      const bags = await forever.client.callTool({ name: "get_character_bags", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } });
+      assert.equal(bags.isError, undefined);
+      const bagRows = (bags.structuredContent as { value?: { data?: { items?: Array<{ name?: string; itemID?: number; quantity?: number; quality?: { state: string }; provenance?: { version: string } }> } } }).value?.data?.items ?? [];
+      assert.ok(bagRows.length > 0, "Forever MCP exposes actual bag rows");
+      assert.ok(bagRows.every((row) => row.quality?.state === "UNKNOWN" && row.provenance?.version === "forever"));
       const summaryResult = await forever.client.callTool({ name: "get_character_professions", arguments: { version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" } });
       const summaryText = JSON.stringify(summaryResult.structuredContent);
       assert.ok(summaryText.length < 10_000, `Hallo profession summary should stay compact (${summaryText.length} chars)`);
@@ -110,6 +115,9 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       assert.equal(planData?.auctionHouse?.state, "UNKNOWN");
       assert.equal(planData?.items?.[0]?.name, "Era item");
       assert.equal(planData?.items?.[0]?.vendorEachCopper, 47);
+      const bags = await era.client.callTool({ name: "get_character_bags", arguments: { version: "classic-era", name: "EraOne", realm: "Nightslayer" } });
+      const bagRows = (bags.structuredContent as { value?: { data?: { items?: Array<{ name?: string; itemID?: number; quantity?: number; vendorValue?: { state: string }; provenance?: { version: string } }> } } }).value?.data?.items ?? [];
+      assert.deepEqual([bagRows[0]?.name, bagRows[0]?.itemID, bagRows[0]?.quantity, bagRows[0]?.vendorValue?.state, bagRows[0]?.provenance?.version], ["Era item", 529, 1, "OBSERVED", "classic-era"]);
     } finally { await era.client.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

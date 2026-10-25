@@ -41,15 +41,21 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
       assert.equal(row?.reason, "possible reagent for recipe; learned state is UNKNOWN");
     }
     for (const name of ["Tough Jerky", "Tough Hunk of Bread", "Refreshing Spring Water", "Minor Healing Potion", "Roasted Boar Meat", "Charred Wolf Meat", "Beer Basted Boar Ribs", "Deeprun Rat Kabob"]) assert.equal(rows.find((row) => row.name === name)?.reason, "consumable");
-    assert.equal(rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.action, "UNDETERMINED");
-    assert.match(rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.reason ?? "", /required skill, or known state is UNKNOWN/);
-    assert.equal(rows.find((row) => row.name === "Crag Boar Rib")?.reason, "possible reagent for recipe; learned state is UNKNOWN");
+    assert.deepEqual([rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.action, rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.reason], ["KEEP", "learn at Cooking 25 (now 8)"]);
+    assert.equal(rows.find((row) => row.name === "Crag Boar Rib")?.reason, "reagent for recipe to learn");
+    assert.equal(rows.find((row) => row.name === "Beer Basted Boar Ribs")?.reason, "consumable");
     assert.deepEqual([rows.find((row) => row.name === "Infantry Cloak")?.action, rows.find((row) => row.name === "Infantry Cloak")?.reason], ["KEEP", "possible upgrade, unverified"]);
     assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", recipeItem: { professionState: "KNOWN", hasProfession: true, requiredSkill: 8, holderSkill: 8, learnedState: "NOT_LEARNED" } }).action, "LEARN_RECIPE");
     assert.equal(classifyMailItem({ version: "classic-era", itemId: 2886, bound: "UNBOUND", reagentForRecipeToLearn: true }).reason, "reagent for recipe to learn");
     assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", objectiveQuest: "Test active quest" }).reason, "needed for active quest Test active quest");
     assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", quality: 0, vendorEachCopper: 5 }).action, "VENDOR");
     assert.equal(rows.find((row) => row.name === "Minor Healthstone")?.reason, "conjured, can't be mailed");
+    const bagRows = new DashboardReadModel(store, () => NOW + 1).getCharacterBags({ version: "classic-era", name: "Ashtest", realm: "Mankrik" });
+    assert.equal(bagRows.status, "FOUND");
+    if (bagRows.status === "FOUND") {
+      const recipeRow = (bagRows.value.data?.items as any[] | undefined)?.find((item) => item.itemID === 2889);
+      assert.deepEqual([recipeRow?.name, recipeRow?.quantity, recipeRow?.quality.state, recipeRow?.recipeLearning?.requiredSkill?.state, recipeRow?.recipeLearning?.requiredSkill?.value], ["Recipe: Beer Basted Boar Ribs", 1, "UNKNOWN", "KNOWN", 25]);
+    }
     for (const name of ["Linen Cloth", "Spider Ichor", "Broken Boar Tusk"]) assert.equal(rows.find((row) => row.name === name)?.action, "MAIL_TO_AUCTION_CHARACTER");
   } finally { store.close(); }
 });

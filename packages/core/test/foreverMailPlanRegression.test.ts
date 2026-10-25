@@ -7,6 +7,7 @@ import { FOREVER_MAIL_RULESET } from "../src/mailFlavorPolicy.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { classifyMailItem } from "../src/mailItemClassification.ts";
+import { recipeLearningRequirement } from "../src/recipeLearningRequirements.ts";
 
 const scenario = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/forever/mail-routing-dev-anonymized.json", import.meta.url)), "utf8")).snapshot541Scenario;
 const NOW = 1_792_724_851;
@@ -95,5 +96,11 @@ test("Hallo Forever fixture uses the shared version-scoped item safeguards", () 
     assert.equal(classifyMailItem({ version: "forever", itemId: 117, bound: "UNBOUND" }).action, "KEEP");
     assert.equal(classifyMailItem({ version: "forever", itemId: 5512, bound: "UNBOUND" }).reason, "conjured, can't be mailed");
     assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", equippable: true }).reason, "possible upgrade, unverified");
+    const recipeRequirement = recipeLearningRequirement("forever", 2889);
+    assert.equal(recipeRequirement?.requiredSkill, 25);
+    assert.equal(classifyMailItem({ version: "forever", itemId: 2889, bound: "UNBOUND", recipeItem: { professionState: "KNOWN", hasProfession: true, profession: "Cooking", recipeName: "Beer Basted Boar Ribs", requiredSkill: 25, holderSkill: 8, learnedState: "UNKNOWN" } }).reason, "learn at Cooking 25 (now 8)");
+    const bags = read.getCharacterBags({ version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" });
+    assert.equal(bags.status, "FOUND");
+    if (bags.status === "FOUND") assert.ok((bags.value.data?.items?.length ?? 0) > 0, "Hallo fixture bag rows stay available in the Forever read model");
   } finally { store.close(); }
 });
