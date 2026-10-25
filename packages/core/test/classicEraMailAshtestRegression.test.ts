@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
 import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { classifyMailItem } from "../src/mailItemClassification.ts";
+import { classicClassCanEquip } from "../src/classicMailProficiency.ts";
 
 const fixture = readFileSync(new URL("./fixtures/ashtest-classic-era-wow-sync.txt", import.meta.url), "utf8");
 const NOW = 1_792_860_800;
@@ -68,4 +69,12 @@ test("v2 item metadata takes precedence and keeps UNKNOWN fields unresolved", ()
   assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, requiredProfession: "Cooking", requiredSkill: 25, recipeAlreadyKnown: true }).action, "ROUTE");
   assert.equal(classifyMailItem({ version: "classic-era", itemId: 118, bound: "UNBOUND", itemMetadataState: "UNKNOWN" }).reason, "consumable");
   assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, equipLoc: "INVTYPE_NON_EQUIP_IGNORE" }).action, "ROUTE");
+});
+
+test("Classic class proficiency is version scoped and rejects observed Warlock shields", () => {
+  assert.equal(classicClassCanEquip("classic-era", "WARLOCK", 4, 6, "INVTYPE_SHIELD"), false);
+  assert.equal(classicClassCanEquip("forever", "WARLOCK", 4, 6, "INVTYPE_SHIELD"), false);
+  assert.equal(classicClassCanEquip("classic-era", "WARLOCK", 2, 15, "INVTYPE_WEAPON"), true);
+  assert.equal(classicClassCanEquip("classic-era", undefined, 4, 6, "INVTYPE_SHIELD"), undefined);
+  assert.equal(classicClassCanEquip("classic-era", "WARLOCK", 4, undefined, "INVTYPE_SHIELD"), undefined);
 });

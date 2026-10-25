@@ -40,6 +40,7 @@ import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFres
 import { resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
 import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
 import { classifyMailItem, normalizeMailBinding } from "./mailItemClassification.ts";
+import { classicClassCanEquip } from "./classicMailProficiency.ts";
 import { recipeLearningRequirement, unknownRecipeLearningRequirement } from "./recipeLearningRequirements.ts";
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
@@ -1790,17 +1791,25 @@ export class DashboardReadModel {
         noRecipient.push({ item: { name: row.name ?? "UNKNOWN item", itemRef: row.itemRef, quantity: row.quantity }, bucket: bucket === "questUtility" ? "quest/utility" : bucket, capturedBinding: row.bound === undefined ? "UNKNOWN" : row.bound ? "OBSERVED_BOUND" : "OBSERVED_UNBOUND", ...(source?.carried.observedAt !== undefined ? { lastSeenAt: new Date(source.carried.observedAt * 1000).toISOString() } : {}), reason: stale ? `Stale bag observation${source?.carried.observedAt !== undefined ? `; LAST_SEEN at ${new Date(source.carried.observedAt * 1000).toISOString()}` : "; LAST_SEEN time UNKNOWN"}.` : "Current bag evidence is not OBSERVED and recent." });
         continue;
       }
-      const rowClass = itemMetadata?.classId.state === "KNOWN" ? itemMetadata.classId.value : row.itemType === "Weapon" ? 2 : row.itemType === "Armor" ? 4 : row.itemType === "Trade Goods" ? 7 : row.itemType === "Consumable" ? 0 : undefined;
+      const rowClass = row.itemMetadataState === "OBSERVED" && typeof row.classID === "number" ? row.classID : itemMetadata?.classId.state === "KNOWN" ? itemMetadata.classId.value : row.itemType === "Weapon" ? 2 : row.itemType === "Armor" ? 4 : row.itemType === "Trade Goods" ? 7 : row.itemType === "Consumable" ? 0 : undefined;
       const ownUse = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.reagentProfessions.find((use: any) => use.itemId === rowItemId || typeof row.name === "string" && typeof use.name === "string" && use.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() === row.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim());
+      const holderProfessions = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.professions;
       const sharedDecision = classifyMailItem({ version: "forever", itemId: rowItemId, name: row.name, held: false, bound: normalizeMailBinding(row.bound), evidenceUsable: true, ownRecipeUse: ownUse?.profession, objectiveQuest: questForItem(row.name), recipeItem: /^Recipe:\s*/i.test(row.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", rowItemId, row.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
         const holder = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey);
         const profession = holder?.professions.status === "FOUND" && holder.professions.value.provenance.state === "OBSERVED" ? holder.professions.value.data?.entries.find((entry) => entry.name.toLowerCase() === requirement.profession.toLowerCase()) : undefined;
         const knowledge = holder?.professions.status === "FOUND" ? holder.professions.value.data?.recipeKnowledge as any : undefined;
         const knownRecipe = (knowledge?.data?.professions ?? []).flatMap((group: any) => group.recipes ?? []).find((recipe: any) => normalizeMailItemName(recipe.name) === normalizeMailItemName(requirement.recipeName));
-        return { professionState: profession ? "KNOWN" as const : "UNKNOWN" as const, hasProfession: !!profession, profession: requirement.profession, recipeName: requirement.recipeName, requiredSkill: requirement.requiredSkill, ...(typeof profession?.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: knownRecipe?.learnedState === "OBSERVED_TRUE" ? "LEARNED" as const : knownRecipe?.learnedState === "OBSERVED_FALSE" ? "NOT_LEARNED" as const : "UNKNOWN" as const }; })() : undefined,
-        itemClass: rowClass, quality: typeof row.quality === "number" ? row.quality : undefined, vendorEachCopper: row.vendorEachCopper,
+        return { professionState: profession ? "KNOWN" as const : "UNKNOWN" as const, hasProfession: !!profession, profession: requirement.profession, recipeName: requirement.recipeName, requiredSkill: requirement.requiredSkill, ...(typeof profession?.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: knownRecipe?.learnedState === "OBSERVED_TRUE" ? "LEARNED" as const : knownRecipe?.learnedState === "OBSERVED_FALSE" ? "NOT_LEARNED" as const : "UNKNOWN" as const }; })() : row.itemMetadataState === "OBSERVED" && row.requiredProfession && typeof row.requiredSkill === "number" ? (() => {
+          const holder = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey);
+          const profession = holder?.professions.status === "FOUND" && holder.professions.value.provenance.state === "OBSERVED" ? holder.professions.value.data?.entries.find((entry) => entry.name.toLowerCase() === row.requiredProfession.toLowerCase()) : undefined;
+          if (!profession) return undefined;
+          return { professionState: "KNOWN" as const, hasProfession: true, profession: row.requiredProfession, requiredSkill: row.requiredSkill, ...(typeof profession.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: row.recipeAlreadyKnown === false ? "NOT_LEARNED" as const : row.recipeAlreadyKnown === true ? "LEARNED" as const : "UNKNOWN" as const };
+        })() : undefined,
+        requiredProfession: row.itemMetadataState === "OBSERVED" && row.requiredProfession && holderProfessions?.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === row.requiredProfession.toLowerCase()) ? row.requiredProfession : undefined,
+        itemClass: rowClass, subClassID: row.itemMetadataState === "OBSERVED" ? row.subClassID : undefined, equipLoc: row.itemMetadataState === "OBSERVED" ? row.equipLoc : undefined, itemMetadataState: row.itemMetadataState, classCanEquip: classicClassCanEquip("forever", this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.class, rowClass, row.subClassID, row.equipLoc), quality: typeof row.quality === "number" ? row.quality : undefined, vendorEachCopper: row.vendorCopper,
         equippable: rowClass === 2 || rowClass === 4 || row.itemType === "Armor" || row.itemType === "Weapon", consumable: rowClass === 0 || bucket === "consumables", conjured: rowItemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(rowItemId) });
       if (sharedDecision.action !== "ROUTE") {
+        if (sharedDecision.action === "VENDOR") { sale.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: "VENDOR", reason: sharedDecision.reason }); continue; }
         keep.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: sharedDecision.action === "UNDETERMINED" ? "UNDETERMINED" : sharedDecision.action, reason: sharedDecision.reason });
         continue;
       }
@@ -2002,16 +2011,21 @@ export class DashboardReadModel {
         const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
         const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
         const sharedDecision = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: false, bound: bindingState, evidenceUsable: usable, ownRecipeUse: ownUse?.recipe,
-          recipeItem: recipePolicy,
+          recipeItem: recipePolicy ?? (tooltipRecipeEvidence && rowMeta?.requiredProfession && typeof rowMeta.requiredSkill === "number" ? (() => {
+            const profession = holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" ? holderProfessions.value.data?.entries.find((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession.toLowerCase()) : undefined;
+            if (!profession) return undefined;
+            return { professionState: "KNOWN" as const, hasProfession: true, profession: rowMeta.requiredProfession, requiredSkill: rowMeta.requiredSkill, ...(typeof profession.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: rowMeta.recipeAlreadyKnown === false ? "NOT_LEARNED" as const : rowMeta.recipeAlreadyKnown === true ? "LEARNED" as const : "UNKNOWN" as const };
+          })() : undefined),
           reagentForRecipeToLearn: recipeReagentsToProtect.some((reagent) => reagent.state === "LEARNABLE" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
           reagentForUnresolvedRecipe: potentialUses.length > 0 || recipeReagentsToProtect.some((reagent) => reagent.state === "UNKNOWN" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
-          objectiveQuest: objectiveQuest?.title, itemClass: metadataClass, consumable, conjured, quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
+          objectiveQuest: objectiveQuest?.title, itemClass: metadataClass, consumable, conjured, classCanEquip: classicClassCanEquip("classic-era", profile.class, metadataClass, metadataSubclass, rowMeta?.equipLoc), quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession && holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession!.toLowerCase()) ? rowMeta.requiredProfession : undefined, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
         const action = bindingState === "BOUND" ? "KEEP"
           : bindingState === "UNKNOWN" ? "UNDETERMINED"
           : !usable ? "UNDETERMINED"
           : incompleteUseEvidence.length ? "KEEP"
           : sharedDecision.action === "KEEP" ? (objectiveQuest ? "KEEP_FOR_QUEST" : "KEEP")
           : sharedDecision.action === "LEARN_RECIPE" ? "LEARN_RECIPE"
+          : sharedDecision.action === "VENDOR" ? "VENDOR"
           : sharedDecision.action === "UNDETERMINED" ? "UNDETERMINED"
           : learnReagents.includes(itemId ?? -1) ? "KEEP"
           : craftChoice.state === "SELECTED" && usable && bindingState === "UNBOUND" ? "MAIL_TO_CRAFTER"
@@ -2055,7 +2069,8 @@ export class DashboardReadModel {
       const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
         gear: [],
         materials: items.filter((item) => item.action === "MAIL_TO_CRAFTER" || item.action === "MAIL_TO_AUCTION_CHARACTER"),
-        sale: items.filter((item) => item.action === "SELL_AH"),
+          sale: items.filter((item) => item.action === "SELL_AH"),
+          vendor: items.filter((item) => item.action === "VENDOR"),
         keep: items.filter((item) => item.action === "KEEP" || item.action === "KEEP_FOR_HOLDER_PROFESSION" || item.action === "UNDETERMINED"),
       });
       return { data: {

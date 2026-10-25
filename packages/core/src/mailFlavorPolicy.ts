@@ -20,6 +20,7 @@ export interface MailPlanGroups {
   pouches?: unknown[];
   sale: unknown[];
   keep: unknown[];
+  vendor?: unknown[];
 }
 
 export function orchestrateFlavorMailPlan(policy: FlavorMailPolicy, groups: MailPlanGroups): { version: MailFlavor; ruleset: string; steps: Array<{ kind: string; action: unknown }> } {
@@ -31,6 +32,7 @@ export function orchestrateFlavorMailPlan(policy: FlavorMailPolicy, groups: Mail
       ...groups.materials.map((action) => ({ kind: "MATERIAL_MAIL", action })),
       ...(groups.pouches ?? []).map((action) => ({ kind: "POUCH_MAIL", action })),
       ...groups.sale.map((action) => ({ kind: "SALE", action })),
+      ...(groups.vendor ?? []).map((action) => ({ kind: "VENDOR", action })),
       ...groups.keep.map((action) => ({ kind: "KEEP", action })),
     ],
   };

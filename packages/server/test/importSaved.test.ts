@@ -730,14 +730,14 @@ const virekWithEquipment = (options: EnvelopeOptions = {}, projection: unknown =
   record("Virek", 1_791_375_100, { equipment: toLua(envelope({ lastAttempt: true, ...options })), ...(projection === undefined ? {} : { specProjection: toLua(projection) }) });
 
 /** A real server over a file-backed store, plus a raw connection to read the observation table. */
-async function withObservedServer(run: (base: string, rows: () => Array<Record<string, any>>) => Promise<void>) {
+async function withObservedServer(run: (base: string, rows: () => Array<Record<string, any>>, store: SqliteSnapshotStore) => Promise<void>) {
   const folder = mkdtempSync(join(tmpdir(), "wowsync-bridge-equipment-"));
   const path = join(folder, "test.sqlite");
   const store = new SqliteSnapshotStore(path);
   const raw = new DatabaseSync(path);
   const server = await listenOnce(createApp(store, 0, undefined, { allowedHosts: LOOPBACK_HOSTNAMES }), "127.0.0.1", 0);
   try {
-    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, () => raw.prepare("SELECT * FROM snapshot_equipment_observations ORDER BY id").all() as Array<Record<string, any>>);
+    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, () => raw.prepare("SELECT * FROM snapshot_equipment_observations ORDER BY id").all() as Array<Record<string, any>>, store);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
     raw.close();
@@ -745,6 +745,21 @@ async function withObservedServer(run: (base: string, rows: () => Array<Record<s
     rmSync(folder, { recursive: true, force: true });
   }
 }
+
+test("END TO END v2: Classic bags metadata in SavedVariables reaches the imported snapshot", async () => {
+  const generatedAt = NOW;
+  const text = buildWowSyncExport({ generatedAt, character: { name: "Ashtest", realm: "Mankrik", class: "WARLOCK", faction: "Alliance", level: 12, clientVersion: "1.15.9", clientBuild: "70003" } });
+  const bags = toLua({ observedAt: generatedAt, completeness: "complete", data: { formatVersion: 2, containers: [{ id: 0, slots: [{ itemID: 621, itemString: "item:621", name: "Worn Hatchet", count: 1, bound: false, itemMetadataState: "OBSERVED", quality: 0, classID: 2, subClassID: 0, equipLoc: "INVTYPE_WEAPONMAINHAND", vendorCopper: 3 }] }] } });
+  const file = svFile(savedVariables([{ guid: "Player-5149-04E5EA53", name: "Ashtest", realm: "Mankrik", text, generatedAt, bags }]));
+  await withObservedServer(async (base, _rows, store) => {
+    const result = await runImportSaved(["--character", "Ashtest", "--file", file, "--url", base], live(base));
+    assert.equal(result.exitCode, 0, all(result));
+    const snapshot = store.listSnapshots("classic-era::mankrik::ashtest")[0];
+    assert.equal(snapshot?.parsed.characterState?.bags?.data?.formatVersion, 2);
+    const importedItem = (snapshot?.parsed.characterState?.bags?.data as any)?.containers?.[0]?.slots?.[0];
+    assert.deepEqual([importedItem?.name, importedItem?.quality, importedItem?.classID, importedItem?.vendorCopper], ["Worn Hatchet", 0, 2, 3]);
+  });
+});
 
 test("A13 readSavedExports carries the canonical sections.equipment subset plus the latestExport projection for a Retail record", () => {
   const saved = virekWithEquipment();
