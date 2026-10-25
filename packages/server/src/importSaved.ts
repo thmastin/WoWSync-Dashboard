@@ -295,15 +295,17 @@ function classicCharacterState(sections: LuaValue | undefined, guid: string | un
     return out;
   };
   const professionRecipes = envelope("professionRecipes");
+  const bags = envelope("bags");
   const quests = envelope("quests");
   const reputation = envelope("reputation");
   const talents = envelope("talents");
-  if (!professionRecipes && !quests && !reputation && !talents) return undefined;
+  if (!professionRecipes && !bags && !quests && !reputation && !talents) return undefined;
   return {
     formatVersion: 1,
     clientFamily: "Classic",
     ...(guid ? { sourceCharacterGuid: guid } : {}),
     ...(professionRecipes ? { professionRecipes } : {}),
+    ...(bags ? { bags } : {}),
     ...(quests ? { quests } : {}),
     ...(reputation ? { reputation: { character: reputation } } : {}),
     ...(talents ? { talents } : {}),

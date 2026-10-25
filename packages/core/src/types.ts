@@ -297,6 +297,8 @@ export interface CapturedCharacterState {
   clientProfile?: string;
   /** Classic only: legacy quest log, objectives, and client-returned completed quest IDs. */
   quests?: CapturedCharacterDomain;
+  /** Classic and Forever structured carried-bag rows from GearExport sections.bags. */
+  bags?: CapturedCharacterDomain;
   /** Classic only: legacy talent trees and ranks. */
   talents?: CapturedCharacterDomain;
   combatSpecialization?: CapturedCharacterDomain;

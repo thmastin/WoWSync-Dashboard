@@ -26,7 +26,7 @@ const counter = (value: unknown): value is number => Number.isSafeInteger(value)
 const text = (value: unknown, max = 512): value is string => typeof value === "string" && value.length > 0 && value.length <= max;
 
 /** Lists GearExport writes; an empty Lua table arrives as `{}`. */
-const LIST_FIELDS = new Set(["professions", "recipes", "reagents", "active", "objectives", "questIDs", "quests", "factions", "majorFactions", "trees", "talents", "issues"]);
+const LIST_FIELDS = new Set(["professions", "recipes", "reagents", "active", "objectives", "questIDs", "quests", "factions", "majorFactions", "trees", "talents", "issues", "containers", "slots"]);
 
 function normalizeEmptyLists(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeEmptyLists);
@@ -227,10 +227,15 @@ export function normalizeClassicCharacterState(input: unknown, version: VersionO
   const state: CapturedCharacterState = { formatVersion: 1, clientFamily: "Classic" };
   if (typeof input.sourceCharacterGuid === "string" && /^Player-\d+-[0-9A-F]+$/i.test(input.sourceCharacterGuid)) state.sourceCharacterGuid = input.sourceCharacterGuid;
   const recipes = normalizeRecipes(input.professionRecipes, version);
+  const bagsRaw = object(input.bags) ? input.bags : undefined;
+  const bagsData = object(bagsRaw?.data) ? normalizeEmptyLists(bagsRaw.data) as Obj : undefined;
+  const bags = bagsRaw && bagsData && finite(bagsRaw.changedAt ?? bagsRaw.observedAt) && [1, 2].includes(bagsData.formatVersion as number)
+    && Array.isArray(bagsData.containers) ? domain(bagsRaw, bagsData, (bagsRaw.changedAt ?? bagsRaw.observedAt) as number, "OBSERVED", bagsRaw.completeness === "complete" ? "complete" : "partial") : undefined;
   const quests = normalizeQuests(input.quests, version);
   const reputation = normalizeReputation(object(input.reputation) ? input.reputation.character : undefined, version);
   const talents = normalizeTalents(input.talents, version);
   if (recipes) state.professionRecipes = recipes;
+  if (bags) state.bags = bags;
   if (quests) {
     const qdata = quests.data as Obj;
     if (typeof qdata.clientProfile !== "string" && character?.clientVersion) {
@@ -243,7 +248,7 @@ export function normalizeClassicCharacterState(input: unknown, version: VersionO
   if (talents) state.talents = talents;
   const profile = [recipes, quests, reputation, talents].map((entry) => (entry?.data as Obj | undefined)?.clientProfile).find((value): value is string => typeof value === "string");
   if (profile) state.clientProfile = profile;
-  return recipes || quests || reputation || talents ? state : undefined;
+  return recipes || bags || quests || reputation || talents ? state : undefined;
 }
 
 /**
@@ -261,9 +266,10 @@ export function mergeClassicCharacterState(previous: CapturedCharacterState | un
   const retained = (domain: CapturedCharacterDomain | undefined): CapturedCharacterDomain | undefined => domain && { ...domain, status: { ...domain.status, state: "LAST_SEEN", reason: "Not present in this later payload for the same export; earlier observation retained." } };
   const result: CapturedCharacterState = current ? structuredClone(current) : { formatVersion: 1, clientFamily: "Classic", ...(previous.sourceCharacterGuid ? { sourceCharacterGuid: previous.sourceCharacterGuid } : {}), ...(previous.clientProfile ? { clientProfile: previous.clientProfile } : {}) };
   result.professionRecipes ??= retained(previous.professionRecipes);
+  result.bags ??= retained(previous.bags);
   result.quests ??= retained(previous.quests);
   result.talents ??= retained(previous.talents);
   if (!result.reputation?.character && previous.reputation?.character) result.reputation = { character: retained(previous.reputation.character)! };
-  for (const key of ["professionRecipes", "quests", "talents"] as const) if (result[key] === undefined) delete result[key];
+  for (const key of ["professionRecipes", "bags", "quests", "talents"] as const) if (result[key] === undefined) delete result[key];
   return result;
 }
