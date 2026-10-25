@@ -624,7 +624,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => {
-    const holdItemIds = (process.env.WOWSYNC_FOREVER_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
+    const holdItemIds = (process.env.WOWSYNC_CLASSIC_ERA_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
     return textResult(readModel().getClassicEraMailPlan(query, { holdItemIds }));
   });
   server.registerTool("ask_forever_copilot", {
