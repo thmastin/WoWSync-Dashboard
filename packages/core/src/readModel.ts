@@ -1743,7 +1743,7 @@ export class DashboardReadModel {
   }
 
   /** Classic Era mail-plan projection. All facts come from Era WOWSYNC sections; AH remains UNKNOWN. */
-  getClassicEraMailPlan(query: CharacterQuery & { accountId?: string }) {
+  getClassicEraMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[] } = {}) {
     if (query.version !== "classic-era") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Classic Era mail planning only accepts classic-era snapshots." } } };
     return this.resolve(query, (character, snapshot) => {
       const snapshots = this.snapshots(character.identityKey);
@@ -1765,11 +1765,13 @@ export class DashboardReadModel {
       const auctionCharacter = settingsScope
         ? resolveMailSettingsCharacter(settings?.auctionCharacterIdentityKey, settingsScope, roster)
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; auction recipient scope cannot be established." };
+      const holdItemIds = new Set(config.holdItemIds ?? []);
       const mainCharacter = settingsScope
         ? resolveMailSettingsCharacter(settings?.mainCharacterIdentityKey, settingsScope, roster)
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; main-character scope cannot be established." };
       const items = bags.items.map((item) => {
         const itemId = itemIdFromItemRef(item.itemRef);
+        if (itemId !== undefined && holdItemIds.has(itemId)) return { ...(item.name !== undefined ? { name: item.name } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}), binding: item.bound === "no" ? "OBSERVED_UNBOUND" : item.bound === "yes" ? "OBSERVED_BOUND" : "UNKNOWN", vendorEachCopper: item.vendorEachCopper, auctionHouseValue: "UNKNOWN" as const, action: "KEEP", reason: "on hold list" };
         const uses: Array<{ character: StoredCharacterSummary; profession: string; evidence: "OBSERVED" | "LAST_SEEN" }> = [];
         if (itemId !== undefined) for (const candidate of scopedRoster) {
           const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
@@ -1796,16 +1798,31 @@ export class DashboardReadModel {
         const mainKey = mainCharacter.state === "ELIGIBLE" ? mainCharacter.character.identityKey : undefined;
         const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
         const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
-        const action = ownUse ? "KEEP_FOR_HOLDER_PROFESSION"
+        const incompleteUseEvidence = scopedRoster.some((candidate) => {
+          const professionResult = this.getCharacterProfessions({ version: "classic-era", name: candidate.name, realm: candidate.realm });
+          if (professionResult.status !== "FOUND" || !professionResult.value.data || professionResult.value.provenance.state !== "OBSERVED") return true;
+          const knowledge = professionResult.value.data.recipeKnowledge as any;
+          return knowledge?.completeness !== "complete" || knowledge?.status?.state !== "OBSERVED" || knowledge?.evidence?.state !== "OBSERVED";
+        });
+        const action = item.bound === "yes" ? "KEEP"
+          : item.bound !== "no" ? "UNDETERMINED"
+          : !usable ? "UNDETERMINED"
+          : ownUse ? "KEEP_FOR_HOLDER_PROFESSION"
           : craftChoice.state === "SELECTED" && usable && item.bound === "no" ? "MAIL_TO_CRAFTER"
           : craftChoice.state === "UNDETERMINED" && observedUses.length ? "UNDETERMINED"
-          : usable && item.bound === "no" && item.vendorEachCopper !== undefined ? "VENDOR_VALUE_KNOWN"
+          : incompleteUseEvidence ? "KEEP"
+          : auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== character.identityKey ? "MAIL_TO_AUCTION_CHARACTER"
+          : auctionCharacter.state === "ELIGIBLE" ? "SELL_AH"
           : "UNDETERMINED";
         const evidenceReason = !usable ? identity.reason ?? (buildVerification === "UNSUPPORTED" ? "Client build is outside the supported Classic Era mail rules." : bags.status.state !== "OBSERVED" ? "Current carried bags are not OBSERVED." : freshness !== "recent" ? "Bag evidence is outside the 72-hour freshness window." : "Required evidence is UNKNOWN.")
           : ownUse ? "Observed recipe evidence shows this item is used by the holder's profession; keep it on the holder."
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
-          : action === "VENDOR_VALUE_KNOWN" ? "Captured vendorEachCopper is available. This is a value observation, not an automatic sale."
+          : action === "KEEP" && incompleteUseEvidence ? "Profession use UNKNOWN because roster recipe evidence is incomplete."
+          : action === "MAIL_TO_AUCTION_CHARACTER" ? "No observed account profession uses this; AH value UNKNOWN."
+          : action === "SELL_AH" ? "Holder is the configured auction character; AH value UNKNOWN."
+          : action === "UNDETERMINED" && auctionCharacter.state !== "ELIGIBLE" ? auctionCharacter.reason
+          : action === "KEEP" && item.bound === "yes" ? "Item is OBSERVED bound and cannot be routed to another character."
           : "Item use, binding, vendor value, or eligible routing evidence is UNKNOWN.";
         return {
           ...(item.name !== undefined ? { name: item.name } : {}),
@@ -1815,6 +1832,7 @@ export class DashboardReadModel {
           vendorEachCopper: item.vendorEachCopper,
           auctionHouseValue: "UNKNOWN" as const,
           action, ...(recipient ? { recipient } : {}),
+          ...(action === "MAIL_TO_AUCTION_CHARACTER" && auctionCharacter.state === "ELIGIBLE" ? { recipient: { identityKey: auctionCharacter.character.identityKey, name: auctionCharacter.character.name }, saleAction: "SELL_AH" as const } : {}),
           ...(evidenceReason ? { reason: evidenceReason } : {}),
           ...(craftChoice.state === "UNDETERMINED" && observedUses.length ? { tiedCrafterCandidates: craftChoice.candidates } : {}),
         };
@@ -1822,9 +1840,9 @@ export class DashboardReadModel {
       const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
       const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
         gear: [],
-        materials: items.filter((item) => item.action === "MAIL_TO_CRAFTER"),
-        sale: [],
-        keep: items.filter((item) => item.action !== "MAIL_TO_CRAFTER"),
+        materials: items.filter((item) => item.action === "MAIL_TO_CRAFTER" || item.action === "MAIL_TO_AUCTION_CHARACTER"),
+        sale: items.filter((item) => item.action === "SELL_AH"),
+        keep: items.filter((item) => item.action === "KEEP" || item.action === "KEEP_FOR_HOLDER_PROFESSION" || item.action === "UNDETERMINED"),
       });
       return { data: {
         version: orchestration.version, ruleset: orchestration.ruleset, buildVerification,
