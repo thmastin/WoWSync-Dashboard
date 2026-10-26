@@ -28,6 +28,7 @@ import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboa
 import { recipeLearnSkills } from "@wowsync-dashboard/core/foreverRecipeLearning.ts";
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
+import { PolestarCodexReadStore } from "@wowsync-dashboard/core/polestarCodex.ts";
 import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS, useForeverPrices } from "@wowsync-dashboard/core/foreverPrices.ts";
 import { z } from "zod";
 import { createReleaseGuard } from "./releaseGuard.ts";
@@ -217,6 +218,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   const readModel = () => new DashboardReadModel(store);
   const foreverKnowledge = new ForeverKnowledgeStore(foreverKnowledgePath(configuration.databasePath ?? defaults.databasePath));
   const foreverPrices = new ForeverPriceStore(foreverPricesPath(configuration.databasePath ?? defaults.databasePath));
+  const polestarCodex = new PolestarCodexReadStore(configuration.databasePath ?? defaults.databasePath);
   const marketRegion = (process.env.WOWSYNC_FOREVER_REGION ?? "us").toLowerCase();
   const registry = new ResearchRegistry(configuration.researchRoot ?? defaults.researchRoot, DASHBOARD_RESEARCH_REGISTRATIONS);
   const server = new McpServer(
@@ -239,6 +241,8 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   // serveStdio owns and closes each factory-created server instance. Close its
   // associated read-only database connection when the SDK closes this server.
   server.server.onclose = closeStore;
+  const priorClose = server.server.onclose;
+  server.server.onclose = () => { priorClose?.(); polestarCodex.close(); };
   // One stderr line per tool call (name, outcome, duration; never arguments or results) so a host such as
   // the Secure MCP Tunnel leaves verifiable evidence of which tools a connected client actually used.
   const registerTool = server.registerTool.bind(server);
@@ -249,10 +253,11 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     get_character_storage: "get_forever_items",
     search_items: "get_forever_items",
   };
-  const foreverExclusiveNames = new Set(["ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_items", "get_forever_market_prices", "lookup_forever_knowledge", "create_erp_project_from_goal"]);
+  const foreverExclusiveNames = new Set(["ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_items", "get_forever_market_prices", "lookup_forever_knowledge", "create_erp_project_from_goal", "lookup_item_sources", "lookup_npc", "lookup_dungeon", "suggest_for_level"]);
   const retailExclusiveNames = new Set(["analyze_retail_gear_candidate", "get_gear_candidate_recipient_screen"]);
   server.registerTool = ((name: string, config: unknown, handler: (...args: unknown[]) => unknown) => {
     const typedConfig = config as Record<string, unknown>;
+    if (["lookup_item_sources", "lookup_npc", "lookup_dungeon", "suggest_for_level"].includes(name) && !foreverProfile) return server;
     if (foreverProfile || classicEraProfile) {
       // The Forever MCP retains the shared non-Era Dashboard tools for existing
       // workflows. The final schema excludes Classic Era, whose data and policy
@@ -585,6 +590,29 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     });
     return textResult({ status: "FOUND", market: resolvedMarket, marketBasis, fetchedAt: prices.bundle.fetchedAt, prices: rows, units: "copper (10000 = 1 gold)", attribution: AHLEDGER_ATTRIBUTION, notes: "Crowd-sourced scans move; the Auction House cut and deposit are not deducted." });
   });
+  const referenceResult = (data: unknown) => textResult({ status: data ? "FOUND" : "UNKNOWN", data: data ?? "UNKNOWN", provenance: "REFERENCE", source: "polestar-codex", codexVersion: polestarCodex.meta()?.build ?? "UNKNOWN" });
+  server.registerTool("lookup_item_sources", { title: "Look up Forever item sources", description: "Read-only Polestar Codex reference lookup. Source data is REFERENCE and may be incomplete; missing records are UNKNOWN.", inputSchema: z.object({ query: z.union([z.string().trim().min(1).max(100),z.number().int().positive()]) }).strict(), annotations: toolAnnotations }, async ({query}) => {
+    const rec = polestarCodex.lookup("item",query) ?? polestarCodex.lookup("mount",query) ?? polestarCodex.lookup("pet",query) ?? polestarCodex.lookup("recipe",query);
+    const sources=(rec?.sources as Array<Record<string,unknown>>|undefined)?.map(source=>{const npcId=source.npc??source.object;const npc=npcId===undefined?undefined:polestarCodex.lookup("npc",Number(npcId));const questId=source.quest;const quest=questId===undefined?undefined:polestarCodex.lookup("quest",Number(questId));const location=(npc?.spawns as unknown[]|undefined)?.length?npc!.spawns:"UNKNOWN";return {...source,...(npc?{npcName:npc.name,location}:npcId!==undefined?{npcName:"UNKNOWN",location:"UNKNOWN"}:{}),...(quest?{questTitle:quest.title}:questId!==undefined?{questTitle:"UNKNOWN"}:{})};});
+    return referenceResult(rec ? {id:rec.id,name:rec.name,sources:sources?.length?sources:"UNKNOWN",requiredLevel:rec.requiredLevel??"UNKNOWN"} : undefined);
+  });
+  server.registerTool("lookup_npc", { title: "Look up Forever NPC", description: "Read-only Polestar Codex NPC lookup with known locations, coordinates, level, sales and drops.", inputSchema: z.object({ query: z.union([z.string().trim().min(1).max(100),z.number().int().positive()]) }).strict(), annotations: toolAnnotations }, async ({query}) => {
+    const rec=polestarCodex.lookup("npc",query)??polestarCodex.lookup("rare",query);
+    const spawns=rec?.spawns as unknown[]|undefined;
+    const items=rec ? polestarCodex.list("item").filter(x=>(rec.loot as number[]|undefined)?.includes(Number(x.id)) || (x.sources as Array<Record<string,unknown>>|undefined)?.some(s=>Number(s.npc)===Number(rec.id))):[];
+    return referenceResult(rec?{id:rec.id,name:rec.name,location:spawns?.length?spawns:"UNKNOWN",coordinates:spawns?.length?spawns:"UNKNOWN",level:rec.level??"UNKNOWN",sellsOrDrops:items.length?items:"UNKNOWN"}:undefined);
+  });
+  server.registerTool("lookup_dungeon", { title: "Look up Forever dungeon", description: "Read-only Polestar Codex dungeon levels, entrance, quests, quest starters and prerequisites.", inputSchema: z.object({ name: z.string().trim().min(1).max(100) }).strict(), annotations: toolAnnotations }, async ({name}) => {
+    const d=polestarCodex.lookup("instance",name); const quests=d?polestarCodex.list("quest").filter(q=>Number(q.zone)===Number(d.areaId)||Number(q.zone)===Number(d.map)):[];
+    return referenceResult(d?{...d,quests:quests.length?quests.map(q=>({id:q.id,title:q.title,level:q.level,startNpc:q.startNpc,prerequisites:q.prerequisites})):"UNKNOWN"}:undefined);
+  });
+  server.registerTool("suggest_for_level", { title: "Suggest Forever sources for a level", description: "Lists reference dungeons and notable sources whose recorded level ranges include the requested level. No ranking or recommendation strength is inferred.", inputSchema: z.object({ level: z.number().int().min(1).max(100), faction: z.enum(["Alliance","Horde"]).optional() }).strict(), annotations: toolAnnotations }, async ({level,faction}) => {
+    const dungeons=polestarCodex.list("instance").filter(d=>{const a=d.levelRange as number[]|undefined;return !!a&&a.length>=2&&level>=a[0]!&&level<=a[a.length-1]!;});
+    const sources=polestarCodex.list("item").filter(i=>(i.sources as Array<Record<string,unknown>>|undefined)?.some(s=>s.minLevel!==undefined&&level>=Number(s.minLevel)&&level<=Number(s.maxLevel??s.minLevel)));
+    const result=referenceResult({level,faction:faction??"UNKNOWN",dungeons:dungeons.length?dungeons:"UNKNOWN",notableSources:sources.length?sources:"UNKNOWN"});
+    if(!dungeons.length&&!sources.length)return textResult({status:"UNKNOWN",data:{level,faction:faction??"UNKNOWN",dungeons:"UNKNOWN",notableSources:"UNKNOWN"},provenance:"REFERENCE",source:"polestar-codex",codexVersion:polestarCodex.meta()?.build??"UNKNOWN"});
+    return result;
+  });
   server.registerTool("lookup_forever_knowledge", {
     title: "Look up Forever game knowledge (items, quests, NPCs, spells, dungeons, zones)",
     description: "Read-only lookup in the private Forever knowledge bundle (QuestieDB Forever + Wowhead Forever tooltips), by id or name (exact match first, then partial; max 10). item: stats, slot, required level, vendor sell price, who sells it, what drops it, which quest rewards it. quest: level, faction, giver and location, turn-in, objectives, prerequisites, follow-up, rewards, XP (Classic-seeded). npc: title, level, location, faction, roles, quests it starts, items it sells. spell: Forever tooltip text, reagents, tools, created item (talents and recipes). dungeon: creature level range (derived), entrance, quests. zone: quest count, quest level range, quests. Game knowledge only, not account state; vendor buy prices, Auction House prices and drop chances are UNKNOWN. Forever-only content is only partly covered.",
@@ -848,7 +876,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const config = { ...selected.config };
       const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
       const nonEraVersion = z.enum(READ_MODEL_VERSIONS.filter((version) => version !== "classic-era") as [VersionOrUnknown, ...VersionOrUnknown[]]);
-      const foreverOnly = new Set(["list_forever_characters", "ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_items", "get_character_bags", "lookup_forever_knowledge", "get_forever_market_prices"]);
+      const foreverOnly = new Set(["list_forever_characters", "ask_forever_copilot", "get_forever_gear_observation", "get_forever_gear_allocation", "get_forever_mail_plan", "get_forever_character_quests", "get_forever_items", "get_character_bags", "lookup_forever_knowledge", "get_forever_market_prices", "lookup_item_sources", "lookup_npc", "lookup_dungeon", "suggest_for_level"]);
       const retailOnly = new Set(["analyze_retail_gear_candidate", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen"]);
       const profileShape = { ...shape, ...(shape.version ? { version: foreverOnly.has(exposedName) ? z.literal("forever") : retailOnly.has(exposedName) || exposedName === "get_gear_candidate_evidence" ? z.literal("retail") : nonEraVersion } : {}) };
       if (exposedName === "list_forever_characters") config.inputSchema = z.object({ version: z.literal("forever"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
