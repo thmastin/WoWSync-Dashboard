@@ -24,7 +24,7 @@ test("mail settings persist by account, flavor, realm, and faction and missing/d
     const vendor = roster.find((row) => row.name === "Vendor")!.identityKey;
     const settings = validateMailPlanSettingsInput({
       accountId: "alt-account", version: "classic-era", realm: "Realm", faction: "Alliance",
-      auctionCharacterIdentityKey: vendor, mainCharacterIdentityKey: holder,
+      auctionCharacterIdentityKey: vendor, mainCharacterIdentityKey: holder, plannedProfessionsByCharacter: { [holder]: ["Tailoring", "First Aid"] },
     }, store.listCharacters("classic-era"), NOW);
     store.setMailPlanSettings(settings);
     store.close();
@@ -33,6 +33,7 @@ test("mail settings persist by account, flavor, realm, and faction and missing/d
     const read = store.getMailPlanSettings({ accountId: "alt-account", version: "classic-era", realm: "Realm", faction: "Alliance" });
     assert.equal(read?.auctionCharacterIdentityKey, vendor);
     assert.equal(read?.mainCharacterIdentityKey, holder);
+    assert.deepEqual(read?.plannedProfessionsByCharacter?.[holder], ["Tailoring", "First Aid"]);
     assert.equal(store.getMailPlanSettings({ accountId: "other-account", version: "classic-era", realm: "Realm", faction: "Alliance" }), undefined);
     store.deleteCharacter(vendor);
     const stale = store.getMailPlanSettings({ accountId: "alt-account", version: "classic-era", realm: "Realm", faction: "Alliance" });
@@ -73,4 +74,11 @@ test("crafter selection is highest OBSERVED skill, main breaks only exact ties, 
   assert.equal(mainTie.state, "SELECTED");
   if (mainTie.state === "SELECTED") assert.equal(mainTie.candidate.name, "B");
   assert.equal(selectCrafterByObservedSkill([rows[2]!]).state, "UNDETERMINED");
+});
+
+test("planned profession material mapping preserves only materials tied to a configured profession", async () => {
+  const { plannedProfessionForMaterial } = await import("../src/mailPlanSettings.ts");
+  assert.equal(plannedProfessionForMaterial(2589, "Linen Cloth", ["Tailoring"]), "Tailoring");
+  assert.equal(plannedProfessionForMaterial(2589, "Linen Cloth", ["First Aid"]), "First Aid");
+  assert.equal(plannedProfessionForMaterial(999999, "UNKNOWN item", ["Tailoring"]), undefined);
 });

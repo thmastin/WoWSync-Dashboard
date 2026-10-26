@@ -1,4 +1,5 @@
 import { MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
+import { plannedProfessionForMaterial } from "./mailPlanSettings.ts";
 
 export interface MailRoutingRecipient {
   identityKey: string;
@@ -15,6 +16,7 @@ export interface MailRoutingRecipient {
   /** Distinguishes an OBSERVED empty profession list from unobserved profession skills. */
   hasObservedProfessions?: boolean;
   observedBagSlots?: number;
+  plannedProfessions?: string[];
 }
 
 export interface MailRoutingItem {
@@ -46,6 +48,7 @@ export function routePouch(item: MailRoutingItem, recipients: MailRoutingRecipie
 
 export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingRecipient[], options: {
   holderIdentityKey?: string;
+  plannedProfessions?: readonly string[];
   heldItemIds?: ReadonlySet<number>;
   ahMedianUnitCopper?: number;
   vendorUnitCopper?: number;
@@ -54,6 +57,9 @@ export function routeMaterial(item: MailRoutingItem, recipients: MailRoutingReci
 } = {}): MailDisposition[] {
   if (item.itemId !== undefined && options.heldItemIds?.has(item.itemId)) return [{ disposition: "KEEP", item, reason: "on hold list" }];
   if (item.itemId === undefined) return [{ disposition: "KEEP", item, reason: "Item identity UNKNOWN; crafting use and price are UNKNOWN." }];
+  const holderPlanned = recipients.find((row) => row.identityKey === options.holderIdentityKey)?.plannedProfessions ?? options.plannedProfessions ?? [];
+  const planned = plannedProfessionForMaterial(item.itemId, item.name, holderPlanned);
+  if (planned) return [{ disposition: "KEEP", item, reason: `Planned ${planned}` }];
   const ownUses = recipients.filter((row) => row.identityKey === options.holderIdentityKey)
     .flatMap((row) => (row.reagentProfessions ?? []).filter((use) => use.itemId === item.itemId));
   if (ownUses.length) {

@@ -29,6 +29,7 @@ export function classifyMailItem(input: {
   bound: "BOUND" | "UNBOUND" | "UNKNOWN";
   evidenceUsable?: boolean;
   ownRecipeUse?: string;
+  plannedProfession?: string;
   ownRecipeUseNames?: readonly string[];
   reagentForRecipeToLearn?: boolean;
   reagentForUnresolvedRecipe?: boolean;
@@ -64,6 +65,7 @@ export function classifyMailItem(input: {
   if (input.held) return { action: "KEEP", reason: "on hold list" };
   if (input.evidenceUsable === false) return { action: "UNDETERMINED", reason: "Required bag, identity, or build evidence is not current and usable." };
   const normalize = (value: string) => value.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  if (input.plannedProfession) return { action: "KEEP", reason: `Planned ${input.plannedProfession}` };
   if (input.ownRecipeUse || (input.name && input.ownRecipeUseNames?.some((name) => normalize(name) === normalize(input.name!)))) return { action: "KEEP", reason: `used by known recipe ${input.ownRecipeUse ?? input.name}; keep on holder` };
   if (input.reagentForRecipeToLearn) return { action: "KEEP", reason: "reagent for recipe to learn" };
   if (input.reagentForUnresolvedRecipe) return { action: "KEEP", reason: "possible reagent for recipe; learned state is UNKNOWN" };

@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -74,7 +74,8 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
       } });
     }
     const auctionCharacter = store.listCharacters("forever").find((row) => row.name === "Alt A")!;
-    store.setMailPlanSettings({ accountId: "default", version: "forever", realm, faction: "Alliance", auctionCharacterIdentityKey: auctionCharacter.identityKey, updatedAt: NOW, provenance: "USER_CONFIGURED" });
+    const holderIdentity = store.listCharacters("forever").find((row) => row.name === holderName)!.identityKey;
+    store.setMailPlanSettings({ accountId: "default", version: "forever", realm, faction: "Alliance", auctionCharacterIdentityKey: auctionCharacter.identityKey, plannedProfessionsByCharacter: { [holderIdentity]: ["First Aid"] }, updatedAt: NOW, provenance: "USER_CONFIGURED" });
     const result = new DashboardReadModel(store, () => NOW).getForeverMailPlan({ version: "forever", name: holderName, realm });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data || !("pouchMail" in result.value.data)) throw new Error("Expected a Forever mail plan");
@@ -85,7 +86,7 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
     ]);
     assert.equal(plan.mail.length, 0, "containers never enter equipment-fit mail");
     for (const { itemId, usedBy } of scenario.materials as Array<{ itemId: number; usedBy: string }>) {
-      assert.ok(plan.keep.some((row) => (row.item as { itemRef?: string }).itemRef === holderRef(itemId) && String(row.reason).includes(`used by your own ${usedBy}`)));
+      assert.ok(plan.keep.some((row) => (row.item as { itemRef?: string }).itemRef === holderRef(itemId) && (itemId === 2589 ? row.reason === "Planned First Aid" : String(row.reason).includes(`used by your own ${usedBy}`))));
       assert.ok(!plan.sale.some((row) => (row.item as { itemRef?: string }).itemRef === holderRef(itemId)), "holder profession use suppresses sale");
     }
     assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9302) && /usable tier 10/.test(row.reason)));
