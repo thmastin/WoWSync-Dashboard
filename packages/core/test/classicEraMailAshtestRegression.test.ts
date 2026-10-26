@@ -8,6 +8,22 @@ import { classicClassCanEquip } from "../src/classicMailProficiency.ts";
 
 const fixture = readFileSync(new URL("./fixtures/ashtest-classic-era-wow-sync.txt", import.meta.url), "utf8");
 const NOW = 1_792_860_800;
+const ashtestBagspaceRows = [
+  [100101, "Gypsy Buckler of Blocking", 4, 6, "INVTYPE_SHIELD", 20, true, 25],
+  [100102, "Infantry Belt", 4, 4, "INVTYPE_WAIST", 20, false, 8],
+  [100103, "Cadet Bracers", 4, 4, "INVTYPE_WRIST", 20, true, 10],
+  [100104, "Rodentia Flint Axe", 2, 0, "INVTYPE_WEAPON", 20, false, 9, 3],
+  [2589, "Linen Cloth", 7, 0, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 2, 53],
+  [10101, "Crisp Spider Meat", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1, 3],
+  [10102, "Small Spider Leg", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
+  [10103, "Boar Ribs", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
+] as const;
+const fullBagFillerRows = [
+  [10200, "Tier 5 Food fixture", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 5, false, 1, 2],
+  [10201, "Tier 10 Food fixture", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 10, false, 1, 2],
+  [10202, "Buff Food fixture", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 8, false, 1, 3],
+  ...Array.from({ length: 5 }, (_, index) => [10203 + index, `Full bag filler ${index + 1}`, 7, 0, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1, 1] as const),
+] as const;
 
 test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conjured healthstone", () => {
   const items = [
@@ -23,8 +39,12 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     .replace("baseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent", "baseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n100001\t4\t1\t0\t254\tno\n3174\t7\t0\t0\t254\tyes\n4862\t7\t0\t0\t254\tyes");
   const store = new SqliteSnapshotStore(":memory:");
   try {
-    store.importSnapshot(injected.replace(/Generated: \d+/, `Generated: ${NOW}`), { characterState: {
+    const fullBagFixtureRows = [...ashtestBagspaceRows, ...fullBagFillerRows];
+    const classicBagSidecar = { observedAt: NOW, completeness: "complete", data: { formatVersion: 1, containers: [{ id: 0, capacity: 16, slots: Object.fromEntries(fullBagFixtureRows.map(([itemID, name, classID, subClassID, equipLoc, requiredLevel, bound, vendorCopper, count = 1], index) => [String(index + 1), { itemID, itemString: `item:${itemID}`, name, count, bound, itemMetadataState: "OBSERVED", classID, subClassID, equipLoc, requiredLevel, quality: 1, vendorCopper,
+      ...(itemID === 10200 ? { foodKind: "FOOD" } : itemID === 10201 ? { foodKind: "FOOD" } : itemID === 10202 ? { foodKind: "BUFF_FOOD", foodStackSize: 1, spellText: "Well Fed" } : {}) }])) }] } };
+    store.importSnapshot(injected.replace("Slots: 20 free / 38", "Slots: 0 free / 38").replace(/Generated: \d+/, `Generated: ${NOW}`), { characterState: {
       formatVersion: 1, clientFamily: "Classic",
+      bags: classicBagSidecar,
       professionRecipes: { capture: 1, revision: 1, observedAt: NOW, completeness: "complete", data: { formatVersion: 1, clientFamily: "1.15.9", professions: [{ name: "Cooking", professionName: "Cooking", observedAt: NOW, sessionObservedAt: NOW,
         recipes: [...["Stringy Wolf Meat", "Boar Ribs", "Bear Meat"].map((name) => ({ name: `Cook ${name}`, reagents: [{ name, count: 1 }] })), { name: "Beer Basted Boar Ribs", reagents: [{ name: "Crag Boar Rib", count: 1 }] }] }] } },
     } as any });
@@ -36,6 +56,19 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     assert.equal(plan.status, "FOUND");
     if (plan.status !== "FOUND") return;
     const rows = (plan as any).value.data.items as Array<{ name?: string; action: string; reason?: string }>;
+    const bagRead = new DashboardReadModel(store, () => NOW + 1).getCharacterBags({ version: "classic-era", name: "Ashtest", realm: "Mankrik" });
+    assert.equal(bagRead.status, "FOUND");
+    if (bagRead.status === "FOUND") assert.equal(rows.length, bagRead.value.data?.items?.length, "every character-bags row has one mail-plan row");
+    assert.equal(fullBagFixtureRows.length, 16, "the full-bags fixture fills all 16 slots");
+    const foodRows = rows.filter((row) => ["Tier 5 Food fixture", "Tier 10 Food fixture", "Buff Food fixture"].includes(row.name ?? ""));
+    assert.deepEqual(foodRows.map((row) => row.name), ["Tier 10 Food fixture", "Tier 5 Food fixture", "Buff Food fixture"]);
+    assert.equal(foodRows.find((row) => row.name === "Tier 10 Food fixture")?.action, "KEEP");
+    assert.equal(foodRows.find((row) => row.name === "Tier 5 Food fixture")?.action, "VENDOR");
+    assert.match(rows.find((row) => row.name === "Buff Food fixture")?.reason ?? "", /at most one stack/);
+    assert.equal((rows.find((row) => row.name === "Buff Food fixture") as any)?.keepQuantity, 1);
+    for (const [, name] of ashtestBagspaceRows) assert.ok(rows.some((row) => row.name === name), `${name} is represented in the mail plan`);
+    assert.deepEqual([rows.find((row) => row.name === "Gypsy Buckler of Blocking")?.action, rows.find((row) => row.name === "Gypsy Buckler of Blocking")?.reason], ["VENDOR", "OBSERVED bound item is unusable; vendor value 25 copper each"]);
+    assert.equal(rows.find((row) => row.name === "Rodentia Flint Axe")?.action, "MAIL_TO_AUCTION_CHARACTER");
     for (const name of ["Stringy Wolf Meat", "Boar Ribs", "Bear Meat"]) {
       const row = rows.find((candidate) => candidate.name === name);
       assert.equal(row?.action, "KEEP", row?.reason);
@@ -45,7 +78,7 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     assert.deepEqual([rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.action, rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.reason], ["KEEP", "learn at Cooking 25 (now 8)"]);
     assert.equal(rows.find((row) => row.name === "Crag Boar Rib")?.reason, "reagent for recipe to learn");
     assert.equal(rows.find((row) => row.name === "Beer Basted Boar Ribs")?.reason, "consumable");
-    assert.deepEqual([rows.find((row) => row.name === "Infantry Cloak")?.action, rows.find((row) => row.name === "Infantry Cloak")?.reason], ["KEEP", "possible upgrade, unverified"]);
+    assert.deepEqual([rows.find((row) => row.name === "Infantry Cloak")?.action, rows.find((row) => row.name === "Infantry Cloak")?.reason], ["KEEP", "Observed equipment item; upgrade suitability is UNKNOWN."]);
     assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", recipeItem: { professionState: "KNOWN", hasProfession: true, requiredSkill: 8, holderSkill: 8, learnedState: "NOT_LEARNED" } }).action, "LEARN_RECIPE");
     assert.equal(classifyMailItem({ version: "classic-era", itemId: 2886, bound: "UNBOUND", reagentForRecipeToLearn: true }).reason, "reagent for recipe to learn");
     assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", objectiveQuest: "Test active quest" }).reason, "needed for active quest Test active quest");
@@ -69,6 +102,14 @@ test("v2 item metadata takes precedence and keeps UNKNOWN fields unresolved", ()
   assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, requiredProfession: "Cooking", requiredSkill: 25, recipeAlreadyKnown: true }).action, "ROUTE");
   assert.equal(classifyMailItem({ version: "classic-era", itemId: 118, bound: "UNBOUND", itemMetadataState: "UNKNOWN" }).reason, "consumable");
   assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", itemMetadataState: "OBSERVED", itemClass: 9, equipLoc: "INVTYPE_NON_EQUIP_IGNORE" }).action, "ROUTE");
+});
+
+test("shared mail classifier uses observed binding, quality, and usability metadata", () => {
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "BOUND", classCanEquip: false, vendorEachCopper: 12 }).action, "VENDOR");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", classCanEquip: false }).action, "ROUTE");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "BOUND", quality: 0, vendorEachCopper: 5 }).action, "VENDOR");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", quality: 0 }).action, "VENDOR");
+  assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", equippable: true }).reason, "Observed equipment item; upgrade suitability is UNKNOWN.");
 });
 
 test("Classic class proficiency is version scoped and rejects observed Warlock shields", () => {

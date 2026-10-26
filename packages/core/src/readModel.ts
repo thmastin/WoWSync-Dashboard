@@ -42,6 +42,28 @@ import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "
 import { classifyMailItem, normalizeMailBinding } from "./mailItemClassification.ts";
 import { classicClassCanEquip } from "./classicMailProficiency.ts";
 import { recipeLearningRequirement, unknownRecipeLearningRequirement } from "./recipeLearningRequirements.ts";
+import { bagSpaceIsTight, cookingRecipeFacts, DEFAULT_MAIL_BAG_SPACE_CONFIG, planCookingMaterial, type MailBagSpaceConfig } from "./foodDrinkPlanning.ts";
+
+function rankKeptFoodRows<T extends { reason?: string }>(rows: readonly T[]): T[] {
+  const output = [...rows];
+  const categoryOrder = ["Food", "Drink", "Buff food"];
+  for (const category of categoryOrder) {
+    const positions: number[] = [];
+    const candidates: Array<{ row: T; tier: number; sourceOrder: number }> = [];
+    output.forEach((row, index) => {
+      const match = row.reason?.match(/^(Food|Drink|Buff food); usable tier (\d+)/);
+      if (match?.[1] === category) { positions.push(index); candidates.push({ row, tier: Number(match[2]), sourceOrder: index }); }
+    });
+    candidates.sort((a, b) => b.tier - a.tier || a.sourceOrder - b.sourceOrder);
+    positions.forEach((position, index) => { output[position] = candidates[index]!.row; });
+  }
+  return output;
+}
+
+function observedCookingFireAvailable(snapshot: StoredSnapshot | undefined): boolean {
+  const spells = snapshot?.parsed.spells;
+  return spells?.status.state === "OBSERVED" && spells.entries.some((spell) => /^(cooking fire|basic campfire)$/i.test(spell.name ?? ""));
+}
 
 export type ReadState = "OBSERVED" | "DERIVED" | "LAST_SEEN" | "UNKNOWN";
 export interface ReadProvenance {
@@ -1596,7 +1618,7 @@ export class DashboardReadModel {
   }
 
   /** A mailbox errand projection over the canonical Forever gear evaluator. */
-  getForeverMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>> } = {}) {
+  getForeverMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[]; vendorPrices?: Readonly<Record<number, number>>; bagSpace?: Partial<MailBagSpaceConfig> } = {}) {
     if (query.version !== "forever") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Mail planning is isolated to Forever 1.60.1 snapshots at or above build 70291." } } };
     const base = this.getForeverGearAllocation(query);
     if (base.status !== "FOUND" || !base.value.data) return base;
@@ -1613,6 +1635,26 @@ export class DashboardReadModel {
       return activeQuests.find((quest: any) => (quest.objectives ?? []).some((objective: any) => normalize(String(objective.text ?? "").replace(/\s*:\s*\d+\s*\/\s*\d+\s*$/, "").trim()) === normalize(name)))?.title;
     };
     const source = data.candidateSources.find((row) => row.source.identityKey === sourceCharacter.identityKey);
+    const sourceBagRead = this.getCharacterStorage({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm, storage: "bags" });
+    const sourceBagData: any = sourceBagRead.status === "FOUND" ? sourceBagRead.value.data : undefined;
+    const sourceLevel = data.recipient.level?.provenance === "OBSERVED" ? data.recipient.level.value : undefined;
+    const foreverBagSection: any = this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation?.bags;
+    const bagContainers = foreverBagSection?.data?.containers;
+    const bagSlots = (Array.isArray(bagContainers) ? bagContainers : bagContainers && typeof bagContainers === "object" ? Object.values(bagContainers) : []).flatMap((container: any) => {
+      const slots = container?.slots;
+      return Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : [];
+    });
+    const foodMetadataById = new Map<number, any>();
+    for (const row of bagSlots) if (row?.itemMetadataState === "OBSERVED" && typeof row.itemID === "number") foodMetadataById.set(row.itemID, row);
+    const highestUsableFoodTier = Math.max(0, ...[...foodMetadataById.values()].filter((row: any) => row.classID === 0 && row.subClassID === 5 && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (sourceLevel ?? -1)).map((row: any) => row.requiredLevel));
+    const bagSpaceConfig: MailBagSpaceConfig = { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, ...config.bagSpace };
+    const foodBagsTight = bagSpaceIsTight(sourceBagData?.freeSlots, bagSpaceConfig);
+    const holderProfessionEvidence = this.getCharacterProfessions({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+    const holderCookingEntry = holderProfessionEvidence?.status === "FOUND" && holderProfessionEvidence.value.provenance.state === "OBSERVED"
+      ? holderProfessionEvidence.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
+    const cookingKnowledge = holderProfessionEvidence?.status === "FOUND" ? holderProfessionEvidence.value.data?.recipeKnowledge as any : undefined;
+    const cookingFacts = cookingRecipeFacts(cookingKnowledge);
+    const cookingFireAvailable = observedCookingFireAvailable(this.snapshots(sourceCharacter.identityKey)[0]);
     const sameRealmFaction = eligibleMailRecipients(sourceCharacter, this.characters("forever"));
     const settingsScope = sourceCharacter.faction === "Alliance" || sourceCharacter.faction === "Horde"
       ? { accountId: query.accountId ?? "default", version: "forever" as const, realm: sourceCharacter.realm, faction: sourceCharacter.faction as "Alliance" | "Horde" }
@@ -1785,7 +1827,25 @@ export class DashboardReadModel {
         else keep.push(routed);
         continue;
       }
-      if (bucket === "materials" && source?.carried.state === "OBSERVED" && source.carried.freshness === "recent" && row.provenance !== "LAST_SEEN" && row.bound === false) { routeMaterial({ ...row, itemID: rowItemId }); continue; }
+      if (bucket === "materials" && foodBagsTight && source?.carried.state === "OBSERVED" && source.carried.freshness === "recent" && row.provenance !== "LAST_SEEN" && row.bound === false) {
+        const cookingPlan = planCookingMaterial({ itemId: rowItemId, itemName: row.name, quantity: row.quantity, cookingSkill: holderCookingEntry?.skill,
+          professionState: holderProfessionEvidence?.status === "FOUND" && holderProfessionEvidence.value.provenance.state === "OBSERVED" ? "OBSERVED" : holderProfessionEvidence?.status === "FOUND" && holderProfessionEvidence.value.provenance.state === "LAST_SEEN" ? "LAST_SEEN" : "UNKNOWN",
+          recipeCompleteness: cookingFacts.completeness, recipes: cookingFacts.recipes,
+          isCookingMaterial: row.itemMetadataState === "OBSERVED" && row.classID === 7 && row.subClassID === 8 });
+        if (cookingPlan) {
+          const cookingDecision = classifyMailItem({ version: "forever", bound: "UNBOUND", evidenceUsable: true, cookingMaterialPlan: cookingPlan, cookingFireAvailable,
+            cookingExcessDisposition: auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== sourceCharacter.identityKey ? "MAIL_TO_AUCTION_CHARACTER" : "VENDOR" });
+          const materialItem = { name: row.name, itemRef: row.itemRef, quantity: row.quantity };
+          const cookingDetails = { item: materialItem, ...(cookingDecision.quantityLimit !== undefined ? { keepQuantity: cookingDecision.quantityLimit } : {}), ...(cookingDecision.excessQuantity !== undefined ? { excessQuantity: cookingDecision.excessQuantity } : {}), ...(cookingDecision.excessDisposition ? { excessDisposition: cookingDecision.excessDisposition } : {}), reason: cookingDecision.reason };
+          if (cookingDecision.action === "KEEP") keep.push({ ...cookingDetails, disposition: "KEEP" });
+          else if (cookingDecision.action === "VENDOR") sale.push({ ...cookingDetails, disposition: "VENDOR" });
+          else if (cookingDecision.action === "ROUTE" && auctionCharacter.state === "ELIGIBLE") materialMail.push({ ...cookingDetails, disposition: "MAIL_TO_AUCTION_CHARACTER", auctionCharacter: { identityKey: auctionCharacter.character.identityKey, name: auctionCharacter.character.name, realm: auctionCharacter.character.realm } });
+          else keep.push({ ...cookingDetails, disposition: "UNDETERMINED", reason: `${cookingDecision.reason} Auction recipient is UNKNOWN.` });
+          continue;
+        }
+        routeMaterial({ ...row, itemID: rowItemId });
+        continue;
+      }
       const stale = source?.carried.state === "LAST_SEEN" || source?.carried.freshness === "stale" || row.provenance === "LAST_SEEN";
       if (stale || source?.carried.state !== "OBSERVED" || source.carried.freshness !== "recent") {
         noRecipient.push({ item: { name: row.name ?? "UNKNOWN item", itemRef: row.itemRef, quantity: row.quantity }, bucket: bucket === "questUtility" ? "quest/utility" : bucket, capturedBinding: row.bound === undefined ? "UNKNOWN" : row.bound ? "OBSERVED_BOUND" : "OBSERVED_UNBOUND", ...(source?.carried.observedAt !== undefined ? { lastSeenAt: new Date(source.carried.observedAt * 1000).toISOString() } : {}), reason: stale ? `Stale bag observation${source?.carried.observedAt !== undefined ? `; LAST_SEEN at ${new Date(source.carried.observedAt * 1000).toISOString()}` : "; LAST_SEEN time UNKNOWN"}.` : "Current bag evidence is not OBSERVED and recent." });
@@ -1793,6 +1853,12 @@ export class DashboardReadModel {
       }
       const rowClass = row.itemMetadataState === "OBSERVED" && typeof row.classID === "number" ? row.classID : itemMetadata?.classId.state === "KNOWN" ? itemMetadata.classId.value : row.itemType === "Weapon" ? 2 : row.itemType === "Armor" ? 4 : row.itemType === "Trade Goods" ? 7 : row.itemType === "Consumable" ? 0 : undefined;
       const ownUse = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.reagentProfessions.find((use: any) => use.itemId === rowItemId || typeof row.name === "string" && typeof use.name === "string" && use.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() === row.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim());
+      const foodMetadata = rowItemId === undefined ? undefined : foodMetadataById.get(rowItemId);
+      const foodText = `${row.tooltipText ?? foodMetadata?.tooltipText ?? ""} ${row.spellText ?? foodMetadata?.spellText ?? ""}`;
+      const rawFoodKind = row.foodKind ?? foodMetadata?.foodKind;
+      const foodKind = ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(rawFoodKind) ? rawFoodKind
+        : /well fed/i.test(foodText) ? "BUFF_FOOD" as const
+        : (rowClass === 0 || foodMetadata?.classID === 0) && (row.subClassID === 5 || foodMetadata?.subClassID === 5) ? "UNKNOWN" as const : undefined;
       const holderProfessions = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.professions;
       const sharedDecision = classifyMailItem({ version: "forever", itemId: rowItemId, name: row.name, held: false, bound: normalizeMailBinding(row.bound), evidenceUsable: true, ownRecipeUse: ownUse?.profession, objectiveQuest: questForItem(row.name), recipeItem: /^Recipe:\s*/i.test(row.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", rowItemId, row.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
         const holder = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey);
@@ -1806,11 +1872,16 @@ export class DashboardReadModel {
           return { professionState: "KNOWN" as const, hasProfession: true, profession: row.requiredProfession, requiredSkill: row.requiredSkill, ...(typeof profession.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: row.recipeAlreadyKnown === false ? "NOT_LEARNED" as const : row.recipeAlreadyKnown === true ? "LEARNED" as const : "UNKNOWN" as const };
         })() : undefined,
         requiredProfession: row.itemMetadataState === "OBSERVED" && row.requiredProfession && holderProfessions?.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === row.requiredProfession.toLowerCase()) ? row.requiredProfession : undefined,
-        itemClass: rowClass, subClassID: row.itemMetadataState === "OBSERVED" ? row.subClassID : undefined, equipLoc: row.itemMetadataState === "OBSERVED" ? row.equipLoc : undefined, itemMetadataState: row.itemMetadataState, classCanEquip: classicClassCanEquip("forever", this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.class, rowClass, row.subClassID, row.equipLoc), quality: typeof row.quality === "number" ? row.quality : undefined, vendorEachCopper: row.vendorCopper,
+        itemClass: rowClass ?? foodMetadata?.classID, subClassID: row.itemMetadataState === "OBSERVED" ? row.subClassID : foodMetadata?.subClassID, equipLoc: row.itemMetadataState === "OBSERVED" ? row.equipLoc : foodMetadata?.equipLoc, itemMetadataState: row.itemMetadataState === "OBSERVED" || foodMetadata ? "OBSERVED" : row.itemMetadataState, foodKind, foodQuantity: row.quantity, foodStackSize: row.foodStackSize ?? foodMetadata?.foodStackSize, foodEvidence: rawFoodKind ? "ITEM_DATA" : /well fed/i.test(foodText) ? "TOOLTIP" : undefined, foodBagsTight, highestUsableFoodTier, bagSpaceConfig, requiredLevel: row.requiredLevel ?? foodMetadata?.requiredLevel, holderLevel: sourceLevel, classCanEquip: classicClassCanEquip("forever", this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.class, rowClass, row.subClassID ?? foodMetadata?.subClassID, row.equipLoc ?? foodMetadata?.equipLoc), quality: typeof row.quality === "number" ? row.quality : typeof foodMetadata?.quality === "number" ? foodMetadata.quality : undefined, vendorEachCopper: row.vendorCopper ?? foodMetadata?.vendorCopper,
         equippable: rowClass === 2 || rowClass === 4 || row.itemType === "Armor" || row.itemType === "Weapon", consumable: rowClass === 0 || bucket === "consumables", conjured: rowItemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(rowItemId) });
       if (sharedDecision.action !== "ROUTE") {
         if (sharedDecision.action === "VENDOR") { sale.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: "VENDOR", reason: sharedDecision.reason }); continue; }
-        keep.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: sharedDecision.action === "UNDETERMINED" ? "UNDETERMINED" : sharedDecision.action, reason: sharedDecision.reason });
+        keep.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: sharedDecision.action === "UNDETERMINED" ? "UNDETERMINED" : sharedDecision.action, ...(sharedDecision.quantityLimit !== undefined ? { keepQuantity: sharedDecision.quantityLimit } : {}), reason: sharedDecision.reason });
+        continue;
+      }
+      if (foodKind && foodKind !== "UNKNOWN") {
+        if (auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== sourceCharacter.identityKey) materialMail.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: "MAIL_TO_AUCTION_CHARACTER", auctionCharacter: { identityKey: auctionCharacter.character.identityKey, name: auctionCharacter.character.name, realm: auctionCharacter.character.realm }, reason: sharedDecision.reason });
+        else keep.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: "UNDETERMINED", reason: "Food or drink is unusable at the observed level, but an eligible auction character is UNKNOWN." });
         continue;
       }
       noRecipient.push({ item: { name: row.name ?? "UNKNOWN item", itemRef: row.itemRef, quantity: row.quantity }, bucket: bucket === "questUtility" ? "quest/utility" : bucket, capturedBinding: row.bound === undefined ? "UNKNOWN" : row.bound ? "OBSERVED_BOUND" : "OBSERVED_UNBOUND", ...(stale && source?.carried.observedAt !== undefined ? { lastSeenAt: new Date(source.carried.observedAt * 1000).toISOString() } : {}), reason: stale ? `Stale bag observation${source?.carried.observedAt !== undefined ? `; LAST_SEEN at ${new Date(source.carried.observedAt * 1000).toISOString()}` : "; LAST_SEEN time UNKNOWN"}.` : row.reason ?? "Classification UNKNOWN." });
@@ -1822,6 +1893,7 @@ export class DashboardReadModel {
       return { character: character.name, realm: character.realm, state: result.status === "FOUND" ? result.value.provenance.state : result.status, professions: result.status === "FOUND" ? result.value.data?.entries?.map((entry) => entry.name) ?? "UNKNOWN" : "UNKNOWN" };
     });
     for (const entry of data.allocationPlan.filter((row) => row.source.identityKey === sourceCharacter.identityKey && row.source.location === "EQUIPPED")) keep.push({ item: entry.item, reason: "Already equipped." });
+    keep.splice(0, keep.length, ...rankKeptFoodRows(keep));
     const observedAt = data.recipient.observedAt;
     const buildVerification = data.buildVerification;
     const sourceProfile = (this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation as { clientProfile?: string } | undefined)?.clientProfile;
@@ -1834,7 +1906,7 @@ export class DashboardReadModel {
   }
 
   /** Classic Era mail-plan projection. All facts come from Era WOWSYNC sections; AH remains UNKNOWN. */
-  getClassicEraMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[] } = {}) {
+  getClassicEraMailPlan(query: CharacterQuery & { accountId?: string }, config: { holdItemIds?: readonly number[]; bagSpace?: Partial<MailBagSpaceConfig> } = {}) {
     if (query.version !== "classic-era") return { status: "FOUND" as const, value: { provenance: { state: "UNKNOWN" as const, version: query.version, reason: "Classic Era mail planning only accepts classic-era snapshots." } } };
     return this.resolve(query, (character, snapshot) => {
       const snapshots = this.snapshots(character.identityKey);
@@ -1915,7 +1987,28 @@ export class DashboardReadModel {
       const mainCharacter = settingsScope
         ? resolveMailSettingsCharacter(settings?.mainCharacterIdentityKey, settingsScope, roster)
         : { state: "UNDETERMINED" as const, reason: "Holder faction is UNKNOWN; main-character scope cannot be established." };
-      const items = bags.items.map((item) => {
+      // The character-bags read model includes Classic sidecar slots that are not
+      // present in the legacy [BAGS] section. Mail planning must use that same
+      // complete observed row set instead of silently omitting those items.
+      const mailBagRows = [...bags.items];
+      const knownBagRefs = new Set(mailBagRows.map((row) => row.itemRef).filter((ref): ref is string => typeof ref === "string"));
+      for (const row of structuredBagRows) {
+        const itemRef = typeof row?.itemString === "string" ? row.itemString : typeof row?.itemID === "number" ? `item:${row.itemID}` : undefined;
+        if (itemRef && knownBagRefs.has(itemRef)) continue;
+        if (itemRef) knownBagRefs.add(itemRef);
+        mailBagRows.push({ name: typeof row?.name === "string" ? row.name : "UNKNOWN item", itemRef, qty: typeof row?.count === "number" ? row.count : undefined,
+          bound: typeof row?.bound === "boolean" ? row.bound : undefined, vendorEachCopper: typeof row?.vendorCopper === "number" ? row.vendorCopper : undefined });
+      }
+      const highestUsableFoodTier = Math.max(0, ...structuredBagRows.filter((row: any) => row?.itemMetadataState === "OBSERVED" && row.classID === 0 && row.subClassID === 5
+        && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (profile.level ?? -1)).map((row: any) => row.requiredLevel));
+      const bagSpaceConfig: MailBagSpaceConfig = { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, ...config.bagSpace };
+      const foodBagsTight = bags.totalSlots !== undefined && bagSpaceIsTight(bags.freeSlots, bagSpaceConfig);
+      const classicCookingEntry = holderProfessionResult.status === "FOUND" && holderProfessionResult.value.provenance.state === "OBSERVED"
+        ? holderProfessionResult.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
+      const classicCookingKnowledge = holderProfessionResult.status === "FOUND" ? holderProfessionResult.value.data?.recipeKnowledge as any : undefined;
+      const classicCookingFacts = cookingRecipeFacts(classicCookingKnowledge);
+      const cookingFireAvailable = observedCookingFireAvailable(snapshot);
+      const items = mailBagRows.map((item) => {
         const itemId = itemIdFromItemRef(item.itemRef);
         const rowMeta: any = structuredBagRows.find((row: any) => row?.itemID === itemId || row?.itemString === item.itemRef);
         const bindingState = normalizeMailBinding(item.bound);
@@ -1950,8 +2043,16 @@ export class DashboardReadModel {
         const metadata = itemId === undefined ? undefined : this.store.getItemMetadata("classic-era", [itemId])[0];
         const metadataClass = rowMeta ? rowMeta.itemMetadataState === "OBSERVED" ? rowMeta.classID : undefined : metadata?.classId.state === "KNOWN" ? metadata.classId.value : undefined;
         const metadataSubclass = rowMeta ? rowMeta.itemMetadataState === "OBSERVED" ? rowMeta.subClassID : undefined : metadata?.subclassId.state === "KNOWN" ? metadata.subclassId.value : undefined;
+        const cookingMaterialPlan = foodBagsTight ? planCookingMaterial({ itemId, itemName: item.name, quantity: item.qty, cookingSkill: classicCookingEntry?.skill,
+          professionState: holderProfessionResult.status === "FOUND" && holderProfessionResult.value.provenance.state === "OBSERVED" ? "OBSERVED" : holderProfessionResult.status === "FOUND" && holderProfessionResult.value.provenance.state === "LAST_SEEN" ? "LAST_SEEN" : "UNKNOWN",
+          recipeCompleteness: classicCookingFacts.completeness, recipes: classicCookingFacts.recipes,
+          isCookingMaterial: rowMeta?.itemMetadataState === "OBSERVED" && metadataClass === 7 && metadataSubclass === 8 }) : undefined;
         const metadataConsumable = metadataClass === 0 && [0, 1, 2, 3, 4, 5, 7].includes(metadataSubclass ?? -1);
         const consumable = rowMeta?.itemMetadataState === "OBSERVED" ? metadataConsumable : metadataConsumable || (itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(itemId));
+        const tooltipOrSpell = `${rowMeta?.tooltipText ?? ""} ${rowMeta?.spellText ?? ""}`;
+        const foodKind = ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(rowMeta?.foodKind) ? rowMeta.foodKind
+          : /well fed/i.test(tooltipOrSpell) ? "BUFF_FOOD" as const
+          : metadataClass === 0 && metadataSubclass === 5 ? "UNKNOWN" as const : undefined;
         const objectiveQuest = activeQuests.find((quest: any) => (quest.objectives ?? []).some((objective: any) => {
           const text = String(objective.text ?? "");
           const target = text.replace(/\s*:\s*\d+\s*\/\s*\d+\s*$/, "").trim();
@@ -2018,10 +2119,8 @@ export class DashboardReadModel {
           })() : undefined),
           reagentForRecipeToLearn: recipeReagentsToProtect.some((reagent) => reagent.state === "LEARNABLE" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
           reagentForUnresolvedRecipe: potentialUses.length > 0 || recipeReagentsToProtect.some((reagent) => reagent.state === "UNKNOWN" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
-          objectiveQuest: objectiveQuest?.title, itemClass: metadataClass, consumable, conjured, classCanEquip: classicClassCanEquip("classic-era", profile.class, metadataClass, metadataSubclass, rowMeta?.equipLoc), quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession && holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession!.toLowerCase()) ? rowMeta.requiredProfession : undefined, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
-        const action = bindingState === "BOUND" ? "KEEP"
-          : bindingState === "UNKNOWN" ? "UNDETERMINED"
-          : !usable ? "UNDETERMINED"
+          objectiveQuest: objectiveQuest?.title, cookingMaterialPlan, cookingFireAvailable, cookingExcessDisposition: auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== character.identityKey ? "MAIL_TO_AUCTION_CHARACTER" : "VENDOR", itemClass: metadataClass, consumable, conjured, foodKind, foodQuantity: item.qty, foodStackSize: rowMeta?.foodStackSize, foodEvidence: rowMeta?.foodKind ? "ITEM_DATA" : /well fed/i.test(tooltipOrSpell) ? "TOOLTIP" : undefined, foodBagsTight, highestUsableFoodTier, bagSpaceConfig, classCanEquip: classicClassCanEquip("classic-era", profile.class, metadataClass, metadataSubclass, rowMeta?.equipLoc), quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession && holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession!.toLowerCase()) ? rowMeta.requiredProfession : undefined, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
+        const action = !usable ? "UNDETERMINED"
           : incompleteUseEvidence.length ? "KEEP"
           : sharedDecision.action === "KEEP" ? (objectiveQuest ? "KEEP_FOR_QUEST" : "KEEP")
           : sharedDecision.action === "LEARN_RECIPE" ? "LEARN_RECIPE"
@@ -2041,7 +2140,7 @@ export class DashboardReadModel {
           : learnReagents.includes(itemId ?? -1) ? "reagent for recipe to learn"
           : conjured ? "conjured, can't be mailed"
           : consumable ? `consumable usable by ${character.name}`
-          : metadataClass === 2 || metadataClass === 4 ? "possible upgrade, unverified"
+          : metadataClass === 2 || metadataClass === 4 ? "Observed equipment item; upgrade suitability is UNKNOWN."
           : metadataClass === undefined ? "item class UNKNOWN; safe mail eligibility is unverified"
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
@@ -2058,6 +2157,9 @@ export class DashboardReadModel {
           ...(item.qty !== undefined ? { quantity: item.qty } : {}),
           binding: bindingState === "UNBOUND" ? "OBSERVED_UNBOUND" : bindingState === "BOUND" ? "OBSERVED_BOUND" : "UNKNOWN",
           vendorEachCopper: item.vendorEachCopper,
+          ...(sharedDecision.quantityLimit !== undefined ? { keepQuantity: sharedDecision.quantityLimit } : {}),
+          ...("excessQuantity" in sharedDecision && sharedDecision.excessQuantity !== undefined ? { excessQuantity: sharedDecision.excessQuantity } : {}),
+          ...("excessDisposition" in sharedDecision && sharedDecision.excessDisposition ? { excessDisposition: sharedDecision.excessDisposition } : {}),
           auctionHouseValue: "UNKNOWN" as const,
           action: action === "KEEP_FOR_QUEST" ? "KEEP" : action, ...(action === "LEARN_RECIPE" ? { disposition: "LEARN_RECIPE" } : {}), ...(recipient ? { recipient } : {}),
           ...(action === "MAIL_TO_AUCTION_CHARACTER" && auctionCharacter.state === "ELIGIBLE" ? { recipient: { identityKey: auctionCharacter.character.identityKey, name: auctionCharacter.character.name }, saleAction: "SELL_AH" as const } : {}),
@@ -2065,6 +2167,10 @@ export class DashboardReadModel {
           ...(craftChoice.state === "UNDETERMINED" && observedUses.length ? { tiedCrafterCandidates: craftChoice.candidates } : {}),
         };
       });
+      items.splice(0, items.length, ...rankKeptFoodRows(items));
+      if (items.length !== mailBagRows.length || items.some((row) => !["KEEP", "VENDOR", "LEARN_RECIPE", "MAIL_TO_AUCTION_CHARACTER", "MAIL_TO_CRAFTER", "SELL_AH", "UNDETERMINED"].includes(row.action))) {
+        throw new Error(`Classic Era mail-plan coverage invariant failed: ${items.length} planned rows for ${mailBagRows.length} bag rows.`);
+      }
       const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
       const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
         gear: [],
@@ -2494,7 +2600,16 @@ export class DashboardReadModel {
       });
     };
     const metadataRows = structuredRows(structuredBag);
-    const items = (source.items ?? []).map((item) => {
+    const bagRows = [...(source.items ?? [])];
+    const knownBagRefs = new Set(bagRows.map((item) => item.itemRef).filter((ref): ref is string => typeof ref === "string"));
+    for (const row of metadataRows) {
+      const itemRef = typeof row.itemString === "string" ? row.itemString : typeof row.itemID === "number" ? `item:${row.itemID}` : undefined;
+      if (!itemRef || knownBagRefs.has(itemRef)) continue;
+      knownBagRefs.add(itemRef);
+      bagRows.push({ name: typeof row.name === "string" ? row.name : "UNKNOWN item", itemRef, qty: typeof row.count === "number" ? row.count : undefined,
+        ...(typeof row.bound === "boolean" ? { bound: row.bound } : {}), ...(typeof row.vendorCopper === "number" ? { vendorEachCopper: row.vendorCopper } : {}) } as NonNullable<typeof source.items>[number]);
+    }
+    const items = bagRows.map((item) => {
       const itemID = itemIdFromItemRef(item.itemRef);
       const structured = metadataRows.find((row: any) => row.itemID === itemID || row.itemString && row.itemString === item.itemRef);
       const itemMetadataState = structured?.itemMetadataState === "OBSERVED" ? "OBSERVED" as const : "UNKNOWN" as const;
