@@ -1,4 +1,5 @@
 import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
+import { planFoodDrink } from "./foodDrinkPlanning.ts";
 import type { WowVersion } from "./types.ts";
 export type MailBindingState = "BOUND" | "UNBOUND" | "UNKNOWN";
 export function normalizeMailBinding(value: unknown): MailBindingState {
@@ -13,11 +14,11 @@ export function normalizeMailBinding(value: unknown): MailBindingState {
 }
 
 export type SharedMailItemDecision =
-  | { action: "KEEP"; reason: string }
-  | { action: "UNDETERMINED"; reason: string }
-  | { action: "LEARN_RECIPE"; reason: string }
-  | { action: "VENDOR"; reason: string }
-  | { action: "ROUTE"; reason?: string };
+  | { action: "KEEP"; reason: string; quantityLimit?: number }
+  | { action: "UNDETERMINED"; reason: string; quantityLimit?: number }
+  | { action: "LEARN_RECIPE"; reason: string; quantityLimit?: number }
+  | { action: "VENDOR"; reason: string; quantityLimit?: number }
+  | { action: "ROUTE"; reason?: string; quantityLimit?: number };
 
 /** Flavor-neutral item safeguards. Routing destinations and snapshot/build gates remain in each planner. */
 export function classifyMailItem(input: {
@@ -48,10 +49,15 @@ export function classifyMailItem(input: {
   requiredProfession?: string;
   requiredSkill?: number;
   classCanEquip?: boolean;
+  /** Item-data-derived food/drink category. UNKNOWN is kept without a tier guess. */
+  foodKind?: "FOOD" | "DRINK" | "BUFF_FOOD" | "UNKNOWN";
+  foodQuantity?: number;
+  foodStackSize?: number;
+  foodEvidence?: "ITEM_DATA" | "SPELL" | "TOOLTIP";
+  foodBagsTight?: boolean;
+  highestUsableFoodTier?: number;
 }): SharedMailItemDecision {
   if (input.held) return { action: "KEEP", reason: "on hold list" };
-  if (input.bound === "BOUND") return { action: "KEEP", reason: "Item is OBSERVED bound and cannot be routed to another character." };
-  if (input.bound === "UNKNOWN") return { action: "UNDETERMINED", reason: "Binding is UNKNOWN; safe routing cannot be established." };
   if (input.evidenceUsable === false) return { action: "UNDETERMINED", reason: "Required bag, identity, or build evidence is not current and usable." };
   const normalize = (value: string) => value.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   if (input.ownRecipeUse || (input.name && input.ownRecipeUseNames?.some((name) => normalize(name) === normalize(input.name!)))) return { action: "KEEP", reason: `used by known recipe ${input.ownRecipeUse ?? input.name}; keep on holder` };
@@ -70,17 +76,30 @@ export function classifyMailItem(input: {
   }
   else if (input.requiredProfession && typeof input.requiredSkill === "number" && input.recipeAlreadyKnown === false) return { action: "LEARN_RECIPE", reason: `learn recipe for ${input.requiredProfession} at skill ${input.requiredSkill}` };
   if (input.objectiveQuest) return { action: "KEEP", reason: `needed for active quest ${input.objectiveQuest}` };
-  if (input.quality === 0) return input.vendorEachCopper === undefined
-    ? { action: "UNDETERMINED", reason: "Quality 0 is OBSERVED, but vendor value is UNKNOWN." }
-    : { action: "VENDOR", reason: `OBSERVED gray item; vendor value ${input.vendorEachCopper} copper each` };
-  if (input.classCanEquip === false) return { action: "ROUTE" };
+  if (input.quality === 0) return { action: "VENDOR", reason: input.vendorEachCopper === undefined
+    ? "OBSERVED gray item; vendor value is UNKNOWN."
+    : `OBSERVED gray item; vendor value ${input.vendorEachCopper} copper each` };
+  const observedEquipment = input.itemMetadataState === "OBSERVED" && (input.itemClass === 2 || input.itemClass === 4 || !!input.equipLoc && input.equipLoc !== "INVTYPE_NON_EQUIP_IGNORE");
+  const equipmentUnusable = input.classCanEquip === false || observedEquipment && input.requiredLevel !== undefined && input.holderLevel !== undefined && input.requiredLevel > input.holderLevel;
+  if (input.bound === "BOUND") {
+    if (equipmentUnusable) return { action: "VENDOR", reason: input.vendorEachCopper === undefined
+      ? "OBSERVED bound item is unusable; vendor value is UNKNOWN."
+      : `OBSERVED bound item is unusable; vendor value ${input.vendorEachCopper} copper each` };
+    return { action: "KEEP", reason: "Item is OBSERVED bound and cannot be routed to another character." };
+  }
+  if (input.bound === "UNKNOWN") return { action: "UNDETERMINED", reason: "Binding is UNKNOWN; safe routing cannot be established." };
+  if (input.foodKind) {
+    const food = planFoodDrink({ kind: input.foodKind, ...(input.requiredLevel !== undefined ? { requiredLevel: input.requiredLevel } : {}), ...(input.foodQuantity !== undefined ? { quantity: input.foodQuantity } : {}), ...(input.foodStackSize !== undefined ? { stackSize: input.foodStackSize } : {}), ...(input.foodEvidence ? { evidence: input.foodEvidence } : {}) }, input.holderLevel, input.foodBagsTight === true, input.highestUsableFoodTier);
+    return { action: food.action === "MAIL_TO_AUCTION_CHARACTER" ? "ROUTE" : food.action, reason: food.reason, ...(typeof food.keepQuantity === "number" ? { quantityLimit: food.keepQuantity } : {}) };
+  }
+  if (equipmentUnusable) return { action: "ROUTE" };
   const fallbackVersion = (input.version === "classic-era" || input.version === "forever") && input.itemMetadataState !== "OBSERVED";
   if (fallbackVersion && (input.conjured || input.itemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(input.itemId))) return { action: "KEEP", reason: "conjured, can't be mailed" };
   const observedConsumable = input.itemMetadataState === "OBSERVED" && input.itemClass === 0;
   const observedEquippable = input.itemMetadataState === "OBSERVED" && (input.itemClass === 2 || input.itemClass === 4 || !!input.equipLoc && input.equipLoc !== "INVTYPE_NON_EQUIP_IGNORE");
   const levelUsable = input.requiredLevel === undefined || input.holderLevel === undefined || input.requiredLevel <= input.holderLevel;
   if ((observedConsumable || fallbackVersion && (input.consumable || input.itemId !== undefined && CLASSIC_CONSUMABLE_FALLBACK_IDS.has(input.itemId))) && levelUsable) return { action: "KEEP", reason: "consumable" };
-  if (input.equippable || observedEquippable || input.itemMetadataState !== "OBSERVED" && (input.itemClass === 2 || input.itemClass === 4)) return { action: "KEEP", reason: "possible upgrade, unverified" };
+  if (input.equippable || observedEquippable || input.itemMetadataState !== "OBSERVED" && (input.itemClass === 2 || input.itemClass === 4)) return { action: "KEEP", reason: "Observed equipment item; upgrade suitability is UNKNOWN." };
   if (input.itemClass === undefined) return { action: "KEEP", reason: "item class UNKNOWN; safe mail eligibility is unverified" };
   return { action: "ROUTE" };
 }

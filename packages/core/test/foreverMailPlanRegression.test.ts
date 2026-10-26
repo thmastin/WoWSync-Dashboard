@@ -8,6 +8,7 @@ import { SqliteSnapshotStore } from "../src/sqliteStore.ts";
 import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { classifyMailItem } from "../src/mailItemClassification.ts";
 import { recipeLearningRequirement } from "../src/recipeLearningRequirements.ts";
+import { planFoodDrink, rankFoodDrinkRows } from "../src/foodDrinkPlanning.ts";
 
 const scenario = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/forever/mail-routing-dev-anonymized.json", import.meta.url)), "utf8")).snapshot541Scenario;
 const NOW = 1_792_724_851;
@@ -95,7 +96,9 @@ test("Hallo Forever fixture uses the shared version-scoped item safeguards", () 
     assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", name: "Linen Cloth", ownRecipeUseNames: ["linen-cloth"] }).action, "KEEP");
     assert.equal(classifyMailItem({ version: "forever", itemId: 117, bound: "UNBOUND" }).action, "KEEP");
     assert.equal(classifyMailItem({ version: "forever", itemId: 5512, bound: "UNBOUND" }).reason, "conjured, can't be mailed");
-    assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", equippable: true }).reason, "possible upgrade, unverified");
+    assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", equippable: true }).reason, "Observed equipment item; upgrade suitability is UNKNOWN.");
+    assert.equal(classifyMailItem({ version: "forever", bound: "BOUND", classCanEquip: false, vendorEachCopper: 12 }).action, "VENDOR");
+    assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", classCanEquip: false }).action, "ROUTE");
     const recipeRequirement = recipeLearningRequirement("forever", 2889);
     assert.equal(recipeRequirement?.requiredSkill, 25);
     assert.equal(classifyMailItem({ version: "forever", itemId: 2889, bound: "UNBOUND", recipeItem: { professionState: "KNOWN", hasProfession: true, profession: "Cooking", recipeName: "Beer Basted Boar Ribs", requiredSkill: 25, holderSkill: 8, learnedState: "UNKNOWN" } }).reason, "learn at Cooking 25 (now 8)");
@@ -103,4 +106,22 @@ test("Hallo Forever fixture uses the shared version-scoped item safeguards", () 
     assert.equal(bags.status, "FOUND");
     if (bags.status === "FOUND") assert.ok((bags.value.data?.items?.length ?? 0) > 0, "Hallo fixture bag rows stay available in the Forever read model");
   } finally { store.close(); }
+});
+
+test("shared food and drink rules rank observed tiers and preserve unknowns", () => {
+  const high = planFoodDrink({ kind: "FOOD", requiredLevel: 10, quantity: 2 }, 12, false);
+  const low = planFoodDrink({ kind: "FOOD", requiredLevel: 5, quantity: 4 }, 12, true, 10);
+  const buff = planFoodDrink({ kind: "BUFF_FOOD", requiredLevel: 8, quantity: 3, stackSize: 1, evidence: "TOOLTIP" }, 12, true);
+  const future = planFoodDrink({ kind: "DRINK", requiredLevel: 15, quantity: 1 }, 12, false);
+  const unknown = planFoodDrink({ kind: "UNKNOWN", quantity: 7 }, 12, false);
+  assert.equal(high.action, "KEEP");
+  assert.equal(low.action, "VENDOR");
+  assert.equal(buff.keepQuantity, 1);
+  assert.equal(future.action, "MAIL_TO_AUCTION_CHARACTER");
+  assert.equal(unknown.action, "KEEP");
+  assert.equal(classifyMailItem({ version: "forever", bound: "UNBOUND", foodKind: "FOOD", foodQuantity: 1, requiredLevel: 15, holderLevel: 12 }).action, "ROUTE");
+  assert.match(classifyMailItem({ version: "classic-era", bound: "UNBOUND", foodKind: "BUFF_FOOD", foodQuantity: 3, foodStackSize: 1, requiredLevel: 8, holderLevel: 12 }).reason ?? "", /one stack \(1\)/);
+  assert.match(classifyMailItem({ version: "forever", bound: "UNBOUND", foodKind: "UNKNOWN", foodQuantity: 3 }).reason ?? "", /category is UNKNOWN/);
+  assert.deepEqual(rankFoodDrinkRows([{ id: "low", tier: 5, sourceOrder: 0 }, { id: "unknown", tier: "UNKNOWN" as const, sourceOrder: 1 }, { id: "high", tier: 10, sourceOrder: 2 }]).map((row) => row.id), ["high", "low", "unknown"]);
+  assert.match(buff.reason, /quantity 3/);
 });
