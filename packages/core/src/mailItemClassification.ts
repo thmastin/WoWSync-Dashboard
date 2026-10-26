@@ -1,5 +1,5 @@
 import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
-import { planFoodDrink } from "./foodDrinkPlanning.ts";
+import { DEFAULT_MAIL_BAG_SPACE_CONFIG, planFoodDrink, type CookingMaterialPlan, type MailBagSpaceConfig } from "./foodDrinkPlanning.ts";
 import type { WowVersion } from "./types.ts";
 export type MailBindingState = "BOUND" | "UNBOUND" | "UNKNOWN";
 export function normalizeMailBinding(value: unknown): MailBindingState {
@@ -14,11 +14,11 @@ export function normalizeMailBinding(value: unknown): MailBindingState {
 }
 
 export type SharedMailItemDecision =
-  | { action: "KEEP"; reason: string; quantityLimit?: number }
-  | { action: "UNDETERMINED"; reason: string; quantityLimit?: number }
-  | { action: "LEARN_RECIPE"; reason: string; quantityLimit?: number }
-  | { action: "VENDOR"; reason: string; quantityLimit?: number }
-  | { action: "ROUTE"; reason?: string; quantityLimit?: number };
+  | { action: "KEEP"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
+  | { action: "UNDETERMINED"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
+  | { action: "LEARN_RECIPE"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
+  | { action: "VENDOR"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
+  | { action: "ROUTE"; reason?: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" };
 
 /** Flavor-neutral item safeguards. Routing destinations and snapshot/build gates remain in each planner. */
 export function classifyMailItem(input: {
@@ -56,6 +56,10 @@ export function classifyMailItem(input: {
   foodEvidence?: "ITEM_DATA" | "SPELL" | "TOOLTIP";
   foodBagsTight?: boolean;
   highestUsableFoodTier?: number;
+  bagSpaceConfig?: MailBagSpaceConfig;
+  cookingMaterialPlan?: CookingMaterialPlan;
+  cookingFireAvailable?: boolean;
+  cookingExcessDisposition?: "VENDOR" | "MAIL_TO_AUCTION_CHARACTER";
 }): SharedMailItemDecision {
   if (input.held) return { action: "KEEP", reason: "on hold list" };
   if (input.evidenceUsable === false) return { action: "UNDETERMINED", reason: "Required bag, identity, or build evidence is not current and usable." };
@@ -76,6 +80,15 @@ export function classifyMailItem(input: {
   }
   else if (input.requiredProfession && typeof input.requiredSkill === "number" && input.recipeAlreadyKnown === false) return { action: "LEARN_RECIPE", reason: `learn recipe for ${input.requiredProfession} at skill ${input.requiredSkill}` };
   if (input.objectiveQuest) return { action: "KEEP", reason: `needed for active quest ${input.objectiveQuest}` };
+  if (input.cookingMaterialPlan) {
+    const plan = input.cookingMaterialPlan;
+    if (plan.state === "UNKNOWN") return { action: "KEEP", reason: plan.reason };
+    if (typeof plan.keepQuantity !== "number" || typeof plan.excessQuantity !== "number") return { action: "KEEP", reason: plan.reason };
+    const extra = plan.excessQuantity;
+    const excessDisposition = extra > 0 ? input.cookingFireAvailable === true && plan.nextRecipe ? "COOK_FIRST" as const : input.cookingExcessDisposition ?? "VENDOR" as const : undefined;
+    const action = plan.keepQuantity > 0 || excessDisposition === "COOK_FIRST" ? "KEEP" as const : excessDisposition === "MAIL_TO_AUCTION_CHARACTER" ? "ROUTE" as const : excessDisposition === "VENDOR" ? "VENDOR" as const : "KEEP" as const;
+    return { action, quantityLimit: plan.keepQuantity, excessQuantity: extra, ...(excessDisposition ? { excessDisposition } : {}), reason: `${plan.reason}${extra > 0 ? excessDisposition === "COOK_FIRST" ? ` COOK_FIRST: use the observed ${plan.nextRecipe} recipe when a fire is available.` : ` Excess ${extra}: ${excessDisposition}.` : ""}` };
+  }
   if (input.quality === 0) return { action: "VENDOR", reason: input.vendorEachCopper === undefined
     ? "OBSERVED gray item; vendor value is UNKNOWN."
     : `OBSERVED gray item; vendor value ${input.vendorEachCopper} copper each` };
@@ -89,7 +102,7 @@ export function classifyMailItem(input: {
   }
   if (input.bound === "UNKNOWN") return { action: "UNDETERMINED", reason: "Binding is UNKNOWN; safe routing cannot be established." };
   if (input.foodKind) {
-    const food = planFoodDrink({ kind: input.foodKind, ...(input.requiredLevel !== undefined ? { requiredLevel: input.requiredLevel } : {}), ...(input.foodQuantity !== undefined ? { quantity: input.foodQuantity } : {}), ...(input.foodStackSize !== undefined ? { stackSize: input.foodStackSize } : {}), ...(input.foodEvidence ? { evidence: input.foodEvidence } : {}) }, input.holderLevel, input.foodBagsTight === true, input.highestUsableFoodTier);
+    const food = planFoodDrink({ kind: input.foodKind, ...(input.requiredLevel !== undefined ? { requiredLevel: input.requiredLevel } : {}), ...(input.foodQuantity !== undefined ? { quantity: input.foodQuantity } : {}), ...(input.foodStackSize !== undefined ? { stackSize: input.foodStackSize } : {}), ...(input.foodEvidence ? { evidence: input.foodEvidence } : {}) }, input.holderLevel, input.foodBagsTight === true, input.highestUsableFoodTier, input.bagSpaceConfig ?? DEFAULT_MAIL_BAG_SPACE_CONFIG);
     return { action: food.action === "MAIL_TO_AUCTION_CHARACTER" ? "ROUTE" : food.action, reason: food.reason, ...(typeof food.keepQuantity === "number" ? { quantityLimit: food.keepQuantity } : {}) };
   }
   if (equipmentUnusable) return { action: "ROUTE" };
