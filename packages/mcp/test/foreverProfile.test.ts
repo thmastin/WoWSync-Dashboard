@@ -8,12 +8,13 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { test } from "node:test";
 import { SqliteSnapshotStore } from "@wowsync-dashboard/core";
+import { importPolestarCodex, parsePolestarCodexFiles } from "@wowsync-dashboard/core/polestarCodex.ts";
 import { buildWowSyncExport } from "../../core/test/fixtureBuilder.ts";
 
 const root = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 const entrypoint = path.join(root, "packages", "mcp", "src", "index.ts");
 const packageRoot = path.join(root, "packages", "mcp");
-const foreverNames = ["analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_bags", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_forever_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"];
+const foreverNames = ["lookup_item_sources", "lookup_npc", "lookup_dungeon", "suggest_for_level", "analyze_retail_gear_candidate", "ask_forever_copilot", "find_recipe_crafters", "get_account_changes", "get_account_currencies", "get_account_overview", "get_allocation_review", "get_character_bags", "get_character_changes", "get_character_currencies", "get_character_equipment", "get_character_history", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_spells", "get_character_state", "get_character_storage", "get_character_summary", "get_character_trainer", "get_erp_change_proposal", "get_erp_change_proposals", "get_erp_operations_context", "get_erp_project", "get_erp_projects", "get_forever_character_quests", "get_forever_crafted_upgrade_assessment", "get_forever_gear_allocation", "get_forever_gear_observation", "get_forever_items", "get_forever_mail_plan", "get_forever_market_prices", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen", "get_item_allocation", "get_item_metadata", "get_profession_coverage", "get_recipe_reagent_availability", "get_renown", "get_research_document", "get_research_section", "get_shared_storage", "list_characters", "list_forever_characters", "list_research_documents", "list_versions", "lookup_forever_knowledge", "search_items", "search_research"].sort();
 const classicEraNames = ["get_character_bags", "get_character_professions", "get_character_progression", "get_character_quests", "get_character_state", "get_character_trainer", "get_classic_era_mail_plan", "get_recipe_reagent_availability", "list_classic_era_characters"].sort();
 
 test("MCP profile exposes exactly its documented tools and bounds crafter results", async () => {
@@ -32,6 +33,10 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
     .replace("Client: 1.15.9 build 70003\n", "Client: 1.15.9 build 70003\nGUID: Player-529-ANON\nTalentStatus: OBSERVED\ntalentTree\tname\tpointsSpent\ntalentTree\tArms\t31\ntalentTree\tFury\t20\ntalentTree\tProtection\t0\n");
   writer.importSnapshot(eraRaw);
   writer.close();
+  importPolestarCodex(databasePath, parsePolestarCodexFiles({
+    "Meta.lua": 'C.Register("meta", { build = "fixture.1", schema = 1 })',
+    "Items1.lua": 'C.Register("item", [[\n100\t\tFixture Blade]], [[\n100\t3;10;;;;;;v42,100,0,e]], 100, 100)',
+  }));
   const connect = async (profile?: string) => {
     const client = new Client({ name: "forever-profile-test", version: "0.1.0" });
     const environment: Record<string, string> = { ...process.env as Record<string, string>, WOWSYNC_MCP_DB_PATH: databasePath };
@@ -59,6 +64,9 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       try { listed = await forever.client.listTools(); }
       catch (error) { throw new Error(`Forever tools/list failed: ${error instanceof Error ? error.stack : String(error)}\nChild stderr:\n${forever.getStderr()}`); }
       assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), foreverNames);
+      const codexItem = await forever.client.callTool({ name: "lookup_item_sources", arguments: { query: 100 } });
+      assert.equal((codexItem.structuredContent as { provenance?: string }).provenance, "REFERENCE");
+      assert.equal((codexItem.structuredContent as { codexVersion?: string }).codexVersion, "fixture.1");
       let result;
       try { result = await forever.client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }); }
       catch (error) { throw new Error(`Forever tools/call failed: ${error instanceof Error ? error.stack : String(error)}\nChild stderr:\n${forever.getStderr()}`); }
@@ -104,7 +112,7 @@ test("MCP profile exposes exactly its documented tools and bounds crafter result
       const listed = await era.client.listTools();
       const eraToolNames = listed.tools.map((tool) => tool.name).sort();
       assert.ok(classicEraNames.every((name) => eraToolNames.includes(name)), "all documented Classic Era tools remain exposed");
-      assert.ok(!eraToolNames.some((name) => name.startsWith("get_forever_") || name === "ask_forever_copilot" || name === "lookup_forever_knowledge"), "Forever-only data, prices, catalog and mail tools stay isolated");
+      assert.ok(!eraToolNames.some((name) => name.startsWith("get_forever_") || name === "ask_forever_copilot" || name === "lookup_forever_knowledge" || ["lookup_item_sources", "lookup_npc", "lookup_dungeon", "suggest_for_level"].includes(name)), "Forever-only data, prices, catalog and mail tools stay isolated");
       const roster = (await era.client.callTool({ name: "list_classic_era_characters", arguments: { version: "classic-era", realm: "Nightslayer" } })).structuredContent as { characters: Array<{ name: string }> };
       assert.deepEqual(roster.characters.map((character) => character.name), ["EraOne"], "Era profile reads only Classic Era rows");
       const plan = await era.client.callTool({ name: "get_classic_era_mail_plan", arguments: { version: "classic-era", name: "EraOne", realm: "Nightslayer" } });
