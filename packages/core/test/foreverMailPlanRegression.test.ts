@@ -124,10 +124,13 @@ test("Hallo Forever fixture uses the shared version-scoped item safeguards", () 
 });
 
 test("shared bag-space cooking goals preserve UNKNOWN and flag only verified excess", () => {
-  assert.equal(bagSpaceIsTight(4), true);
-  assert.equal(bagSpaceIsTight(5), false);
-  assert.equal(bagSpaceIsTight(undefined), false, "UNKNOWN free slots are not treated as zero");
-  assert.equal(bagSpaceIsTight(6, { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, lowFreeSlotThreshold: 6 }), true);
+  assert.equal(bagSpaceIsTight(8, 16), true, "16-slot bag uses the minimum threshold of 8");
+  assert.equal(bagSpaceIsTight(9, 16), false);
+  assert.equal(bagSpaceIsTight(10, 100), true, "100-slot bag uses 10 percent");
+  assert.equal(bagSpaceIsTight(11, 100), false);
+  assert.equal(bagSpaceIsTight(undefined, 16), false, "UNKNOWN free slots are not treated as zero");
+  assert.equal(bagSpaceIsTight(8, undefined), false, "UNKNOWN total slots leave the rule off");
+  assert.equal(bagSpaceIsTight(6, 16, { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, lowFreeSlotThreshold: 6 }), true);
 
   const recipes = [
     { name: "Roasted Boar Meat", requiredSkill: 15, evidence: "OBSERVED" as const, learnedState: "OBSERVED_TRUE" as const, reagents: [{ itemId: 2679, count: 2 }] },

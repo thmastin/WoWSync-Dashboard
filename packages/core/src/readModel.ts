@@ -1648,7 +1648,7 @@ export class DashboardReadModel {
     for (const row of bagSlots) if (row?.itemMetadataState === "OBSERVED" && typeof row.itemID === "number") foodMetadataById.set(row.itemID, row);
     const highestUsableFoodTier = Math.max(0, ...[...foodMetadataById.values()].filter((row: any) => row.classID === 0 && row.subClassID === 5 && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (sourceLevel ?? -1)).map((row: any) => row.requiredLevel));
     const bagSpaceConfig: MailBagSpaceConfig = { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, ...config.bagSpace };
-    const foodBagsTight = bagSpaceIsTight(sourceBagData?.freeSlots, bagSpaceConfig);
+    const foodBagsTight = bagSpaceIsTight(sourceBagData?.freeSlots, sourceBagData?.totalSlots, bagSpaceConfig);
     const holderProfessionEvidence = this.getCharacterProfessions({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
     const holderCookingEntry = holderProfessionEvidence?.status === "FOUND" && holderProfessionEvidence.value.provenance.state === "OBSERVED"
       ? holderProfessionEvidence.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
@@ -2002,7 +2002,7 @@ export class DashboardReadModel {
       const highestUsableFoodTier = Math.max(0, ...structuredBagRows.filter((row: any) => row?.itemMetadataState === "OBSERVED" && row.classID === 0 && row.subClassID === 5
         && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (profile.level ?? -1)).map((row: any) => row.requiredLevel));
       const bagSpaceConfig: MailBagSpaceConfig = { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, ...config.bagSpace };
-      const foodBagsTight = bags.totalSlots !== undefined && bagSpaceIsTight(bags.freeSlots, bagSpaceConfig);
+      const foodBagsTight = bagSpaceIsTight(bags.freeSlots, bags.totalSlots, bagSpaceConfig);
       const classicCookingEntry = holderProfessionResult.status === "FOUND" && holderProfessionResult.value.provenance.state === "OBSERVED"
         ? holderProfessionResult.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
       const classicCookingKnowledge = holderProfessionResult.status === "FOUND" ? holderProfessionResult.value.data?.recipeKnowledge as any : undefined;
@@ -2140,12 +2140,14 @@ export class DashboardReadModel {
           : learnReagents.includes(itemId ?? -1) ? "reagent for recipe to learn"
           : conjured ? "conjured, can't be mailed"
           : consumable ? `consumable usable by ${character.name}`
+          : rowMeta?.itemMetadataState === "OBSERVED" && classicClassCanEquip("classic-era", profile.class, metadataClass, metadataSubclass, rowMeta.equipLoc) === false ? `${profile.class ?? "This class"} cannot use ${rowMeta.equipLoc === "INVTYPE_SHIELD" ? "shields" : "this item"}.`
           : metadataClass === 2 || metadataClass === 4 ? "Observed equipment item; upgrade suitability is UNKNOWN."
           : metadataClass === undefined ? "item class UNKNOWN; safe mail eligibility is unverified"
           : action === "MAIL_TO_CRAFTER" ? craftChoice.reason
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
           : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
           : action === "UNDETERMINED" && bindingState === "UNKNOWN" ? "Binding is UNKNOWN; safe routing cannot be established."
+          : action === "MAIL_TO_AUCTION_CHARACTER" && classicCookingEntry && !classicCookingFacts.recipes.some((recipe) => recipe.reagents?.some((reagent) => reagent.itemId === itemId || reagent.name && normalizeMailItemName(reagent.name) === normalizeMailItemName(item.name))) ? `Cooking observed (${classicCookingEntry.skill}); no known recipe uses this; recipe coverage ${classicCookingFacts.completeness}.`
           : action === "MAIL_TO_AUCTION_CHARACTER" ? "No observed account profession uses this; AH value UNKNOWN."
           : action === "SELL_AH" ? "Holder is the configured auction character; AH value UNKNOWN."
           : action === "UNDETERMINED" && auctionCharacter.state !== "ELIGIBLE" ? auctionCharacter.reason
