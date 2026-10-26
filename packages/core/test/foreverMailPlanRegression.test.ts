@@ -31,6 +31,10 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
     const items = [
       ...scenario.materials.map((item: { itemId: number; name: string }) => ({ itemRef: holderRef(item.itemId), name: item.name, qty: 2, bound: false })),
       ...scenario.containers.map((itemId: number) => ({ itemRef: holderRef(itemId), name: itemId === 4496 ? "Small Brown Pouch" : "Small Green Pouch", qty: 1, bound: false })),
+      { itemRef: holderRef(9301), name: "Tier 5 food fixture", qty: 2, bound: false, foodKind: "FOOD", requiredLevel: 5 },
+      { itemRef: holderRef(9302), name: "Tier 10 food fixture", qty: 2, bound: false, foodKind: "FOOD", requiredLevel: 10 },
+      { itemRef: holderRef(9303), name: "Well Fed buff food fixture", qty: 3, bound: false, foodKind: "BUFF_FOOD", requiredLevel: 8, foodStackSize: 1, spellText: "Well Fed" },
+      { itemRef: holderRef(9304), name: "Future food fixture", qty: 1, bound: false, foodKind: "FOOD", requiredLevel: 15 },
     ];
     const professionRecipeData = {
       formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 3 },
@@ -39,7 +43,7 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
         recipes: [{ recipeID: 100 + index, name: `Anonymized ${material.usedBy} recipe`, evidence: "OBSERVED", learned: false, learnedState: "OBSERVED_FALSE", reagentSlots: [{ slotIndex: 1, required: true, quantityRequired: 1, reagents: [{ itemID: material.itemId }] }] }],
       })),
     };
-    const text = buildWowSyncExport({ generatedAt: NOW, character: { name: holderName, realm, class: "Warlock", race: "Gnome", faction: "Alliance", level: 12, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" }, professions: { entries: ["Tailoring", "Enchanting", "Cooking"].map((name) => ({ name, skill: 1, maxSkill: 75 })) }, bags: { containers: [{ id: 0, capacity: 16, free: 9, items }] }, bank: { unknown: true } });
+    const text = buildWowSyncExport({ generatedAt: NOW, character: { name: holderName, realm, class: "Warlock", race: "Gnome", faction: "Alliance", level: 12, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" }, professions: { entries: ["Tailoring", "Enchanting", "Cooking"].map((name) => ({ name, skill: 1, maxSkill: 75 })) }, bags: { containers: [{ id: 0, capacity: items.length, free: 0, items }] }, bank: { unknown: true } });
     const sourceGuid = "Player-1-ANON-HOLDER";
     store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 60, character: { name: holderName, realm, class: "Warlock", race: "Gnome", faction: "Alliance", level: 12, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" }, professions: { entries: ["Tailoring", "Enchanting", "Cooking"].map((name) => ({ name, skill: 1, maxSkill: 75 })) }, bags: { containers: [] }, bank: { unknown: true } }), { foreverGearObservation: {
       clientProfile: "Forever:1.60.1:70532:16001", name: holderName, realm, generatedAt: NOW - 60, sourceCharacterGuid: sourceGuid,
@@ -50,11 +54,12 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
     store.importSnapshot(text, { foreverGearObservation: {
       clientProfile: "Forever:1.60.1:70532:16001", name: holderName, realm, generatedAt: NOW, sourceCharacterGuid: "Player-1-ANON-HOLDER",
       equipment: { observedAt: NOW, completeness: "complete", data: { slots: {} } },
-      bags: { observedAt: NOW, completeness: "complete", data: { containers: [{ id: 0, slots: Object.fromEntries(items.map((item: { itemRef: string; name: string; qty: number; bound: boolean }, index: number) => [String(index + 1), { itemID: Number(item.itemRef.match(/^item:(\d+)/)?.[1]), itemString: item.itemRef, name: item.name, count: item.qty, bound: item.bound }])) }] } },
+      bags: { observedAt: NOW, completeness: "complete", data: { containers: [{ id: 0, slots: Object.fromEntries(items.map((item: any, index: number) => [String(index + 1), { itemID: Number(item.itemRef.match(/^item:(\d+)/)?.[1]), itemString: item.itemRef, name: item.name, count: item.qty, bound: item.bound, ...(item.foodKind ? { itemMetadataState: "OBSERVED", classID: 0, subClassID: 5, equipLoc: "INVTYPE_NON_EQUIP_IGNORE", requiredLevel: item.requiredLevel, foodKind: item.foodKind, ...(item.foodStackSize ? { foodStackSize: item.foodStackSize } : {}), ...(item.spellText ? { spellText: item.spellText } : {}) } : {}) }])) }] } },
       bank: { observedAt: NOW, completeness: "unknown", data: {} },
       itemEvidence: { observedAt: NOW, completeness: "complete", source: "anonymized snapshot-541 regression fixture", data: { sourceSections: { bags: { observedAt: NOW, state: "complete" } }, items: [
         ...scenario.materials.map((item: { itemId: number; name: string }) => itemFact(item.itemId, item.name, "Trade Goods", item.itemId === 2589 || item.itemId === 2320 ? "Cloth" : "Enchanting", "INVTYPE_NON_EQUIP_IGNORE", false)),
         ...scenario.containers.map((itemId: number) => itemFact(itemId, itemId === 4496 ? "Small Brown Pouch" : "Small Green Pouch", "Container", "Bag", "INVTYPE_BAG", true)),
+        ...items.filter((item: any) => item.foodKind).map((item: any) => itemFact(Number(item.itemRef.match(/^item:(\d+)/)?.[1]), item.name, "Consumable", "Food & Drink", "INVTYPE_NON_EQUIP_IGNORE", false)),
       ] } },
     } });
     for (const [name, bagSlots] of [["Alt A", scenario.eligibleAltBagSlots[0]], ["Alt B", scenario.eligibleAltBagSlots[1]]] as const) {
@@ -65,6 +70,8 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
         bank: { observedAt: NOW - 20, completeness: "unknown", data: {} },
       } });
     }
+    const auctionCharacter = store.listCharacters("forever").find((row) => row.name === "Alt A")!;
+    store.setMailPlanSettings({ accountId: "default", version: "forever", realm, faction: "Alliance", auctionCharacterIdentityKey: auctionCharacter.identityKey, updatedAt: NOW, provenance: "USER_CONFIGURED" });
     const result = new DashboardReadModel(store, () => NOW).getForeverMailPlan({ version: "forever", name: holderName, realm });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND" || !result.value.data || !("pouchMail" in result.value.data)) throw new Error("Expected a Forever mail plan");
@@ -78,6 +85,10 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
       assert.ok(plan.keep.some((row) => (row.item as { itemRef?: string }).itemRef === holderRef(itemId) && String(row.reason).includes(`used by your own ${usedBy}`)));
       assert.ok(!plan.sale.some((row) => (row.item as { itemRef?: string }).itemRef === holderRef(itemId)), "holder profession use suppresses sale");
     }
+    assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9302) && /usable tier 10/.test(row.reason)));
+    assert.ok(plan.sale.some((row: any) => row.item?.itemRef === holderRef(9301) && /lower tier and bags are tight/.test(row.reason)));
+    assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9303) && row.keepQuantity === 1 && /quantity 3/.test(row.reason)));
+    assert.ok(plan.materialMail.some((row: any) => row.item?.itemRef === holderRef(9304) && row.disposition === "MAIL_TO_AUCTION_CHARACTER"));
     assert.ok(!plan.unknownReasons.some((reason) => /before selling any no-recipient item/i.test(reason)));
   } finally { store.close(); }
 });

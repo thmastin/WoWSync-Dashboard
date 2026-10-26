@@ -1631,8 +1631,16 @@ export class DashboardReadModel {
     const source = data.candidateSources.find((row) => row.source.identityKey === sourceCharacter.identityKey);
     const sourceBagRead = this.getCharacterStorage({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm, storage: "bags" });
     const sourceBagData: any = sourceBagRead.status === "FOUND" ? sourceBagRead.value.data : undefined;
-    const sourceLevel = this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.level;
-    const highestUsableFoodTier = Math.max(0, ...Object.values(source?.carriedBuckets ?? {}).flat().filter((row: any) => row.itemMetadataState === "OBSERVED" && row.classID === 0 && row.subClassID === 5 && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (sourceLevel ?? -1)).map((row: any) => row.requiredLevel));
+    const sourceLevel = data.recipient.level?.provenance === "OBSERVED" ? data.recipient.level.value : undefined;
+    const foreverBagSection: any = this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation?.bags;
+    const bagContainers = foreverBagSection?.data?.containers;
+    const bagSlots = (Array.isArray(bagContainers) ? bagContainers : bagContainers && typeof bagContainers === "object" ? Object.values(bagContainers) : []).flatMap((container: any) => {
+      const slots = container?.slots;
+      return Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : [];
+    });
+    const foodMetadataById = new Map<number, any>();
+    for (const row of bagSlots) if (row?.itemMetadataState === "OBSERVED" && typeof row.itemID === "number") foodMetadataById.set(row.itemID, row);
+    const highestUsableFoodTier = Math.max(0, ...[...foodMetadataById.values()].filter((row: any) => row.classID === 0 && row.subClassID === 5 && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (sourceLevel ?? -1)).map((row: any) => row.requiredLevel));
     const foodBagsTight = sourceBagData?.freeSlots === 0;
     const sameRealmFaction = eligibleMailRecipients(sourceCharacter, this.characters("forever"));
     const settingsScope = sourceCharacter.faction === "Alliance" || sourceCharacter.faction === "Horde"
@@ -1814,10 +1822,12 @@ export class DashboardReadModel {
       }
       const rowClass = row.itemMetadataState === "OBSERVED" && typeof row.classID === "number" ? row.classID : itemMetadata?.classId.state === "KNOWN" ? itemMetadata.classId.value : row.itemType === "Weapon" ? 2 : row.itemType === "Armor" ? 4 : row.itemType === "Trade Goods" ? 7 : row.itemType === "Consumable" ? 0 : undefined;
       const ownUse = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.reagentProfessions.find((use: any) => use.itemId === rowItemId || typeof row.name === "string" && typeof use.name === "string" && use.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() === row.name.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim());
-      const foodText = `${row.tooltipText ?? ""} ${row.spellText ?? ""}`;
-      const foodKind = ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(row.foodKind) ? row.foodKind
+      const foodMetadata = rowItemId === undefined ? undefined : foodMetadataById.get(rowItemId);
+      const foodText = `${row.tooltipText ?? foodMetadata?.tooltipText ?? ""} ${row.spellText ?? foodMetadata?.spellText ?? ""}`;
+      const rawFoodKind = row.foodKind ?? foodMetadata?.foodKind;
+      const foodKind = ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(rawFoodKind) ? rawFoodKind
         : /well fed/i.test(foodText) ? "BUFF_FOOD" as const
-        : rowClass === 0 && row.subClassID === 5 ? "UNKNOWN" as const : undefined;
+        : (rowClass === 0 || foodMetadata?.classID === 0) && (row.subClassID === 5 || foodMetadata?.subClassID === 5) ? "UNKNOWN" as const : undefined;
       const holderProfessions = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.professions;
       const sharedDecision = classifyMailItem({ version: "forever", itemId: rowItemId, name: row.name, held: false, bound: normalizeMailBinding(row.bound), evidenceUsable: true, ownRecipeUse: ownUse?.profession, objectiveQuest: questForItem(row.name), recipeItem: /^Recipe:\s*/i.test(row.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", rowItemId, row.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
         const holder = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey);
@@ -1831,7 +1841,7 @@ export class DashboardReadModel {
           return { professionState: "KNOWN" as const, hasProfession: true, profession: row.requiredProfession, requiredSkill: row.requiredSkill, ...(typeof profession.skill === "number" ? { holderSkill: profession.skill } : {}), learnedState: row.recipeAlreadyKnown === false ? "NOT_LEARNED" as const : row.recipeAlreadyKnown === true ? "LEARNED" as const : "UNKNOWN" as const };
         })() : undefined,
         requiredProfession: row.itemMetadataState === "OBSERVED" && row.requiredProfession && holderProfessions?.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === row.requiredProfession.toLowerCase()) ? row.requiredProfession : undefined,
-        itemClass: rowClass, subClassID: row.itemMetadataState === "OBSERVED" ? row.subClassID : undefined, equipLoc: row.itemMetadataState === "OBSERVED" ? row.equipLoc : undefined, itemMetadataState: row.itemMetadataState, foodKind, foodQuantity: row.quantity, foodStackSize: row.foodStackSize, foodEvidence: row.foodKind ? "ITEM_DATA" : /well fed/i.test(foodText) ? "TOOLTIP" : undefined, foodBagsTight, highestUsableFoodTier, classCanEquip: classicClassCanEquip("forever", this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.class, rowClass, row.subClassID, row.equipLoc), quality: typeof row.quality === "number" ? row.quality : undefined, vendorEachCopper: row.vendorCopper,
+        itemClass: rowClass ?? foodMetadata?.classID, subClassID: row.itemMetadataState === "OBSERVED" ? row.subClassID : foodMetadata?.subClassID, equipLoc: row.itemMetadataState === "OBSERVED" ? row.equipLoc : foodMetadata?.equipLoc, itemMetadataState: row.itemMetadataState === "OBSERVED" || foodMetadata ? "OBSERVED" : row.itemMetadataState, foodKind, foodQuantity: row.quantity, foodStackSize: row.foodStackSize ?? foodMetadata?.foodStackSize, foodEvidence: rawFoodKind ? "ITEM_DATA" : /well fed/i.test(foodText) ? "TOOLTIP" : undefined, foodBagsTight, highestUsableFoodTier, requiredLevel: row.requiredLevel ?? foodMetadata?.requiredLevel, holderLevel: sourceLevel, classCanEquip: classicClassCanEquip("forever", this.snapshots(sourceCharacter.identityKey)[0]?.parsed.character.class, rowClass, row.subClassID ?? foodMetadata?.subClassID, row.equipLoc ?? foodMetadata?.equipLoc), quality: typeof row.quality === "number" ? row.quality : typeof foodMetadata?.quality === "number" ? foodMetadata.quality : undefined, vendorEachCopper: row.vendorCopper ?? foodMetadata?.vendorCopper,
         equippable: rowClass === 2 || rowClass === 4 || row.itemType === "Armor" || row.itemType === "Weapon", consumable: rowClass === 0 || bucket === "consumables", conjured: rowItemId !== undefined && CLASSIC_CONJURED_FALLBACK_IDS.has(rowItemId) });
       if (sharedDecision.action !== "ROUTE") {
         if (sharedDecision.action === "VENDOR") { sale.push({ item: { name: row.name, itemRef: row.itemRef, quantity: row.quantity }, disposition: "VENDOR", reason: sharedDecision.reason }); continue; }
