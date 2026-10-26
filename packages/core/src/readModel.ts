@@ -2147,7 +2147,7 @@ export class DashboardReadModel {
           : action === "UNDETERMINED" && observedUses.length ? craftChoice.reason
           : action === "KEEP" && bindingState === "BOUND" ? "Item is OBSERVED bound and cannot be routed to another character."
           : action === "UNDETERMINED" && bindingState === "UNKNOWN" ? "Binding is UNKNOWN; safe routing cannot be established."
-          : action === "MAIL_TO_AUCTION_CHARACTER" && classicCookingEntry && !classicCookingFacts.recipes.some((recipe) => recipe.reagents?.some((reagent) => reagent.itemId === itemId || reagent.name && normalizeMailItemName(reagent.name) === normalizeMailItemName(item.name))) ? `Cooking observed (${classicCookingEntry.skill}); no known recipe uses this; recipe coverage ${classicCookingFacts.completeness}.`
+          : action === "MAIL_TO_AUCTION_CHARACTER" && metadataClass === 7 && metadataSubclass === 8 && classicCookingEntry && !classicCookingFacts.recipes.some((recipe) => recipe.reagents?.some((reagent) => reagent.itemId === itemId || reagent.name && normalizeMailItemName(reagent.name) === normalizeMailItemName(item.name))) ? `Cooking observed (${classicCookingEntry.skill}); no known recipe uses this; recipe coverage ${classicCookingFacts.completeness}.`
           : action === "MAIL_TO_AUCTION_CHARACTER" ? "No observed account profession uses this; AH value UNKNOWN."
           : action === "SELL_AH" ? "Holder is the configured auction character; AH value UNKNOWN."
           : action === "UNDETERMINED" && auctionCharacter.state !== "ELIGIBLE" ? auctionCharacter.reason

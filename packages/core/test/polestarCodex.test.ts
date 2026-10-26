@@ -25,6 +25,17 @@ test("parses schema 1 records and typed source values from a synthetic fixture",
   assert.equal(parsed.records.find(x=>x.kind==="npc")?.levelMax,22);
 });
 
+test("parses quoted Lua strings and decodes Codex escapes", () => {
+  const parsed = parsePolestarCodexFiles({
+    "Meta.lua": `C.Register("meta", { build = "quoted.1", schema = 1 })`,
+    "Quoted.lua": `C.Register("npc", "\\n3\\t\\tFlesh Eater\\n", "\\n3\\t20;22;A;\\001;\\\"quoted\\\";\\\\;0\\t", 3, 3)`,
+  });
+  assert.equal(parsed.records.length, 1);
+  assert.equal(parsed.records[0]?.name, "Flesh Eater");
+  assert.deepEqual(parsed.records[0]?.fields.slice(0, 5), ["20", "22", "A", "\u0001", '"quoted"']);
+  assert.throws(() => parsePolestarCodexFiles({ "Meta.lua": `C.Register("meta", { build = "empty", schema = 1 })` }), /0 supported records/);
+});
+
 test("rejects unknown packed format schema explicitly", () => {
   assert.throws(()=>parsePolestarCodexFiles(fixture(999)),UnsupportedCodexFormatError);
 });
