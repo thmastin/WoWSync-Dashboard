@@ -236,9 +236,13 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "list_forever_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_dungeon",
       "lookup_forever_knowledge",
+      "lookup_item_sources",
+      "lookup_npc",
       "search_items",
       "search_research",
+      "suggest_for_level",
     ]);
     const crafters = structured<{ data?: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }));
     assert.equal(crafters.provenance.state, "DERIVED");
@@ -922,9 +926,13 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "list_forever_characters",
       "list_research_documents",
       "list_versions",
+      "lookup_dungeon",
       "lookup_forever_knowledge",
+      "lookup_item_sources",
+      "lookup_npc",
       "search_items",
       "search_research",
+      "suggest_for_level",
     ]);
   } finally {
     child.stdin.end();
