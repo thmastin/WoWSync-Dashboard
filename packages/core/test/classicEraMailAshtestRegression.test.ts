@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
@@ -42,7 +42,7 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     const fullBagFixtureRows = [...ashtestBagspaceRows, ...fullBagFillerRows];
     const classicBagSidecar = { observedAt: NOW, completeness: "complete", data: { formatVersion: 1, containers: [{ id: 0, capacity: 16, slots: Object.fromEntries(fullBagFixtureRows.map(([itemID, name, classID, subClassID, equipLoc, requiredLevel, bound, vendorCopper, count = 1], index) => [String(index + 1), { itemID, itemString: `item:${itemID}`, name, count, bound, itemMetadataState: "OBSERVED", classID, subClassID, equipLoc, requiredLevel, quality: 1, vendorCopper,
       ...(itemID === 10200 ? { foodKind: "FOOD" } : itemID === 10201 ? { foodKind: "FOOD" } : itemID === 10202 ? { foodKind: "BUFF_FOOD", foodStackSize: 1, spellText: "Well Fed" } : {}) }])) }] } };
-    store.importSnapshot(injected.replace("Slots: 20 free / 38", "Slots: 0 free / 38").replace(/Generated: \d+/, `Generated: ${NOW}`), { characterState: {
+    store.importSnapshot(injected.replace("Slots: 20 free / 38", "Slots: 0 free / 38").replace(/Generated: \d+/, `Generated: ${NOW}`).replace(/\n\n\[BANK\]/, "\n?\tUNKNOWN item\t1\tno\t?\n\n[BANK]"), { characterState: {
       formatVersion: 1, clientFamily: "Classic",
       bags: classicBagSidecar,
       professionRecipes: { capture: 1, revision: 1, observedAt: NOW, completeness: "complete", data: { formatVersion: 1, clientFamily: "1.15.9", professions: [{ name: "Cooking", professionName: "Cooking", observedAt: NOW, sessionObservedAt: NOW,
@@ -51,14 +51,18 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     const auctionText = injected.replace(/Name: Ashtest/, "Name: Bankytest").replace("Cooking\t8\t75\nHerbalism\t2\t75", "Herbalism\t1\t75").replace(/Generated: \d+/, `Generated: ${NOW}`);
     store.importSnapshot(auctionText);
     const auction = store.listCharacters("classic-era").find((row) => row.name === "Bankytest")!;
-    store.setMailPlanSettings({ accountId: "default", version: "classic-era", realm: "Mankrik", faction: "Alliance", auctionCharacterIdentityKey: auction.identityKey, updatedAt: NOW, provenance: "USER_CONFIGURED" });
+    const ashtest = store.listCharacters("classic-era").find((row) => row.name === "Ashtest")!;
+    store.setMailPlanSettings({ accountId: "default", version: "classic-era", realm: "Mankrik", faction: "Alliance", auctionCharacterIdentityKey: auction.identityKey, plannedProfessionsByCharacter: { [ashtest.identityKey]: ["Tailoring"] }, updatedAt: NOW, provenance: "USER_CONFIGURED" });
     const plan = new DashboardReadModel(store, () => NOW + 1).getClassicEraMailPlan({ version: "classic-era", name: "Ashtest", realm: "Mankrik" });
     assert.equal(plan.status, "FOUND");
     if (plan.status !== "FOUND") return;
     const rows = (plan as any).value.data.items as Array<{ name?: string; action: string; reason?: string }>;
     const bagRead = new DashboardReadModel(store, () => NOW + 1).getCharacterBags({ version: "classic-era", name: "Ashtest", realm: "Mankrik" });
     assert.equal(bagRead.status, "FOUND");
-    if (bagRead.status === "FOUND") assert.equal(rows.length, bagRead.value.data?.items?.length, "every character-bags row has one mail-plan row");
+    if (bagRead.status === "FOUND") assert.equal(rows.length + 1, bagRead.value.data?.items?.length, "the identity-less bag row is excluded from plan actions");
+    assert.equal(((plan as any).value.data as any).coverageWarnings?.length, 1);
+    assert.match(((plan as any).value.data as any).coverageWarnings[0], /no item identity/);
+    assert.ok(!rows.some((row) => row.name === "UNKNOWN item"));
     assert.equal(fullBagFixtureRows.length, 16, "the full-bags fixture fills all 16 slots");
     const foodRows = rows.filter((row) => ["Tier 5 Food fixture", "Tier 10 Food fixture", "Buff Food fixture"].includes(row.name ?? ""));
     assert.deepEqual(foodRows.map((row) => row.name), ["Tier 10 Food fixture", "Tier 5 Food fixture", "Buff Food fixture"]);
@@ -90,7 +94,8 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
       const recipeRow = (bagRows.value.data?.items as any[] | undefined)?.find((item) => item.itemID === 2889);
       assert.deepEqual([recipeRow?.name, recipeRow?.quantity, recipeRow?.quality.state, recipeRow?.recipeLearning?.requiredSkill?.state, recipeRow?.recipeLearning?.requiredSkill?.value], ["Recipe: Beer Basted Boar Ribs", 1, "UNKNOWN", "KNOWN", 25]);
     }
-    for (const name of ["Linen Cloth", "Spider Ichor", "Broken Boar Tusk"]) assert.equal(rows.find((row) => row.name === name)?.action, "MAIL_TO_AUCTION_CHARACTER");
+    assert.deepEqual([rows.find((row) => row.name === "Linen Cloth")?.action, rows.find((row) => row.name === "Linen Cloth")?.reason], ["KEEP", "Planned Tailoring"]);
+    for (const name of ["Spider Ichor", "Broken Boar Tusk"]) assert.equal(rows.find((row) => row.name === name)?.action, "MAIL_TO_AUCTION_CHARACTER");
   } finally { store.close(); }
 });
 

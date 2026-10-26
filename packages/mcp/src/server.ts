@@ -29,6 +29,7 @@ import { recipeLearnSkills } from "@wowsync-dashboard/core/foreverRecipeLearning
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { PolestarCodexReadStore } from "@wowsync-dashboard/core/polestarCodex.ts";
+import { suggestForeverForLevel } from "./foreverLevelSuggestions.ts";
 import { AHLEDGER_ATTRIBUTION, foreverMarketFor, PRICE_FRESH_HOURS, useForeverPrices } from "@wowsync-dashboard/core/foreverPrices.ts";
 import { z } from "zod";
 import { createReleaseGuard } from "./releaseGuard.ts";
@@ -610,14 +611,9 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     return referenceResult({id:d.id,name:d.name,levelRange:d.levelRange??"UNKNOWN",entrance:d.entrance??"UNKNOWN",bosses,quests:quests.length?quests:"UNKNOWN"});
   });
   server.registerTool("suggest_for_level", { title: "Suggest Forever sources for a level", description: "Compact ranked Forever reference dungeons and notable item sources in range; faction-specific records are filtered when known.", inputSchema: z.object({ level: z.number().int().min(1).max(100), faction: z.enum(["Alliance","Horde"]).optional() }).strict(), annotations: toolAnnotations }, async ({level,faction}) => {
-    const factionOK=(r:any)=>!faction||!r.faction||r.faction==="0"||r.faction===faction;
-    const dungeons=polestarCodex.list("instance").filter(d=>{const a=d.levelRange as number[]|undefined;return !!a&&a.length>=2&&level>=a[0]!&&level<=a[a.length-1]!&&factionOK(d);})
-      .sort((a,b)=>{const ar=a.levelRange as number[],br=b.levelRange as number[];return Math.abs((ar[0]!+ar.at(-1)!)/2-level)-Math.abs((br[0]!+br.at(-1)!)/2-level)||String(a.name).localeCompare(String(b.name));})
-      .slice(0,8).map(d=>{const range=d.levelRange as number[];const qs=polestarCodex.list("quest").filter(q=>Number(q.zone)===Number(d.areaId)||Number(q.zone)===Number(d.map));const giverIds=[...new Set(qs.flatMap(q=>(q.startNpc as number[]|undefined)??[]))];const givers=giverIds.slice(0,3).map(id=>({id,name:polestarCodex.lookup("npc",id)?.name??"UNKNOWN"}));return {name:d.name,levelRange:range,questCount:qs.length,questGivers:givers};});
-    const sources=polestarCodex.list("item").flatMap(i=>((i.sources as Array<Record<string,unknown>>|undefined)??[]).filter(s=>s.minLevel!==undefined&&level>=Number(s.minLevel)&&level<=Number(s.maxLevel??s.minLevel)&&factionOK(s)).map(s=>({id:i.id,name:i.name,levelRange:[Number(s.minLevel),Number(s.maxLevel??s.minLevel)],type:s.type,npc:s.npc,quest:s.quest})))
-      .sort((a,b)=>String(a.name).localeCompare(String(b.name))).slice(0,10);
-    const result=referenceResult({level,faction:faction??"UNKNOWN",dungeons:dungeons.length?dungeons:"UNKNOWN",notableSources:sources.length?sources:"UNKNOWN"});
-    if(!dungeons.length&&!sources.length)return textResult({status:"UNKNOWN",data:{level,faction:faction??"UNKNOWN",dungeons:"UNKNOWN",notableSources:"UNKNOWN"},provenance:"REFERENCE",source:"polestar-codex",codexVersion:polestarCodex.meta()?.build??"UNKNOWN"});
+    const data=suggestForeverForLevel(level,faction,polestarCodex.list("instance"),polestarCodex.list("quest"),polestarCodex.list("item"),polestarCodex.list("npc"));
+    const result=referenceResult(data.dungeons==="UNKNOWN"&&data.notableSources==="UNKNOWN"?undefined:data);
+    if(data.dungeons==="UNKNOWN"&&data.notableSources==="UNKNOWN")return textResult({status:"UNKNOWN",data,provenance:"REFERENCE",source:"polestar-codex",codexVersion:polestarCodex.meta()?.build??"UNKNOWN"});
     return result;
   });
   server.registerTool("lookup_forever_knowledge", {

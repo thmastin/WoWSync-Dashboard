@@ -12,12 +12,14 @@ export interface MailPlanSettingsScope {
 export interface MailPlanSettings extends MailPlanSettingsScope {
   auctionCharacterIdentityKey?: string;
   mainCharacterIdentityKey?: string;
+  plannedProfessionsByCharacter?: Record<string, string[]>;
   updatedAt: number;
   provenance: "USER_CONFIGURED";
 }
 export interface MailPlanSettingsInput extends MailPlanSettingsScope {
   auctionCharacterIdentityKey?: string;
   mainCharacterIdentityKey?: string;
+  plannedProfessionsByCharacter?: Record<string, string[]>;
 }
 
 export class MailSettingsValidationError extends Error {
@@ -48,7 +50,28 @@ export function validateMailPlanSettingsInput(value: unknown, roster: readonly S
     }
     selected[field] = key;
   }
-  return { ...scope, ...selected, updatedAt: now, provenance: "USER_CONFIGURED" };
+  const planned: Record<string, string[]> = {};
+  if (row.plannedProfessionsByCharacter !== undefined) {
+    if (!row.plannedProfessionsByCharacter || typeof row.plannedProfessionsByCharacter !== "object" || Array.isArray(row.plannedProfessionsByCharacter)) throw new MailSettingsValidationError("plannedProfessionsByCharacter must map character identity keys to profession-name arrays.");
+    for (const [key, values] of Object.entries(row.plannedProfessionsByCharacter as Record<string, unknown>)) {
+      const character = roster.find((candidate) => candidate.identityKey === key);
+      if (!character || character.version !== scope.version || character.realm !== scope.realm || character.faction !== scope.faction) throw new MailSettingsValidationError("Planned profession character must match the settings version, realm, and faction.");
+      if (!Array.isArray(values) || values.length > 20 || values.some((profession) => typeof profession !== "string" || profession.trim() !== profession || profession.length < 2 || profession.length > 40)) throw new MailSettingsValidationError("Each planned profession must be a non-empty profession name.");
+      planned[key] = [...new Set(values as string[])];
+    }
+  }
+  return { ...scope, ...selected, ...(Object.keys(planned).length ? { plannedProfessionsByCharacter: planned } : {}), updatedAt: now, provenance: "USER_CONFIGURED" };
+}
+
+const PLANNED_MATERIAL_PROFESSIONS: Readonly<Record<number, readonly string[]>> = Object.freeze({
+  2589: ["Tailoring", "First Aid"], 2592: ["Tailoring", "First Aid"], 4306: ["Tailoring", "First Aid"], 4338: ["Tailoring", "First Aid"], 14047: ["Tailoring", "First Aid"],
+});
+
+export function plannedProfessionForMaterial(itemId: number | undefined, name: string | undefined, plannedProfessions: readonly string[] = []): string | undefined {
+  const planned = new Set(plannedProfessions.map((value) => value.toLocaleLowerCase()));
+  const matches = itemId === undefined ? undefined : PLANNED_MATERIAL_PROFESSIONS[itemId];
+  const byName = name && /\b(linen|wool|silk|mageweave|runecloth) cloth\b/i.test(name) ? ["Tailoring", "First Aid"] : undefined;
+  return [...(matches ?? byName ?? [])].find((profession) => planned.has(profession.toLocaleLowerCase()));
 }
 
 export function resolveMailSettingsCharacter(key: string | undefined, scope: MailPlanSettingsScope, roster: readonly StoredCharacterSummary[]): { state: "ELIGIBLE"; character: StoredCharacterSummary } | { state: "UNDETERMINED"; reason: string } {

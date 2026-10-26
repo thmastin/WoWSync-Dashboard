@@ -37,7 +37,7 @@ import { marketPrice } from "./foreverPrices.ts";
 import { eligibleMailRecipients, routeMaterial as routeMailMaterial, routePouch } from "./foreverMailRouting.ts";
 import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
 import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
-import { resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
+import { plannedProfessionForMaterial, resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
 import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
 import { classifyMailItem, normalizeMailBinding } from "./mailItemClassification.ts";
 import { classicClassCanEquip } from "./classicMailProficiency.ts";
@@ -1667,6 +1667,7 @@ export class DashboardReadModel {
     const keep: Array<Record<string, unknown>> = [];
     const noRecipient: Array<Record<string, unknown>> = [];
     const unknownReasons: string[] = [];
+    let identitylessSkipped = false;
     const holdItemIds = new Set(config.holdItemIds ?? []);
     const materialMail: Array<Record<string, unknown>> = [];
     const pouchMail: Array<Record<string, unknown>> = [];
@@ -1707,10 +1708,11 @@ export class DashboardReadModel {
         && knowledge?.status?.state === "OBSERVED"
         && knowledge?.evidence?.state === "OBSERVED";
       const hasObservedProfessions = professions.status === "FOUND" && professions.value.provenance.state === "OBSERVED" && (professions.value.data?.entries.length ?? 0) > 0;
-      return { character, professions, observed, professionEvidenceState: professions.status === "FOUND" ? professions.value.provenance.state : "UNKNOWN", observedReagentIds, reagentProfessions, recipeKnowledgeComplete, hasObservedProfessions, observedBagSlots };
+      return { character, professions, observed, professionEvidenceState: professions.status === "FOUND" ? professions.value.provenance.state : "UNKNOWN", observedReagentIds, reagentProfessions, recipeKnowledgeComplete, hasObservedProfessions, observedBagSlots, plannedProfessions: mailSettings?.plannedProfessionsByCharacter?.[character.identityKey] ?? [] };
     });
     const routeMaterial = (item: Record<string, any>) => {
       const itemId = typeof item.itemID === "number" ? item.itemID : typeof item.itemId === "number" ? item.itemId : item.itemRef ? itemIdFromItemRef(item.itemRef) : undefined;
+      if (itemId === undefined) { identitylessSkipped = true; return; }
       const norm = (value: string) => value.toLocaleLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
       const holder = recipientProfessions.find((row) => row.character.identityKey === sourceCharacter.identityKey);
       const heldRecipeRequirement = Object.values(source?.carriedBuckets ?? {}).flat().flatMap((carried: any) => {
@@ -1740,7 +1742,7 @@ export class DashboardReadModel {
       const routed = routeMailMaterial({ ...item, itemId }, recipientProfessions.map((row) => ({
         identityKey: row.character.identityKey, name: row.character.name, realm: row.character.realm, faction: row.character.faction,
         professionsState: row.professionEvidenceState, observedReagentIds: row.observedReagentIds, reagentProfessions: row.reagentProfessions,
-        recipeKnowledgeComplete: row.recipeKnowledgeComplete, hasObservedProfessions: row.hasObservedProfessions, observedBagSlots: row.observedBagSlots,
+        recipeKnowledgeComplete: row.recipeKnowledgeComplete, hasObservedProfessions: row.hasObservedProfessions, observedBagSlots: row.observedBagSlots, plannedProfessions: row.plannedProfessions,
       })), { holderIdentityKey: sourceCharacter.identityKey, heldItemIds: holdItemIds, ahMedianUnitCopper: ah?.price.median7d ?? ah?.price.median, vendorUnitCopper: vendor });
       for (const action of routed) {
         const { disposition, ...details } = action;
@@ -1760,6 +1762,7 @@ export class DashboardReadModel {
     for (const candidate of source?.candidates ?? []) {
       const item = { name: candidate.name ?? "UNKNOWN item", itemRef: candidate.itemRef, quantity: candidate.quantity };
       const candidateItemId = candidate.itemRef ? itemIdFromItemRef(candidate.itemRef) : undefined;
+      if (candidateItemId === undefined) { identitylessSkipped = true; continue; }
       if (candidateItemId !== undefined && holdItemIds.has(candidateItemId)) { keep.push({ item, disposition: "KEEP", reason: "on hold list" }); continue; }
       const candidateMetadata = candidateItemId === undefined ? undefined : this.store.getItemMetadata("forever", [candidateItemId])[0];
       const isContainer = (candidate as any).itemType === "Container"
@@ -1815,6 +1818,7 @@ export class DashboardReadModel {
     }
     for (const [bucket, rows] of Object.entries(source?.carriedBuckets ?? {}) as Array<[string, any[]]>) for (const row of rows) {
       const rowItemId = typeof (row as any).itemID === "number" ? (row as any).itemID as number : typeof row.itemRef === "string" ? itemIdFromItemRef(row.itemRef) : undefined;
+      if (rowItemId === undefined) { identitylessSkipped = true; continue; }
       if (rowItemId !== undefined && holdItemIds.has(rowItemId)) { keep.push({ item: { name: typeof row.name === "string" ? row.name : undefined, itemRef: typeof row.itemRef === "string" ? row.itemRef : undefined, quantity: typeof row.quantity === "number" ? row.quantity : undefined }, disposition: "KEEP", reason: "on hold list" }); continue; }
       const itemMetadata = rowItemId === undefined ? undefined : this.store.getItemMetadata("forever", [rowItemId])[0];
       const isPouch = row.itemType === "Container" || (itemMetadata?.classId.state === "KNOWN" && itemMetadata.classId.value === 1);
@@ -1860,7 +1864,7 @@ export class DashboardReadModel {
         : /well fed/i.test(foodText) ? "BUFF_FOOD" as const
         : (rowClass === 0 || foodMetadata?.classID === 0) && (row.subClassID === 5 || foodMetadata?.subClassID === 5) ? "UNKNOWN" as const : undefined;
       const holderProfessions = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey)?.professions;
-      const sharedDecision = classifyMailItem({ version: "forever", itemId: rowItemId, name: row.name, held: false, bound: normalizeMailBinding(row.bound), evidenceUsable: true, ownRecipeUse: ownUse?.profession, objectiveQuest: questForItem(row.name), recipeItem: /^Recipe:\s*/i.test(row.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", rowItemId, row.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
+      const sharedDecision = classifyMailItem({ version: "forever", itemId: rowItemId, name: row.name, held: false, bound: normalizeMailBinding(row.bound), evidenceUsable: true, ownRecipeUse: ownUse?.profession, plannedProfession: plannedProfessionForMaterial(rowItemId, row.name, mailSettings?.plannedProfessionsByCharacter?.[sourceCharacter.identityKey]), objectiveQuest: questForItem(row.name), recipeItem: /^Recipe:\s*/i.test(row.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", rowItemId, row.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
         const holder = recipientProfessions.find((entry) => entry.character.identityKey === sourceCharacter.identityKey);
         const profession = holder?.professions.status === "FOUND" && holder.professions.value.provenance.state === "OBSERVED" ? holder.professions.value.data?.entries.find((entry) => entry.name.toLowerCase() === requirement.profession.toLowerCase()) : undefined;
         const knowledge = holder?.professions.status === "FOUND" ? holder.professions.value.data?.recipeKnowledge as any : undefined;
@@ -1899,7 +1903,7 @@ export class DashboardReadModel {
     const sourceProfile = (this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation as { clientProfile?: string } | undefined)?.clientProfile;
     const clientBuild = parseForeverProfile(sourceProfile)?.clientBuild;
     const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES.forever, { gear: mail, materials: materialMail, pouches: pouchMail, sale, keep });
-    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: orchestration.ruleset, buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", notes: [questFresh ? "Quest evidence is OBSERVED and recent; exact normalized objective-name matches are kept." : "Quest evidence is missing, stale, or LAST_SEEN; quest matching was skipped and other rules still apply."], scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, ...(mailSettings ? { settings: { accountId: settingsScope?.accountId ?? "default", auctionCharacter } } : {}), steps: orchestration.steps, screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons,
+    return { status: "FOUND" as const, value: { data: { version: "forever", ruleset: orchestration.ruleset, buildVerification, ...(clientBuild ? { build: Number(clientBuild) } : {}), confidenceQualifier: buildVerification === "VERIFIED" ? "STANDARD" : "LOWERED_UNVERIFIED_BUILD", notes: [questFresh ? "Quest evidence is OBSERVED and recent; exact normalized objective-name matches are kept." : "Quest evidence is missing, stale, or LAST_SEEN; quest matching was skipped and other rules still apply."], scope: { accountMembership: "UNKNOWN", reason: "Dashboard roster membership does not establish WoW account ownership. Recipient matching uses only known same-realm and same-faction characters." }, ...(mailSettings ? { settings: { accountId: settingsScope?.accountId ?? "default", auctionCharacter } } : {}), steps: orchestration.steps, screenedRecipients, mail, materialMail, pouchMail, sale, keep, noRecipient, unknownReasons, coverageWarnings: identitylessSkipped ? ["Bag rows without item identity were excluded; no plan action was emitted."] : [],
       bank: source?.bank ?? { state: "UNKNOWN", reason: "No bank evidence." }, professionChecks,
       plannedSpecs: Object.entries(FOREVER_PLANNED_SPECS).map(([identityKey, spec]) => ({ identityKey, spec, provenance: "USER_CONFIGURED" as const, informational: true as const })),
     }, provenance: { ...base.value.provenance, state: "DERIVED" as const, ...(observedAt !== undefined ? { observedAt } : {}) } } };
@@ -2008,7 +2012,8 @@ export class DashboardReadModel {
       const classicCookingKnowledge = holderProfessionResult.status === "FOUND" ? holderProfessionResult.value.data?.recipeKnowledge as any : undefined;
       const classicCookingFacts = cookingRecipeFacts(classicCookingKnowledge);
       const cookingFireAvailable = observedCookingFireAvailable(snapshot);
-      const items = mailBagRows.map((item) => {
+      const identitylessRows = mailBagRows.filter((item) => itemIdFromItemRef(item.itemRef) === undefined);
+      const items = mailBagRows.filter((item) => itemIdFromItemRef(item.itemRef) !== undefined).map((item) => {
         const itemId = itemIdFromItemRef(item.itemRef);
         const rowMeta: any = structuredBagRows.find((row: any) => row?.itemID === itemId || row?.itemString === item.itemRef);
         const bindingState = normalizeMailBinding(item.bound);
@@ -2111,7 +2116,7 @@ export class DashboardReadModel {
         const mainKey = mainCharacter.state === "ELIGIBLE" ? mainCharacter.character.identityKey : undefined;
         const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
         const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
-        const sharedDecision = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: false, bound: bindingState, evidenceUsable: usable, ownRecipeUse: ownUse?.recipe,
+        const sharedDecision = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: false, bound: bindingState, evidenceUsable: usable, ownRecipeUse: ownUse?.recipe, plannedProfession: plannedProfessionForMaterial(itemId, item.name, settings?.plannedProfessionsByCharacter?.[character.identityKey]),
           recipeItem: recipePolicy ?? (tooltipRecipeEvidence && rowMeta?.requiredProfession && typeof rowMeta.requiredSkill === "number" ? (() => {
             const profession = holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" ? holderProfessions.value.data?.entries.find((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession.toLowerCase()) : undefined;
             if (!profession) return undefined;
@@ -2170,8 +2175,8 @@ export class DashboardReadModel {
         };
       });
       items.splice(0, items.length, ...rankKeptFoodRows(items));
-      if (items.length !== mailBagRows.length || items.some((row) => !["KEEP", "VENDOR", "LEARN_RECIPE", "MAIL_TO_AUCTION_CHARACTER", "MAIL_TO_CRAFTER", "SELL_AH", "UNDETERMINED"].includes(row.action))) {
-        throw new Error(`Classic Era mail-plan coverage invariant failed: ${items.length} planned rows for ${mailBagRows.length} bag rows.`);
+      if (items.length + identitylessRows.length !== mailBagRows.length || items.some((row) => !["KEEP", "VENDOR", "LEARN_RECIPE", "MAIL_TO_AUCTION_CHARACTER", "MAIL_TO_CRAFTER", "SELL_AH", "UNDETERMINED"].includes(row.action))) {
+        throw new Error(`Classic Era mail-plan coverage invariant failed: ${items.length} identified planned rows and ${identitylessRows.length} identity-less rows for ${mailBagRows.length} bag rows.`);
       }
       const spec = deriveClassicEraSpec(profile.talentTree, profile.talentStatus);
       const orchestration = orchestrateFlavorMailPlan(MAIL_FLAVOR_POLICIES["classic-era"], {
@@ -2190,7 +2195,7 @@ export class DashboardReadModel {
         settings: { accountId: settingsScope?.accountId ?? query.accountId ?? "default", auctionCharacter, mainCharacter },
         vendorValueSource: "Captured WOWSYNC bags.vendorEachCopper",
         talentSpec: { ...spec, provenance: spec.state === "DERIVED" ? "DERIVED" as const : "UNKNOWN" as const },
-        items, steps: orchestration.steps,
+        items, coverageWarnings: identitylessRows.length ? [`${identitylessRows.length} bag row(s) have no item identity; no plan action was emitted.`] : [], steps: orchestration.steps,
       }, provenance: { state: "DERIVED" as const, version: "classic-era" as const, identityKey: character.identityKey, snapshotId: snapshot.id, ...(observedAt !== undefined ? { observedAt, freshness } : {}), source: "Classic Era WOWSYNC character, bag, and talent observations", ...(identity.reason ? { reason: identity.reason } : {}) } };
     });
   }
