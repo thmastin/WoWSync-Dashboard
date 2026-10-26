@@ -2,7 +2,7 @@ export type FoodDrinkKind = "FOOD" | "DRINK" | "BUFF_FOOD" | "UNKNOWN";
 
 export interface MailBagSpaceConfig {
   /** At or below this many OBSERVED free slots, plans apply quantity caps. */
-  lowFreeSlotThreshold: number;
+  lowFreeSlotThreshold?: number;
   /** Food/drink stack allowance grows by this many items per ten character levels. */
   foodPerTenLevels: number;
   minimumFoodQuantity: number;
@@ -10,14 +10,15 @@ export interface MailBagSpaceConfig {
 }
 
 export const DEFAULT_MAIL_BAG_SPACE_CONFIG: Readonly<MailBagSpaceConfig> = Object.freeze({
-  lowFreeSlotThreshold: 4,
   foodPerTenLevels: 5,
   minimumFoodQuantity: 5,
   maximumFoodQuantity: 20,
 });
 
-export function bagSpaceIsTight(freeSlots: number | undefined, config: MailBagSpaceConfig = DEFAULT_MAIL_BAG_SPACE_CONFIG): boolean {
-  return Number.isSafeInteger(freeSlots) && freeSlots! >= 0 && freeSlots! <= config.lowFreeSlotThreshold;
+export function bagSpaceIsTight(freeSlots: number | undefined, totalSlots: number | undefined, config: MailBagSpaceConfig = DEFAULT_MAIL_BAG_SPACE_CONFIG): boolean {
+  if (!Number.isSafeInteger(freeSlots) || freeSlots! < 0 || !Number.isSafeInteger(totalSlots) || totalSlots! < 0) return false;
+  const threshold = config.lowFreeSlotThreshold ?? Math.max(8, Math.ceil(totalSlots! * 0.1));
+  return freeSlots! <= threshold;
 }
 
 export function foodQuantityCap(level: number, config: MailBagSpaceConfig = DEFAULT_MAIL_BAG_SPACE_CONFIG): number | undefined {
