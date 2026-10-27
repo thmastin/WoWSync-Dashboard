@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DashboardReadModel } from "../src/readModel.ts";
@@ -64,7 +64,7 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     assert.match(((plan as any).value.data as any).coverageWarnings[0], /no item identity/);
     assert.ok(!rows.some((row) => row.name === "UNKNOWN item"));
     assert.equal(fullBagFixtureRows.length, 16, "the full-bags fixture fills all 16 slots");
-    const actionKeys = rows.map((row) => `${row.itemRef ?? row.name}:${row.action}`);
+    const actionKeys = rows.map((row) => `${(row as { itemRef?: string }).itemRef ?? row.name}:${row.action}`);
     assert.equal(new Set(actionKeys).size, actionKeys.length, "each item is represented once per action after location aggregation");
     for (const [name, quantity] of [["Crisp Spider Meat", 5], ["Small Spider Leg", 1], ["Boar Ribs", 1]] as const) {
       const matches = rows.filter((row) => row.name === name);
