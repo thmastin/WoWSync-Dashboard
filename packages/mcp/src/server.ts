@@ -315,7 +315,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     if (found.length !== 1) throw new Error(found.length ? "Character identity is ambiguous; pass its exact identity key." : "Character was not found in this version's Dashboard roster.");
     const character = found[0]!;
     if (character.faction !== "Alliance" && character.faction !== "Horde") throw new Error("Character faction is unknown; planned professions cannot be scoped safely.");
-    return character;
+    return { ...character, faction: character.faction as "Alliance" | "Horde" };
   };
   const getPlannedProfessions = (version: "classic-era" | "forever", characterInput: string | { name: string; realm: string }) => {
     const character = resolvePreferenceCharacter(version, characterInput);
@@ -343,7 +343,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const map = { ...(latest?.plannedProfessionsByCharacter ?? {}) };
       if (proposed.length) map[character.identityKey] = proposed;
       else delete map[character.identityKey];
-      const saved = writer.setMailPlanSettings({ ...(latest ?? scope), plannedProfessionsByCharacter: map, updatedAt: latest?.updatedAt ?? Math.floor(Date.now() / 1000), provenance: "USER_CONFIGURED" });
+      const saved = writer.setMailPlanSettings({ ...scope, ...(latest ?? {}), plannedProfessionsByCharacter: map, updatedAt: latest?.updatedAt ?? Math.floor(Date.now() / 1000), provenance: "USER_CONFIGURED" } as Parameters<typeof writer.setMailPlanSettings>[0]);
       return textResult({ mode: "SAVED", character: result.character, professions: saved.plannedProfessionsByCharacter?.[character.identityKey] ?? [], provenance: saved.provenance });
     } catch (error) { return safeFailure("PLANNED_PROFESSIONS_WRITE_FAILED", error instanceof Error ? error.message : String(error)); }
     finally { writer.close(); }
