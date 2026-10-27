@@ -13,6 +13,13 @@ export function normalizeMailBinding(value: unknown): MailBindingState {
   }
 }
 
+const COOKING_SKILL_UP_MATERIAL_IDS = new Set([1081, 2677, 5465]);
+const COOKING_SKILL_UP_MATERIAL_NAMES = new Set(["crisp spider meat", "boar ribs", "small spider leg"]);
+export function isKnownCookingSkillUpMaterial(itemId?: number, name?: string): boolean {
+  const normalizedName = name?.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+  return itemId !== undefined && COOKING_SKILL_UP_MATERIAL_IDS.has(itemId) || !!normalizedName && COOKING_SKILL_UP_MATERIAL_NAMES.has(normalizedName);
+}
+
 export type SharedMailItemDecision =
   | { action: "KEEP"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
   | { action: "UNDETERMINED"; reason: string; quantityLimit?: number; excessQuantity?: number; excessDisposition?: "COOK_FIRST" | "VENDOR" | "MAIL_TO_AUCTION_CHARACTER" }
@@ -30,6 +37,8 @@ export function classifyMailItem(input: {
   evidenceUsable?: boolean;
   ownRecipeUse?: string;
   plannedProfession?: string;
+  /** A positively identified material for a profession the holder has OBSERVED and learned. */
+  professionSkillUpMaterial?: { profession: string; skill: number };
   ownRecipeUseNames?: readonly string[];
   reagentForRecipeToLearn?: boolean;
   reagentForUnresolvedRecipe?: boolean;
@@ -84,13 +93,14 @@ export function classifyMailItem(input: {
   if (input.objectiveQuest) return { action: "KEEP", reason: `needed for active quest ${input.objectiveQuest}` };
   if (input.cookingMaterialPlan) {
     const plan = input.cookingMaterialPlan;
-    if (plan.state === "UNKNOWN") return { action: "KEEP", reason: plan.reason };
+    if (plan.state === "UNKNOWN") return { action: "KEEP", reason: input.professionSkillUpMaterial ? `${input.professionSkillUpMaterial.profession} ${input.professionSkillUpMaterial.skill}: skill-up mat` : plan.reason };
     if (typeof plan.keepQuantity !== "number" || typeof plan.excessQuantity !== "number") return { action: "KEEP", reason: plan.reason };
     const extra = plan.excessQuantity;
     const excessDisposition = extra > 0 ? input.cookingFireAvailable === true && plan.nextRecipe ? "COOK_FIRST" as const : input.cookingExcessDisposition ?? "VENDOR" as const : undefined;
     const action = plan.keepQuantity > 0 || excessDisposition === "COOK_FIRST" ? "KEEP" as const : excessDisposition === "MAIL_TO_AUCTION_CHARACTER" ? "ROUTE" as const : excessDisposition === "VENDOR" ? "VENDOR" as const : "KEEP" as const;
     return { action, quantityLimit: plan.keepQuantity, excessQuantity: extra, ...(excessDisposition ? { excessDisposition } : {}), reason: `${plan.reason}${extra > 0 ? excessDisposition === "COOK_FIRST" ? ` COOK_FIRST: use the observed ${plan.nextRecipe} recipe when a fire is available.` : ` Excess ${extra}: ${excessDisposition}.` : ""}` };
   }
+  if (input.professionSkillUpMaterial) return { action: "KEEP", reason: `${input.professionSkillUpMaterial.profession} ${input.professionSkillUpMaterial.skill}: skill-up mat` };
   if (input.quality === 0) return { action: "VENDOR", reason: input.vendorEachCopper === undefined
     ? "OBSERVED gray item; vendor value is UNKNOWN."
     : `OBSERVED gray item; vendor value ${input.vendorEachCopper} copper each` };
