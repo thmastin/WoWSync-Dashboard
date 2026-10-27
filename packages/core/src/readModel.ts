@@ -39,7 +39,7 @@ import { deriveForeverSpec, foreverSpecProjection } from "./foreverSpec.ts";
 import { classicEraBuildVerification, classicEraGuidContinuity, classifyMailFreshness, deriveClassicEraSpec, MAIL_FLAVOR_POLICIES, orchestrateFlavorMailPlan } from "./mailFlavorPolicy.ts";
 import { plannedProfessionForMaterial, resolveMailSettingsCharacter, selectCrafterByObservedSkill } from "./mailPlanSettings.ts";
 import { CLASSIC_CONJURED_FALLBACK_IDS, CLASSIC_CONSUMABLE_FALLBACK_IDS } from "./classicMailItemRules.ts";
-import { classifyMailItem, normalizeMailBinding } from "./mailItemClassification.ts";
+import { classifyMailItem, isKnownCookingSkillUpMaterial, normalizeMailBinding } from "./mailItemClassification.ts";
 import { classicClassCanEquip } from "./classicMailProficiency.ts";
 import { recipeLearningRequirement, unknownRecipeLearningRequirement } from "./recipeLearningRequirements.ts";
 import { bagSpaceIsTight, cookingRecipeFacts, DEFAULT_MAIL_BAG_SPACE_CONFIG, planCookingMaterial, type MailBagSpaceConfig } from "./foodDrinkPlanning.ts";
@@ -1726,7 +1726,11 @@ export class DashboardReadModel {
       const ownUsesForItem = recipientProfessions.find((row) => row.character.identityKey === sourceCharacter.identityKey)?.reagentProfessions.filter((use: any) => use.itemId === itemId || !!item.name && !!use.name && norm(use.name) === norm(item.name)) ?? [];
       const ownRecipeUse = ownUsesForItem.find((use: any) => use.learnedState === "OBSERVED_TRUE");
       const unresolvedOwnRecipeUse = ownUsesForItem.some((use: any) => use.learnedState === "UNKNOWN" && use.evidence === "OBSERVED");
-      const sharedDecision = classifyMailItem({ version: "forever", itemId, name: item.name, held: itemId !== undefined && holdItemIds.has(itemId), bound: normalizeMailBinding(item.bound ?? false), evidenceUsable: source?.carried.state === "OBSERVED" && source.carried.freshness === "recent", ownRecipeUse: ownRecipeUse?.profession, objectiveQuest: questForItem(item.name), reagentForRecipeToLearn: !!heldRecipeRequirement,
+      const knownItemMetadata = this.store.getItemMetadata("forever", [itemId])[0];
+      const cookingEntry = holder?.professions.status === "FOUND" && holder.professions.value.provenance.state === "OBSERVED" ? holder.professions.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
+      const itemSubclass = item.itemMetadataState === "OBSERVED" && typeof item.subClassID === "number" ? item.subClassID : knownItemMetadata?.subclassId.state === "KNOWN" ? knownItemMetadata.subclassId.value : undefined;
+      const itemClass = item.itemMetadataState === "OBSERVED" && typeof item.classID === "number" ? item.classID : knownItemMetadata?.classId.state === "KNOWN" ? knownItemMetadata.classId.value : item.itemType === "Trade Goods" ? 7 : undefined;
+      const sharedDecision = classifyMailItem({ version: "forever", itemId, name: item.name, held: itemId !== undefined && holdItemIds.has(itemId), bound: normalizeMailBinding(item.bound ?? false), evidenceUsable: source?.carried.state === "OBSERVED" && source.carried.freshness === "recent", ownRecipeUse: ownRecipeUse?.profession, professionSkillUpMaterial: (itemClass === 7 && itemSubclass === 8 || isKnownCookingSkillUpMaterial(itemId, item.name)) && typeof cookingEntry?.skill === "number" ? { profession: cookingEntry.name, skill: cookingEntry.skill } : undefined, objectiveQuest: questForItem(item.name), reagentForRecipeToLearn: !!heldRecipeRequirement,
         recipeItem: /^Recipe:\s*/i.test(item.name ?? "") ? (() => { const requirement = recipeLearningRequirement("forever", itemId, item.name); if (!requirement) return { professionState: "UNKNOWN" as const, hasProfession: false };
           const profession = holder?.professions.status === "FOUND" && holder.professions.value.provenance.state === "OBSERVED" ? holder.professions.value.data?.entries.find((entry) => entry.name.toLowerCase() === requirement.profession.toLowerCase()) : undefined;
           const knowledge = holder?.professions.status === "FOUND" ? holder.professions.value.data?.recipeKnowledge as any : undefined;
@@ -1837,7 +1841,7 @@ export class DashboardReadModel {
           recipeCompleteness: cookingFacts.completeness, recipes: cookingFacts.recipes,
           isCookingMaterial: row.itemMetadataState === "OBSERVED" && row.classID === 7 && row.subClassID === 8 });
         if (cookingPlan) {
-          const cookingDecision = classifyMailItem({ version: "forever", bound: "UNBOUND", evidenceUsable: true, cookingMaterialPlan: cookingPlan, cookingFireAvailable,
+          const cookingDecision = classifyMailItem({ version: "forever", bound: "UNBOUND", evidenceUsable: true, cookingMaterialPlan: cookingPlan, professionSkillUpMaterial: typeof holderCookingEntry?.skill === "number" && row.itemMetadataState === "OBSERVED" && row.classID === 7 && row.subClassID === 8 ? { profession: holderCookingEntry.name, skill: holderCookingEntry.skill } : undefined, cookingFireAvailable,
             cookingExcessDisposition: auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== sourceCharacter.identityKey ? "MAIL_TO_AUCTION_CHARACTER" : "VENDOR" });
           const materialItem = { name: row.name, itemRef: row.itemRef, quantity: row.quantity };
           const cookingDetails = { item: materialItem, ...(cookingDecision.quantityLimit !== undefined ? { keepQuantity: cookingDecision.quantityLimit } : {}), ...(cookingDecision.excessQuantity !== undefined ? { excessQuantity: cookingDecision.excessQuantity } : {}), ...(cookingDecision.excessDisposition ? { excessDisposition: cookingDecision.excessDisposition } : {}), reason: cookingDecision.reason };
@@ -1921,7 +1925,24 @@ export class DashboardReadModel {
       const identity = classicEraGuidContinuity(profile.guid, priorGuids);
       const bags = snapshot.parsed.bags;
       const classicState = snapshot.parsed.characterState?.clientFamily === "Classic" ? snapshot.parsed.characterState : undefined;
-      const structuredBagRows = (() => { const containers = (classicState?.bags?.data as any)?.containers; const list = Array.isArray(containers) ? containers : containers && typeof containers === "object" ? Object.values(containers) : []; return list.flatMap((container: any) => { const slots = container?.slots; return Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : []; }); })();
+      const structuredBagRows = (() => {
+        const containers = (classicState?.bags?.data as any)?.containers;
+        const list = Array.isArray(containers) ? containers : containers && typeof containers === "object" ? Object.entries(containers).map(([key, value]) => ({ ...value as any, __containerKey: key })) : [];
+        const seenLocations = new Set<string>();
+        return list.flatMap((container: any, containerIndex: number) => {
+          const slots = container?.slots;
+          const entries = Array.isArray(slots) ? slots.map((row: any, index: number) => [String(index), row] as const) : slots && typeof slots === "object" ? Object.entries(slots) : [];
+          const containerKey = String(container?.containerID ?? container?.containerId ?? container?.id ?? container?.__containerKey ?? containerIndex);
+          return entries.flatMap(([slotKey, row]: readonly [string, any]) => {
+            if (!row || typeof row !== "object") return [];
+            const itemId = typeof row.itemID === "number" ? row.itemID : typeof row.itemString === "string" ? itemIdFromItemRef(row.itemString) : undefined;
+            const locationKey = JSON.stringify([itemId, containerKey, slotKey]);
+            if (seenLocations.has(locationKey)) return [];
+            seenLocations.add(locationKey);
+            return [row];
+          });
+        });
+      })();
       const questDomain = classicState?.quests;
       const questData = questDomain?.data as any;
       const questObservedAt = questDomain?.observedAt;
@@ -1994,14 +2015,31 @@ export class DashboardReadModel {
       // The character-bags read model includes Classic sidecar slots that are not
       // present in the legacy [BAGS] section. Mail planning must use that same
       // complete observed row set instead of silently omitting those items.
-      const mailBagRows = [...bags.items];
-      const knownBagRefs = new Set(mailBagRows.map((row) => row.itemRef).filter((ref): ref is string => typeof ref === "string"));
+      const legacyByItem = new Map<number, NonNullable<typeof bags.items>[number]>();
+      for (const row of bags.items) {
+        const itemId = itemIdFromItemRef(row.itemRef);
+        if (itemId === undefined) continue;
+        const previous = legacyByItem.get(itemId);
+        if (!previous) legacyByItem.set(itemId, { ...row });
+        else legacyByItem.set(itemId, { ...previous, qty: typeof previous.qty === "number" && typeof row.qty === "number" ? previous.qty + row.qty : undefined });
+      }
+      const structuredByItem = new Map<number, any>();
       for (const row of structuredBagRows) {
-        const itemRef = typeof row?.itemString === "string" ? row.itemString : typeof row?.itemID === "number" ? `item:${row.itemID}` : undefined;
-        if (itemRef && knownBagRefs.has(itemRef)) continue;
-        if (itemRef) knownBagRefs.add(itemRef);
-        mailBagRows.push({ name: typeof row?.name === "string" ? row.name : "UNKNOWN item", itemRef, qty: typeof row?.count === "number" ? row.count : undefined,
-          bound: typeof row?.bound === "boolean" ? row.bound : undefined, vendorEachCopper: typeof row?.vendorCopper === "number" ? row.vendorCopper : undefined });
+        const itemId = typeof row.itemID === "number" ? row.itemID : typeof row.itemString === "string" ? itemIdFromItemRef(row.itemString) : undefined;
+        if (itemId === undefined) continue;
+        const previous = structuredByItem.get(itemId);
+        structuredByItem.set(itemId, previous
+          ? { ...previous, count: typeof previous.count === "number" && typeof row.count === "number" ? previous.count + row.count : undefined }
+          : { ...row });
+      }
+      const mailBagRows = [...bags.items.filter((row) => itemIdFromItemRef(row.itemRef) === undefined), ...[...legacyByItem.entries()].map(([itemId, legacy]) => {
+        const structured = structuredByItem.get(itemId);
+        return structured ? { ...legacy, qty: typeof structured.count === "number" ? structured.count : legacy.qty } : legacy;
+      })];
+      for (const [itemId, row] of structuredByItem) if (!legacyByItem.has(itemId)) {
+        const itemRef = typeof row.itemString === "string" ? row.itemString : `item:${itemId}`;
+        mailBagRows.push({ name: typeof row.name === "string" ? row.name : "UNKNOWN item", itemRef, qty: typeof row.count === "number" ? row.count : undefined,
+          bound: typeof row.bound === "boolean" ? row.bound : undefined, vendorEachCopper: typeof row.vendorCopper === "number" ? row.vendorCopper : undefined });
       }
       const highestUsableFoodTier = Math.max(0, ...structuredBagRows.filter((row: any) => row?.itemMetadataState === "OBSERVED" && row.classID === 0 && row.subClassID === 5
         && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (profile.level ?? -1)).map((row: any) => row.requiredLevel));
@@ -2116,7 +2154,8 @@ export class DashboardReadModel {
         const mainKey = mainCharacter.state === "ELIGIBLE" ? mainCharacter.character.identityKey : undefined;
         const craftChoice = selectCrafterByObservedSkill(crafterCandidates, mainKey);
         const recipient = craftChoice.state === "SELECTED" ? { identityKey: craftChoice.candidate.identityKey, name: craftChoice.candidate.name } : undefined;
-        const sharedDecision = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: false, bound: bindingState, evidenceUsable: usable, ownRecipeUse: ownUse?.recipe, plannedProfession: plannedProfessionForMaterial(itemId, item.name, settings?.plannedProfessionsByCharacter?.[character.identityKey]),
+        const professionSkillUpMaterial = (metadataClass === 7 && metadataSubclass === 8 || isKnownCookingSkillUpMaterial(itemId, item.name)) && typeof classicCookingEntry?.skill === "number" ? { profession: classicCookingEntry.name, skill: classicCookingEntry.skill } : undefined;
+        const sharedDecision = classifyMailItem({ version: "classic-era", itemId, name: item.name, held: false, bound: bindingState, evidenceUsable: usable, ownRecipeUse: ownUse?.recipe, professionSkillUpMaterial, plannedProfession: plannedProfessionForMaterial(itemId, item.name, settings?.plannedProfessionsByCharacter?.[character.identityKey]),
           recipeItem: recipePolicy ?? (tooltipRecipeEvidence && rowMeta?.requiredProfession && typeof rowMeta.requiredSkill === "number" ? (() => {
             const profession = holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" ? holderProfessions.value.data?.entries.find((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession.toLowerCase()) : undefined;
             if (!profession) return undefined;
@@ -2125,7 +2164,9 @@ export class DashboardReadModel {
           reagentForRecipeToLearn: recipeReagentsToProtect.some((reagent) => reagent.state === "LEARNABLE" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
           reagentForUnresolvedRecipe: potentialUses.length > 0 || recipeReagentsToProtect.some((reagent) => reagent.state === "UNKNOWN" && (itemId !== undefined && reagent.itemId === itemId || !!item.name && !!reagent.name && normalizeMailItemName(item.name) === normalizeMailItemName(reagent.name))),
           objectiveQuest: objectiveQuest?.title, cookingMaterialPlan, cookingFireAvailable, cookingExcessDisposition: auctionCharacter.state === "ELIGIBLE" && auctionCharacter.character.identityKey !== character.identityKey ? "MAIL_TO_AUCTION_CHARACTER" : "VENDOR", itemClass: metadataClass, consumable, conjured, foodKind, foodQuantity: item.qty, foodStackSize: rowMeta?.foodStackSize, foodEvidence: rowMeta?.foodKind ? "ITEM_DATA" : /well fed/i.test(tooltipOrSpell) ? "TOOLTIP" : undefined, foodBagsTight, highestUsableFoodTier, bagSpaceConfig, classCanEquip: classicClassCanEquip("classic-era", profile.class, metadataClass, metadataSubclass, rowMeta?.equipLoc), quality: rowMeta?.itemMetadataState === "OBSERVED" ? rowMeta.quality : undefined, vendorEachCopper: typeof rowMeta?.vendorCopper === "number" ? rowMeta.vendorCopper : item.vendorEachCopper, itemMetadataState: rowMeta?.itemMetadataState === "OBSERVED" || rowMeta?.itemMetadataState === "UNKNOWN" ? rowMeta.itemMetadataState : "UNKNOWN", subClassID: metadataSubclass, equipLoc: rowMeta?.equipLoc, requiredLevel: rowMeta?.requiredLevel, holderLevel: profile.level, requiredProfession: rowMeta?.requiredProfession && holderProfessions.status === "FOUND" && holderProfessions.value.provenance.state === "OBSERVED" && holderProfessions.value.data?.entries.some((entry) => entry.name.toLowerCase() === rowMeta.requiredProfession!.toLowerCase()) ? rowMeta.requiredProfession : undefined, requiredSkill: rowMeta?.requiredSkill, recipeAlreadyKnown: rowMeta?.recipeAlreadyKnown });
+        const skillUpMaterialMustKeep = !!professionSkillUpMaterial && cookingMaterialPlan?.state !== "KNOWN";
         const action = !usable ? "UNDETERMINED"
+          : skillUpMaterialMustKeep ? "KEEP"
           : incompleteUseEvidence.length ? "KEEP"
           : sharedDecision.action === "KEEP" ? (objectiveQuest ? "KEEP_FOR_QUEST" : "KEEP")
           : sharedDecision.action === "LEARN_RECIPE" ? "LEARN_RECIPE"
@@ -2139,6 +2180,7 @@ export class DashboardReadModel {
           : auctionCharacter.state === "ELIGIBLE" ? "SELL_AH"
           : "UNDETERMINED";
         const evidenceReason = !usable ? identity.reason ?? (buildVerification === "UNSUPPORTED" ? "Client build is outside the supported Classic Era mail rules." : bags.status.state !== "OBSERVED" ? "Current carried bags are not OBSERVED." : freshness !== "recent" ? "Bag evidence is outside the 72-hour freshness window." : "Required evidence is UNKNOWN.")
+          : skillUpMaterialMustKeep && professionSkillUpMaterial ? `${professionSkillUpMaterial.profession} ${professionSkillUpMaterial.skill}: skill-up mat`
           : action === "KEEP" && incompleteUseEvidence.length ? incompleteUseReason
           : sharedDecision.action !== "ROUTE" ? sharedDecision.reason
           : learnRecipe ? learnReason
@@ -2600,19 +2642,44 @@ export class DashboardReadModel {
     const structuredRows = (section: any) => {
       const containers = section?.data?.containers;
       if (!containers) return [] as any[];
-      const list = Array.isArray(containers) ? containers : Object.values(containers);
-      return list.flatMap((container: any) => {
+      const list = Array.isArray(containers) ? containers : Object.entries(containers).map(([key, value]) => ({ ...value as any, __containerKey: key }));
+      const seenLocations = new Set<string>();
+      return list.flatMap((container: any, containerIndex: number) => {
         const slots = container?.slots;
-        return (Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : []).filter((row: any) => row && typeof row === "object");
+        const entries = Array.isArray(slots) ? slots.map((row: any, index: number) => [String(index), row] as const) : slots && typeof slots === "object" ? Object.entries(slots) : [];
+        const containerKey = String(container?.containerID ?? container?.containerId ?? container?.id ?? container?.__containerKey ?? containerIndex);
+        return entries.flatMap(([slotKey, row]: readonly [string, any]) => {
+          if (!row || typeof row !== "object") return [];
+          const itemId = typeof row.itemID === "number" ? row.itemID : typeof row.itemString === "string" ? itemIdFromItemRef(row.itemString) : undefined;
+          const locationKey = JSON.stringify([itemId, containerKey, slotKey]);
+          if (seenLocations.has(locationKey)) return [];
+          seenLocations.add(locationKey);
+          return [row];
+        });
       });
     };
     const metadataRows = structuredRows(structuredBag);
-    const bagRows = [...(source.items ?? [])];
-    const knownBagRefs = new Set(bagRows.map((item) => item.itemRef).filter((ref): ref is string => typeof ref === "string"));
+    const legacyByItem = new Map<number, NonNullable<typeof source.items>[number]>();
+    const legacyIdentityless: NonNullable<typeof source.items>[number][] = [];
+    for (const item of source.items ?? []) {
+      const itemId = itemIdFromItemRef(item.itemRef);
+      if (itemId === undefined) { legacyIdentityless.push(item); continue; }
+      const previous = legacyByItem.get(itemId);
+      legacyByItem.set(itemId, previous ? { ...previous, qty: typeof previous.qty === "number" && typeof item.qty === "number" ? previous.qty + item.qty : undefined } : { ...item });
+    }
+    const structuredByItem = new Map<number, any>();
     for (const row of metadataRows) {
-      const itemRef = typeof row.itemString === "string" ? row.itemString : typeof row.itemID === "number" ? `item:${row.itemID}` : undefined;
-      if (!itemRef || knownBagRefs.has(itemRef)) continue;
-      knownBagRefs.add(itemRef);
+      const itemId = typeof row.itemID === "number" ? row.itemID : typeof row.itemString === "string" ? itemIdFromItemRef(row.itemString) : undefined;
+      if (itemId === undefined) continue;
+      const previous = structuredByItem.get(itemId);
+      structuredByItem.set(itemId, previous ? { ...previous, count: typeof previous.count === "number" && typeof row.count === "number" ? previous.count + row.count : undefined } : { ...row });
+    }
+    const bagRows = [...legacyIdentityless, ...[...legacyByItem.entries()].map(([itemId, item]) => {
+      const structured = structuredByItem.get(itemId);
+      return structured && typeof structured.count === "number" ? { ...item, qty: structured.count } : item;
+    })];
+    for (const [itemId, row] of structuredByItem) if (!legacyByItem.has(itemId)) {
+      const itemRef = typeof row.itemString === "string" ? row.itemString : `item:${itemId}`;
       bagRows.push({ name: typeof row.name === "string" ? row.name : "UNKNOWN item", itemRef, qty: typeof row.count === "number" ? row.count : undefined,
         ...(typeof row.bound === "boolean" ? { bound: row.bound } : {}), ...(typeof row.vendorCopper === "number" ? { vendorEachCopper: row.vendorCopper } : {}) } as NonNullable<typeof source.items>[number]);
     }

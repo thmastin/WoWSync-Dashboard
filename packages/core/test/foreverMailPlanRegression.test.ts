@@ -92,7 +92,7 @@ test("anonymized snapshot-541 mail plan keeps holder reagents and routes contain
     assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9302) && /usable tier 10/.test(row.reason)));
     assert.ok(plan.sale.some((row: any) => row.item?.itemRef === holderRef(9301) && /lower tier and bags are tight/.test(row.reason)));
     assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9303) && row.keepQuantity === 1 && /quantity 3/.test(row.reason)));
-    assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9305) && /Next Cooking goal is UNKNOWN/.test(row.reason) && /quantity 6/.test(row.reason)), "partial recipe coverage preserves the material instead of treating the unknown goal as zero");
+    assert.ok(plan.keep.some((row: any) => row.item?.itemRef === holderRef(9305) && row.reason === "Cooking 1: skill-up mat"), "an observed learned Cooking profession keeps its identified skill-up material");
     assert.ok(plan.materialMail.some((row: any) => row.item?.itemRef === holderRef(9304) && row.disposition === "MAIL_TO_AUCTION_CHARACTER"));
     assert.ok(!plan.unknownReasons.some((reason) => /before selling any no-recipient item/i.test(reason)));
   } finally { store.close(); }

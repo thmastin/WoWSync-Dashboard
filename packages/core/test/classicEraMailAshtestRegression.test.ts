@@ -14,9 +14,9 @@ const ashtestBagspaceRows = [
   [100103, "Cadet Bracers", 4, 4, "INVTYPE_WRIST", 20, true, 10],
   [100104, "Rodentia Flint Axe", 2, 0, "INVTYPE_WEAPON", 20, false, 9, 3],
   [2589, "Linen Cloth", 7, 0, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 2, 53],
-  [10101, "Crisp Spider Meat", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1, 3],
-  [10102, "Small Spider Leg", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
-  [10103, "Boar Ribs", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
+  [1081, "Crisp Spider Meat", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1, 3],
+  [5465, "Small Spider Leg", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
+  [2677, "Boar Ribs", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1],
 ] as const;
 const fullBagFillerRows = [
   [10200, "Tier 5 Food fixture", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 5, false, 1, 2],
@@ -27,19 +27,19 @@ const fullBagFillerRows = [
 
 test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conjured healthstone", () => {
   const items = [
-    [2672, "Stringy Wolf Meat"], [2886, "Crag Boar Rib"], [2677, "Boar Ribs"], [3173, "Bear Meat"],
+    [2672, "Stringy Wolf Meat"], [2886, "Crag Boar Rib"], [2677, "Boar Ribs"], [3173, "Bear Meat"], [1081, "Crisp Spider Meat"], [5465, "Small Spider Leg"],
     [117, "Tough Jerky"], [4540, "Tough Hunk of Bread"], [159, "Refreshing Spring Water"], [118, "Minor Healing Potion"],
     [2679, "Charred Wolf Meat"], [2681, "Roasted Boar Meat"], [2888, "Beer Basted Boar Ribs"], [17119, "Deeprun Rat Kabob"], [5512, "Minor Healthstone"],
     [2589, "Linen Cloth"], [3174, "Spider Ichor"], [4862, "Broken Boar Tusk"],
     [100001, "Infantry Cloak"],
   ] as const;
   const extra = items.map(([id, name]) => `item:${id}\t${name}\t1\tno\t1`).join("\n");
-  const injected = fixture.replace(/Level: 10/, "Level: 11").replace("Herbalism\t1\t75", "Cooking\t8\t75\nHerbalism\t2\t75")
+  const injected = fixture.replace(/Level: 10/, "Level: 11").replace("Herbalism\t1\t75", "Cooking\t19\t75\nHerbalism\t2\t75")
     .replace(/\n\n\[BANK\]/, `\n${extra}\n\n[BANK]`)
     .replace("baseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent", "baseItemID\tclassID\tsubclassID\tbindType\texpansionID\tisCraftingReagent\n100001\t4\t1\t0\t254\tno\n3174\t7\t0\t0\t254\tyes\n4862\t7\t0\t0\t254\tyes");
   const store = new SqliteSnapshotStore(":memory:");
   try {
-    const fullBagFixtureRows = [...ashtestBagspaceRows, ...fullBagFillerRows];
+    const fullBagFixtureRows = [...ashtestBagspaceRows, ...fullBagFillerRows.slice(0, -1), [1081, "Crisp Spider Meat", 0, 5, "INVTYPE_NON_EQUIP_IGNORE", 1, false, 1, 2] as const];
     const classicBagSidecar = { observedAt: NOW, completeness: "complete", data: { formatVersion: 1, containers: [{ id: 0, capacity: 16, slots: Object.fromEntries(fullBagFixtureRows.map(([itemID, name, classID, subClassID, equipLoc, requiredLevel, bound, vendorCopper, count = 1], index) => [String(index + 1), { itemID, itemString: `item:${itemID}`, name, count, bound, itemMetadataState: "OBSERVED", classID, subClassID, equipLoc, requiredLevel, quality: 1, vendorCopper,
       ...(itemID === 10200 ? { foodKind: "FOOD" } : itemID === 10201 ? { foodKind: "FOOD" } : itemID === 10202 ? { foodKind: "BUFF_FOOD", foodStackSize: 1, spellText: "Well Fed" } : {}) }])) }] } };
     store.importSnapshot(injected.replace("Slots: 20 free / 38", "Slots: 0 free / 38").replace(/Generated: \d+/, `Generated: ${NOW}`).replace(/\n\n\[BANK\]/, "\n?\tUNKNOWN item\t1\tno\t?\n\n[BANK]"), { characterState: {
@@ -48,7 +48,7 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
       professionRecipes: { capture: 1, revision: 1, observedAt: NOW, completeness: "complete", data: { formatVersion: 1, clientFamily: "1.15.9", professions: [{ name: "Cooking", professionName: "Cooking", observedAt: NOW, sessionObservedAt: NOW,
         recipes: [...["Stringy Wolf Meat", "Boar Ribs", "Bear Meat"].map((name) => ({ name: `Cook ${name}`, reagents: [{ name, count: 1 }] })), { name: "Beer Basted Boar Ribs", reagents: [{ name: "Crag Boar Rib", count: 1 }] }] }] } },
     } as any });
-    const auctionText = injected.replace(/Name: Ashtest/, "Name: Bankytest").replace("Cooking\t8\t75\nHerbalism\t2\t75", "Herbalism\t1\t75").replace(/Generated: \d+/, `Generated: ${NOW}`);
+    const auctionText = injected.replace(/Name: Ashtest/, "Name: Bankytest").replace("Cooking\t19\t75\nHerbalism\t2\t75", "Herbalism\t1\t75").replace(/Generated: \d+/, `Generated: ${NOW}`);
     store.importSnapshot(auctionText);
     const auction = store.listCharacters("classic-era").find((row) => row.name === "Bankytest")!;
     const ashtest = store.listCharacters("classic-era").find((row) => row.name === "Ashtest")!;
@@ -64,8 +64,15 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     assert.match(((plan as any).value.data as any).coverageWarnings[0], /no item identity/);
     assert.ok(!rows.some((row) => row.name === "UNKNOWN item"));
     assert.equal(fullBagFixtureRows.length, 16, "the full-bags fixture fills all 16 slots");
+    const actionKeys = rows.map((row) => `${row.itemRef ?? row.name}:${row.action}`);
+    assert.equal(new Set(actionKeys).size, actionKeys.length, "each item is represented once per action after location aggregation");
+    for (const [name, quantity] of [["Crisp Spider Meat", 5], ["Small Spider Leg", 1], ["Boar Ribs", 1]] as const) {
+      const matches = rows.filter((row) => row.name === name);
+      assert.equal(matches.length, 1, `${name} appears once in the plan`);
+      assert.deepEqual([matches[0]?.action, matches[0]?.reason, (matches[0] as any)?.quantity], ["KEEP", "Cooking 19: skill-up mat", quantity]);
+    }
     const foodRows = rows.filter((row) => ["Tier 5 Food fixture", "Tier 10 Food fixture", "Buff Food fixture"].includes(row.name ?? ""));
-    assert.deepEqual(foodRows.map((row) => row.name), ["Tier 10 Food fixture", "Tier 5 Food fixture", "Buff Food fixture"]);
+    assert.deepEqual(foodRows.map((row) => row.name), ["Tier 10 Food fixture", "Tier 5 Food fixture", "Buff Food fixture"], JSON.stringify(foodRows));
     assert.equal(foodRows.find((row) => row.name === "Tier 10 Food fixture")?.action, "KEEP");
     assert.equal(foodRows.find((row) => row.name === "Tier 5 Food fixture")?.action, "VENDOR");
     assert.match(rows.find((row) => row.name === "Buff Food fixture")?.reason ?? "", /at most one stack/);
@@ -76,10 +83,10 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
     for (const name of ["Stringy Wolf Meat", "Boar Ribs", "Bear Meat"]) {
       const row = rows.find((candidate) => candidate.name === name);
       assert.equal(row?.action, "KEEP", row?.reason);
-      assert.equal(row?.reason, "possible reagent for recipe; learned state is UNKNOWN");
+      assert.equal(row?.reason, name === "Boar Ribs" ? "Cooking 19: skill-up mat" : "possible reagent for recipe; learned state is UNKNOWN");
     }
     for (const name of ["Tough Jerky", "Tough Hunk of Bread", "Refreshing Spring Water", "Minor Healing Potion", "Roasted Boar Meat", "Charred Wolf Meat", "Beer Basted Boar Ribs", "Deeprun Rat Kabob"]) assert.equal(rows.find((row) => row.name === name)?.reason, "consumable");
-    assert.deepEqual([rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.action, rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.reason], ["KEEP", "learn at Cooking 25 (now 8)"]);
+    assert.deepEqual([rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.action, rows.find((row) => row.name === "Recipe: Beer Basted Boar Ribs")?.reason], ["KEEP", "learn at Cooking 25 (now 19)"]);
     assert.equal(rows.find((row) => row.name === "Crag Boar Rib")?.reason, "reagent for recipe to learn");
     assert.equal(rows.find((row) => row.name === "Beer Basted Boar Ribs")?.reason, "consumable");
     assert.deepEqual([rows.find((row) => row.name === "Infantry Cloak")?.action, rows.find((row) => row.name === "Infantry Cloak")?.reason], ["KEEP", "Observed equipment item; upgrade suitability is UNKNOWN."]);
@@ -95,6 +102,7 @@ test("Ashtest Classic Era keeps own recipe reagents, usable consumables and conj
       assert.deepEqual([recipeRow?.name, recipeRow?.quantity, recipeRow?.quality.state, recipeRow?.recipeLearning?.requiredSkill?.state, recipeRow?.recipeLearning?.requiredSkill?.value], ["Recipe: Beer Basted Boar Ribs", 1, "UNKNOWN", "KNOWN", 25]);
     }
     assert.deepEqual([rows.find((row) => row.name === "Linen Cloth")?.action, rows.find((row) => row.name === "Linen Cloth")?.reason], ["KEEP", "Planned Tailoring"]);
+    assert.deepEqual(store.getMailPlanSettings({ accountId: "default", version: "classic-era", realm: "Mankrik", faction: "Alliance" })?.plannedProfessionsByCharacter?.[ashtest.identityKey], ["Tailoring"], "mail planning leaves the player's planned profession list unchanged");
     for (const name of ["Spider Ichor", "Broken Boar Tusk"]) assert.equal(rows.find((row) => row.name === name)?.action, "MAIL_TO_AUCTION_CHARACTER");
   } finally { store.close(); }
 });
@@ -115,6 +123,13 @@ test("shared mail classifier uses observed binding, quality, and usability metad
   assert.equal(classifyMailItem({ version: "classic-era", bound: "BOUND", quality: 0, vendorEachCopper: 5 }).action, "VENDOR");
   assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", quality: 0 }).action, "VENDOR");
   assert.equal(classifyMailItem({ version: "classic-era", bound: "UNBOUND", equippable: true }).reason, "Observed equipment item; upgrade suitability is UNKNOWN.");
+});
+
+test("shared mail classifier keeps profession skill-up materials for OBSERVED learned professions in Era and Forever", () => {
+  for (const version of ["classic-era", "forever"] as const) {
+    assert.deepEqual(classifyMailItem({ version, bound: "UNBOUND", professionSkillUpMaterial: { profession: "Cooking", skill: 19 } }), { action: "KEEP", reason: "Cooking 19: skill-up mat" });
+    assert.deepEqual(classifyMailItem({ version, bound: "UNBOUND", cookingMaterialPlan: { state: "UNKNOWN", keepQuantity: "UNKNOWN", excessQuantity: "UNKNOWN", reason: "Other cooking-plan note" }, professionSkillUpMaterial: { profession: "Cooking", skill: 19 } }), { action: "KEEP", reason: "Cooking 19: skill-up mat" });
+  }
 });
 
 test("Classic class proficiency is version scoped and rejects observed Warlock shields", () => {
