@@ -226,6 +226,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
+      "get_planned_professions",
       "get_profession_coverage",
       "get_recipe_reagent_availability",
       "get_renown",
@@ -242,6 +243,7 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
       "lookup_npc",
       "search_items",
       "search_research",
+      "set_planned_professions",
       "suggest_for_level",
     ]);
     const crafters = structured<{ data?: { learned: unknown[]; charactersWithoutRecipeEvidence: Array<{ name: string }> }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "forever", nameContains: "copper" } }));
@@ -250,7 +252,9 @@ test("the local STDIO MCP server exposes only bounded read tools over the read-o
     const eraCrafters = structured<{ data?: { learned: unknown[] }; provenance: { state: string } }>(await client.callTool({ name: "find_recipe_crafters", arguments: { version: "classic-era", recipeID: 2663 } }));
     assert.equal(eraCrafters.data?.learned.length, 0, "Forever recipe rows never appear in Classic Era");
     const tools = (await client.listTools()).tools;
-    assert.ok(tools.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
+    assert.ok(tools.every((tool) => ["set_planned_professions"].includes(tool.name)
+      ? tool.annotations?.readOnlyHint === false && tool.annotations?.destructiveHint === false
+      : tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false));
     assert.equal(tools.some((tool) => /sql|file|shell|command|account_facts/i.test(tool.name)), false);
     assert.equal(toolNames.includes("update_erp_project_plan"), false, "player-authored writes remain absent from the default read-only profile");
 
@@ -916,6 +920,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "get_gear_candidate_recipient_screen",
       "get_item_allocation",
       "get_item_metadata",
+      "get_planned_professions",
       "get_profession_coverage",
       "get_recipe_reagent_availability",
       "get_renown",
@@ -932,6 +937,7 @@ test("the direct Node STDIO entrypoint supports modern discovery with protocol-o
       "lookup_npc",
       "search_items",
       "search_research",
+      "set_planned_professions",
       "suggest_for_level",
     ]);
   } finally {

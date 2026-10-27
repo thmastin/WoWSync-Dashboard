@@ -18,6 +18,8 @@ import {
   READ_MODEL_VERSIONS,
   ResearchRegistry,
   SqliteSnapshotReadStore,
+  SqliteMailPlanSettingsStore,
+  professionCatalogForVersion,
   type ResearchDocumentClass,
   type VersionOrUnknown,
 } from "@wowsync-dashboard/core";
@@ -26,6 +28,7 @@ import { buildRordinForeverGoalProject } from "./foreverGoalProject.ts";
 import { ForeverKnowledgeStore, foreverKnowledgePath } from "@wowsync-dashboard/core/foreverKnowledgeStore.ts";
 import { describeForeverTalents, lookupForeverKnowledge } from "@wowsync-dashboard/core/foreverKnowledgeLookup.ts";
 import { recipeLearnSkills } from "@wowsync-dashboard/core/foreverRecipeLearning.ts";
+import { PRIMARY_PROFESSIONS } from "@wowsync-dashboard/core/foreverDiscovery.ts";
 import type { ForeverTalentView } from "@wowsync-dashboard/core/readModel.ts";
 import { ForeverPriceStore, foreverPricesPath } from "@wowsync-dashboard/core/foreverPriceStore.ts";
 import { PolestarCodexReadStore } from "@wowsync-dashboard/core/polestarCodex.ts";
@@ -227,7 +230,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     {
       instructions: planningApiBaseUrl
         ? "WoWSync retrieval plus optional local ERP plan recording. Require an explicit WoW version. Planning tools write only player-authored planning records through the loopback Dashboard REST API; they never execute in-game actions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance."
-        : "Read-only WoWSync retrieval. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance.",
+        : "Read-only WoWSync retrieval except for user-preference tools that require confirm=true. Require an explicit WoW version for account-state questions. Latest-known data is not guaranteed live; preserve OBSERVED, DERIVED, LAST_SEEN, and UNKNOWN provenance.",
       supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
     },
   );
@@ -299,6 +302,72 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     const resolvedLimit = limit ?? DEFAULT_CHARACTER_LIST;
     return textResult({ version, realm, characters: characters.slice(0, resolvedLimit), returnedCount: Math.min(characters.length, resolvedLimit), totalCount: characters.length, truncated: characters.length > resolvedLimit });
   });
+
+  const preferenceCharacterSchema = z.union([
+    z.string().trim().min(1).max(512),
+    z.object({ name: nameSchema, realm: realmSchema }).strict(),
+  ]);
+  const resolvePreferenceCharacter = (version: "classic-era" | "forever", input: string | { name: string; realm: string }) => {
+    const roster = store.listCharacters(version);
+    const found = typeof input === "string"
+      ? roster.filter((row) => row.identityKey === input)
+      : roster.filter((row) => row.name.toLocaleLowerCase() === input.name.toLocaleLowerCase() && row.realm.toLocaleLowerCase() === input.realm.toLocaleLowerCase());
+    if (found.length !== 1) throw new Error(found.length ? "Character identity is ambiguous; pass its exact identity key." : "Character was not found in this version's Dashboard roster.");
+    const character = found[0]!;
+    if (character.faction !== "Alliance" && character.faction !== "Horde") throw new Error("Character faction is unknown; planned professions cannot be scoped safely.");
+    return character;
+  };
+  const getPlannedProfessions = (version: "classic-era" | "forever", characterInput: string | { name: string; realm: string }) => {
+    const character = resolvePreferenceCharacter(version, characterInput);
+    const scope = { accountId: "default", version, realm: character.realm, faction: character.faction } as const;
+    const settings = store.getMailPlanSettings(scope);
+    return { character: { identityKey: character.identityKey, name: character.name, realm: character.realm, version }, professions: settings?.plannedProfessionsByCharacter?.[character.identityKey] ?? [], provenance: "USER_CONFIGURED" as const };
+  };
+  const setPlannedProfessions = (version: "classic-era" | "forever", characterInput: string | { name: string; realm: string }, professions: string[], confirm: boolean) => {
+    const character = resolvePreferenceCharacter(version, characterInput);
+    const allowed = version === "classic-era" ? professionCatalogForVersion(version) : [...PRIMARY_PROFESSIONS, "Cooking", "First Aid", "Fishing"];
+    const canonical = new Map(allowed.map((name) => [name.toLocaleLowerCase(), name]));
+    const unknown = professions.filter((name) => !canonical.has(name.toLocaleLowerCase()));
+    if (unknown.length) return safeFailure("UNKNOWN_PROFESSION", `Unknown ${version} profession name(s): ${unknown.join(", ")}. Allowed names: ${allowed.join(", ")}.`);
+    const proposed = [...new Set(professions.map((name) => canonical.get(name.toLocaleLowerCase())!))];
+    const scope = { accountId: "default", version, realm: character.realm, faction: character.faction } as const;
+    const currentSettings = store.getMailPlanSettings(scope);
+    const current = currentSettings?.plannedProfessionsByCharacter?.[character.identityKey] ?? [];
+    const added = proposed.filter((name) => !current.includes(name));
+    const removed = current.filter((name) => !proposed.includes(name));
+    const result = { character: { identityKey: character.identityKey, name: character.name, realm: character.realm, version }, current, proposed, diff: { added, removed } };
+    if (!confirm) return textResult({ mode: "DRY_RUN", ...result, written: false });
+    const writer = new SqliteMailPlanSettingsStore(configuration.databasePath ?? defaults.databasePath);
+    try {
+      const latest = writer.getMailPlanSettings(scope);
+      const map = { ...(latest?.plannedProfessionsByCharacter ?? {}) };
+      if (proposed.length) map[character.identityKey] = proposed;
+      else delete map[character.identityKey];
+      const saved = writer.setMailPlanSettings({ ...(latest ?? scope), plannedProfessionsByCharacter: map, updatedAt: latest?.updatedAt ?? Math.floor(Date.now() / 1000), provenance: "USER_CONFIGURED" });
+      return textResult({ mode: "SAVED", character: result.character, professions: saved.plannedProfessionsByCharacter?.[character.identityKey] ?? [], provenance: saved.provenance });
+    } catch (error) { return safeFailure("PLANNED_PROFESSIONS_WRITE_FAILED", error instanceof Error ? error.message : String(error)); }
+    finally { writer.close(); }
+  };
+  if (classicEraProfile || foreverProfile) {
+    const version = classicEraProfile ? "classic-era" as const : "forever" as const;
+    server.registerTool("get_planned_professions", {
+      title: "Get planned professions",
+      description: `Reads the USER_CONFIGURED planned profession list for one exact ${version} character. This is player preference, not captured profession evidence.`,
+      inputSchema: z.object({ character: preferenceCharacterSchema }).strict(), annotations: toolAnnotations,
+    }, async ({ character }) => {
+      try { return textResult(getPlannedProfessions(version, character)); }
+      catch (error) { return safeFailure("CHARACTER_NOT_FOUND_OR_AMBIGUOUS", error instanceof Error ? error.message : String(error)); }
+    });
+    server.registerTool("set_planned_professions", {
+      title: "Set planned professions",
+      description: `Shows a dry run for one exact ${version} character. Always show that diff and get the user's explicit yes before calling again with confirm=true. Never write on your own initiative. This changes only user preferences; captured game data stays read-only.`,
+      inputSchema: z.object({ character: preferenceCharacterSchema, professions: z.array(z.string().trim().min(2).max(40)).max(20), confirm: z.boolean() }).strict(),
+      annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
+    }, async ({ character, professions, confirm }) => {
+      try { return setPlannedProfessions(version, character, professions, confirm); }
+      catch (error) { return safeFailure("CHARACTER_NOT_FOUND_OR_AMBIGUOUS", error instanceof Error ? error.message : String(error)); }
+    });
+  }
 
   server.registerTool("get_erp_projects", {
     title: "Review WoWSync ERP projects",
