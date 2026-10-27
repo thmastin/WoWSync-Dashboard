@@ -579,6 +579,8 @@ export class SnapshotReadStoreOpenError extends Error {
 interface SqliteStoreOpenOptions {
   /** Internal support for the narrow SqliteSnapshotReadStore wrapper only. */
   readOnly?: boolean;
+  /** Opens the existing schema for the mail preference setter without schema setup or shared-storage backfill. */
+  settingsOnly?: boolean;
 }
 
 const READ_ONLY_REQUIRED_TABLES = [
@@ -605,6 +607,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
 
   constructor(path: string, options: SqliteStoreOpenOptions = {}) {
     this.readOnly = options.readOnly === true;
+    const settingsOnly = options.settingsOnly === true;
     if (this.readOnly && (path === ":memory:" || !existsSync(path))) {
       throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: the database file does not exist (${path}).`);
     }
@@ -614,7 +617,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (this.readOnly) throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
-    if (!this.readOnly) {
+    if (!this.readOnly && !settingsOnly) {
       this.db.exec("PRAGMA journal_mode = WAL;");
       this.db.exec(SCHEMA);
     }
@@ -744,7 +747,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
     };
       if (this.readOnly) {
         this.assertReadOnlySchema();
-      } else {
+      } else if (!settingsOnly) {
         // One-time, idempotent: journals shared storage already present in stored snapshots.
         if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
       }
@@ -2066,6 +2069,16 @@ export class SqliteSnapshotStore implements SnapshotStore {
   close(): void {
     this.db.close();
   }
+}
+
+/** Narrow writable entry point for the existing mail-plan preference record only. */
+export class SqliteMailPlanSettingsStore {
+  private readonly store: SqliteSnapshotStore;
+  constructor(path: string) { this.store = new SqliteSnapshotStore(path, { settingsOnly: true }); }
+  getMailPlanSettings(scope: MailPlanSettingsScope): MailPlanSettings | undefined { return this.store.getMailPlanSettings(scope); }
+  setMailPlanSettings(settings: MailPlanSettings): MailPlanSettings { return this.store.setMailPlanSettings(settings); }
+  listCharacters(version: VersionOrUnknown): StoredCharacterSummary[] { return this.store.listCharacters(version); }
+  close(): void { this.store.close(); }
 }
 
 /**

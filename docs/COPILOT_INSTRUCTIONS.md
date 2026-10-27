@@ -4,7 +4,7 @@
 
 - The MCP process must set `WOWSYNC_MCP_PROFILE` to exactly `classic-era` or `forever`. A missing or other value is a startup error; there is no default flavor.
 - Use the Classic Era profile for Classic Era-specific tools and the Forever profile for Forever-specific tools. Shared Dashboard tools remain available, but each profile's version schema prevents the Forever process from querying Era and the Era process from querying Forever. Retail-only gear screens remain Retail-scoped.
-- Each process reads the same Dashboard database in read-only mode. Flavor and stable character identity keep the data partitioned.
+- Captured game data is read-only. The two preference tools can write only the player's planned profession preference, and only after `set_planned_professions` is called with `confirm:true`.
 
 ## Forever profile
 
@@ -18,6 +18,7 @@
 ### Tool discipline
 - Make the smallest call that answers the question first.
 - One character and one section at a time. No bulk dumps; page with `offset`/`limit`.
+- For planned professions, call `set_planned_professions` with `confirm:false`, show the returned current list, proposed list, and diff, then get the user's explicit yes. Only then call it again with `confirm:true`. Never write on your own initiative. Use `get_planned_professions` to show the saved preference; it is USER_CONFIGURED intent, not captured evidence.
 
 ### Provenance
 - Cite `observedAt` / freshness for every claim. Report `LAST_SEEN` data as stale, never as current.
@@ -59,6 +60,7 @@
 ## Classic Era profile
 
 - Classic Era-specific tools: `list_classic_era_characters` and `get_classic_era_mail_plan`, plus shared Dashboard read tools with their version fixed to `classic-era`.
+- For planned professions, call `set_planned_professions` with `confirm:false`, show the returned current list, proposed list, and diff, then get the user's explicit yes. Only then call it again with `confirm:true`. Never write on your own initiative. Use `get_planned_professions` to show the saved preference; it is USER_CONFIGURED intent, not captured evidence.
 - The profile requires the explicit Classic Era version on versioned calls. Forever-only prices, knowledge, gear, and mail tools are not exposed.
 - The mail plan requires the Classic Era GUID to remain consistent across known observations and recent OBSERVED bags (72 hours). Build 70003 is verified; newer eligible Era builds remain usable with lowered confidence. A Forever profile/build never verifies Era evidence.
 - Vendor unit value comes only from the current captured `vendorEachCopper` item fact. Auction House value is always `UNKNOWN`; no Era AH source is available. Do not use Forever market prices or Forever knowledge/catalog rows for Era.
