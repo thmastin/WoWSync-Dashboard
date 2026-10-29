@@ -23,6 +23,7 @@
     "start": "node packages/server/src/index.ts",
     "import:saved": "node --disable-warning=ExperimentalWarning packages/server/src/importSavedCli.ts",
     "import:polestar-codex": "node --disable-warning=ExperimentalWarning packages/server/src/importPolestarCodexCli.ts",
+    "purge:flavor": "node --disable-warning=ExperimentalWarning tools/purgeFlavor.mjs",
     "watch:saved": "node --disable-warning=ExperimentalWarning packages/server/src/watchSavedCli.ts"
   },
   "engines": {
