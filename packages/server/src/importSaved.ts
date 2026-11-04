@@ -50,7 +50,7 @@ export class BridgeError extends Error {
 // --- discovery ---------------------------------------------------------------------------------------
 
 /** WoW's per-product folders. Discovery looks in these (and in the folder itself), never anywhere else. */
-export const PRODUCT_FOLDERS = ["_retail_", "_classic_era_", "_classic_", "_anniversary_", "_classic_beta_"] as const;
+export const PRODUCT_FOLDERS = ["_retail_", "_classic_era_", "_classic_", "_anniversary_", "_classic_beta_", "_forever_"] as const;
 export const SAVED_VARIABLES_FILE = "GearExport.lua";
 /** A SavedVariables file larger than this is not what GearExport writes; refuse it rather than load it. */
 export const MAX_SAVED_VARIABLES_BYTES = 256 * 1024 * 1024;
