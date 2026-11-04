@@ -106,7 +106,7 @@ test("FOREVER WORKFLOW: a multi-character launch-build account answers crafting,
     // "Where is my Copper Bar across the account?" — search agrees with the reagent view.
     const search = await call<{ data: { items: Array<{ item: { locations: Array<{ name?: string; characterName?: string; identityKey: string; storage: string; state: string }> } }> } }>("search_items", { version: "forever", query: "Copper Bar" });
     const locations = search.data.items.flatMap((row) => row.item.locations).map((row) => `${row.identityKey}|${row.storage}|${row.state}`).sort();
-    assert.ok(locations.includes("forever::forever launch::smith|bank|LAST_SEEN"), locations.join(","));
+    assert.ok(locations.includes("forever::forever launch::smith::guid:player-1-smith|bank|LAST_SEEN"), locations.join(","));
     assert.ok(locations.includes("forever::forever launch::miner|bags|OBSERVED"), locations.join(","));
 
     // "What can Smith craft as gear?" — launch build accepted, labelled unverified; upgrades stay UNKNOWN.

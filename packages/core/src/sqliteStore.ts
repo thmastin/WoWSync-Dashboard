@@ -346,6 +346,7 @@ CREATE INDEX IF NOT EXISTS idx_erp_change_proposals_version_status ON erp_change
 /** Bump only if the backfill's ALGORITHM changes; it is deliberately not tied to the content-hash version. */
 const SHARED_BACKFILL_VERSION = "1";
 const SHARED_BACKFILL_KEY = "shared_storage_backfill";
+const FOREVER_IDENTITY_MIGRATION_KEY = "forever_identity_surname_v1";
 
 interface CharacterRow {
   id: number;
@@ -748,6 +749,7 @@ export class SqliteSnapshotStore implements SnapshotStore {
       if (this.readOnly) {
         this.assertReadOnlySchema();
       } else if (!settingsOnly) {
+        this.migrateForeverIdentities();
         // One-time, idempotent: journals shared storage already present in stored snapshots.
         if (one<{ value: string }>(this.stmts.getMeta, SHARED_BACKFILL_KEY)?.value !== SHARED_BACKFILL_VERSION) this.backfillSharedStorage();
       }
@@ -757,6 +759,37 @@ export class SqliteSnapshotStore implements SnapshotStore {
         if (error instanceof SnapshotReadStoreOpenError) throw error;
         throw new SnapshotReadStoreOpenError(`Cannot open WoWSync database read-only: ${error instanceof Error ? error.message : String(error)}`);
       }
+      throw error;
+    }
+  }
+
+  private migrateForeverIdentities(): void {
+    if (one<{ value: string }>(this.stmts.getMeta, FOREVER_IDENTITY_MIGRATION_KEY)) return;
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const rows = many<CharacterRow>(this.db.prepare("SELECT * FROM characters WHERE version = 'forever' ORDER BY id"));
+      const updateKey = this.db.prepare("UPDATE characters SET identity_key = ? WHERE id = ?");
+      const snapshotRows = this.db.prepare("SELECT parsed_json FROM snapshots WHERE character_id = ? ORDER BY id DESC");
+      for (const row of rows) {
+        const snapshots = snapshotRows.all(row.id) as Array<{ parsed_json: string }>;
+        let surname: string | undefined;
+        let guid: string | undefined;
+        for (const snapshot of snapshots) {
+          const parsed = JSON.parse(snapshot.parsed_json) as ParsedSnapshot;
+          surname ??= parsed.character.surname?.trim() || undefined;
+          guid ??= parsed.character.guid || parsed.foreverGearObservation?.sourceCharacterGuid || parsed.characterState?.sourceCharacterGuid;
+          if (surname || guid) break;
+        }
+        const target = characterIdentity("forever", { name: row.name, realm: row.realm, surname }, guid).key;
+        if (target === row.identity_key) continue;
+        const collision = one<{ id: number }>(this.db.prepare("SELECT id FROM characters WHERE identity_key = ? AND id <> ?"), target, row.id);
+        if (collision) throw new Error(`Cannot migrate Forever identity for ${row.name} on ${row.realm}: target identity already belongs to another character.`);
+        updateKey.run(target, row.id);
+      }
+      this.stmts.setMeta.run(FOREVER_IDENTITY_MIGRATION_KEY, "1");
+      this.db.exec("COMMIT;");
+    } catch (error) {
+      this.db.exec("ROLLBACK;");
       throw error;
     }
   }
@@ -862,10 +895,17 @@ export class SqliteSnapshotStore implements SnapshotStore {
         } },
       };
     }
-    const identity = characterIdentity(version, parsed.character);
+    const sourceCharacterGuid = parsed.character.guid || parsed.foreverGearObservation?.sourceCharacterGuid || parsed.characterState?.sourceCharacterGuid;
+    const identity = characterIdentity(version, parsed.character, sourceCharacterGuid);
     const now = Math.floor(Date.now() / 1000);
 
     return this.inTransaction((): ImportResult => {
+      if (version === "forever" && !parsed.character.surname?.trim()) {
+        const sameFirstName = many<CharacterRow>(this.db.prepare("SELECT * FROM characters WHERE version = 'forever' AND lower(realm) = lower(?) AND lower(name) = lower(?)"), identity.realm, identity.name);
+        if (sameFirstName.length > 0 && !sourceCharacterGuid) {
+          throw new Error(`Forever import refused: ${identity.name} on ${identity.realm} has an existing same-first-name character. This export needs an observed surname or source character GUID to identify it safely.`);
+        }
+      }
       let characterRow = one<CharacterRow>(this.stmts.findCharacterByKey, identity.key);
       const isNewCharacter = !characterRow;
 

@@ -45,21 +45,76 @@ test("Forever surname persists in snapshot and latest summaries without changing
     assert.equal(first.snapshot.parsed.character.race, "Dwarf");
     assert.equal(first.character.surname, "Emberstone");
     assert.equal(first.character.surnameSource, "UnitName[2]+GetUnitName suffix");
-    assert.equal(first.character.identityKey, "forever::classic beta pvp 2::hallo");
+    assert.equal(first.character.identityKey, "forever::classic beta pvp 2::hallo::emberstone");
     assert.equal(store.buildAccountFacts("forever", 1_700_000_001).characters[0]?.surname, "Emberstone");
     assert.equal(store.buildAccountContext(1_700_000_001).versions.forever.characters[0]?.surname, "Emberstone");
     assert.equal(store.listCharacters("forever")[0]?.race, "Dwarf", "observed race reaches the roster API summary");
     assert.equal(store.buildAccountContext(1_700_000_001).versions.forever.characters[0]?.race, "Dwarf", "race reaches AccountContext");
 
-    const laterLegacy = buildWowSyncExport({ generatedAt: 1_700_000_010, character: {
-      name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
+    const laterSameIdentity = buildWowSyncExport({ generatedAt: 1_700_000_010, character: {
+      name: "Hallo", surname: "Emberstone", surnameSource: "UnitName[2]+GetUnitName suffix", race: "Dwarf", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001",
     } });
-    const latest = store.importSnapshot(laterLegacy);
+    const latest = store.importSnapshot(laterSameIdentity);
     assert.equal(latest.character.identityKey, first.character.identityKey);
-    assert.equal(latest.snapshot.parsed.character.surname, undefined);
-    assert.equal(store.listCharacters("forever")[0]?.surname, undefined, "missing latest surname is not carried forward as current");
+    assert.equal(latest.snapshot.parsed.character.surname, "Emberstone");
     assert.equal(store.listSnapshots(first.character.identityKey).length, 2);
   } finally { store.close(); }
+});
+
+test("Forever same-first-name characters remain separate and imports are idempotent", () => {
+  const store = freshStore();
+  try {
+    const make = (surname: string, race: string, cls: string) => buildWowSyncExport({ generatedAt: 1_700_100_000, character: {
+      name: "Hallo", surname, surnameSource: "UnitName[2]+GetUnitName suffix", race, class: cls,
+      realm: "CAMWOW US2 Realm 3 PvE", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+    } });
+    const ashwick = make("Ashwick", "Gnome", "Warlock");
+    const oldbeard = make("Oldbeard", "Dwarf", "Hunter");
+    const a = store.importSnapshot(ashwick);
+    const b = store.importSnapshot(oldbeard);
+    assert.notEqual(a.character.identityKey, b.character.identityKey);
+    assert.equal(store.listCharacters("forever").length, 2);
+    assert.deepEqual(store.listCharacters("forever").map(({ name, surname }) => `${name} ${surname}`).sort(), ["Hallo Ashwick", "Hallo Oldbeard"]);
+    const ambiguous = new DashboardReadModel(store).getCharacterSummary({ version: "forever", name: "Hallo", realm: "CAMWOW US2 Realm 3 PvE" });
+    assert.equal(ambiguous.status, "AMBIGUOUS");
+    if (ambiguous.status === "AMBIGUOUS") assert.deepEqual(ambiguous.candidates.map((candidate) => candidate.surname).sort(), ["Ashwick", "Oldbeard"]);
+    assert.equal(store.importSnapshot(ashwick).isDuplicate, true);
+    assert.equal(store.listSnapshots(a.character.identityKey).length, 1);
+    assert.equal(store.listSnapshots(b.character.identityKey).length, 1);
+    const unknownSurname = buildWowSyncExport({ character: { name: "Hallo", realm: "CAMWOW US2 Realm 3 PvE", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" } });
+    assert.throws(() => store.importSnapshot(unknownSurname), /Forever import refused: Hallo on CAMWOW US2 Realm 3 PvE.*observed surname or source character GUID/);
+  } finally { store.close(); }
+});
+
+test("Forever identity migration re-keys legacy rows without changing character or snapshot IDs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wowsync-forever-identity-"));
+  const path = join(dir, "test.sqlite");
+  try {
+    let characterId: number;
+    let snapshotId: number;
+    {
+      const store = new SqliteSnapshotStore(path);
+      const imported = store.importSnapshot(buildWowSyncExport({ generatedAt: 1_700_200_000, character: {
+        name: "Torvald", surname: "Oldbeard", surnameSource: "UnitName[2]+GetUnitName suffix", realm: "CAMWOW US2 Realm 3 PvE", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001",
+      } }));
+      characterId = imported.character.id;
+      snapshotId = imported.snapshot.id;
+      store.close();
+    }
+    const raw = new DatabaseSync(path);
+    raw.prepare("UPDATE characters SET identity_key = ? WHERE id = ?").run("forever::camwow us2 realm 3 pve::torvald", characterId);
+    raw.prepare("DELETE FROM store_meta WHERE key = 'forever_identity_surname_v1'").run();
+    raw.close();
+    const migrated = new SqliteSnapshotStore(path);
+    try {
+      const character = migrated.getCharacter("forever::camwow us2 realm 3 pve::torvald::oldbeard");
+      assert.equal(character?.id, characterId);
+      assert.deepEqual(migrated.listSnapshots(character!.identityKey).map((snapshot) => snapshot.id), [snapshotId]);
+    } finally { migrated.close(); }
+    const reopened = new SqliteSnapshotStore(path);
+    try { assert.equal(reopened.listCharacters("forever").length, 1); }
+    finally { reopened.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("gear candidates persist in snapshot JSON, duplicates are idempotent, and separate observations stay separate", () => {
