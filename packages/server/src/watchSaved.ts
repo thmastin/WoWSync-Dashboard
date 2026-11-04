@@ -317,7 +317,7 @@ through the normal POST /api/import. Foreground; stop it with Ctrl+C. Read-only:
 and cannot make WoW save.
 
 Point --wow-dir at the install root (e.g. "D:\\World of Warcraft") to watch every product that has GearExport.lua
-(_retail_, _anniversary_, _classic_era_, _classic_, _classic_beta_). Point it at one product folder to watch only that client.
+(_retail_, _anniversary_, _classic_era_, _classic_, _classic_beta_, _forever_). Point it at one product folder to watch only that client.
 --file still watches a single file. import:saved still refuses when several files match; only the watcher accepts multiples.
 
 WoW writes SavedVariables when you /reload, log out or exit, NOT when you run /wowsync. An export arrives on the next save.

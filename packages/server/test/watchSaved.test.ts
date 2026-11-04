@@ -795,7 +795,7 @@ test("watchTargetLabel picks the product folder from a SavedVariables path", () 
 test("discoverWatchTargets returns every GearExport.lua under an install root", () => {
   const install = join(root, "multi-install");
   const files = [];
-  for (const product of ["_retail_", "_anniversary_", "_classic_beta_"]) {
+  for (const product of ["_retail_", "_anniversary_", "_classic_beta_", "_forever_"]) {
     const dir = join(install, product, "WTF", "Account", "A1", "SavedVariables");
     mkdirSync(dir, { recursive: true });
     const file = join(dir, "GearExport.lua");
@@ -803,7 +803,7 @@ test("discoverWatchTargets returns every GearExport.lua under an install root", 
     files.push(file);
   }
   const found = discoverWatchTargets({ wowDir: install, env: {} });
-  assert.equal(found.length, 3);
+  assert.equal(found.length, 4);
   assert.deepEqual(found.map((f) => f.path).sort(), files.sort());
 });
 
