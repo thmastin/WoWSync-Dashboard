@@ -182,6 +182,13 @@ test("trainer evidence: Hallo's Forever class trainer capture parses with level,
       assert.deepEqual([rootService?.requiredLevel, rootService?.costCopper, rootService?.statusAtVisit], ["8", 200, "unavailable"]);
       assert.equal(read.value.data?.categories[0]?.statusCounts.available, 0, "Forever status tokens remain unmapped absent evidence");
       assert.ok((read.value.data?.categories[0]?.statusCounts.unavailable ?? 0) > 0, "the literal unavailable token is preserved and counted");
+      const staleRead = new DashboardReadModel(store, () => NOW + 10 * 24 * 60 * 60).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+      assert.equal(staleRead.status, "FOUND");
+      if (staleRead.status === "FOUND") {
+        assert.equal(staleRead.value.provenance.observedAt, 1_791_863_345);
+        assert.equal(staleRead.value.provenance.freshness, "stale");
+        assert.equal(staleRead.value.data?.snapshot?.freshness, "stale");
+      }
     }
   } finally { store.close(); }
 });
