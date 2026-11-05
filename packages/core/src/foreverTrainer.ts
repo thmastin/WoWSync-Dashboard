@@ -51,9 +51,12 @@ function findTrainerEvidence(value: unknown, depth = 0): Loose | undefined {
 /** Reads trainer evidence from a parsed snapshot's Forever structured observation, if any. */
 export function extractForeverTrainerVisit(parsed: unknown, snapshotId: number): ForeverTrainerVisit | undefined {
   const evidence = findTrainerEvidence((parsed as Loose | undefined)?.foreverGearObservation);
-  const window = (evidence?.lastObserved ?? (evidence?.state === "OBSERVED" ? evidence : undefined)) as Loose | undefined;
-  const rawServices = Array.isArray(window?.services) ? window!.services as Loose[] : [];
-  if (!rawServices.length) return undefined;
+  const window = (evidence?.lastObserved ?? (evidence?.state === "OBSERVED" || evidence?.state === "OBSERVED_OPEN_WINDOW" ? evidence : undefined)) as Loose | undefined;
+  if (!window || (window.state !== "OBSERVED_OPEN_WINDOW" && window.state !== "OBSERVED")) return undefined;
+  const hasServiceList = Array.isArray(window.services);
+  const rawServices = hasServiceList ? window.services as Loose[] : [];
+  const serviceCount = Number(window.serviceCount ?? rawServices.length);
+  if (!Number.isFinite(serviceCount) || serviceCount < 0 || (!hasServiceList && window.serviceCount !== 0)) return undefined;
   let frame = "UNKNOWN";
   let observedAt: number | undefined;
   const services: ForeverTrainerService[] = [];
@@ -72,14 +75,14 @@ export function extractForeverTrainerVisit(parsed: unknown, snapshotId: number):
       name: info[0],
       rank: typeof info[4] === "string" && info[4] ? info[4] : undefined,
       statusAtVisit: typeof info[1] === "string" ? info[1] : "unknown",
-      level: typeof info[3] === "number" && info[3] > 0 ? info[3] : undefined,
+      level: typeof info[3] === "number" ? info[3] : undefined,
       costCopper: typeof cost === "number" ? cost : undefined,
       requires,
-      skillRequirement: typeof skill[0] === "string" || (typeof skill[1] === "number" && skill[1] > 0) ? { skill: typeof skill[0] === "string" ? skill[0] : undefined, rank: typeof skill[1] === "number" ? skill[1] : undefined } : undefined,
+      skillRequirement: typeof skill[0] === "string" || typeof skill[1] === "number" ? { skill: typeof skill[0] === "string" ? skill[0] : undefined, rank: typeof skill[1] === "number" ? skill[1] : undefined } : undefined,
     });
   }
-  if (!services.length) return undefined;
+  if (serviceCount > 0 && services.length === 0) return undefined;
   const skills = services.map((service) => service.skillRequirement?.skill).filter((name): name is string => !!name);
   const kind = skills.length >= services.length / 2 ? skills.sort((a, b) => skills.filter((x) => x === b).length - skills.filter((x) => x === a).length)[0] : "CLASS";
-  return { frame, kind, observedAt, snapshotId, serviceCount: Number(window?.serviceCount ?? services.length), services };
+  return { frame, kind: kind || "CLASS", observedAt: observedAt ?? (typeof window.capturedAt === "number" ? window.capturedAt : undefined), snapshotId, serviceCount, services };
 }

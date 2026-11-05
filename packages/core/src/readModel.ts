@@ -2415,16 +2415,52 @@ export class DashboardReadModel {
       const identity = { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm };
       if (!snapshot) return { data: { identity, sectionState: "UNKNOWN", categories: [], services: [], offset: 0, limit: query.limit ?? 50, totalCount: 0, truncated: false, categoryCount: 0, categoriesTruncated: false, reason: "No stored snapshot exists for this character." }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason: "No stored snapshot exists for this character." } };
       const section = snapshot.parsed.trainer;
-      const status = section.status.state;
+      let status = section.status.state;
+      let trainerCategories = section.categories;
+      let sectionObservedAt = section.status.observedAt;
+      let sectionReason = section.status.reason;
+      let foreverEvidenceSource = false;
+      if (query.version === "forever" && status === "UNKNOWN") {
+        const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id);
+        if (visit) {
+          const evidence = (snapshot.parsed.foreverGearObservation as any)?.itemEvidence?.data?.trainerEvidence;
+          const currentWindow = evidence?.state === "OBSERVED_OPEN_WINDOW" || evidence?.state === "OBSERVED";
+          status = currentWindow ? "OBSERVED" : "LAST_SEEN";
+          sectionObservedAt = visit.observedAt;
+          sectionReason = currentWindow ? undefined : "Trainer window was captured previously and carried through a closed-window capture; historical, not current.";
+          foreverEvidenceSource = true;
+          trainerCategories = [{
+            category: visit.kind,
+            status: { state: status, ...(visit.observedAt !== undefined ? { observedAt: visit.observedAt } : {}), ...(!currentWindow ? { reason: sectionReason } : {}) },
+            name: visit.frame,
+            trainerType: visit.frame,
+            coverage: "Forever raw trainer-window service evidence",
+            services: visit.services.map((service) => ({
+              ability: service.name,
+              ...(service.rank ? { rank: service.rank } : {}),
+              statusAtVisit: service.statusAtVisit,
+              ...(service.level !== undefined ? { requiredLevel: String(service.level) } : {}),
+              ...(service.costCopper !== undefined ? { costCopper: service.costCopper } : {}),
+              ...((service.requires.length || service.skillRequirement) ? { requirementsAtVisit: [
+                ...service.requires,
+                ...(service.skillRequirement ? [`${service.skillRequirement.skill ?? ""}${service.skillRequirement.rank !== undefined ? ` ${service.skillRequirement.rank}` : ""}`.trim()] : []),
+              ].filter(Boolean).join("; ") } : {}),
+            })),
+          }];
+        }
+      }
       // Trainer offers joined to this character's captured recipe rows (Forever/Retail only).
       const recipeRows = supportsRecipeCapture(query.version) ? knowledgeRows(resolveRecipeEvidence(query.version, this.snapshots(character.identityKey), snapshot)) : [];
-      const selectedCategories = [...section.categories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
+      const selectedCategories = [...trainerCategories].filter((category) => !query.category || category.category.toLocaleLowerCase() === query.category.trim().toLocaleLowerCase()).sort((a, b) => a.category.localeCompare(b.category));
       const categoryRead = selectedCategories.map((category) => {
         const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
         const counts = { known: 0, available: 0, unavailable: 0, other: 0 };
         for (const service of category.services) {
           const state = service.statusAtVisit?.toLowerCase();
-          if (state === "known" || state === "available" || state === "unavailable") counts[state]++;
+          if (foreverEvidenceSource) {
+            if (service.statusAtVisit === "unavailable") counts.unavailable++;
+            else counts.other++;
+          } else if (state === "known" || state === "available" || state === "unavailable") counts[state]++;
           else counts.other++;
         }
         return { category, observedAt, freshness: classifyFreshness(observedAt, this.now()), counts };
@@ -2433,7 +2469,8 @@ export class DashboardReadModel {
       const services = categoryRead.flatMap(({ category, observedAt, freshness }) => category.services
         .filter((service) => {
           const state = service.statusAtVisit?.toLowerCase();
-          if (query.status && (query.status === "other" ? state === "known" || state === "available" || state === "unavailable" : state !== query.status)) return false;
+          const mappedState = foreverEvidenceSource ? service.statusAtVisit === "unavailable" ? "unavailable" : "other" : state === "known" || state === "available" || state === "unavailable" ? state : "other";
+          if (query.status && mappedState !== query.status) return false;
           return !needle || `${service.spellID ?? ""} ${service.ability ?? ""} ${service.rank ?? ""} ${service.requirementsAtVisit ?? ""}`.toLocaleLowerCase().includes(needle);
         })
         .map((service) => {
@@ -2443,10 +2480,10 @@ export class DashboardReadModel {
       const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
       const pageServices = services.slice(page.offset, page.offset + page.limit);
       const categories = categoryRead.slice(0, 50).map(({ category, observedAt, freshness, counts }) => ({ category: category.category, state: category.status.state, observedAt, freshness, trainerName: category.name, trainerType: category.trainerType, coverage: category.coverage, filters: category.filters, serviceCount: category.services.length, statusCounts: counts }));
-      const observedAt = section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
+      const observedAt = sectionObservedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
       return {
-        data: { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt ?? undefined, observedAt: snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), importedAt: snapshot.importedAt, freshness: classifyFreshness(snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), this.now()) }, sectionState: status, categories, categoryCount: categoryRead.length, categoriesTruncated: categoryRead.length > categories.length, services: pageServices, offset: page.offset, limit: page.limit, totalCount: services.length, truncated: page.offset + pageServices.length < services.length, ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Trainer visits have not been observed in this snapshot." } : {}) },
-        provenance: { state: status, version: query.version, identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: "WOWSYNC v1 captured trainer visit observations", ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Trainer visits have not been observed." } : {}), ...(status === "LAST_SEEN" || categoryRead.some(({ category }) => category.status.state === "LAST_SEEN") ? { warning: "One or more trainer categories are historical observations; they are not current." } : {}) },
+        data: { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt ?? undefined, observedAt, importedAt: snapshot.importedAt, freshness: classifyFreshness(observedAt, this.now()) }, sectionState: status, categories, categoryCount: categoryRead.length, categoriesTruncated: categoryRead.length > categories.length, services: pageServices, offset: page.offset, limit: page.limit, totalCount: services.length, truncated: page.offset + pageServices.length < services.length, ...(status === "UNKNOWN" ? { reason: sectionReason ?? "Trainer visits have not been observed in this snapshot." } : {}) },
+        provenance: { state: status, version: query.version, identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness: classifyFreshness(observedAt, this.now()), source: foreverEvidenceSource ? "Forever raw trainer-window evidence" : "WOWSYNC v1 captured trainer visit observations", ...(status === "UNKNOWN" ? { reason: sectionReason ?? "Trainer visits have not been observed." } : {}), ...(status === "LAST_SEEN" || categoryRead.some(({ category }) => category.status.state === "LAST_SEEN") ? { warning: "One or more trainer categories are historical observations; they are not current." } : {}) },
       };
     });
   }

@@ -171,6 +171,82 @@ test("trainer evidence: Hallo's Forever class trainer capture parses with level,
     assert.deepEqual([roots.level, roots.costCopper, roots.statusAtVisit], [8, 200, "unavailable"]);
     const bash = visit.services.find((service) => service.name === "Bash" && service.rank === "Rank 1")!;
     assert.deepEqual([bash.level, bash.costCopper, bash.requires], [14, 900, ["Bear Form (Shapeshift)"]]);
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+    assert.equal(read.status, "FOUND");
+    if (read.status === "FOUND") {
+      assert.equal(read.value.data?.sectionState, "LAST_SEEN", "the fixture was captured after the trainer window closed");
+      assert.equal(read.value.provenance.state, "LAST_SEEN");
+      assert.equal(read.value.provenance.observedAt, 1_791_863_345, "use the raw window timestamp, not import time");
+      assert.equal(read.value.provenance.source, "Forever raw trainer-window evidence");
+      const rootService = read.value.data?.services.find((service) => service.ability === "Entangling Roots");
+      assert.deepEqual([rootService?.requiredLevel, rootService?.costCopper, rootService?.statusAtVisit], ["8", 200, "unavailable"]);
+      assert.equal(read.value.data?.categories[0]?.statusCounts.available, 0, "Forever status tokens remain unmapped absent evidence");
+      assert.ok((read.value.data?.categories[0]?.statusCounts.unavailable ?? 0) > 0, "the literal unavailable token is preserved and counted");
+      const staleRead = new DashboardReadModel(store, () => NOW + 10 * 24 * 60 * 60).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+      assert.equal(staleRead.status, "FOUND");
+      if (staleRead.status === "FOUND") {
+        assert.equal(staleRead.value.provenance.observedAt, 1_791_863_345);
+        assert.equal(staleRead.value.provenance.freshness, "stale");
+        assert.equal(staleRead.value.data?.snapshot?.freshness, "stale");
+      }
+    }
+  } finally { store.close(); }
+});
+
+test("Forever trainer extraction distinguishes an observed empty window from missing evidence", () => {
+  const visit = extractForeverTrainerVisit({ foreverGearObservation: { itemEvidence: { data: { trainerEvidence: {
+    state: "OBSERVED_OPEN_WINDOW", frame: "ClassTrainerFrame", capturedAt: NOW, serviceCount: 0, services: [],
+  } } } } }, 1);
+  assert.deepEqual(visit && { kind: visit.kind, serviceCount: visit.serviceCount, services: visit.services }, { kind: "CLASS", serviceCount: 0, services: [] });
+  assert.equal(extractForeverTrainerVisit({ foreverGearObservation: { itemEvidence: { data: { trainerEvidence: { state: "UNKNOWN" } } } } }, 1), undefined);
+  assert.equal(extractForeverTrainerVisit({ foreverGearObservation: { itemEvidence: { data: { trainerEvidence: { state: "OBSERVED_OPEN_WINDOW" } } } } }, 1), undefined, "missing service data is not an observed empty list");
+  assert.equal(extractForeverTrainerVisit({ foreverGearObservation: { itemEvidence: { data: { trainerEvidence: { state: "OBSERVED_OPEN_WINDOW", serviceCount: 1 } } } } }, 1), undefined, "a missing service list with a positive count is not an observed empty list");
+  const zeroCost = extractForeverTrainerVisit({ foreverGearObservation: { itemEvidence: { data: { trainerEvidence: { state: "OBSERVED_OPEN_WINDOW", frame: "ClassTrainerFrame", serviceCount: 1, services: [{ calls: {
+    info: { observedAt: NOW, context: { frame: "ClassTrainerFrame" }, returns: [
+      { index: 1, observation: { state: "OBSERVED", value: "Sample Ability" } },
+      { index: 2, observation: { state: "OBSERVED", value: "mystery-token" } },
+      { index: 4, observation: { state: "OBSERVED", value: 0 } },
+    ] },
+    cost: { returns: [{ index: 1, observation: { state: "OBSERVED", value: 0 } }] },
+  } }] } } } } }, 1);
+  assert.deepEqual(zeroCost?.services[0] && { status: zeroCost.services[0].statusAtVisit, level: zeroCost.services[0].level, costCopper: zeroCost.services[0].costCopper }, { status: "mystery-token", level: 0, costCopper: 0 });
+});
+
+test("current Forever open-window evidence produces OBSERVED trainer categories and services", () => {
+  const { store } = stable([], (target) => {
+    const { text, ...extras } = payload("hallo-pve");
+    const observation = extras.foreverGearObservation as any;
+    const prior = observation.itemEvidence.data.trainerEvidence.lastObserved;
+    observation.itemEvidence.data.trainerEvidence = { ...prior, state: "OBSERVED_OPEN_WINDOW", capturedAt: NOW };
+    target.importSnapshot(text, extras);
+  });
+  try {
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    assert.equal(read.value.data?.sectionState, "OBSERVED");
+    assert.equal(read.value.provenance.state, "OBSERVED");
+    assert.equal(read.value.data?.categories[0]?.category, "CLASS");
+    assert.ok((read.value.data?.categories[0]?.serviceCount ?? 0) > 0);
+    assert.ok(read.value.data?.services.some((service) => service.ability === "Entangling Roots"));
+  } finally { store.close(); }
+});
+
+test("missing Forever trainer evidence keeps the trainer read UNKNOWN", () => {
+  const { store } = stable([], (target) => {
+    const { text, ...extras } = payload("hallo-pve");
+    const observation = extras.foreverGearObservation as any;
+    observation.itemEvidence.data.trainerEvidence = { state: "UNKNOWN", reason: "No trainer window evidence." };
+    target.importSnapshot(text, extras);
+  });
+  try {
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    assert.equal(read.value.data?.sectionState, "UNKNOWN");
+    assert.equal(read.value.provenance.state, "UNKNOWN");
+    assert.deepEqual(read.value.data?.categories, []);
+    assert.deepEqual(read.value.data?.services, []);
   } finally { store.close(); }
 });
 
