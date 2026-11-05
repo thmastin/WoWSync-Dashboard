@@ -163,7 +163,7 @@ test("objective understanding", () => {
 test("trainer evidence: Hallo's Forever class trainer capture parses with level, cost and status", () => {
   const { store } = stable(["hallo-pve"]);
   try {
-    const snapshot = store.listSnapshots("forever::classic beta pve::hallo")[0]!;
+    const snapshot = store.listSnapshots("forever::classic beta pve::hallo::rootwalker")[0]!;
     const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id)!;
     assert.equal(visit.kind, "CLASS");
     assert.equal(visit.serviceCount, 177);
@@ -209,7 +209,7 @@ test("pass 3: observed weapon skills decide eligibility; talents parse; route an
   const { collectForeverObservedIds } = await import("../src/foreverKnowledgeBundle.ts");
   const { store, read } = stable(ALL);
   try {
-    const snapshot = store.listSnapshots("forever::classic beta pve::hallo")[0]!;
+    const snapshot = store.listSnapshots("forever::classic beta pve::hallo::rootwalker")[0]!;
     const skills = extractForeverSkillLines(snapshot.parsed, snapshot.id)!;
     assert.deepEqual(skills.weapons.get("Staves"), { rank: 27, maxRank: 30 });
     assert.equal(skills.weapons.has("Two-Handed Maces"), false);

@@ -78,14 +78,14 @@ test("Forever pre-GUID snapshots do not block current observation or contribute 
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const oldAt = NOW - 10;
-    store.importSnapshot(buildWowSyncExport({ generatedAt: oldAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70245", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:old", name: "Old source item" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:old-bag", name: "Old source bag item", qty: 1 }] }] } }));
+    store.importSnapshot(buildWowSyncExport({ generatedAt: oldAt, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70245", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:old", name: "Old source item" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:old-bag", name: "Old source bag item", qty: 1 }] }] } }));
     const currentAt = NOW - 5;
-    const currentRaw = buildWowSyncExport({ generatedAt: currentAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:current", name: "Current item" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:current-bag", name: "Current bag item", qty: 1 }] }] } });
+    const currentRaw = buildWowSyncExport({ generatedAt: currentAt, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:current", name: "Current item" }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:current-bag", name: "Current bag item", qty: 1 }] }] } });
     store.importSnapshot(currentRaw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70532:16001", name: "Hallo", realm: "Hallo", generatedAt: currentAt, sourceCharacterGuid: "Player-1-A", equipment: { observedAt: currentAt, completeness: "complete", data: { slots: {} } } } });
     const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
     assert.equal(result.status, "FOUND");
     if (result.status === "FOUND") {
-      assert.equal(result.value.provenance.snapshotId, store.listSnapshots("forever::hallo::hallo")[0]?.id);
+      assert.equal(result.value.provenance.snapshotId, store.listSnapshots("forever::hallo::hallo::test")[0]?.id);
       assert.equal(result.value.data?.equipment.items.some((item) => item.name === "Old source item"), false);
       assert.equal(result.value.data?.carried?.items?.some((item) => item.name === "Old source bag item"), false);
     }
@@ -96,7 +96,7 @@ test("Forever observation blocks when latest snapshot has no GUID", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const add = (generatedAt: number, guid?: string) => {
-      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" } });
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" } });
       const sidecar = guid ? { foreverGearObservation: { clientProfile: "Forever:1.60.1:70532:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: guid } } : undefined;
       store.importSnapshot(raw, sidecar);
     };
@@ -112,7 +112,7 @@ test("Forever observation blocks when history contains differing GUIDs", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
     for (const [generatedAt, guid] of [[NOW - 10, "Player-1-A"], [NOW - 5, "Player-2-B"]] as const) {
-      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" } });
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" } });
       store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70532:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: guid } });
     }
     const result = new DashboardReadModel(store, () => NOW).getForeverGearObservation({ version: "forever", name: "Hallo", realm: "Hallo" });
@@ -125,7 +125,7 @@ test("Forever observation blocks on a conflict marker anywhere in history", () =
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const add = (generatedAt: number, guid: string, conflict?: boolean) => {
-      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70532", interface: "16001" } });
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
       store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70532:16001", name: "Hallo", realm: "Hallo", generatedAt, sourceCharacterGuid: guid, ...(conflict ? { sourceCharacterGuidConflict: true } : {}) } });
     };
     add(NOW - 10, "Player-1-A", true);
@@ -139,7 +139,7 @@ test("Forever observation blocks on a conflict marker anywhere in history", () =
 test("Forever duplicate text cannot erase a conflicting WoWSyncDB source GUID", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
-    const raw = buildWowSyncExport({ generatedAt: NOW, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+    const raw = buildWowSyncExport({ generatedAt: NOW, character: { name: "Hallo", surname: "Test", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
     const observation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW, sourceCharacterGuid: "Player-1-A", equipment: { observedAt: NOW, completeness: "complete", data: { slots: {} } } };
     store.importSnapshot(raw, { foreverGearObservation: observation });
     const duplicate = { ...observation, sourceCharacterGuid: "Player-2-B" };

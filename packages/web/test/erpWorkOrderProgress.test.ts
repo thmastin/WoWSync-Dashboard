@@ -28,7 +28,7 @@ test("observed profession goals are presented as approval-gated suggestions, nev
   const html = renderToStaticMarkup(React.createElement(ErpWorkOrderProgressLine, { characterName: () => "Rordin Longbraid", progress: { ...progress,
     workOrderId: "learn_blacksmithing", recordedStatus: "PLANNED", completionRecorded: false,
     reconciliation: "CURRENT_LINKED_NEEDS_MET", reason: "Recent profession observations meet this work order's linked skill requirements for Rordin.",
-    professionGoalStateReview: { state: "CURRENTLY_MET", identityKey: "forever::classic beta pvp 2::rordin", needIds: ["blacksmithing_profession"], observedAt: 1_791_742_215, proposalReadiness: "REVIEW_DEPENDENCIES_FIRST", unresolvedDependencyIds: ["review_evidence"], requiresDashboardApproval: true, reason: "Current skill is observed; when or how it was learned is not established." },
+    professionGoalStateReview: { state: "CURRENTLY_MET", identityKey: "forever::classic beta pvp 2::rordin::longbraid", needIds: ["blacksmithing_profession"], observedAt: 1_791_742_215, proposalReadiness: "REVIEW_DEPENDENCIES_FIRST", unresolvedDependencyIds: ["review_evidence"], requiresDashboardApproval: true, reason: "Current skill is observed; when or how it was learned is not established." },
   } }));
   assert.match(html, /Current profession evidence/);
   assert.match(html, /Recent observations meet the linked profession skill requirement/);

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { ApiError } from "../src/api.ts";
 import { performDelete } from "../src/deleteFlow.ts";
 
-const KEY = "forever::classic beta pvp 2::hallo emberstone";
+const KEY = "forever::classic beta pvp 2::hallo::emberstone";
 const ok = async (key: string) => ({ deleted: { identityKey: key, snapshotsDeleted: 2 } });
 const failing = (err: unknown) => async () => {
   throw err;

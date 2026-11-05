@@ -22,7 +22,7 @@ const dir = fileURLToPath(new URL("fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${dir}${path}`, "utf8");
 const LEVEL4 = "forever/hallo-1789693144.wowsync.txt";
 const LEVEL7 = "forever/hallo-1789731867.wowsync.txt";
-const HALLO_KEY = "forever::classic beta pvp 2::hallo emberstone";
+const HALLO_KEY = "forever::classic beta pvp 2::hallo::emberstone";
 // Just after the level-7 capture, so freshness is deterministic.
 const NOW_RECENT = 1789731867 + 3600;
 const NOW_STALE = 1789731867 + 30 * 86400;
@@ -256,7 +256,7 @@ test("[REAL] Forever inventory aggregates observed bags and never invents a bank
     );
     assert.equal(inv.items.length, 22, "the 22 distinct bag items observed in the real capture");
     assert.ok(inv.items.every((i) => i.locations.every((l) => l.storage === "bags")), "no bank locations exist anywhere");
-    assert.deepEqual(inv.unknownBank, [{ identityKey: HALLO_KEY, name: "Hallo Emberstone" }]);
+    assert.deepEqual(inv.unknownBank, [{ identityKey: HALLO_KEY, name: "Hallo" }]);
     assert.deepEqual(inv.unknownBags, []);
     assert.equal(inv.hasUnknownStorage, true);
   } finally {
@@ -308,7 +308,7 @@ test("[REAL] Forever coverage comes only from the export: Engineering/Mining cov
 
     assert.equal(cov.get("Engineering")?.coverageStatus, "covered");
     assert.deepEqual(cov.get("Engineering")?.characters, [
-      { identityKey: HALLO_KEY, name: "Hallo Emberstone", skill: 20, maxSkill: 75 },
+      { identityKey: HALLO_KEY, name: "Hallo", skill: 20, maxSkill: 75 },
     ]);
     assert.equal(cov.get("Mining")?.coverageStatus, "covered");
     assert.equal(cov.get("Mining")?.characters[0].skill, 22);
@@ -422,7 +422,7 @@ test("[SYNTHETIC] Forever realms are isolated: each realm's gold/playtime/invent
     assert.equal(pveHerb?.coverageStatus, "covered");
     assert.equal(pvpHerb?.coverageStatus, "unknown", "Hallo's Herbalism is 0/0 - Zed's realm must not turn it 'covered'");
     assert.deepEqual(pve.characters.map((c) => c.name), ["Zed"]);
-    assert.deepEqual(pvp.characters.map((c) => c.name), ["Hallo Emberstone"]);
+    assert.deepEqual(pvp.characters.map((c) => c.name), ["Hallo"]);
   } finally {
     store.close();
   }

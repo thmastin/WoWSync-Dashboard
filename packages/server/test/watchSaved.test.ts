@@ -775,7 +775,7 @@ test("END TO END: watcher imports a new Forever 70338 character with a surname i
     assert.match(all(out), /Result: imported as a new snapshot/);
     const characters = store.listCharacters("forever");
     assert.equal(characters.length, 1);
-    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin::longbraid");
     assert.equal(characters[0]?.surname, "Longbraid");
     assert.equal(store.listCharacters("retail").length, 0);
     assert.equal(store.listSnapshots(characters[0]!.identityKey)[0]?.parsed.character.clientBuild, "70338");

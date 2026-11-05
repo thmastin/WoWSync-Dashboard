@@ -16,13 +16,13 @@ test("[REAL OBSERVED FIXTURE] a pre-70291 Hallo export is kept outside the 70291
   try {
     store.importSnapshot(readFileSync(HALLO_EXPORT, "utf8"));
     const result = new DashboardReadModel(store, () => NOW).getForeverGearAllocation({
-      version: "forever", name: "Hallo Emberstone", realm: "Classic Beta PvP 2",
+      version: "forever", name: "Hallo", realm: "Classic Beta PvP 2",
     });
     assert.equal(result.status, "FOUND");
     if (result.status !== "FOUND") throw new Error("Expected a version-scoped response for the real Hallo fixture");
     assert.equal(result.value.data, undefined, "the committed real export is build 69913 and must not be treated as the requested 70291 profile");
     assert.equal(result.value.provenance.state, "UNKNOWN", "an older unverified build is never interpreted as a 70291 allocation");
-    const mailPlan = new DashboardReadModel(store, () => NOW).getForeverMailPlan({ version: "forever", name: "Hallo Emberstone", realm: "Classic Beta PvP 2" });
+    const mailPlan = new DashboardReadModel(store, () => NOW).getForeverMailPlan({ version: "forever", name: "Hallo", realm: "Classic Beta PvP 2" });
     assert.equal(mailPlan.status, "FOUND");
     if (mailPlan.status === "FOUND") assert.equal(mailPlan.value.provenance.state, "UNKNOWN", "an unsupported observed build cannot produce a guessed mail plan");
   } finally {
