@@ -205,6 +205,26 @@ test("Forever trainer extraction distinguishes an observed empty window from mis
   assert.deepEqual(zeroCost?.services[0] && { status: zeroCost.services[0].statusAtVisit, level: zeroCost.services[0].level, costCopper: zeroCost.services[0].costCopper }, { status: "mystery-token", level: 0, costCopper: 0 });
 });
 
+test("current Forever open-window evidence produces OBSERVED trainer categories and services", () => {
+  const { store } = stable([], (target) => {
+    const { text, ...extras } = payload("hallo-pve");
+    const observation = extras.foreverGearObservation as any;
+    const prior = observation.itemEvidence.data.trainerEvidence.lastObserved;
+    observation.itemEvidence.data.trainerEvidence = { ...prior, state: "OBSERVED_OPEN_WINDOW", capturedAt: NOW };
+    target.importSnapshot(text, extras);
+  });
+  try {
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    assert.equal(read.value.data?.sectionState, "OBSERVED");
+    assert.equal(read.value.provenance.state, "OBSERVED");
+    assert.equal(read.value.data?.categories[0]?.category, "CLASS");
+    assert.ok((read.value.data?.categories[0]?.serviceCount ?? 0) > 0);
+    assert.ok(read.value.data?.services.some((service) => service.ability === "Entangling Roots"));
+  } finally { store.close(); }
+});
+
 test("knowledge parsers, Lua literal reader, and the bundle store", () => {
   const bracers = parseItemTooltip(2853, { name: "Copper Bracers", quality: 1, tooltip: "<span class=\"q\"><br>Item Level <!--ilvl-->7</span><table width=\"100%\"><tr><td>Wrist</td><th><!--scstart4:3--><span class=\"q1\">Mail</span><!--scend--></th></tr></table><span><!--amr-->35 Armor</span><br>Requires Level <!--rlvl-->2<br><div class=\"whtt-sellprice\">Sell Price: <span class=\"moneycopper\">17</span></div>" }, "t");
   assert.deepEqual([bracers?.itemLevel, bracers?.slot, bracers?.subtype, bracers?.armor, bracers?.requiredLevel, bracers?.sellPriceCopper], [7, "Wrist", "Mail", 35, 2, 17]);
