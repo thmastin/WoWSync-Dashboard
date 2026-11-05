@@ -225,6 +225,24 @@ test("current Forever open-window evidence produces OBSERVED trainer categories 
   } finally { store.close(); }
 });
 
+test("missing Forever trainer evidence keeps the trainer read UNKNOWN", () => {
+  const { store } = stable([], (target) => {
+    const { text, ...extras } = payload("hallo-pve");
+    const observation = extras.foreverGearObservation as any;
+    observation.itemEvidence.data.trainerEvidence = { state: "UNKNOWN", reason: "No trainer window evidence." };
+    target.importSnapshot(text, extras);
+  });
+  try {
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Hallo", realm: "Classic Beta PvE" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    assert.equal(read.value.data?.sectionState, "UNKNOWN");
+    assert.equal(read.value.provenance.state, "UNKNOWN");
+    assert.deepEqual(read.value.data?.categories, []);
+    assert.deepEqual(read.value.data?.services, []);
+  } finally { store.close(); }
+});
+
 test("knowledge parsers, Lua literal reader, and the bundle store", () => {
   const bracers = parseItemTooltip(2853, { name: "Copper Bracers", quality: 1, tooltip: "<span class=\"q\"><br>Item Level <!--ilvl-->7</span><table width=\"100%\"><tr><td>Wrist</td><th><!--scstart4:3--><span class=\"q1\">Mail</span><!--scend--></th></tr></table><span><!--amr-->35 Armor</span><br>Requires Level <!--rlvl-->2<br><div class=\"whtt-sellprice\">Sell Price: <span class=\"moneycopper\">17</span></div>" }, "t");
   assert.deepEqual([bracers?.itemLevel, bracers?.slot, bracers?.subtype, bracers?.armor, bracers?.requiredLevel, bracers?.sellPriceCopper], [7, "Wrist", "Mail", 35, 2, 17]);
