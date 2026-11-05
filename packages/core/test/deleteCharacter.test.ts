@@ -25,7 +25,7 @@ const TORAHN = "tbc-anniversary::dreamscythe::torahn"; // 1 real snapshot
 const TENIVARD = "tbc-anniversary::dreamscythe::tenivard"; // 1 real snapshot
 const BROMRIK = "classic-era::defias pillager::bromrik"; // 2 real snapshots
 const EZALLER = "retail::kel'thuzad::ezaller"; // 2 real snapshots
-const HALLO = "forever::classic beta pvp 2::hallo emberstone"; // 2 real snapshots
+const HALLO = "forever::classic beta pvp 2::hallo::emberstone"; // 2 real snapshots
 
 function seed(store: SqliteSnapshotStore, which: ("voodan" | "torahn" | "tenivard" | "bromrik" | "ezaller" | "hallo")[] = ["voodan", "torahn", "tenivard", "bromrik", "ezaller", "hallo"]) {
   const files: Record<string, string[]> = {
@@ -322,7 +322,7 @@ test("[REAL] AccountContext after deletion contains no trace of the deleted char
     assert.equal(JSON.stringify(ctx).toLowerCase().includes("voodan"), false, "not even in embedded facts, transitions, or inventory");
 
     // The other characters, including Forever's Hallo, are still fully present.
-    assert.equal(ctx.versions["forever"].characters[0].name, "Hallo Emberstone");
+    assert.equal(ctx.versions["forever"].characters[0].name, "Hallo");
     assert.equal(ctx.versions["forever"].characters[0].snapshotHistory.length, 2);
   } finally {
     store.close();

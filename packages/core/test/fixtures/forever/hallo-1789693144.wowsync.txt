@@ -7,7 +7,9 @@ Format: tab-separated columns; ?=unknown; timestamps=Unix seconds; money=copper;
 [CHARACTER]
 State: OBSERVED; partial; observed=1789693144
 CoverageNote: Playtime unverified on Forever; capture deferred
-Name: Hallo Emberstone
+Name: Hallo
+Surname: Emberstone
+SurnameSource: UnitName[2]+GetUnitName suffix
 Realm: Classic Beta PvP 2
 Class: HUNTER
 Level: 4

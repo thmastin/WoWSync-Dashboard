@@ -20,7 +20,7 @@ import { readSavedExports } from "../src/importSaved.ts";
 const fixtures = fileURLToPath(new URL("../../core/test/fixtures/", import.meta.url));
 const read = (path: string) => readFileSync(`${fixtures}${path}`, "utf8");
 
-const HALLO = "forever::classic beta pvp 2::hallo emberstone";
+const HALLO = "forever::classic beta pvp 2::hallo::emberstone";
 const VOODAN = "tbc-anniversary::dreamscythe::voodan";
 const TORAHN = "tbc-anniversary::dreamscythe::torahn";
 
@@ -118,7 +118,7 @@ test("Forever surname flows through REST and AccountContext as optional display 
     assert.equal(imported.status, 200);
     assert.equal(imported.body.result.character.surname, "Emberstone");
     assert.equal(imported.body.result.character.surnameSource, "UnitName[2]+GetUnitName suffix");
-    assert.equal(imported.body.result.character.identityKey, "forever::surname realm::hallo");
+    assert.equal(imported.body.result.character.identityKey, "forever::surname realm::hallo::emberstone");
 
     const listed = await api.get("/api/versions/forever/characters");
     assert.equal(listed.body.characters[0].surname, "Emberstone");
@@ -153,7 +153,7 @@ test("Forever potential equipment candidates reach REST and AccountContext with 
   const itemString = "item:1777:3:5";
   const text = buildWowSyncExport({ generatedAt, character: { name: "Gearcheck", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [] }, bags: { containers: [{ id: 0, capacity: 1, items: [{ itemRef: itemString, name: "Observed item", qty: 1 }] }] }, bank: { unknown: true } });
   await withApp(async (api) => {
-    const key = "forever::forever realm::gearcheck";
+    const key = "forever::forever realm::gearcheck::guid:player-gearcheck";
     const rest = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-observation`);
     assert.equal(rest.body.value.data.evaluationCandidates.state, "OBSERVED");
     assert.equal(rest.body.value.data.evaluationCandidates.freshness, "recent");
@@ -242,7 +242,7 @@ test("Forever allocation route exposes separate evidence-gated decisions without
   const itemString = "item:2901::::::::8:1485::14:::::::";
   const text = buildWowSyncExport({ generatedAt, character: { name: "Allocator", realm: "Forever Realm", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001", class: "HUNTER", level: 8 }, bags: { containers: [] }, bank: { unknown: true } });
   await withApp(async (api) => {
-    const key = "forever::forever realm::allocator";
+    const key = "forever::forever realm::allocator::guid:player-allocator";
     const response = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
     assert.equal(response.status, 200);
     const view = response.body.value.data;
@@ -322,7 +322,7 @@ test("[LIVE REGRESSION] Hallo/Fizzwick 70291 mail-test captures stay evidence-qu
     assert.equal(imported.status, 200);
     const otherImport = await api.importCapture({ text: fizzwick.text, foreverGearObservation: fizzwick.foreverGearObservation });
     assert.equal(otherImport.status, 200);
-    const identities = ["forever::classic beta pvp 2::hallo", "forever::classic beta pvp 2::fizzwick"];
+    const identities = ["forever::classic beta pvp 2::hallo::emberstone", "forever::classic beta pvp 2::fizzwick"];
     const allocations = new Map<string, any>();
     for (const key of identities) {
       const allocationResponse = await api.get(`/api/characters/${encodeURIComponent(key)}/forever-gear-allocation`);
@@ -381,7 +381,7 @@ test("[REAL] the version-scoped routes accept 'forever' and return only Forever 
     await seed(api);
     const chars = await api.get("/api/versions/forever/characters");
     assert.equal(chars.status, 200);
-    assert.deepEqual(chars.body.characters.map((c: { name: string }) => c.name), ["Hallo Emberstone"]);
+    assert.deepEqual(chars.body.characters.map((c: { name: string; surname?: string }) => [c.name, c.surname]), [["Hallo", "Emberstone"]]);
 
     const facts = await api.get("/api/versions/forever/account-facts");
     assert.equal(facts.status, 200);
@@ -402,7 +402,7 @@ test("[REAL] /api/account-context includes forever alongside the other versions"
     await seed(api);
     const { body } = await api.get("/api/account-context?now=1789740000");
     assert.deepEqual(Object.keys(body.versions), ["classic-era", "tbc-anniversary", "retail", "forever"]);
-    assert.equal(body.versions.forever.characters[0].name, "Hallo Emberstone");
+    assert.equal(body.versions.forever.characters[0].name, "Hallo");
     assert.equal(body.versions.forever.facts.gold.totalKnownCopper, 291);
     assert.equal(body.versions["tbc-anniversary"].characters.length, 2);
   });

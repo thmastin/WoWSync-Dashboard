@@ -3,7 +3,7 @@ import { buildWowSyncExport } from "../fixtureBuilder.ts";
 
 export const RORDIN_SNAPSHOT_180 = {
   id: 180,
-  identity: { version: "forever" as const, identityKey: "forever::classic beta pvp 2::rordin", name: "Rordin", realm: "Classic Beta PvP 2" },
+  identity: { version: "forever" as const, identityKey: "forever::classic beta pvp 2::rordin::longbraid", name: "Rordin", realm: "Classic Beta PvP 2" },
   generatedAt: 1_791_764_829,
   questObservedAt: 1_791_764_792,
   sourceCharacterGuid: "Player-4613-016F932B",

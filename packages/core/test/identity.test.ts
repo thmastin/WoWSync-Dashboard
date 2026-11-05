@@ -36,11 +36,20 @@ test("identity is case-insensitive for realm/name matching", () => {
   assert.equal(a.key, b.key);
 });
 
-test("Forever surname changes display only and does not alter the established identity key", () => {
+test("Forever surname distinguishes characters while other version keys retain their established shape", () => {
   const first = identityFor({ character: { name: "Hallo", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
   const withSurname = identityFor({ character: { name: "Hallo", surname: "Emberstone", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
-  assert.equal(withSurname.key, first.key);
+  assert.equal(first.key, "forever::classic beta pvp 2::hallo");
+  assert.equal(withSurname.key, "forever::classic beta pvp 2::hallo::emberstone");
+  assert.notEqual(withSurname.key, first.key);
+  assert.equal(characterIdentity("forever", { name: "Hallo", realm: "Classic Beta PvP 2" }, "Player-123").key, "forever::classic beta pvp 2::hallo::guid:player-123");
   assert.equal(withSurname.name, "Hallo");
   assert.equal(characterDisplayName({ name: "Hallo", surname: "Emberstone" }), "Hallo Emberstone");
   assert.equal(characterDisplayName({ name: "Hallo" }), "Hallo");
+});
+
+test("Retail, Classic Era, and TBC Anniversary identity keys stay unchanged", () => {
+  assert.equal(identityFor({ character: { name: "A", realm: "R", clientFamily: "Retail", clientVersion: "12.1.0", interface: "120100" } }).key, "retail::r::a");
+  assert.equal(identityFor({ character: { name: "A", realm: "R", clientVersion: "1.15.7" } }).key, "classic-era::r::a");
+  assert.equal(identityFor({ character: { name: "A", realm: "R", clientVersion: "2.5.6" } }).key, "tbc-anniversary::r::a");
 });

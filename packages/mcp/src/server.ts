@@ -979,7 +979,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
           const state = stateResult.structuredContent;
           const identity = state?.value?.data?.identity as Record<string, unknown> | undefined;
           if (identity) {
-            const character = readModel().listCharacters({ version: "forever", realm: String(args.realm) }).find((entry) => entry.name.toLowerCase() === String(args.name).toLowerCase());
+            const character = readModel().listCharacters({ version: "forever", realm: String(args.realm) }).find((entry) => entry.identityKey === identity.identityKey);
             result = textResult({ ...state!, value: { ...state!.value, data: { ...state!.value.data, identity: { ...identity, race: character?.race || "UNKNOWN", sex: "UNKNOWN" } } } });
           }
         }

@@ -7,7 +7,7 @@ import { buildWowSyncExport } from "./fixtureBuilder.ts";
 import { RORDIN_SNAPSHOT_180, seedRordinSnapshot180 } from "./fixtures/foreverSnapshot180.ts";
 
 const NOW = 1_797_000_000;
-const identity = { identityKey: "forever::forever realm::questhero", name: "Questhero", realm: "Forever Realm" };
+const identity = { identityKey: "forever::forever realm::questhero::guid:player-test-quest", name: "Questhero", realm: "Forever Realm" };
 const questData = {
   formatVersion: 1,
   clientFamily: "Forever",

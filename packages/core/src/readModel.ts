@@ -83,7 +83,7 @@ export interface ReadValue<T> { data?: T; provenance: ReadProvenance }
 export type CharacterResolution<T> =
   | { status: "FOUND"; value: T }
   | { status: "NOT_FOUND"; version: VersionOrUnknown; name: string; realm?: string }
-  | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name">> };
+  | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name"> & { surname?: string }> };
 
 export interface CharacterQuery { version: VersionOrUnknown; name: string; realm?: string }
 export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
@@ -2915,7 +2915,7 @@ export class DashboardReadModel {
     requireVersion(query.version);
     const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
     const character = candidates[0];
     const snapshots = this.snapshots(character.identityKey);
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
@@ -2925,7 +2925,7 @@ export class DashboardReadModel {
   private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView; upcomingAbilities?: unknown }>> {
     const candidates = this.characters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
     const character = candidates[0]!;
     let snapshots = this.snapshots(character.identityKey);
     if (query.snapshotId !== undefined) {
@@ -2963,7 +2963,7 @@ export class DashboardReadModel {
     if (query.version !== "forever") return { status: "FOUND", value: {} };
     const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
     let skills: ForeverSkillLines | undefined;
     let talents: ForeverTalents | undefined;
     let classSpells: ForeverClassSpells | undefined;
@@ -2992,7 +2992,7 @@ export class DashboardReadModel {
     if (query.version !== "forever") return { status: "FOUND", value: [] };
     const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
     const visits = new Map<string, ForeverTrainerVisit>();
     for (const snapshot of this.snapshots(candidates[0]!.identityKey)) {
       const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id);
@@ -3009,7 +3009,7 @@ export class DashboardReadModel {
     if (query.snapshotId !== undefined && (!Number.isSafeInteger(query.snapshotId) || query.snapshotId < 1)) throw new TypeError("snapshotId must be a positive integer");
     const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
     if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name }) => ({ identityKey, realm, name })) };
+    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
     const character = candidates[0]!;
     const snapshots = this.snapshots(character.identityKey);
     const snapshot = query.snapshotId === undefined ? snapshots[0] : snapshots.find((entry) => entry.id === query.snapshotId);

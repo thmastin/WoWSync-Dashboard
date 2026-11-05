@@ -195,7 +195,7 @@ test("ERP RECIPE needs use the shared resolver: snapshot 190 reports LAST_SEEN c
 }));
 
 test("an older observed bank is carried forward as LAST_SEEN, never as current, when the latest export did not open the bank", () => withStore((store) => {
-  const character = { name: "Banker", realm: "Classic Beta PvP 2", class: "Mage", level: 10, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70450", interface: "16001" };
+  const character = { name: "Banker", surname: "Test", realm: "Classic Beta PvP 2", class: "Mage", level: 10, clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70450", interface: "16001" };
   store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 3_000, character, bank: { containers: [{ id: -1, capacity: 24, items: [{ itemRef: "item:2840::::::::10:1491:::::::::", name: "Copper Bar", qty: 12 }] }] } }));
   store.importSnapshot(buildWowSyncExport({ generatedAt: NOW - 100, character, bank: { unknown: true } }));
   const read = new DashboardReadModel(store, () => NOW);

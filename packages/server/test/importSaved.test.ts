@@ -589,7 +589,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
   await withServer(async (base, store) => {
     const result = await runImportSaved(["--character", "Hallo", "--file", file, "--url", base], live(base));
     assert.equal(result.exitCode, 0, all(result));
-    const snapshot = store.listSnapshots("forever::hallo::hallo")[0];
+    const snapshot = store.listSnapshots("forever::hallo::hallo::guid:player-1-hallo")[0];
     assert.equal(snapshot.parsed.foreverGearObservation?.sourceCharacterGuid, guid);
     assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
     assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
@@ -624,7 +624,7 @@ test("END TO END: Forever 70338 profession recipe section is preserved through S
   await withServer(async (_base, store) => {
     const result = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--file", file, "--url", _base], live(_base));
     assert.equal(result.exitCode, 0, all(result));
-    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin")[0];
+    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin::guid:player-1-rordin")[0];
     const captured = snapshot.parsed.foreverGearObservation?.professionRecipes as any;
     assert.equal(snapshot.parsed.characterState, undefined, "Forever recipe rows do not enter the Retail-only characterState sidecar");
     assert.equal(captured.status.state, "OBSERVED");
@@ -649,7 +649,7 @@ test("LAUNCH SAFETY: a future Forever client build with a surname keeps its reci
   await withServer(async (_base, store) => {
     const result = await runImportSaved(["--character", "Rordin", "--realm", "Classic Beta PvP 2", "--file", file, "--url", _base], live(_base));
     assert.equal(result.exitCode, 0, all(result));
-    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin")[0];
+    const snapshot = store.listSnapshots("forever::classic beta pvp 2::rordin::longbraid")[0];
     const captured = snapshot.parsed.foreverGearObservation?.professionRecipes as any;
     assert.equal(snapshot.parsed.characterState, undefined, "Forever recipe rows do not enter the Retail-only characterState sidecar");
     assert.equal(snapshot.parsed.character.surname, "Longbraid");
@@ -681,7 +681,7 @@ test("END TO END: the SavedVariables bridge discovers a new Forever 70338 charac
     assert.match(all(imported), /Result: imported as a new snapshot/);
     const characters = store.listCharacters("forever");
     assert.equal(characters.length, 1);
-    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin");
+    assert.equal(characters[0]?.identityKey, "forever::classic beta pvp 2::rordin::longbraid");
     assert.equal(characters[0]?.name, "Rordin");
     assert.equal(characters[0]?.surname, "Longbraid");
     assert.equal(characters[0]?.realm, "Classic Beta PvP 2");
@@ -694,7 +694,7 @@ test("END TO END: the SavedVariables bridge discovers a new Forever 70338 charac
     assert.equal(rosterResponse.status, 200);
     const roster = await rosterResponse.json() as { characters: Array<{ identityKey: string; surname?: string; latestLevel?: number }> };
     assert.deepEqual(roster.characters.map(({ identityKey, surname, latestLevel }) => ({ identityKey, surname, latestLevel })), [
-      { identityKey: "forever::classic beta pvp 2::rordin", surname: "Longbraid", latestLevel: 3 },
+      { identityKey: "forever::classic beta pvp 2::rordin::longbraid", surname: "Longbraid", latestLevel: 3 },
     ], "the roster REST contract exposes the newly imported Forever character");
   });
 });

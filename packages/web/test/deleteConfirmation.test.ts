@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { describeDeletion, isDeleteConfirmed, requiredConfirmationText, type DeleteTarget } from "../src/deleteConfirmation.ts";
 
 const hallo: DeleteTarget = {
-  identityKey: "forever::classic beta pvp 2::hallo emberstone",
+  identityKey: "forever::classic beta pvp 2::hallo::emberstone",
   name: "Hallo Emberstone",
   realm: "Classic Beta PvP 2",
   versionLabel: "Forever",
