@@ -232,6 +232,69 @@ test("current Forever open-window evidence produces OBSERVED trainer categories 
   } finally { store.close(); }
 });
 
+test("Forever trainer rollup and filters map raw used status to known and preserve unknown tokens", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  const generatedAt = NOW;
+  const statuses = [
+    ...Array.from({ length: 13 }, () => "available"),
+    ...Array.from({ length: 8 }, () => "used"),
+    ...Array.from({ length: 4 }, () => "unavailable"),
+    "Mystery-Token",
+  ];
+  const services = statuses.map((status, index) => ({ calls: {
+    info: {
+      observedAt: generatedAt,
+      context: { frame: "ClassTrainerFrame" },
+      returns: [
+        { index: 1, observation: { state: "OBSERVED", value: `Trainer Service ${index + 1}` } },
+        { index: 2, observation: { state: "OBSERVED", value: status } },
+        { index: 4, observation: { state: "OBSERVED", value: 5 } },
+      ],
+    },
+    cost: { returns: [{ index: 1, observation: { state: "OBSERVED", value: 25 } }] },
+  } }));
+  const raw = buildWowSyncExport({ generatedAt, character: {
+    name: "Trainer Tester", surname: "Example", realm: "Test Realm",
+    clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70790", interface: "16001",
+  } });
+  store.importSnapshot(raw, { foreverGearObservation: {
+    clientProfile: "Forever:1.60.1:70790:16001",
+    name: "Trainer Tester", realm: "Test Realm", generatedAt,
+    itemEvidence: {
+      observedAt: generatedAt, completeness: "complete", source: "synthetic trainer status rollup test",
+      data: { trainerEvidence: {
+        state: "NOT_OBSERVED_WINDOW_CLOSED",
+        lastObserved: { state: "OBSERVED_OPEN_WINDOW", capturedAt: generatedAt, frame: "ClassTrainerFrame", serviceCount: statuses.length, services },
+      } },
+    },
+  } });
+  try {
+    const read = new DashboardReadModel(store, () => NOW);
+    const result = read.getCharacterTrainer({ version: "forever", name: "Trainer Tester", realm: "Test Realm", limit: 100 });
+    assert.equal(result.status, "FOUND");
+    if (result.status !== "FOUND") return;
+    const data = result.value.data!;
+    assert.equal(data.sectionState, "LAST_SEEN");
+    assert.equal(result.value.provenance.state, "LAST_SEEN");
+    assert.equal(result.value.provenance.observedAt, generatedAt);
+    assert.equal(result.value.provenance.freshness, "recent");
+    assert.deepEqual(data.categories[0]?.statusCounts, { known: 8, available: 13, unavailable: 4, other: 1 });
+    assert.equal(data.categories[0]?.state, "LAST_SEEN");
+    assert.equal(data.categories[0]?.observedAt, generatedAt);
+    assert.equal(data.categories[0]?.freshness, "recent");
+    assert.deepEqual(data.services.map((service) => service.statusAtVisit), statuses, "raw visit tokens remain verbatim");
+
+    const expected = { known: 8, available: 13, unavailable: 4, other: 1 } as const;
+    for (const [filter, count] of Object.entries(expected)) {
+      const filtered = read.getCharacterTrainer({ version: "forever", name: "Trainer Tester", realm: "Test Realm", status: filter as keyof typeof expected, limit: 100 });
+      assert.equal(filtered.status, "FOUND");
+      if (filtered.status !== "FOUND") continue;
+      assert.equal(filtered.value.data?.totalCount, count, `${filter} filter uses the category rollup semantics`);
+      assert.ok(filtered.value.data?.services.every((service) => service.statusAtVisit === (filter === "known" ? "used" : filter === "other" ? "Mystery-Token" : filter)));
+    }
+  } finally { store.close(); }
+});
+
 test("missing Forever trainer evidence keeps the trainer read UNKNOWN", () => {
   const { store } = stable([], (target) => {
     const { text, ...extras } = payload("hallo-pve");
