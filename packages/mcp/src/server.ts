@@ -547,6 +547,12 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({ ...characterQuery.shape, snapshotId: z.number().int().positive().optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getCharacterSpells(query)));
+  server.registerTool("get_character_pet_spells", {
+    title: "Get captured active-pet abilities",
+    description: "Returns captured learned abilities from a Forever active pet spellbook, separately from the owner's spells and trainer offers. OBSERVED is a timed observation; LAST_SEEN retains the original observation time and pet identity; UNKNOWN means no usable enumeration exists. Select by surname or identityKey when names collide.",
+    inputSchema: z.object({ ...characterQuery.shape, snapshotId: z.number().int().positive().optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    annotations: toolAnnotations,
+  }, async (query) => textResult(readModel().getCharacterPetSpells(query)));
   server.registerTool("get_character_trainer", {
     title: "Get captured trainer observations",
     description: "Returns bounded trainer visit evidence from the latest or one selected character snapshot. statusAtVisit is preserved verbatim; available/known/unavailable are observations at visit time, not inferred current learnability or a complete recipe list. A visit from an earlier export is reported LAST_SEEN. For Retail, Forever, Classic Era, and TBC, a service may carry recipeMatch joining it to the character's captured recipe rows: basis RECIPE_ID (exact spell/recipe ID) or DERIVED_NAME (unique exact name match only), with the recipe's output and reagents; no match is not evidence the recipe does not exist.",

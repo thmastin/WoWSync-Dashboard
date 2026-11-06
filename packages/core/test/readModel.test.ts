@@ -150,6 +150,33 @@ test("Forever duplicate text cannot erase a conflicting WoWSyncDB source GUID", 
   } finally { store.close(); }
 });
 
+test("synthetic pet spell read is separate, exact-identity selected, and preserves ambiguous name-only requests", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    for (const [surname, guid, pet, entries] of [["North", "Player-1-A", { guid: "Pet-1", name: "Wolf", family: "Wolf" }, [{ spellID: 17253, name: "Bite", rank: "Rank 3" }]], ["South", "Player-2-B", { guid: "Pet-2", name: "Imp", family: "Imp" }, [{ spellID: 3110, name: "Firebolt" }]]] as const) {
+      const generatedAt = NOW;
+      const raw = buildWowSyncExport({ generatedAt, character: { name: "Twin", surname, realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338", interface: "16001" }, spells: { entries: [{ spellID: 100, name: "Owner spell" }] } });
+      assert.equal(raw.includes("[PET SPELLS]"), false, "legacy WOWSYNC v1 text stays unchanged by the structured pet sidecar");
+      store.importSnapshot(raw, { foreverGearObservation: { clientProfile: "Forever:1.60.1:70338:16001", name: "Twin", realm: "Hallo", generatedAt, sourceCharacterGuid: guid, petSpells: { observedAt: generatedAt - 10 * 86400, completeness: "complete", data: { pet, entries, coverage: "active pet spellbook" } } } });
+    }
+    const model = new DashboardReadModel(store, () => NOW);
+    assert.equal(model.getCharacterPetSpells({ version: "forever", name: "Twin", realm: "Hallo" }).status, "AMBIGUOUS");
+    const exact = model.getCharacterPetSpells({ version: "forever", name: "Twin", surname: "North", realm: "Hallo" });
+    assert.equal(exact.status, "FOUND");
+    if (exact.status === "FOUND") {
+      assert.equal(exact.value.data?.pet?.guid, "Pet-1");
+      assert.equal(exact.value.data?.abilities?.items[0]?.spellID, 17253);
+      assert.equal(exact.value.provenance.observedAt, NOW - 10 * 86400);
+      assert.equal(exact.value.provenance.freshness, "stale", "carried observation keeps its original freshness");
+      const byIdentity = model.getCharacterPetSpells({ version: "forever", name: "Twin", realm: "Hallo", identityKey: exact.value.data.identity.identityKey });
+      assert.equal(byIdentity.status, "FOUND", "identityKey is an exact selector");
+    }
+    const ownerSpells = model.getCharacterSpells({ version: "forever", name: "Twin", surname: "North", realm: "Hallo" });
+    assert.equal(ownerSpells.status, "FOUND");
+    if (ownerSpells.status === "FOUND") assert.equal(ownerSpells.value.data?.spells?.items[0]?.name, "Owner spell", "pet ability did not leak into owner spell list");
+  } finally { store.close(); }
+});
+
 test("Forever observation resolves within its version and reports observed variants with explicit UNKNOWN claims", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {

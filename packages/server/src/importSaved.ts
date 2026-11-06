@@ -419,7 +419,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
           ...(isLuaTable(professionRecipes) && typeof luaGet(professionRecipes, "lastAttemptError") === "string" && typeof luaGet(professionRecipes, "lastAttemptAt") === "number"
             ? { recipeCaptureAttempt: { observedAt: luaGet(professionRecipes, "lastAttemptAt"), data: { error: luaGet(professionRecipes, "lastAttemptError") } } }
             : {}),
-          ...Object.fromEntries(["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog"].flatMap((key) => {
+          ...Object.fromEntries(["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog", "petSpells"].flatMap((key) => {
             const section = luaGet(sections, key);
             return isLuaTable(section) ? [[key, luaToPlain(section)]] : [];
           })),

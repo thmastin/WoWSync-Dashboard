@@ -301,6 +301,15 @@ export interface CharacterSpellsRead {
   spells?: BoundedPage<SpellEntry>;
   reason?: string;
 }
+export interface CharacterPetSpellsRead {
+  identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
+  snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
+  sectionState: SectionState;
+  pet?: { guid?: string; name?: string; family?: string; level?: number };
+  coverage?: string;
+  abilities?: BoundedPage<{ spellID: number; name: string; subName?: string; rank?: string }>;
+  reason?: string;
+}
 export interface CharacterTrainerRead {
   identity: { version: VersionOrUnknown; identityKey: string; name: string; realm: string };
   snapshot?: { snapshotId: number; generatedAt?: number; observedAt: number; importedAt: number; freshness: "recent" | "stale" | "unknown" };
@@ -2465,6 +2474,28 @@ export class DashboardReadModel {
         data: { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt ?? undefined, observedAt, importedAt: snapshot.importedAt, freshness }, sectionState: status, ...(section.coverage ? { coverage: section.coverage } : {}), ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Known-spell capture is UNKNOWN in this snapshot." } : { spells: { items: entries, offset: page.offset, limit: page.limit, totalCount: matches.length, truncated: page.offset + entries.length < matches.length } }) },
         provenance: { state: status, version: query.version, identityKey: character.identityKey, observedAt, importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness, source: "WOWSYNC v1 known-spells section", ...(status === "UNKNOWN" ? { reason: section.status.reason ?? "Known-spell capture is UNKNOWN." } : {}), ...(status === "LAST_SEEN" ? { warning: "Historical spellbook observation; not current." } : {}) },
       };
+    });
+  }
+
+  /** Active-pet learned abilities are a distinct Forever sidecar, never the owner spellbook. */
+  getCharacterPetSpells(query: CharacterSpellsQuery): CharacterResolution<ReadValue<CharacterPetSpellsRead>> {
+    return this.resolveSelectedSnapshot(query, (character, snapshot) => {
+      const identity = { version: query.version, identityKey: character.identityKey, name: character.name, realm: character.realm };
+      const section = query.version === "forever" ? snapshot?.parsed.foreverGearObservation?.petSpells as any : undefined;
+      const status = section?.status?.state ?? "UNKNOWN";
+      const observedAt = section?.observedAt;
+      const freshness = classifyFreshness(observedAt, this.now());
+      const data = section?.data;
+      if (!snapshot || !section) {
+        const reason = "No active-pet learned-ability observation was captured for this character.";
+        return { data: { identity, sectionState: "UNKNOWN", reason }, provenance: { state: "UNKNOWN", version: query.version, identityKey: character.identityKey, reason } };
+      }
+      const matches = status === "UNKNOWN" ? [] : (Array.isArray(data?.entries) ? data.entries : []).filter((row: any) => !query.query || `${row.spellID ?? ""} ${row.name ?? ""} ${row.subName ?? ""} ${row.rank ?? ""}`.toLocaleLowerCase().includes(query.query.toLocaleLowerCase()));
+      const page = pageBounds(query.offset ?? 0, query.limit ?? 50);
+      const value: CharacterPetSpellsRead = { identity, snapshot: { snapshotId: snapshot.id, generatedAt: snapshot.generatedAt, observedAt: observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt), importedAt: snapshot.importedAt, freshness }, sectionState: status,
+        ...(data?.pet ? { pet: data.pet } : {}), ...(data?.coverage ? { coverage: data.coverage } : {}),
+        ...(status === "UNKNOWN" ? { reason: section.status?.reason ?? "Pet-ability state is UNKNOWN." } : { abilities: { items: matches.slice(page.offset, page.offset + page.limit), offset: page.offset, limit: page.limit, totalCount: matches.length, truncated: page.offset + page.limit < matches.length } }) };
+      return { data: value, provenance: { state: status, version: query.version, identityKey: character.identityKey, ...(observedAt !== undefined ? { observedAt } : {}), importedAt: snapshot.importedAt, snapshotId: snapshot.id, freshness, source: "GearExport Forever active-pet spellbook", ...(status === "LAST_SEEN" ? { warning: "Historical active-pet spellbook; it may belong to a previous pet." } : {}), ...(status === "UNKNOWN" ? { reason: value.reason } : {}) } };
     });
   }
 
