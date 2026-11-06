@@ -109,6 +109,16 @@ export const STRUCTURED_OBSERVATION_COVERAGE = {
 export interface RecipeSelector { recipeID?: number; recipeKey?: string; outputItemID?: number; enchantID?: number; recipeName?: string }
 export interface CharacterSpellsQuery extends CharacterSnapshotQuery { query?: string; offset?: number; limit?: number }
 export interface CharacterTrainerQuery extends CharacterSnapshotQuery { category?: string; query?: string; status?: "known" | "available" | "unavailable" | "other"; offset?: number; limit?: number }
+
+type TrainerStatusBucket = "known" | "available" | "unavailable" | "other";
+
+/** Map shared trainer-contract states while preserving the service's raw statusAtVisit in the response. */
+function trainerStatusBucket(statusAtVisit: string | undefined, foreverVersion: boolean): TrainerStatusBucket {
+  const status = statusAtVisit?.toLowerCase();
+  if (status === "available" || status === "known" || status === "unavailable") return status;
+  if (foreverVersion && status === "used") return "known";
+  return "other";
+}
 export interface AccountChangesQuery { version: VersionOrUnknown; realm?: string; offset?: number; limit?: number }
 
 /** Optional process-configured identityKey -> planned spec map; malformed config stays empty. */
@@ -2456,21 +2466,14 @@ export class DashboardReadModel {
         const observedAt = category.status.observedAt ?? section.status.observedAt ?? snapshotObservedAt(snapshot.generatedAt, snapshot.importedAt);
         const counts = { known: 0, available: 0, unavailable: 0, other: 0 };
         for (const service of category.services) {
-          const state = service.statusAtVisit?.toLowerCase();
-          if (foreverEvidenceSource) {
-            if (service.statusAtVisit === "unavailable") counts.unavailable++;
-            else counts.other++;
-          } else if (state === "known" || state === "available" || state === "unavailable") counts[state]++;
-          else counts.other++;
+          counts[trainerStatusBucket(service.statusAtVisit, query.version === "forever")]++;
         }
         return { category, observedAt, freshness: classifyFreshness(observedAt, this.now()), counts };
       });
       const needle = query.query?.trim().toLocaleLowerCase();
       const services = categoryRead.flatMap(({ category, observedAt, freshness }) => category.services
         .filter((service) => {
-          const state = service.statusAtVisit?.toLowerCase();
-          const mappedState = foreverEvidenceSource ? service.statusAtVisit === "unavailable" ? "unavailable" : "other" : state === "known" || state === "available" || state === "unavailable" ? state : "other";
-          if (query.status && mappedState !== query.status) return false;
+          if (query.status && trainerStatusBucket(service.statusAtVisit, query.version === "forever") !== query.status) return false;
           return !needle || `${service.spellID ?? ""} ${service.ability ?? ""} ${service.rank ?? ""} ${service.requirementsAtVisit ?? ""}`.toLocaleLowerCase().includes(needle);
         })
         .map((service) => {
