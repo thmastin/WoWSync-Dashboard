@@ -193,7 +193,11 @@ tools are read-only. Opt-in planning tools stage immutable proposals or commit o
 Dashboard-approved proposal; no MCP tool approves or executes game actions. Tool annotations
 are advisory and are not the approval boundary. Every account-state query
 requires an explicit canonical version; none defaults to Retail. Character
-lookups return `AMBIGUOUS` instead of selecting a same-name realm. Results
+lookups return `AMBIGUOUS` instead of selecting a same-name realm or a shared
+Forever first name. Optional `surname` or `identityKey` selects one exact
+identity in the requested version; a display name such as `Hallo Ashwick` is
+not a first name, and selectors that disagree return `SELECTOR_CONFLICT`.
+Results
 preserve `OBSERVED`, `DERIVED`, `LAST_SEEN`, and `UNKNOWN`. Renown is currently
 an intentional `UNKNOWN`, because WoWSync has not captured it.
 

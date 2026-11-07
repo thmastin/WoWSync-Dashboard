@@ -51,6 +51,9 @@ const MAX_DOCUMENT_CHARACTERS = 40_000;
 const versionSchema = z.enum(READ_MODEL_VERSIONS as unknown as [VersionOrUnknown, ...VersionOrUnknown[]]);
 const nameSchema = z.string().trim().min(1).max(64);
 const realmSchema = z.string().trim().min(1).max(64);
+const surnameSchema = z.string().trim().min(1).max(64);
+const identityKeySchema = z.string().trim().min(1).max(512);
+const characterSelector = { surname: surnameSchema.optional(), identityKey: identityKeySchema.optional() };
 const limitSchema = z.number().int().min(1);
 const documentClassSchema = z.enum(["VERSIONED_RESEARCH", "OPERATIONAL_TRUTH"]);
 const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveHint: false } as const;
@@ -525,10 +528,10 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       annotations: planningWriteAnnotations,
     }, async ({ version, proposalId, digest }) => forwardPlanningRequest(planningApiBaseUrl, "POST", `/api/versions/${encodeURIComponent(version)}/erp/change-proposals/${encodeURIComponent(proposalId.startsWith("proposal_") ? proposalId : `proposal_${proposalId}`)}/commit`, { digest }));
   }
-  const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional() }).strict();
+  const characterQuery = z.object({ version: versionSchema, name: nameSchema, realm: realmSchema.optional(), ...characterSelector }).strict();
   server.registerTool("get_character_summary", {
     title: "Get a character summary",
-    description: "Returns the latest-known compact summary for one explicit-version character. If name and realm are ambiguous, returns AMBIGUOUS rather than guessing.",
+    description: "Returns the latest-known compact summary for one explicit-version character. name and optional realm stay compatible. A same-name collision returns AMBIGUOUS with each candidate identityKey and surname and is never guessed. Optional surname or identityKey selects one exact identity in the requested version; selectors that disagree with each other or with name/realm return SELECTOR_CONFLICT.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getCharacterSummary(query)));
@@ -589,19 +592,19 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   server.registerTool("get_forever_gear_observation", {
     title: "Get Forever observed equipment and carried items",
     description: "Returns one Forever-version character's observed equipped slots and carried inventory with snapshot/source/freshness provenance. The existing Dashboard identity model has no WoW account identifier, so account scope is explicitly UNKNOWN and limited to this Dashboard import context. Candidate classification remains UNKNOWN unless validated Forever metadata supports it; eligibility, suitability, upgrade status, transferability, and unobserved bank contents remain UNKNOWN. Never applies Retail rules.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getForeverGearObservation(query)));
   server.registerTool("get_forever_crafted_upgrade_assessment", {
     title: "Assess Forever learned equipment recipes against observed gear",
     description: "Read-only, snapshot-scoped assessment of positively observed learned Forever equipment recipes. snapshot.buildVerification is VERIFIED only for an exact verified version/build/interface profile; snapshot.compatibility also reports the exporter's own claim (VERIFIED_PROFILE / UNVERIFIED_BUILD) and whether the two agree. Covers output identity, slot, exact captured item stats, candidate eligibility, profession prerequisites, reagent requirements and source-character reagent availability. Partial recipe coverage remains partial; older-build reference facts are never promoted to current observations; missing bank, access, eligibility, item stats or craftability remain UNKNOWN. Does not craft, transfer, reserve, or mutate ERP plans.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, snapshotId: z.number().int().positive().optional() }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector, snapshotId: z.number().int().positive().optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getForeverCraftedUpgradeAssessment(query)));
   server.registerTool("get_forever_character_quests", {
     title: "Get Forever active quests and objectives",
     description: "Returns read-only quest and objective observations for one explicit Forever character, optionally pinned to a snapshotId belonging to that character. Active quests, objective progress, completion, turn-in readiness, completed history, tracking, and waypoint context remain separately evidenced; partial/stale/unavailable data stays explicit. A quest disappearing from the active log does not prove completion. Never applies Retail rules or takes gameplay actions.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, snapshotId: z.number().int().positive().optional() }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector, snapshotId: z.number().int().positive().optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getForeverQuestObservation(query)));
   server.registerTool("get_character_quests", {
@@ -627,7 +630,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({
       version: z.literal("forever"),
       items: z.array(z.union([z.number().int().positive(), z.string().trim().min(2).max(100)])).min(1).max(25),
-      character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(),
+      character: z.object({ name: nameSchema, realm: realmSchema.optional(), ...characterSelector }).strict().optional(),
       market: z.string().regex(/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/).optional(),
     }).strict().refine((value) => value.character !== undefined || value.market !== undefined, { message: "Pass character or market." }),
     annotations: toolAnnotations,
@@ -637,11 +640,15 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     let resolvedMarket = market;
     let marketBasis = market ? "requested" : undefined;
     if (!resolvedMarket && character) {
-      const matches = readModel().listCharacters({ version: "forever" }).filter((entry) => entry.name.toLowerCase() === character.name.toLowerCase() && (!character.realm || entry.realm === character.realm));
-      if (matches.length !== 1) return textResult({ status: matches.length ? "CHARACTER_AMBIGUOUS" : "CHARACTER_NOT_FOUND", candidates: matches.map((entry) => ({ name: entry.name, realm: entry.realm })) });
-      resolvedMarket = foreverMarketFor(matches[0]!.realm, (matches[0] as { faction?: string }).faction, marketRegion);
-      marketBasis = `DERIVED from ${matches[0]!.name}'s realm "${matches[0]!.realm}" (ruleset) and faction`;
-      if (!resolvedMarket) return textResult({ status: "MARKET_UNKNOWN", reason: `Cannot tell the ruleset or faction for ${matches[0]!.name} (realm "${matches[0]!.realm}"); pass market explicitly.` });
+      const selected = readModel().resolveCharacter({ version: "forever", ...character });
+      if (selected.status !== "FOUND") {
+        if (selected.status === "SELECTOR_CONFLICT") return textResult({ status: "SELECTOR_CONFLICT", reason: selected.reason, name: selected.name, ...(selected.realm ? { realm: selected.realm } : {}), ...(selected.surname ? { surname: selected.surname } : {}), ...(selected.identityKey ? { identityKey: selected.identityKey } : {}) });
+        if (selected.status === "AMBIGUOUS") return textResult({ status: "CHARACTER_AMBIGUOUS", name: selected.name, candidates: selected.candidates });
+        return textResult({ status: "CHARACTER_NOT_FOUND", name: selected.name, ...(selected.realm ? { realm: selected.realm } : {}) });
+      }
+      resolvedMarket = foreverMarketFor(selected.character.realm, selected.character.faction, marketRegion);
+      marketBasis = `DERIVED from ${selected.character.name}'s realm "${selected.character.realm}" (ruleset) and faction`;
+      if (!resolvedMarket) return textResult({ status: "MARKET_UNKNOWN", reason: `Cannot tell the ruleset or faction for ${selected.character.name} (realm "${selected.character.realm}"); pass market explicitly.` });
     }
     const index = foreverKnowledge.get();
     const nameToId = (name: string) => {
@@ -700,13 +707,13 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   server.registerTool("get_forever_gear_allocation", {
     title: "Evaluate observed Forever gear candidates",
     description: "Evaluates exact observed Forever carried candidates against the requested character and screens each candidate against every Dashboard-known Forever character's observed level, equipment slots, and captured equipped stats. Accepts Forever 1.60.1 profiles at or above build 70291. Verified builds receive standard confidence; newer unverified builds remain included, tagged UNVERIFIED_BUILD, and have lower confidence. Returns explicit Classic-derived armor/weapon proficiency hypotheses separately from confirmed eligibility, exact-variant recorded-stat comparisons, binding category UNKNOWN when target-client semantics are unvalidated, and per-recipient fit/exclusion reasons. Account membership and cross-character transfer access remain UNKNOWN; fit screens are not transfer recommendations and are not ranked without complete validated comparative priority evidence. Never applies Retail rules or initiates gameplay/bank actions.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector }).strict(),
     annotations: toolAnnotations,
   }, async (query) => textResult(readModel().getForeverGearAllocation(query)));
   server.registerTool("get_forever_mail_plan", {
     title: "Build a Forever mailbox errand plan",
     description: "Builds a read-only, evidence-based mail plan from the current character's latest imported Forever gear observation, reusing the minimum-build-70291 allocation evaluator. Verified builds receive standard confidence; newer unverified builds are retained, tagged UNVERIFIED_BUILD, and lower confidence. Only same-realm/faction recipients are considered. Unknown or stale item, equipment, level, proficiency, faction, and bank facts remain UNKNOWN. The player performs each mailbox action.",
-    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
+    inputSchema: z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => {
     const holdItemIds = (process.env.WOWSYNC_FOREVER_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
@@ -721,7 +728,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   server.registerTool("get_classic_era_mail_plan", {
     title: "Build a Classic Era mailbox errand plan",
     description: "Builds a read-only plan from Classic Era WOWSYNC observations only. Requires a stable GUID, OBSERVED bags within 72 hours, and an Era client build at or above 70003; build 70003 is verified and newer builds remain usable with lowered confidence. Vendor unit value comes only from captured vendorEachCopper. Auction House value is always UNKNOWN because no Era price source is available. Talent spec is DERIVED only from an unambiguous observed legacy talent tree. Missing or ineligible settings and skill ties remain UNDETERMINED. The player performs any mailbox action.",
-    inputSchema: z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
+    inputSchema: z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, ...characterSelector, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict(),
     annotations: toolAnnotations,
   }, async (query) => {
     const holdItemIds = (process.env.WOWSYNC_CLASSIC_ERA_MAIL_HOLD_ITEM_IDS ?? "").split(",").map((value) => Number(value.trim())).filter((value) => Number.isSafeInteger(value) && value > 0);
@@ -733,7 +740,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     inputSchema: z.object({
       version: z.literal("forever"),
       question: z.string().trim().min(1).max(2_000),
-      character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(),
+      character: z.object({ name: nameSchema, realm: realmSchema.optional(), ...characterSelector }).strict().optional(),
       realm: realmSchema.optional(),
       objectives: z.array(z.enum(["IMPROVE_CHARACTER", "MAKE_GOLD", "DEVELOP_PROFESSIONS", "SELF_SUFFICIENCY", "LEVELING", "GEAR"])).min(1).max(6).optional(),
       preferences: z.object({ emphasis: z.enum(["IMMEDIATE_POWER", "SELF_SUFFICIENCY", "BALANCED"]).optional(), avoidSpending: z.boolean().optional(), goals: z.array(z.string().trim().min(1).max(200)).max(10).optional() }).strict().optional(),
@@ -746,13 +753,14 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
     if (format === "markdown") return textResult({ status: answer.status, markdown: answer.markdown });
     return textResult(answer);
   });
-  const professionsWithCaptureIssue = (model: DashboardReadModel, query: { version: VersionOrUnknown; name: string; realm?: string }, result: unknown) => {
+  const professionsWithCaptureIssue = (model: DashboardReadModel, query: { version: VersionOrUnknown; name: string; realm?: string; surname?: string; identityKey?: string }, result: unknown) => {
     if (query.version !== "forever") return result;
-    const issue = model.getForeverRecipeCaptureIssue(query as never);
-    const visits = model.getForeverTrainerVisits(query as never);
+    const selected = model.resolveCharacter(query);
+    const issue = selected.status === "FOUND" ? model.getForeverRecipeCaptureIssue(query) : undefined;
+    const visits = model.getForeverTrainerVisits(query);
     const trainerVisits = visits.status === "FOUND" ? visits.value : [];
     const index = foreverKnowledge.get();
-    const faction = (model.listCharacters({ version: "forever" }).find((entry) => entry.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || entry.realm === query.realm)) as { faction?: string } | undefined)?.faction;
+    const faction = selected.status === "FOUND" ? selected.character.faction : undefined;
     // Add learnSkill to each recipe row: trainer window (OBSERVED) or pattern tooltip (EXTERNAL, matched by name).
     const withLearn = JSON.parse(JSON.stringify(result)) as { value?: { data?: { recipeKnowledge?: { data?: { professions?: Array<{ professionName?: string; name?: string; recipes?: Array<{ recipeID: number; name?: string; learnSkill?: unknown }> }> } } } } };
     for (const profession of withLearn.value?.data?.recipeKnowledge?.data?.professions ?? []) {
@@ -765,7 +773,7 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
   };
   server.registerTool("get_character_professions", {
     title: "Get latest-known character professions",
-    description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. Recipe sources: Retail C_TradeSkillUI captures, Forever structured captures (any well-formed build; unverified builds are labelled), and Classic Era / TBC rows from a profession window the player opened (TradeSkill rows are the character's own learned list; Craft-window rows such as Enchanting are visible with learnedState UNKNOWN; Enchanting outputs are enchant identities, not items). Candidate recipe coverage is partial; absence does not mean unlearned. For Forever, each recipe may carry learnSkill { rank, basis TRAINER_OBSERVED (trainer window, with cost) or PATTERN_TOOLTIP (pattern item tooltip, matched by name; item and where it comes from) }; recipes without it have no known learn skill yet. latestRecipeCapture FAILED means the newest export could not refresh the recipe list (reason included) and rows are from the last successful capture; and an earlier observation is labelled LAST_SEEN with its source snapshot. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",
+    description: "Returns profession skills and version-scoped recipe observations for one explicit-version character. name and optional realm stay compatible. A same-name collision returns AMBIGUOUS and is never guessed; optional surname or identityKey selects one exact identity, and disagreeing selectors return SELECTOR_CONFLICT. Recipe sources: Retail C_TradeSkillUI captures, Forever structured captures (any well-formed build; unverified builds are labelled), and Classic Era / TBC rows from a profession window the player opened (TradeSkill rows are the character's own learned list; Craft-window rows such as Enchanting are visible with learnedState UNKNOWN; Enchanting outputs are enchant identities, not items). Candidate recipe coverage is partial; absence does not mean unlearned. For Forever, each recipe may carry learnSkill { rank, basis TRAINER_OBSERVED (trainer window, with cost) or PATTERN_TOOLTIP (pattern item tooltip, matched by name; item and where it comes from) }; recipes without it have no known learn skill yet. latestRecipeCapture FAILED means the newest export could not refresh the recipe list (reason included) and rows are from the last successful capture; and an earlier observation is labelled LAST_SEEN with its source snapshot. Recipe/output/reagent observations do not alone establish current skill eligibility or that crafting is presently possible.",
     inputSchema: characterQuery,
     annotations: toolAnnotations,
   }, async (query) => {
@@ -952,10 +960,10 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const retailOnly = new Set(["analyze_retail_gear_candidate", "get_gear_candidate_evidence", "get_gear_candidate_recipient_screen"]);
       const profileShape = { ...shape, ...(shape.version ? { version: foreverOnly.has(exposedName) ? z.literal("forever") : retailOnly.has(exposedName) || exposedName === "get_gear_candidate_evidence" ? z.literal("retail") : nonEraVersion } : {}) };
       if (exposedName === "list_forever_characters") config.inputSchema = z.object({ version: z.literal("forever"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
-      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: nonEraVersion, name: nameSchema, realm: realmSchema.optional(), profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
-      else if (exposedName === "get_character_bags") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
-      else if (exposedName === "get_forever_items") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema.optional(), realm: realmSchema.optional(), storage: z.enum(["bags", "bank"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.query !== undefined && args.name === undefined && args.realm === undefined && args.storage === undefined) || (args.query === undefined && args.name !== undefined && args.realm !== undefined && args.storage !== undefined), "Pass query alone or name, realm, and storage together.");
-      else if (exposedName === "get_forever_market_prices") config.inputSchema = z.object({ version: z.literal("forever"), items: z.array(z.union([z.number().int().positive(), z.string().trim().min(2).max(100)])).min(1).max(25), character: z.object({ name: nameSchema, realm: realmSchema.optional() }).strict().optional(), market: z.string().regex(/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/).optional() }).strict().refine((args) => args.character !== undefined || args.market !== undefined, "Pass character or market.");
+      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: nonEraVersion, name: nameSchema, realm: realmSchema.optional(), ...characterSelector, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
+      else if (exposedName === "get_character_bags") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema, realm: realmSchema, ...characterSelector, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
+      else if (exposedName === "get_forever_items") config.inputSchema = z.object({ version: z.literal("forever"), name: nameSchema.optional(), realm: realmSchema.optional(), ...characterSelector, storage: z.enum(["bags", "bank"]).optional(), query: z.string().trim().min(1).max(100).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => { const exact = args.surname !== undefined || args.identityKey !== undefined; return (args.query !== undefined && args.name === undefined && args.realm === undefined && args.storage === undefined && !exact) || (args.query === undefined && args.name !== undefined && args.realm !== undefined && args.storage !== undefined); }, "Pass query alone or name, realm, and storage together.");
+      else if (exposedName === "get_forever_market_prices") config.inputSchema = z.object({ version: z.literal("forever"), items: z.array(z.union([z.number().int().positive(), z.string().trim().min(2).max(100)])).min(1).max(25), character: z.object({ name: nameSchema, realm: realmSchema.optional(), ...characterSelector }).strict().optional(), market: z.string().regex(/^forever\.(normal|pvp|rp)\.(alliance|horde)\.[a-z]{2}$/).optional() }).strict().refine((args) => args.character !== undefined || args.market !== undefined, "Pass character or market.");
       else if (exposedName === "lookup_forever_knowledge") config.inputSchema = z.object({ version: z.literal("forever"), kind: z.enum(["item", "quest", "npc", "spell", "dungeon", "zone"]), id: z.number().int().positive().optional(), name: z.string().trim().min(2).max(100).optional(), limit: z.number().int().min(1).max(10).optional() }).strict().refine((args) => args.id !== undefined || args.name !== undefined, "Pass id or name.");
       else {
         config.inputSchema = z.object(profileShape).strict();
@@ -999,9 +1007,9 @@ export function createWoWSyncMcpServer(configuration: WoWSyncMcpConfiguration = 
       const config = { ...selected.config };
       const shape = (selected.config.inputSchema as z.ZodObject<z.ZodRawShape> | undefined)?.shape ?? {};
       if (exposedName === "list_classic_era_characters") config.inputSchema = z.object({ version: z.literal("classic-era"), realm: realmSchema.optional(), limit: limitSchema.max(MAX_CHARACTER_LIST).optional() }).strict();
-      else if (exposedName === "get_character_bags") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
-      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
-      else if (exposedName === "get_classic_era_mail_plan") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict();
+      else if (exposedName === "get_character_bags") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, ...characterSelector, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
+      else if (exposedName === "get_character_professions") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, ...characterSelector, profession: z.string().trim().min(1).max(80).optional(), includeRecipes: z.boolean().default(false), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().refine((args) => (args.includeRecipes !== true || args.profession !== undefined) && ((args.offset === undefined && args.limit === undefined) || args.includeRecipes === true), "Recipes and recipe paging require includeRecipes:true and a profession.");
+      else if (exposedName === "get_classic_era_mail_plan") config.inputSchema = z.object({ version: z.literal("classic-era"), name: nameSchema, realm: realmSchema, ...characterSelector, accountId: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/).optional() }).strict();
       else {
         const profileShape = { ...shape, ...(shape.version ? { version: z.literal("classic-era") } : {}) };
         config.inputSchema = z.object(profileShape).strict();

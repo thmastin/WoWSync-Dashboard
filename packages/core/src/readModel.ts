@@ -80,12 +80,61 @@ export interface ReadProvenance {
   warning?: string;
 }
 export interface ReadValue<T> { data?: T; provenance: ReadProvenance }
-export type CharacterResolution<T> =
-  | { status: "FOUND"; value: T }
-  | { status: "NOT_FOUND"; version: VersionOrUnknown; name: string; realm?: string }
-  | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: Array<Pick<StoredCharacterSummary, "identityKey" | "realm" | "name"> & { surname?: string }> };
+type CharacterCandidate = Pick<StoredCharacterSummary, "identityKey" | "realm" | "name"> & { surname?: string };
+export type CharacterMatchFailure =
+  | { status: "NOT_FOUND"; version: VersionOrUnknown; name: string; realm?: string; surname?: string; identityKey?: string }
+  | { status: "AMBIGUOUS"; version: VersionOrUnknown; name: string; candidates: CharacterCandidate[] }
+  | { status: "SELECTOR_CONFLICT"; version: VersionOrUnknown; name: string; realm?: string; surname?: string; identityKey?: string; reason: string };
+export type CharacterResolution<T> = { status: "FOUND"; value: T } | CharacterMatchFailure;
+export type CharacterSelection = { status: "FOUND"; character: StoredCharacterSummary } | CharacterMatchFailure;
 
-export interface CharacterQuery { version: VersionOrUnknown; name: string; realm?: string }
+export interface CharacterQuery {
+  version: VersionOrUnknown;
+  name: string;
+  realm?: string;
+  /** Observed Forever surname. Narrows a same-first-name collision and never selects by itself. */
+  surname?: string;
+  /** Exact version-scoped identity key. Must agree with name, realm, and surname when those are also sent. */
+  identityKey?: string;
+}
+
+/** Re-read one character the caller already holds. Identity is pinned so a shared first name cannot be chosen again. */
+export function characterReadQuery(version: VersionOrUnknown, character: Pick<StoredCharacterSummary, "name" | "realm" | "identityKey" | "surname">): CharacterQuery {
+  return { version, name: character.name, realm: character.realm, identityKey: character.identityKey, ...(character.surname ? { surname: character.surname } : {}) };
+}
+
+/**
+ * Select one character inside an already version-scoped roster.
+ * Name and optional realm stay compatible. Surname or identityKey selects an exact identity.
+ * More than one remaining candidate is AMBIGUOUS. Disagreeing selectors are SELECTOR_CONFLICT.
+ */
+export function selectCharacterRoster(version: VersionOrUnknown, roster: readonly StoredCharacterSummary[], query: Omit<CharacterQuery, "version">): CharacterSelection {
+  const name = query.name;
+  const realm = query.realm;
+  const surname = query.surname?.trim();
+  const identityKey = query.identityKey?.trim().toLowerCase();
+  if (!name?.trim()) throw new TypeError("name is required");
+  if (query.surname !== undefined && !surname) throw new TypeError("surname must be non-empty when provided");
+  if (query.identityKey !== undefined && !identityKey) throw new TypeError("identityKey must be non-empty when provided");
+  const described = { version, name, ...(realm ? { realm } : {}), ...(surname ? { surname } : {}), ...(identityKey ? { identityKey } : {}) };
+  const sameSurname = (character: StoredCharacterSummary) => (character.surname?.trim().toLowerCase() ?? "") === surname!.toLowerCase();
+  const agrees = (character: StoredCharacterSummary) => character.name.toLowerCase() === name.toLowerCase()
+    && (!realm || character.realm === realm)
+    && (surname === undefined || sameSurname(character));
+  if (identityKey) {
+    if (!identityKey.startsWith(`${version.toLowerCase()}::`)) {
+      return { status: "SELECTOR_CONFLICT", ...described, reason: "The identityKey belongs to a different WoW version and is not used." };
+    }
+    const character = roster.find((entry) => entry.identityKey === identityKey);
+    if (!character) return { status: "NOT_FOUND", ...described };
+    if (!agrees(character)) return { status: "SELECTOR_CONFLICT", ...described, identityKey: character.identityKey, reason: "The identityKey does not match the supplied name, realm, or surname." };
+    return { status: "FOUND", character };
+  }
+  const candidates = roster.filter((character) => character.name.toLowerCase() === name.toLowerCase() && (!realm || character.realm === realm) && (surname === undefined || sameSurname(character)));
+  if (candidates.length === 0) return { status: "NOT_FOUND", ...described };
+  if (candidates.length > 1) return { status: "AMBIGUOUS", version, name, candidates: candidates.map(({ identityKey: key, realm: candidateRealm, name: candidateName, surname: candidateSurname }) => ({ identityKey: key, realm: candidateRealm, name: candidateName, ...(candidateSurname ? { surname: candidateSurname } : {}) })) };
+  return { status: "FOUND", character: candidates[0]! };
+}
 export interface CharacterSnapshotQuery extends CharacterQuery { snapshotId?: number }
 export interface CharacterQuestQuery extends CharacterSnapshotQuery { completedQuestIDs?: number[] }
 export interface CharacterProgressionQuery extends CharacterSnapshotQuery { factionQuery?: string; includeTalents?: boolean }
@@ -1289,7 +1338,7 @@ export class DashboardReadModel {
     const candidateSources: Array<{ source: { identityKey: string; name: string; surname?: string; realm: string }; observationState: string; buildVerification: "VERIFIED" | "UNVERIFIED_BUILD"; observedAt?: number; freshness?: string; carried: { state: string; observedAt?: number; freshness?: string; itemCount?: number }; carriedItems: ReturnType<typeof buildForeverGearObservation>["carried"]["items"]; bank: { state: string; observedAt?: number; freshness?: string; reason?: string; items?: ReturnType<typeof buildForeverGearObservation>["bank"]["items"] }; candidates: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["items"]; unclassifiedItems: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["unclassifiedItems"]; carriedBuckets: ReturnType<typeof buildForeverGearObservation>["evaluationCandidates"]["carriedBuckets"] }> = [];
     const exclusions: Array<{ character: { identityKey: string; name: string; surname?: string; realm: string }; state: string; reason: string }> = [];
     for (const sourceCharacter of this.characters("forever")) {
-      const observation = this.getForeverGearObservation({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+      const observation = this.getForeverGearObservation(characterReadQuery("forever", sourceCharacter));
       if (observation.status !== "FOUND" || !observation.value.data) {
         exclusions.push({ character: { identityKey: sourceCharacter.identityKey, name: sourceCharacter.name, ...(sourceCharacter.surname ? { surname: sourceCharacter.surname } : {}), realm: sourceCharacter.realm }, state: observation.status, reason: observation.status === "FOUND" ? observation.value.provenance.reason ?? "Observation data unavailable." : "Source identity or supported Forever gear evidence could not be safely resolved." });
         continue;
@@ -1463,7 +1512,7 @@ export class DashboardReadModel {
     // Forever character. Cross-character results are screening/fit evidence;
     // the exporter set is not treated as a shared WoW account or transfer route.
     const foreverRoster = this.characters("forever").flatMap((character) => {
-      const resolvedObservation = this.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm });
+      const resolvedObservation = this.getForeverGearObservation(characterReadQuery("forever", character));
       if (resolvedObservation.status !== "FOUND" || !resolvedObservation.value.data) return [];
       const snapshot = this.snapshots(character.identityKey)[0];
       const profile = snapshot?.parsed.character;
@@ -1635,7 +1684,7 @@ export class DashboardReadModel {
     const data = base.value.data;
     const sourceCharacter = this.characters("forever").find((c) => c.identityKey === data.recipient.identityKey);
     if (!sourceCharacter) return { status: "NOT_FOUND" as const, version: "forever" as const, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    const questResult = this.getCharacterQuests({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+    const questResult = this.getCharacterQuests(characterReadQuery("forever", sourceCharacter));
     const questObservation = questResult.status === "FOUND" ? questResult.value.data : undefined;
     const questFresh = questObservation?.state === "OBSERVED" && questObservation.freshness === "recent";
     const activeQuests = questFresh ? (questObservation?.active ?? []).filter((quest: any) => quest.rowEvidence === "OBSERVED" && quest.isComplete !== true) : [];
@@ -1645,7 +1694,7 @@ export class DashboardReadModel {
       return activeQuests.find((quest: any) => (quest.objectives ?? []).some((objective: any) => normalize(String(objective.text ?? "").replace(/\s*:\s*\d+\s*\/\s*\d+\s*$/, "").trim()) === normalize(name)))?.title;
     };
     const source = data.candidateSources.find((row) => row.source.identityKey === sourceCharacter.identityKey);
-    const sourceBagRead = this.getCharacterStorage({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm, storage: "bags" });
+    const sourceBagRead = this.getCharacterStorage({ ...characterReadQuery("forever", sourceCharacter), storage: "bags" });
     const sourceBagData: any = sourceBagRead.status === "FOUND" ? sourceBagRead.value.data : undefined;
     const sourceLevel = data.recipient.level?.provenance === "OBSERVED" ? data.recipient.level.value : undefined;
     const foreverBagSection: any = this.snapshots(sourceCharacter.identityKey)[0]?.parsed.foreverGearObservation?.bags;
@@ -1659,7 +1708,7 @@ export class DashboardReadModel {
     const highestUsableFoodTier = Math.max(0, ...[...foodMetadataById.values()].filter((row: any) => row.classID === 0 && row.subClassID === 5 && row.foodKind !== "BUFF_FOOD" && typeof row.requiredLevel === "number" && row.requiredLevel <= (sourceLevel ?? -1)).map((row: any) => row.requiredLevel));
     const bagSpaceConfig: MailBagSpaceConfig = { ...DEFAULT_MAIL_BAG_SPACE_CONFIG, ...config.bagSpace };
     const foodBagsTight = bagSpaceIsTight(sourceBagData?.freeSlots, sourceBagData?.totalSlots, bagSpaceConfig);
-    const holderProfessionEvidence = this.getCharacterProfessions({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+    const holderProfessionEvidence = this.getCharacterProfessions(characterReadQuery("forever", sourceCharacter));
     const holderCookingEntry = holderProfessionEvidence?.status === "FOUND" && holderProfessionEvidence.value.provenance.state === "OBSERVED"
       ? holderProfessionEvidence.value.data?.entries.find((entry) => entry.name.toLocaleLowerCase() === "cooking") : undefined;
     const cookingKnowledge = holderProfessionEvidence?.status === "FOUND" ? holderProfessionEvidence.value.data?.recipeKnowledge as any : undefined;
@@ -1687,7 +1736,7 @@ export class DashboardReadModel {
       const snap = this.snapshots(character.identityKey)[0];
       const obsAt = snap?.generatedAt ?? snap?.importedAt;
       const freshness = obsAt === undefined ? "unknown" : classifyFreshness(obsAt, this.now());
-      const allocation = this.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm });
+      const allocation = this.getForeverGearAllocation(characterReadQuery("forever", character));
       const profile = snap?.parsed.character;
       const status = allocation.status === "FOUND" && allocation.value.data ? "SCREENED" : allocation.status;
       const reason = status === "SCREENED" ? "Recipient reached the supported Forever gear screening; item-specific checks are recorded per candidate." : allocation.status === "FOUND" ? allocation.value.provenance.reason ?? "Recipient evaluation data is UNKNOWN." : "Recipient snapshot or supported gear evidence could not be resolved.";
@@ -1695,7 +1744,7 @@ export class DashboardReadModel {
     });
     const materialUsers = [sourceCharacter, ...sameRealmFaction];
     const recipientProfessions = materialUsers.map((character) => {
-      const professions = this.getCharacterProfessions({ version: "forever", name: character.name, realm: character.realm });
+      const professions = this.getCharacterProfessions(characterReadQuery("forever", character));
       const observed = professions.status === "FOUND" && professions.value.provenance.state === "OBSERVED";
       const knowledge = professions.status === "FOUND" ? professions.value.data?.recipeKnowledge as any : undefined;
       const groups = knowledge?.data?.professions ?? [];
@@ -1800,7 +1849,7 @@ export class DashboardReadModel {
       }
       let found: Record<string, unknown> | undefined;
       for (const character of sameRealmFaction) {
-        const allocation = this.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm });
+        const allocation = this.getForeverGearAllocation(characterReadQuery("forever", character));
         if (allocation.status !== "FOUND" || !allocation.value.data) continue;
         const assessment = allocation.value.data.assessments.find((row) => row.source.identityKey === sourceCharacter.identityKey && row.candidate.itemRef === candidate.itemRef);
         if (!assessment) continue;
@@ -1826,7 +1875,7 @@ export class DashboardReadModel {
         else mail.push(found);
       }
       else {
-        const professionStatus = this.getCharacterProfessions({ version: "forever", name: sourceCharacter.name, realm: sourceCharacter.realm });
+        const professionStatus = this.getCharacterProfessions(characterReadQuery("forever", sourceCharacter));
         noRecipient.push({ item, reason: "No same-realm, same-faction recipient has a supported equipment fit; consider vendor/AH only after checking professions.", ownerProfessionEvidence: professionStatus.status === "FOUND" ? professionStatus.value.provenance.state : "UNKNOWN" });
       }
     }
@@ -1907,7 +1956,7 @@ export class DashboardReadModel {
     const bankItems = source?.bank.items ?? [];
     for (const item of bankItems) noRecipient.push({ item: { name: item.name ?? "UNKNOWN item", itemRef: item.itemRef, quantity: item.quantity }, location: "BANK", reason: "Bank item is observed but the gear evaluator has no exact bank-source item API comparison; withdraw/location and suitability remain UNKNOWN." });
     const professionChecks = this.characters("forever").map((character) => {
-      const result = this.getCharacterProfessions({ version: "forever", name: character.name, realm: character.realm });
+      const result = this.getCharacterProfessions(characterReadQuery("forever", character));
       return { character: character.name, realm: character.realm, state: result.status === "FOUND" ? result.value.provenance.state : result.status, professions: result.status === "FOUND" ? result.value.data?.entries?.map((entry) => entry.name) ?? "UNKNOWN" : "UNKNOWN" };
     });
     for (const entry of data.allocationPlan.filter((row) => row.source.identityKey === sourceCharacter.identityKey && row.source.location === "EQUIPPED")) keep.push({ item: entry.item, reason: "Already equipped." });
@@ -2951,22 +3000,24 @@ export class DashboardReadModel {
     });
   }
 
-  private resolve<T>(query: CharacterQuery, build: (character: StoredCharacterSummary, latest: StoredSnapshot | undefined) => T): CharacterResolution<T> {
+  resolveCharacter(query: CharacterQuery): CharacterSelection {
     requireVersion(query.version);
-    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
-    const character = candidates[0];
+    return selectCharacterRoster(query.version, this.characters(query.version), query);
+  }
+
+  private resolve<T>(query: CharacterQuery, build: (character: StoredCharacterSummary, latest: StoredSnapshot | undefined) => T): CharacterResolution<T> {
+    const selected = this.resolveCharacter(query);
+    if (selected.status !== "FOUND") return selected;
+    const character = selected.character;
     const snapshots = this.snapshots(character.identityKey);
     return { status: "FOUND", value: build(character, snapshots[0] && resolveSnapshotView(query.version, snapshots, snapshots[0])) };
   }
 
   /** Forever reputation (visible rows) and full talent capture, each from the newest snapshot that carries it (or from snapshotId and older). */
   private getForeverProgression(query: CharacterProgressionQuery): CharacterResolution<ReadValue<{ version: VersionOrUnknown; reputation: ClassicReputationView; talents: ForeverTalentView; upcomingAbilities?: unknown }>> {
-    const candidates = this.characters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length === 0) return { status: "NOT_FOUND", version: "forever", name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: "forever", name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
-    const character = candidates[0]!;
+    const selected = this.resolveCharacter({ ...query, version: "forever" });
+    if (selected.status !== "FOUND") return selected;
+    const character = selected.character;
     let snapshots = this.snapshots(character.identityKey);
     if (query.snapshotId !== undefined) {
       const at = snapshots.findIndex((snapshot) => snapshot.id === query.snapshotId);
@@ -3001,13 +3052,12 @@ export class DashboardReadModel {
   getForeverSkillsAndTalents(query: CharacterQuery): CharacterResolution<{ skills?: ForeverSkillLines; talents?: ForeverTalents; classSpells?: ForeverClassSpells }> {
     requireVersion(query.version);
     if (query.version !== "forever") return { status: "FOUND", value: {} };
-    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
+    const selected = this.resolveCharacter(query);
+    if (selected.status !== "FOUND") return selected;
     let skills: ForeverSkillLines | undefined;
     let talents: ForeverTalents | undefined;
     let classSpells: ForeverClassSpells | undefined;
-    for (const snapshot of this.snapshots(candidates[0]!.identityKey)) {
+    for (const snapshot of this.snapshots(selected.character.identityKey)) {
       skills ??= extractForeverSkillLines(snapshot.parsed, snapshot.id);
       talents ??= extractForeverTalents(snapshot.parsed, snapshot.id);
       classSpells ??= extractForeverClassSpells(snapshot.parsed, snapshot.id);
@@ -3019,9 +3069,9 @@ export class DashboardReadModel {
   /** Whether the character's latest export reports a failed profession-recipe capture (only the newest snapshot counts). */
   getForeverRecipeCaptureIssue(query: CharacterQuery): { error: string; at?: number; snapshotId: number } | undefined {
     if (query.version !== "forever") return undefined;
-    const candidates = this.characters("forever").filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length !== 1) return undefined;
-    const latest = this.snapshots(candidates[0]!.identityKey)[0];
+    const selected = this.resolveCharacter(query);
+    if (selected.status !== "FOUND") return undefined;
+    const latest = this.snapshots(selected.character.identityKey)[0];
     const issue = latest ? extractForeverRecipeCaptureIssue(latest.parsed) : undefined;
     return issue && latest ? { ...issue, snapshotId: latest.id } : undefined;
   }
@@ -3030,11 +3080,10 @@ export class DashboardReadModel {
   getForeverTrainerVisits(query: CharacterQuery): CharacterResolution<ForeverTrainerVisit[]> {
     requireVersion(query.version);
     if (query.version !== "forever") return { status: "FOUND", value: [] };
-    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
+    const selected = this.resolveCharacter(query);
+    if (selected.status !== "FOUND") return selected;
     const visits = new Map<string, ForeverTrainerVisit>();
-    for (const snapshot of this.snapshots(candidates[0]!.identityKey)) {
+    for (const snapshot of this.snapshots(selected.character.identityKey)) {
       const visit = extractForeverTrainerVisit(snapshot.parsed, snapshot.id);
       if (!visit) continue;
       const key = visit.kind;
@@ -3045,12 +3094,10 @@ export class DashboardReadModel {
   }
 
   private resolveSelectedSnapshot<T>(query: CharacterSnapshotQuery, build: (character: StoredCharacterSummary, snapshot: StoredSnapshot | undefined) => T): CharacterResolution<T> {
-    requireVersion(query.version);
     if (query.snapshotId !== undefined && (!Number.isSafeInteger(query.snapshotId) || query.snapshotId < 1)) throw new TypeError("snapshotId must be a positive integer");
-    const candidates = this.characters(query.version).filter((character) => character.name.toLowerCase() === query.name.toLowerCase() && (!query.realm || character.realm === query.realm));
-    if (candidates.length === 0) return { status: "NOT_FOUND", version: query.version, name: query.name, ...(query.realm ? { realm: query.realm } : {}) };
-    if (candidates.length > 1) return { status: "AMBIGUOUS", version: query.version, name: query.name, candidates: candidates.map(({ identityKey, realm, name, surname }) => ({ identityKey, realm, name, ...(surname ? { surname } : {}) })) };
-    const character = candidates[0]!;
+    const selected = this.resolveCharacter(query);
+    if (selected.status !== "FOUND") return selected;
+    const character = selected.character;
     const snapshots = this.snapshots(character.identityKey);
     const snapshot = query.snapshotId === undefined ? snapshots[0] : snapshots.find((entry) => entry.id === query.snapshotId);
     if (query.snapshotId !== undefined && !snapshot) throw new TypeError("snapshotId must belong to the resolved character in the requested WoW version");

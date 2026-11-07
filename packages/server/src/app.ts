@@ -8,6 +8,7 @@ import express, { type Express } from "express";
 import {
   VERSION_LABELS,
   WOW_VERSIONS,
+  characterReadQuery,
   DashboardReadModel,
   SharedStorageIntegrityError,
   WowSyncParseError,
@@ -175,7 +176,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
   app.get("/api/characters/:identityKey/forever-gear-observation", (req, res) => {
     const character = store.getCharacter(req.params.identityKey);
     if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
-    const result = new DashboardReadModel(store).getForeverGearObservation({ version: character.version, name: character.name, realm: character.realm });
+    const result = new DashboardReadModel(store).getForeverGearObservation(characterReadQuery(character.version, character));
     if (result.status !== "FOUND") return res.status(404).json({ error: "Forever gear observation is not available for this character.", code: result.status });
     res.json(result);
   });
@@ -192,7 +193,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     }
     let result: ReturnType<DashboardReadModel["getForeverCraftedUpgradeAssessment"]>;
     try {
-      result = new DashboardReadModel(store).getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+      result = new DashboardReadModel(store).getForeverCraftedUpgradeAssessment({ ...characterReadQuery("forever", character), ...(snapshotId !== undefined ? { snapshotId } : {}) });
     } catch (error) {
       if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
       throw error;
@@ -212,7 +213,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     }
     let result: ReturnType<DashboardReadModel["getForeverQuestObservation"]>;
     try {
-      result = new DashboardReadModel(store).getForeverQuestObservation({ version: character.version, name: character.name, realm: character.realm, ...(snapshotId !== undefined ? { snapshotId } : {}) });
+      result = new DashboardReadModel(store).getForeverQuestObservation({ ...characterReadQuery(character.version, character), ...(snapshotId !== undefined ? { snapshotId } : {}) });
     } catch (error) {
       if (error instanceof TypeError) return res.status(400).json({ error: error.message, code: "INVALID_SNAPSHOT_SELECTION" });
       throw error;
@@ -225,7 +226,7 @@ export function createApp(store: SnapshotStore, port: number, webDistDir?: strin
     const character = store.getCharacter(req.params.identityKey);
     if (!character) return res.status(404).json({ error: "Character not found", code: "CHARACTER_NOT_FOUND" });
     if (character.version !== "forever") return res.status(404).json({ error: "Forever allocation is not available for this client version.", code: "VERSION_NOT_SUPPORTED" });
-    const result = new DashboardReadModel(store).getForeverGearAllocation({ version: character.version, name: character.name, realm: character.realm });
+    const result = new DashboardReadModel(store).getForeverGearAllocation(characterReadQuery(character.version, character));
     if (result.status !== "FOUND") return res.status(404).json({ error: "Forever allocation evidence is not available for this character.", code: result.status });
     res.json(result);
   });

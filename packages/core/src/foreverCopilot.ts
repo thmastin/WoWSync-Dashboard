@@ -13,7 +13,8 @@
 //   the Forever knowledge dataset (foreverKnowledge.ts) and carry their source URL.
 // - Player control: recommendations never execute anything. Moving items is described as
 //   player-run steps; /bankx transfers always need the player to run each move.
-import type { DashboardReadModel } from "./readModel.ts";
+import { selectCharacterRoster, type DashboardReadModel } from "./readModel.ts";
+import type { StoredCharacterSummary } from "./store.ts";
 import type { ForeverTrainerVisit } from "./foreverTrainer.ts";
 import { requiredSkillFor, type ForeverClassSpells, type ForeverSkillLines, type ForeverTalents } from "./foreverSkills.ts";
 import type { ForeverKnowledgeIndex } from "./foreverKnowledgeBundle.ts";
@@ -44,7 +45,7 @@ export type Feasibility = "READY_NOW" | "NEEDS_TRANSFER" | "NEEDS_INPUTS" | "NEE
 export interface CopilotRequest {
   version: string;
   question: string;
-  character?: { name: string; realm?: string };
+  character?: { name: string; realm?: string; surname?: string; identityKey?: string };
   realm?: string;
   objectives?: CopilotObjective[];
   preferences?: { emphasis?: CopilotEmphasis; avoidSpending?: boolean; goals?: string[] };
@@ -98,7 +99,7 @@ export interface CopilotCharacterBrief {
 }
 
 export interface CopilotAnswer {
-  status: "ANSWERED" | "UNSUPPORTED_VERSION" | "CHARACTER_NOT_FOUND" | "CHARACTER_AMBIGUOUS" | "NO_DATA";
+  status: "ANSWERED" | "UNSUPPORTED_VERSION" | "CHARACTER_NOT_FOUND" | "CHARACTER_AMBIGUOUS" | "SELECTOR_CONFLICT" | "NO_DATA";
   version: string;
   question: string;
   objective: { objectives: CopilotObjective[]; emphasis: CopilotEmphasis; basis: string; matchedTerms: string[] };
@@ -168,8 +169,8 @@ const valueOf = (resolution: Loose): Loose | undefined => resolution?.status ===
 
 const isoDay = (epoch?: number) => epoch ? new Date(epoch * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC" : "unknown time";
 
-function gatherCharacter(readModel: DashboardReadModel, summary: Loose): CharacterEvidence {
-  const query = { version: "forever" as const, name: String(summary.name), realm: String(summary.realm) };
+function gatherCharacter(readModel: DashboardReadModel, summary: StoredCharacterSummary): CharacterEvidence {
+  const query = { version: "forever" as const, name: summary.name, realm: summary.realm, identityKey: summary.identityKey, ...(summary.surname ? { surname: summary.surname } : {}) };
   const state = valueOf(readModel.getCharacterState(query)) ?? {};
   const professionsRead = valueOf(readModel.getCharacterProfessions(query)) ?? {};
   const equipmentRead = valueOf(readModel.getCharacterEquipment(query)) ?? {};
@@ -304,14 +305,14 @@ export function understandObjective(request: CopilotRequest): CopilotAnswer["obj
   return { objectives, emphasis, basis: matchedTerms.length ? "DERIVED from words in the question; pass objectives explicitly to override." : "No objective words found; defaulted to broad character improvement.", matchedTerms };
 }
 
-function resolveSubject(request: CopilotRequest, characters: Loose[]): { status: "FOUND"; summary: Loose } | { status: "NONE" } | { status: "NOT_FOUND" | "AMBIGUOUS"; message: string } {
+function resolveSubject(request: CopilotRequest, characters: StoredCharacterSummary[]): { status: "FOUND"; summary: StoredCharacterSummary } | { status: "NONE" } | { status: "NOT_FOUND" | "AMBIGUOUS" | "SELECTOR_CONFLICT"; message: string } {
   if (request.character?.name) {
-    const name = request.character.name.trim().toLowerCase();
-    const realm = request.character.realm?.trim().toLowerCase();
-    const matches = characters.filter((character) => String(character.name).toLowerCase() === name && (!realm || String(character.realm).toLowerCase() === realm));
-    if (matches.length === 1) return { status: "FOUND", summary: matches[0] };
-    if (!matches.length) return { status: "NOT_FOUND", message: `No Forever character named ${request.character.name}${request.character.realm ? ` on ${request.character.realm}` : ""} has been imported.` };
-    return { status: "AMBIGUOUS", message: `${request.character.name} exists on several Forever realms (${matches.map((match) => match.realm).join(", ")}). Name the realm.` };
+    const selected = selectCharacterRoster("forever", characters, request.character);
+    if (selected.status === "FOUND") return { status: "FOUND", summary: selected.character };
+    if (selected.status === "SELECTOR_CONFLICT") return { status: "SELECTOR_CONFLICT", message: selected.reason };
+    if (selected.status === "NOT_FOUND") return { status: "NOT_FOUND", message: `No Forever character named ${request.character.name}${request.character.realm ? ` on ${request.character.realm}` : ""} has been imported.` };
+    const detail = selected.candidates.map((match) => `${match.name}${match.surname ? ` ${match.surname}` : ""} (${match.realm})`).join("; ");
+    return { status: "AMBIGUOUS", message: `${request.character.name} matches more than one Forever character (${detail}). Pass surname or identityKey; nothing is chosen automatically.` };
   }
   const mentioned = characters.filter((character) => new RegExp(`\\b${String(character.name).replace(/[^A-Za-z]/g, "")}\\b`, "i").test(request.question));
   const names = [...new Set(mentioned.map((character) => String(character.name).toLowerCase()))];
@@ -320,6 +321,10 @@ function resolveSubject(request: CopilotRequest, characters: Loose[]): { status:
     const realm = request.realm?.toLowerCase();
     const onRealm = realm ? mentioned.filter((character) => String(character.realm).toLowerCase() === realm) : [];
     if (onRealm.length === 1) return { status: "FOUND", summary: onRealm[0] };
+    if (onRealm.length > 1) {
+      const detail = onRealm.map((match) => `${match.name}${match.surname ? ` ${match.surname}` : ""}`).join("; ");
+      return { status: "AMBIGUOUS", message: `${mentioned[0].name} matches more than one Forever character on ${request.realm} (${detail}). Pass surname or identityKey; nothing is chosen automatically.` };
+    }
     // Same name on several realms: ask for a distinguishing realm or identity detail; never guess.
     const question = request.question.toLowerCase();
     const realmWords = (realmName: string) => realmName.toLowerCase().replace(/^classic beta\s*/, "").trim();
@@ -328,8 +333,10 @@ function resolveSubject(request: CopilotRequest, characters: Loose[]): { status:
       const score = (character.class && question.includes(String(character.class).toLowerCase()) ? 1 : 0) + (character.race && question.includes(String(character.race).toLowerCase()) ? 1 : 0) + (realmWord && new RegExp(`\\b${realmWord.replace(/[^a-z0-9 ]/g, "")}\\b`).test(question) ? 2 : 0);
       return { character, score };
     }).sort((a, b) => b.score - a.score);
-    if (scored[0].score > 0 && scored[0].score > (scored[1]?.score ?? -1)) return { status: "FOUND", summary: scored[0].character };
-    return { status: "AMBIGUOUS", message: `${mentioned[0].name} exists on several Forever realms (${mentioned.map((match) => match.realm).join(", ")}). Name the realm.` };
+    const sameRealm = mentioned.every((match) => String(match.realm).toLowerCase() === String(mentioned[0].realm).toLowerCase());
+    if (!sameRealm && scored[0].score > 0 && scored[0].score > (scored[1]?.score ?? -1)) return { status: "FOUND", summary: scored[0].character };
+    const detail = mentioned.map((match) => `${match.name}${match.surname ? ` ${match.surname}` : ""} (${match.realm})`).join("; ");
+    return { status: "AMBIGUOUS", message: `${mentioned[0].name} matches more than one Forever character (${detail}). Pass surname or identityKey; nothing is chosen automatically.` };
   }
   return { status: "NONE" };
 }
@@ -1273,14 +1280,15 @@ function answerWithKnowledge(readModel: DashboardReadModel, request: CopilotRequ
     const answer: CopilotAnswer = { ...base, status: "UNSUPPORTED_VERSION", message: `The co-pilot answers Forever questions only. "${request.version}" data is never mixed in.`, markdown: "" };
     return { ...answer, markdown: renderCopilotMarkdown(answer) };
   }
-  const summaries = readModel.listCharacters({ version: "forever" }) as unknown as Loose[];
+  const summaries = readModel.listCharacters({ version: "forever" });
   if (!summaries.length) {
     const answer: CopilotAnswer = { ...base, status: "NO_DATA", message: "No Forever characters have been imported.", markdown: "" };
     return { ...answer, markdown: renderCopilotMarkdown(answer) };
   }
   const subjectResolution = resolveSubject(request, summaries);
-  if (subjectResolution.status === "NOT_FOUND" || subjectResolution.status === "AMBIGUOUS") {
-    const answer: CopilotAnswer = { ...base, status: subjectResolution.status === "NOT_FOUND" ? "CHARACTER_NOT_FOUND" : "CHARACTER_AMBIGUOUS", message: subjectResolution.message, markdown: "" };
+  if (subjectResolution.status === "NOT_FOUND" || subjectResolution.status === "AMBIGUOUS" || subjectResolution.status === "SELECTOR_CONFLICT") {
+    const status = subjectResolution.status === "NOT_FOUND" ? "CHARACTER_NOT_FOUND" : subjectResolution.status === "SELECTOR_CONFLICT" ? "SELECTOR_CONFLICT" : "CHARACTER_AMBIGUOUS";
+    const answer: CopilotAnswer = { ...base, status, message: subjectResolution.message, markdown: "" };
     return { ...answer, markdown: renderCopilotMarkdown(answer) };
   }
   const subjectSummary = subjectResolution.status === "FOUND" ? subjectResolution.summary : undefined;
