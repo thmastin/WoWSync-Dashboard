@@ -175,13 +175,14 @@ export interface ForeverObservedIds {
 }
 
 // Structural view of the read-model methods used, so this module does not import the read model.
+interface ObservedCharacterQuery { version: "forever"; name: string; realm: string; surname?: string; identityKey?: string }
 interface ObservedIdReader {
-  listCharacters(query: { version: "forever" }): Array<{ name: string; realm: string }>;
-  getCharacterEquipment(query: { version: "forever"; name: string; realm: string }): unknown;
-  getCharacterStorage(query: { version: "forever"; name: string; realm: string; storage: "bags" | "bank"; limit: number }): unknown;
-  getCharacterProfessions(query: { version: "forever"; name: string; realm: string }): unknown;
-  getForeverQuestObservation(query: { version: "forever"; name: string; realm: string }): unknown;
-  getForeverSkillsAndTalents?(query: { version: "forever"; name: string; realm: string }): unknown;
+  listCharacters(query: { version: "forever" }): Array<{ name: string; realm: string; surname?: string; identityKey?: string }>;
+  getCharacterEquipment(query: ObservedCharacterQuery): unknown;
+  getCharacterStorage(query: ObservedCharacterQuery & { storage: "bags" | "bank"; limit: number }): unknown;
+  getCharacterProfessions(query: ObservedCharacterQuery): unknown;
+  getForeverQuestObservation(query: ObservedCharacterQuery): unknown;
+  getForeverSkillsAndTalents?(query: ObservedCharacterQuery): unknown;
 }
 
 export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverObservedIds {
@@ -191,7 +192,7 @@ export function collectForeverObservedIds(readModel: ObservedIdReader): ForeverO
   const data = (resolution: unknown): Loose | undefined => (resolution as Loose)?.status === "FOUND" ? (resolution as Loose).value?.data : undefined;
   const ref = (value: unknown) => { const match = typeof value === "string" ? /^item:(\d+)/.exec(value) : null; if (match) items.add(Number(match[1])); };
   for (const character of readModel.listCharacters({ version: "forever" })) {
-    const query = { version: "forever" as const, name: character.name, realm: character.realm };
+    const query = { version: "forever" as const, name: character.name, realm: character.realm, ...(character.identityKey ? { identityKey: character.identityKey } : {}), ...(character.surname ? { surname: character.surname } : {}) };
     for (const slot of (data(readModel.getCharacterEquipment(query))?.slots ?? []) as Loose[]) ref(slot.itemRef);
     for (const storage of ["bags", "bank"] as const) for (const item of (data(readModel.getCharacterStorage({ ...query, storage, limit: 100 }))?.items ?? []) as Loose[]) ref(item.itemRef);
     for (const profession of (data(readModel.getCharacterProfessions(query))?.recipeKnowledge?.data?.professions ?? []) as Loose[]) {

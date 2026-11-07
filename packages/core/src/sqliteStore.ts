@@ -53,7 +53,7 @@ import { diffSnapshots, type SnapshotDiff } from "./diff.ts";
 import { parseWowSyncExport } from "./parser.ts";
 import { mergeCharacterState, normalizeCharacterStateSidecar } from "./characterState.ts";
 import { mergeForeverStructuredObservation, normalizeForeverStructuredObservation } from "./foreverGearObservation.ts";
-import { DashboardReadModel } from "./readModel.ts";
+import { characterReadQuery, DashboardReadModel } from "./readModel.ts";
 import {
   canonicalJson,
   evaluateEquipmentPolicy,
@@ -1725,10 +1725,11 @@ export class SqliteSnapshotStore implements SnapshotStore {
     }
     const readModel = new DashboardReadModel(this, () => now);
     for (const character of versionFacts.forever.characters) {
-      foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation({ version: "forever", name: character.name, realm: character.realm }));
-      foreverQuestObservations.set(character.identityKey, readModel.getForeverQuestObservation({ version: "forever", name: character.name, realm: character.realm }));
-      foreverCraftedUpgradeAssessments.set(character.identityKey, readModel.getForeverCraftedUpgradeAssessment({ version: "forever", name: character.name, realm: character.realm }));
-      foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation({ version: "forever", name: character.name, realm: character.realm }));
+      const query = characterReadQuery("forever", character);
+      foreverGearObservations.set(character.identityKey, readModel.getForeverGearObservation(query));
+      foreverQuestObservations.set(character.identityKey, readModel.getForeverQuestObservation(query));
+      foreverCraftedUpgradeAssessments.set(character.identityKey, readModel.getForeverCraftedUpgradeAssessment(query));
+      foreverGearAllocations.set(character.identityKey, readModel.getForeverGearAllocation(query));
     }
     const erpProjects = WOW_VERSIONS.flatMap((version) => readModel.getErpProjects({ version }));
     return buildAccountContextPure({ now, versionFacts, characterSnapshots, foreverGearObservations, foreverQuestObservations, foreverGearAllocations, foreverCraftedUpgradeAssessments, erpProjects });
