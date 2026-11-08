@@ -177,6 +177,52 @@ test("synthetic pet spell read is separate, exact-identity selected, and preserv
   } finally { store.close(); }
 });
 
+test("[LIVE OBSERVATION FIXTURE: user-supplied Forever 70790 probe] Voidwalker, no pet, then Imp keep identity and timestamps separate", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const voidRows = [
+      { spellID: 17767, name: "Consume Shadows", rank: "Rank 1", subName: "Rank 1" },
+      { spellID: 7812, name: "Sacrifice", rank: "Rank 1", subName: "Rank 1" },
+      { spellID: 3716, name: "Torment", rank: "Rank 1", subName: "Rank 1" },
+    ];
+    const impRows = [
+      { spellID: 7804, name: "Blood Pact", rank: "Rank 2", subName: "Rank 2" },
+      { spellID: 2947, name: "Fire Shield", rank: "Rank 1", subName: "Rank 1" },
+      { spellID: 7799, name: "Firebolt", rank: "Rank 2", subName: "Rank 2" },
+      { spellID: 4511, name: "Phase Shift", subName: undefined },
+    ];
+    const profile = "Forever:1.60.1:70790:16001";
+    const exportAt = (generatedAt: number) => buildWowSyncExport({ generatedAt, character: { name: "Mezzkresh", surname: "Voidwalker", realm: "Classic Beta PvP 2", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70790", interface: "16001" } });
+    const attach = (generatedAt: number, observedAt: number, pet: Record<string, unknown>, entries: unknown[], stale = false) => ({
+      clientProfile: profile, name: "Mezzkresh", realm: "Classic Beta PvP 2", generatedAt, sourceCharacterGuid: "Player-LIVE-PROBE",
+      petSpells: { observedAt, completeness: "complete", ...(stale ? { lastAttemptStale: true, lastAttemptAt: generatedAt, lastAttemptError: "No active pet" } : {}), data: { pet, entries, coverage: "Live Forever C_SpellBook Pet bank probe" } },
+    });
+    const voidAt = NOW - 10 * 86400;
+    const first = store.importSnapshot(exportAt(NOW), { foreverGearObservation: attach(NOW, voidAt, { guid: "Pet-0-7073-0-3-1860-0821A254F2", name: "Mezzkresh", family: "Voidwalker", level: 11 }, voidRows) });
+    const emptyWindow = store.importSnapshot(exportAt(NOW + 1), { foreverGearObservation: attach(NOW + 1, voidAt, { guid: "Pet-0-7073-0-3-1860-0821A254F2", name: "Mezzkresh", family: "Voidwalker", level: 11 }, voidRows, true) });
+    const impAt = NOW + 2;
+    const third = store.importSnapshot(exportAt(NOW + 2), { foreverGearObservation: attach(NOW + 2, impAt, { guid: "Pet-0-7073-0-3-416-B91DE90ECA", name: "Laznip", family: "Imp", level: 12 }, impRows) });
+    const model = new DashboardReadModel(store, () => NOW + 3);
+    const old = model.getCharacterPetSpells({ version: "forever", name: "Mezzkresh", surname: "Voidwalker", realm: "Classic Beta PvP 2", snapshotId: emptyWindow.snapshot.id });
+    assert.equal(old.status, "FOUND");
+    if (old.status === "FOUND") {
+      assert.equal(old.value.provenance.state, "LAST_SEEN");
+      assert.equal(old.value.provenance.observedAt, voidAt, "no-pet carry retains the original Voidwalker observation time");
+      assert.deepEqual(old.value.data?.abilities?.items.map((row) => row.spellID).sort((a, b) => a - b), [3716, 7812, 17767]);
+    }
+    const current = model.getCharacterPetSpells({ version: "forever", name: "Mezzkresh", surname: "Voidwalker", realm: "Classic Beta PvP 2" });
+    assert.equal(current.status, "FOUND");
+    if (current.status === "FOUND") {
+      assert.equal(current.value.provenance.state, "OBSERVED");
+      assert.equal(current.value.data?.pet?.guid, "Pet-0-7073-0-3-416-B91DE90ECA");
+      assert.deepEqual(current.value.data?.abilities?.items.map((row) => row.spellID).sort((a, b) => a - b), [2947, 4511, 7799, 7804]);
+      assert.equal(current.value.data?.abilities?.items.find((row) => row.spellID === 4511)?.rank, undefined, "blank Phase Shift rank stays absent");
+      assert.ok(current.value.provenance.observedAt! > voidAt, "new Imp capture has its own time");
+    }
+    assert.equal(first.snapshot.id !== third.snapshot.id, true, "fixture sequence is stored as distinct observations");
+  } finally { store.close(); }
+});
+
 test("Forever observation resolves within its version and reports observed variants with explicit UNKNOWN claims", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
