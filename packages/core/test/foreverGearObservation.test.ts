@@ -17,6 +17,17 @@ test("Forever structured sidecar is isolated by version, identity, profile, and 
   assert.equal(normalizeForeverStructuredObservation({ ...sidecar, clientProfile: "Retail" }, "forever", "Hero", "Hallo", 99), undefined);
 });
 
+test("synthetic Forever active-pet sidecar preserves observed identity, original freshness, and LAST_SEEN", () => {
+  const pet = { ...sidecar, petSpells: { observedAt: 90, completeness: "complete", data: { pet: { guid: "Pet-1", name: "Wolf", family: "Wolf" }, entries: [{ spellID: 17253, name: "Bite", rank: "Rank 3" }] } } };
+  const observed = normalizeForeverStructuredObservation(pet, "forever", "Hero", "Hallo", 99);
+  assert.equal((observed?.petSpells as any).status.state, "OBSERVED");
+  assert.equal((observed?.petSpells as any).observedAt, 90);
+  assert.equal((observed?.petSpells as any).data.pet.guid, "Pet-1");
+  const carried = normalizeForeverStructuredObservation({ ...pet, petSpells: { ...pet.petSpells, lastAttemptStale: true, lastAttemptAt: 100, lastAttemptError: "No active pet" } }, "forever", "Hero", "Hallo", 99);
+  assert.equal((carried?.petSpells as any).status.state, "LAST_SEEN");
+  assert.equal((carried?.petSpells as any).observedAt, 90, "a failed later capture does not refresh observation time");
+});
+
 test("Forever profession recipes accept the validated partial catalogue shape from any well-formed Forever build", () => {
   const recipeData = { formatVersion: 1, ownerScope: "CHARACTER", coverage: { state: "PARTIAL", candidateCompleteness: "UNKNOWN", returnedRecipeCount: 1, uniqueCandidateCount: 1 }, professions: [{ baseSkillLineID: 164, skillLineID: 2938, evidence: "OBSERVED", observedAt: 100, recipes: [{ recipeID: 2660, learned: true, learnedState: "OBSERVED_TRUE", evidence: "OBSERVED", observedAt: 100, outputItemID: 2862, reagentSlots: [{ quantityRequired: 1, reagents: [{ itemID: 2835 }] }] }] }] };
   const recipes = { observedAt: 100, capture: 59, revision: 2, source: "client", data: recipeData };

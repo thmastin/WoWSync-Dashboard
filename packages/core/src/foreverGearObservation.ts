@@ -19,6 +19,7 @@ export interface ForeverStructuredObservation {
   talents?: Record<string, unknown>;
   reputation?: Record<string, unknown>;
   classSpellCatalog?: Record<string, unknown>;
+  petSpells?: Record<string, unknown>;
   /** The latest failed profession-recipe capture (GearExport lastAttemptError/At); absent after a success. */
   recipeCaptureAttempt?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
@@ -43,6 +44,10 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     const s = raw as Record<string, unknown>;
     if (typeof s.observedAt !== "number" || !Number.isFinite(s.observedAt) || s.data === undefined) return undefined;
     const data = object(s.data);
+    if (key === "petSpells" && data) {
+      const lastSeen = s.lastAttemptStale === true;
+      return { ...s, status: { state: lastSeen ? "LAST_SEEN" : "OBSERVED", ...(typeof s.reason === "string" ? { reason: s.reason } : {}) }, data };
+    }
     // Current GearExport Classic/Forever collectors identify the client in data.clientFamily
     // and name quest rows `quests`; older adapters already use `active` plus clientProfile/source.
     if (key === "quests" && data && Array.isArray(data.quests) && data.evidence === "OBSERVED") {
@@ -118,6 +123,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("bank") ? { bank: section("bank") } : {}),
     ...(section("quests") ? { quests: section("quests") } : {}),
     ...(section("talents") ? { talents: section("talents") } : {}),
+    ...(section("petSpells") ? { petSpells: section("petSpells") } : {}),
     ...(section("reputation") ? { reputation: section("reputation") } : {}),
     ...(section("classSpellCatalog") ? { classSpellCatalog: section("classSpellCatalog") } : {}),
     ...(section("recipeCaptureAttempt") && typeof object(section("recipeCaptureAttempt")!.data)?.error === "string" ? { recipeCaptureAttempt: section("recipeCaptureAttempt") } : {}),
