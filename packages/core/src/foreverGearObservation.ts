@@ -335,7 +335,7 @@ export function mergeForeverStructuredObservation(existing: ForeverStructuredObs
     conflict = true;
   }
   if (incoming.sourceCharacterGuidConflict || existing.sourceCharacterGuidConflict) value.sourceCharacterGuidConflict = true;
-  for (const key of ["equipment", "bags", "bank", "quests", "talents", "reputation", "classSpellCatalog", "recipeCaptureAttempt"] as const) {
+  for (const key of ["equipment", "bags", "bank", "quests", "talents", "petSpells", "reputation", "classSpellCatalog", "recipeCaptureAttempt"] as const) {
     const before = existing[key]; const next = incoming[key];
     if (!next) continue;
     if (!before) { value[key] = next; updated = true; continue; }
