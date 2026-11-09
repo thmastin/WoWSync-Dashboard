@@ -177,6 +177,39 @@ test("synthetic pet spell read is separate, exact-identity selected, and preserv
   } finally { store.close(); }
 });
 
+test("[SYNTHETIC] duplicate Forever export merges a pet observation added after the text snapshot", () => {
+  const store = new SqliteSnapshotStore(":memory:");
+  try {
+    const generatedAt = NOW;
+    const raw = buildWowSyncExport({ generatedAt, character: { name: "Hallo", surname: "Ashwick", realm: "Realm 11", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70790", interface: "16001" } });
+    const base = { clientProfile: "Forever:1.60.1:70790:16001", name: "Hallo", realm: "Realm 11", generatedAt, sourceCharacterGuid: "Player-HALLO" };
+
+    store.importSnapshot(raw, { foreverGearObservation: base });
+    const pet = { guid: "Pet-HALLO-VOIDWALKER", name: "Mezzkresh", family: "Voidwalker", level: 18 };
+    const abilities = [
+      { spellID: 3716, name: "Torment", rank: "Rank 1" },
+      { spellID: 7812, name: "Sacrifice", rank: "Rank 1" },
+      { spellID: 17767, name: "Consume Shadows", rank: "Rank 1" },
+    ];
+    const duplicate = store.importSnapshot(raw, { foreverGearObservation: {
+      ...base,
+      petSpells: { observedAt: NOW + 1, completeness: "complete", data: { pet, entries: abilities, coverage: "Forever active-pet spellbook" } },
+    } });
+
+    assert.equal(duplicate.isDuplicate, true, "the WOWSYNC v1 text is unchanged");
+    assert.equal(duplicate.foreverGearObservation, "updated", "the structured sidecar merge records the new pet section");
+    const result = new DashboardReadModel(store, () => NOW + 2).getCharacterPetSpells({ version: "forever", name: "Hallo", realm: "Realm 11", surname: "Ashwick" });
+    assert.equal(result.status, "FOUND");
+    if (result.status === "FOUND") {
+      assert.equal(result.value.provenance.state, "OBSERVED");
+      assert.equal(result.value.provenance.observedAt, NOW + 1);
+      assert.equal(result.value.data?.pet?.guid, pet.guid);
+      assert.deepEqual(result.value.data?.abilities?.items.map((row) => row.spellID), [3716, 7812, 17767]);
+      assert.deepEqual(result.value.data?.abilities?.items.map((row) => row.name), ["Torment", "Sacrifice", "Consume Shadows"]);
+    }
+  } finally { store.close(); }
+});
+
 test("[LIVE OBSERVATION FIXTURE: user-supplied Forever 70790 probe] Voidwalker, no pet, then Imp keep identity and timestamps separate", () => {
   const store = new SqliteSnapshotStore(":memory:");
   try {
