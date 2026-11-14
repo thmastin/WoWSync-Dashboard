@@ -112,19 +112,17 @@ test("malformed SavedVariables fail loudly and read nothing: truncated, garbled,
     ["truncated mid-write", good.slice(0, Math.floor(good.length / 2)), /not a SavedVariables file this tool can read as data.*Nothing was sent/s],
     ["garbled", good.replace('["characters"] = {', '["characters"] = ???'), /can read as data/],
     ["no WoWSyncDB", 'GearExportDB = {\r\n["exports"] = {\r\n},\r\n}\r\n', /has no WoWSyncDB/],
-    ["future schema", savedVariables([VIREK], { schemaVersion: 3 }), /schemaVersion 3 is not supported/],
+    ["future schema", savedVariables([VIREK], { schemaVersion: 4 }), /schemaVersion 4 is not supported/],
   ];
   for (const [label, text, expected] of cases) {
     assert.throws(() => readSavedExports(svFile(text)), (e) => e instanceof BridgeError && expected.test(e.message), label);
   }
 });
 
-test("schema 2 SavedVariables with pruned archive data still imports the latest export", () => {
-  const source = savedVariables([VIREK], { schemaVersion: 2 }).replace(
-    '["sections"] = {',
-    '["archivedCaptures"] = {}, ["sections"] = { ["forever70291Evidence"] = nil,',
-  );
-  const parsed = parseSavedExports(source, "schema-2-pruned-fixture");
+test("schema 3 SavedVariables with pruned archives and evidence still imports the latest export", () => {
+  // The fixture omits archivedCaptures and forever70291Evidence, as schema 3 migration does.
+  const source = savedVariables([VIREK], { schemaVersion: 3 });
+  const parsed = parseSavedExports(source, "schema-3-pruned-fixture");
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0].name, VIREK.name);
   assert.equal(parsed[0].text, VIREK.text);

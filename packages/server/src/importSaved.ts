@@ -355,7 +355,7 @@ export function parseSavedExports(source: string, filePath: string): SavedExport
   if (db === undefined) throw new BridgeError(`${filePath} has no WoWSyncDB variable: it is not GearExport's SavedVariables (or GearExport has never saved).`);
   if (!isLuaTable(db)) throw new BridgeError("WoWSyncDB is not a table.");
   const schema = luaGet(db, "schemaVersion");
-  if (schema !== undefined && schema !== 1 && schema !== 2) throw new BridgeError(`WoWSyncDB schemaVersion ${String(schema)} is not supported by this tool (expected 1 or 2).`);
+  if (schema !== undefined && schema !== 1 && schema !== 2 && schema !== 3) throw new BridgeError(`WoWSyncDB schemaVersion ${String(schema)} is not supported by this tool (expected 1, 2, or 3).`);
   const characters = luaGet(db, "characters");
   if (characters === undefined || characters === null) return [];
   if (!isLuaTable(characters)) throw new BridgeError("WoWSyncDB.characters is not a table.");
