@@ -20,6 +20,7 @@ export interface ForeverStructuredObservation {
   reputation?: Record<string, unknown>;
   classSpellCatalog?: Record<string, unknown>;
   petSpells?: Record<string, unknown>;
+  trainer?: Record<string, unknown>;
   /** The latest failed profession-recipe capture (GearExport lastAttemptError/At); absent after a success. */
   recipeCaptureAttempt?: Record<string, unknown>;
   itemMetadata?: Record<string, unknown>;
@@ -124,6 +125,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("quests") ? { quests: section("quests") } : {}),
     ...(section("talents") ? { talents: section("talents") } : {}),
     ...(section("petSpells") ? { petSpells: section("petSpells") } : {}),
+    ...(section("trainer") ? { trainer: section("trainer") } : {}),
     ...(section("reputation") ? { reputation: section("reputation") } : {}),
     ...(section("classSpellCatalog") ? { classSpellCatalog: section("classSpellCatalog") } : {}),
     ...(section("recipeCaptureAttempt") && typeof object(section("recipeCaptureAttempt")!.data)?.error === "string" ? { recipeCaptureAttempt: section("recipeCaptureAttempt") } : {}),
