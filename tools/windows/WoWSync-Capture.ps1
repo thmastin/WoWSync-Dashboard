@@ -175,6 +175,11 @@ function Repair-CaptureStartup {
 }
 
 function Run-Supervisor {
+    # The logon task runs a VBS shim that exits immediately, so Task Scheduler's
+    # IgnoreNew never sees a running instance. Enforce one supervisor here.
+    $supervisorCreated = $false
+    $supervisorMutex = New-Object System.Threading.Mutex($true, 'Local\WoWSyncCaptureSupervisor', [ref]$supervisorCreated)
+    if (-not $supervisorCreated) { $supervisorMutex.Dispose(); return }
     $config = Get-Config
     $secureCipher = Get-Content -LiteralPath $TokenPath -Raw
     $secureToken = ConvertTo-SecureString $secureCipher
@@ -229,18 +234,30 @@ function Run-Supervisor {
         Stop-Child $ssh
         Remove-Item Env:WOWSYNC_CAPTURE_TOKEN -ErrorAction SilentlyContinue
         Remove-Variable tokenValue -ErrorAction SilentlyContinue
+        try { $supervisorMutex.ReleaseMutex() } catch { }
+        $supervisorMutex.Dispose()
         Write-JsonAtomic $SupervisorPath ([ordered]@{ target = 'DEV'; state = 'stopped'; heartbeatAt = (Get-Date).ToUniversalTime().ToString('o'); tunnelRunning = $false; watcherRunning = $false; mcpTunnelRunning = $false; dashboardUrl = 'http://127.0.0.1:4174' }) -BestEffort
     }
+}
+
+function Get-SupervisorProcesses {
+    @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'WoWSync-Capture\.ps1"?\s+-Mode\s+Run' })
+}
+
+function Stop-SupervisorTree($Process) {
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$($Process.ProcessId)" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $Process.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
 function Stop-Capture {
     if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { return }
     New-Item -ItemType File -Path $StopPath -Force | Out-Null
+    # The task itself exits as soon as the VBS shim does, so wait on the real supervisors.
     $until = (Get-Date).AddSeconds(30)
-    while ((Get-ScheduledTask -TaskName $TaskName).State -eq 'Running' -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 500 }
+    while ((Get-SupervisorProcesses).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 500 }
+    foreach ($process in Get-SupervisorProcesses) { Stop-SupervisorTree $process }
     if ((Get-ScheduledTask -TaskName $TaskName).State -eq 'Running') { Stop-ScheduledTask -TaskName $TaskName }
 }
-
 function Show-CaptureStatus {
     $taskState = 'Not installed'
     try {
