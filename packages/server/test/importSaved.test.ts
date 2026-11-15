@@ -585,6 +585,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     guid, name: "Hallo", realm: "Hallo", text, generatedAt, captureProfile: "Forever:1.60.1:70291:16001",
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "partial", data: { slots: { "16": { itemID: 123, itemString: "item:123:4:5", name: "Observed" } } } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { containers: [{ id: 0, slots: [{ itemID: 124, itemString: "item:124:0:7", name: "Carried candidate", count: 2 }] }] } }),
+    equipmentSets: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { state: "OBSERVED", sets: [{ setID: 3, name: "Travel", icon: 135637, isEquipped: true, itemLocations: [{ itemID: 124, itemString: "item:124:0:7" }] }] } }),
     quests: toLua({ observedAt: generatedAt + 7, completeness: "partial", data: { formatVersion: 1, clientProfile: "Forever:1.60.1:70291:16001", clientFamily: "Forever", source: "C_QuestLog", observedAt: generatedAt + 7, activeState: "OBSERVED", activeCompleteness: "partial", activeCounts: { visibleEntries: 1, quests: 1, scannedRows: 1, returnedQuests: 1 }, active: [{ questID: 1234, title: "A Captured Quest", titleState: "OBSERVED", objectiveState: "UNKNOWN", completionState: "OBSERVED", isComplete: false, turnInReadinessState: "UNKNOWN" }], completedHistory: { state: "UNKNOWN", questIDs: [] }, issues: ["ReadyForTurnIn unknown"] } }),
     forever70291Evidence: toLua({ observedAt: generatedAt + 3, completeness: "partial", data: {
       capturedAt: generatedAt + 6,
@@ -603,6 +604,7 @@ test("END TO END: Forever import:saved carries the structured sidecar and WoWSyn
     assert.equal(snapshot.parsed.foreverGearObservation?.sourceCharacterGuid, guid);
     assert.equal(snapshot.parsed.foreverGearObservation?.equipment?.observedAt, generatedAt + 1);
     assert.equal(snapshot.parsed.foreverGearObservation?.bags?.observedAt, generatedAt + 2);
+    assert.equal((snapshot.parsed.foreverGearObservation?.equipmentSets?.data as any)?.sets[0]?.name, "Travel");
     assert.equal(snapshot.parsed.foreverGearObservation?.itemEvidence?.observedAt, generatedAt + 3);
     assert.equal(snapshot.parsed.foreverGearObservation?.quests?.observedAt, generatedAt + 7);
     assert.equal((snapshot.parsed.foreverGearObservation?.itemEvidence?.data as any)?.items[0]?.itemString, "item:124:0:7");
@@ -791,6 +793,7 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
     equipment: toLua({ observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } }),
     bags: toLua({ observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } }),
     bank: toLua({ observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} }),
+    equipmentSets: toLua({ observedAt: generatedAt + 2, completeness: "complete", data: { state: "OBSERVED", sets: [{ setID: 7, name: "Travel", itemLocations: [] }] } }),
     itemMetadata: toLua({ "123": { classID: 4 } }),
   };
   const [saved] = parseSavedExports(savedVariables([record]), "fixture");
@@ -799,6 +802,7 @@ test("Forever 70291 bridge carries identity-matched structured inventory timesta
     equipment: { observedAt: generatedAt + 1, completeness: "complete", source: "test", data: { slots: {} } },
     bags: { observedAt: generatedAt + 2, completeness: "partial", data: { containers: {} } },
     bank: { observedAt: generatedAt + 2, completeness: "unknown", reason: "not visited", data: {} },
+    equipmentSets: { observedAt: generatedAt + 2, completeness: "complete", data: { state: "OBSERVED", sets: [{ setID: 7, name: "Travel", itemLocations: {} }] } },
     itemMetadata: { "123": { classID: 4 } },
   });
   const wrongProfile = parseSavedExports(savedVariables([{ ...record, captureProfile: "Forever:1.60.1:69913:16001" }]), "fixture")[0];

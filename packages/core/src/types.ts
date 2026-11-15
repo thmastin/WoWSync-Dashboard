@@ -95,6 +95,11 @@ export interface InventoryItemRecord {
   qty?: number;
   bound?: string;
   vendorEachCopper?: number;
+  enchantID?: number;
+  enchantName?: string;
+  enchantNameState?: "OBSERVED" | "UNKNOWN";
+  gemIDs?: number[];
+  isEnchanted?: boolean | "UNKNOWN";
 }
 
 export interface InventorySection {
