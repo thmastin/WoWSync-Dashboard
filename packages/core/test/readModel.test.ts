@@ -227,7 +227,7 @@ test("Forever observation resolves within its version and reports observed varia
   const store = new SqliteSnapshotStore(":memory:");
   try {
     const raw = buildWowSyncExport({ generatedAt: NOW - 5, character: { name: "Hallo", realm: "Hallo", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" }, equipment: { slots: [{ slot: 16, slotName: "Main Hand", itemRef: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 }] }, bags: { containers: [{ id: 0, capacity: 16, items: [{ itemRef: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", qty: 1 }] }] }, bank: { unknown: true } });
-    const sidecar = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW - 5, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: NOW - 4, completeness: "complete", data: { slots: { "16": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 } } } }, bags: { observedAt: NOW - 3, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", count: 1 } } }] } }, bank: { observedAt: NOW - 3, completeness: "unknown", reason: "not observed", data: {} }, itemMetadata: {} };
+    const sidecar = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hallo", realm: "Hallo", generatedAt: NOW - 5, sourceCharacterGuid: "Player-1-HALLO", equipment: { observedAt: NOW - 4, completeness: "complete", data: { slots: { "16": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0", name: "Observed", itemLevel: 2 } } } }, bags: { observedAt: NOW - 3, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 42, itemString: "item:42:0:0:0:0:0:0:0:123:0:0:0", name: "Variant", count: 1, enchantID: 0 } } }] } }, bank: { observedAt: NOW - 3, completeness: "unknown", reason: "not observed", data: {} }, equipmentSets: { observedAt: NOW - 3, completeness: "complete", data: { state: "OBSERVED", sets: [{ setID: 7, name: "Travel", icon: 135637, isEquipped: true, itemLocations: [{ itemID: 42 }] }] } }, itemMetadata: {} };
     const first = store.importSnapshot(raw, { foreverGearObservation: sidecar });
     const newer = structuredClone(sidecar);
     newer.equipment.observedAt = NOW - 1;
@@ -245,12 +245,21 @@ test("Forever observation resolves within its version and reports observed varia
       assert.equal(result.value.provenance.version, "forever");
       assert.equal(result.value.data?.equipment.items[0]?.itemRef, "item:43:9");
       assert.equal(result.value.data?.equipment.items[0]?.provenance, "OBSERVED");
+      assert.equal((result.value.data?.equipment.items[0] as any)?.isEnchanted, true);
+      assert.equal((result.value.data?.equipmentSets as any)?.sets[0]?.name, "Travel");
       assert.equal(result.value.data?.carried?.items?.[0]?.itemRef, "item:42:0:0:0:0:0:0:0:123:0:0:0");
+      assert.equal(result.value.data?.carried?.items?.[0]?.isEnchanted, false);
       assert.equal(result.value.data?.evaluationCandidates.state, "UNKNOWN");
       assert.equal(result.value.data?.unknowns.transferability, "UNKNOWN");
       assert.equal(result.value.data?.bank.state, "UNKNOWN");
       assert.equal(result.value.data?.identity.accountScope, "UNKNOWN");
     }
+    const bagRead = read.getCharacterBags({ version: "forever", name: "Hallo", realm: "Hallo" });
+    assert.equal(bagRead.status, "FOUND");
+    if (bagRead.status === "FOUND") assert.equal(bagRead.value.data?.items?.[0]?.isEnchanted, false, "character bags read exposes explicit enchant state");
+    const storageRead = read.getCharacterStorage({ version: "forever", name: "Hallo", realm: "Hallo", storage: "bags" });
+    assert.equal(storageRead.status, "FOUND");
+    if (storageRead.status === "FOUND") assert.equal((storageRead.value.data?.items?.[0] as any)?.isEnchanted, false, "character storage read exposes the structured enchant state");
     const wrongVersion = read.getForeverGearObservation({ version: "retail", name: "Hallo", realm: "Hallo" });
     assert.equal(wrongVersion.status, "FOUND");
     if (wrongVersion.status === "FOUND") assert.equal(wrongVersion.value.data, undefined);

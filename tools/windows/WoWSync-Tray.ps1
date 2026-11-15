@@ -92,6 +92,10 @@ function Format-Age($Seconds) {
     if ($Seconds -lt 172800) { return ('{0} h ago' -f [Math]::Round($Seconds / 3600)) }
     return ('{0} days ago' -f [Math]::Round($Seconds / 86400))
 }
+function Limit-NotifyIconText([string]$Text) {
+    if ($Text.Length -le 63) { return $Text }
+    return $Text.Substring(0, 62) + '…'
+}
 
 # Same health rules as WoWSync-Capture.ps1 -Mode Status, read from the files the collector writes.
 function Get-Health {
@@ -184,8 +188,8 @@ function Update-Tray {
     $script:lastHealth = $health
     $tray.Icon = $Icons[$health.State]
     $tip = "WoWSync: $($health.Summary)`n$($health.LastCapture)"
-    if ($tip.Length -gt 127) { $tip = $tip.Substring(0, 127) }
-    $tray.Text = $tip
+    $tray.Text = Limit-NotifyIconText $tip
+    if ($tray.Text.Length -gt 63) { throw 'NotifyIcon.Text exceeded the 63-character safety limit.' }
     $headerItem.Text = "WoWSync: $($health.Summary)"
     $lastItem.Text = "Last capture: $($health.LastCapture)"
     $pendingItem.Text = "Queued: $($health.Pending)"

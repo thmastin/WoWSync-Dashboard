@@ -15,6 +15,7 @@ export interface ForeverStructuredObservation {
   equipment?: Record<string, unknown>;
   bags?: Record<string, unknown>;
   bank?: Record<string, unknown>;
+  equipmentSets?: Record<string, unknown>;
   quests?: Record<string, unknown>;
   talents?: Record<string, unknown>;
   reputation?: Record<string, unknown>;
@@ -31,7 +32,27 @@ export interface ForeverStructuredObservation {
 type ForeverSectionState = "OBSERVED" | "LAST_SEEN" | "UNKNOWN";
 type ForeverEquipmentLike = { status: { state: ForeverSectionState; observedAt?: number }; slots: Array<{ slot: number; slotName: string; empty: boolean; itemRef?: string; name?: string; itemLevel?: string }> };
 type ForeverInventoryLike = { status: { state: ForeverSectionState; observedAt?: number }; items: Array<{ itemRef?: string; name?: string; qty?: number }> };
-type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; nameSource?: string; nameResolution: "OBSERVED" | "UNKNOWN"; quantity?: number; bound?: boolean; bindingState?: string; quality?: number; classID?: number; subClassID?: number; equipLoc?: string; requiredLevel?: number; vendorCopper?: number; itemMetadataState?: "OBSERVED" | "UNKNOWN"; requiredProfession?: string; requiredSkill?: number; recipeAlreadyKnown?: boolean; foodKind?: "FOOD" | "DRINK" | "BUFF_FOOD" | "UNKNOWN"; foodStackSize?: number; tooltipText?: string; spellText?: string; provenance: ForeverSectionState };
+type ForeverCarriedItem = { container?: number; slot?: number; itemID?: number; itemRef?: string; itemIdentity?: "OBSERVED" | "PARTIAL" | "UNKNOWN"; name?: string; nameSource?: string; nameResolution: "OBSERVED" | "UNKNOWN"; quantity?: number; bound?: boolean; bindingState?: string; quality?: number; classID?: number; subClassID?: number; equipLoc?: string; requiredLevel?: number; vendorCopper?: number; enchantID?: number; enchantName?: string; enchantNameState?: "OBSERVED" | "UNKNOWN"; gemIDs?: number[]; isEnchanted: boolean | "UNKNOWN"; equipmentSets?: string[]; equipmentSetsState?: "OBSERVED" | "UNKNOWN"; itemMetadataState?: "OBSERVED" | "UNKNOWN"; requiredProfession?: string; requiredSkill?: number; recipeAlreadyKnown?: boolean; foodKind?: "FOOD" | "DRINK" | "BUFF_FOOD" | "UNKNOWN"; foodStackSize?: number; tooltipText?: string; spellText?: string; provenance: ForeverSectionState };
+
+function itemEnchantFields(item: Record<string, unknown>) {
+  const itemString = typeof item.itemString === "string" ? item.itemString : undefined;
+  const fields = itemString?.split(":");
+  let enchantID = typeof item.enchantID === "number" && Number.isSafeInteger(item.enchantID) && item.enchantID >= 0 ? item.enchantID : undefined;
+  if (enchantID === undefined && fields?.[0] === "item" && fields.length >= 3 && fields[2] !== "") {
+    const parsed = Number(fields[2]);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) enchantID = parsed;
+  }
+  let isEnchanted: boolean | "UNKNOWN" = "UNKNOWN";
+  if (itemString) {
+    if (fields && fields[0] === "item" && fields.length >= 3) {
+      const parsed = fields[2] === "" ? 0 : Number(fields[2]);
+      if (Number.isSafeInteger(parsed) && parsed >= 0) enchantID ??= parsed;
+      if (enchantID !== undefined || fields[2] === "") isEnchanted = (enchantID ?? 0) > 0;
+    }
+  }
+  const gemIDs = Array.isArray(item.gemIDs) ? item.gemIDs.filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id) && id >= 0) : undefined;
+  return { ...(enchantID !== undefined ? { enchantID } : {}), ...(typeof item.enchantName === "string" ? { enchantName: item.enchantName } : {}), ...(item.enchantNameState === "OBSERVED" || item.enchantNameState === "UNKNOWN" ? { enchantNameState: item.enchantNameState as "OBSERVED" | "UNKNOWN" } : enchantID && enchantID > 0 ? { enchantNameState: "UNKNOWN" as const } : {}), ...(gemIDs ? { gemIDs } : {}), isEnchanted };
+}
 
 
 export function normalizeForeverStructuredObservation(value: unknown, version: VersionOrUnknown, name?: string, realm?: string, generatedAt?: number): ForeverStructuredObservation | undefined {
@@ -122,6 +143,7 @@ export function normalizeForeverStructuredObservation(value: unknown, version: V
     ...(section("equipment") ? { equipment: section("equipment") } : {}),
     ...(section("bags") ? { bags: section("bags") } : {}),
     ...(section("bank") ? { bank: section("bank") } : {}),
+    ...(section("equipmentSets") ? { equipmentSets: section("equipmentSets") } : {}),
     ...(section("quests") ? { quests: section("quests") } : {}),
     ...(section("talents") ? { talents: section("talents") } : {}),
     ...(section("petSpells") ? { petSpells: section("petSpells") } : {}),
@@ -159,7 +181,7 @@ function object(value: unknown): Record<string, unknown> | undefined {
 
 function structuredEquipment(section: Record<string, unknown> | undefined, fallback: ForeverEquipmentLike["slots"], provenance: string) {
   const rawSlots = object(section?.data)?.slots;
-  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot] ?? slot.slotName, itemID: undefined, itemRef: slot.itemRef, itemIdentity: slot.itemRef ? "OBSERVED" as const : "UNKNOWN" as const, name: slot.name, nameSource: slot.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: slot.name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: slot.itemLevel, provenance: slot.itemRef ? provenance : "UNKNOWN" as const }));
+  if (!rawSlots || typeof rawSlots !== "object") return fallback.filter((slot) => !slot.empty).map((slot) => ({ slot: slot.slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot.slot] ?? slot.slotName, itemID: undefined, itemRef: slot.itemRef, itemIdentity: slot.itemRef ? "OBSERVED" as const : "UNKNOWN" as const, name: slot.name, nameSource: slot.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: slot.name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: slot.itemLevel, isEnchanted: "UNKNOWN" as const, provenance: slot.itemRef ? provenance : "UNKNOWN" as const }));
   return entries(rawSlots).flatMap(([key, value]) => {
     const item = object(value);
     if (!item) return [];
@@ -168,13 +190,13 @@ function structuredEquipment(section: Record<string, unknown> | undefined, fallb
     const itemString = typeof item.itemString === "string" ? item.itemString : undefined;
     const identified = itemID !== undefined || itemString !== undefined;
     const name = typeof item.name === "string" && item.name.length > 0 ? item.name : undefined;
-    return [{ slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot] ?? `Slot ${key}`, itemID, itemRef: itemString ?? (itemID === undefined ? undefined : `item:${itemID}`), itemIdentity: itemString ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? (typeof item.nameSource === "string" ? item.nameSource : "WOWSYNC_V1_OBSERVED_NAME") : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, provenance: identified ? provenance : "UNKNOWN" as const }];
+    return [{ slot, slotName: FOREVER_EQUIPMENT_SLOT_LABELS[slot] ?? `Slot ${key}`, itemID, itemRef: itemString ?? (itemID === undefined ? undefined : `item:${itemID}`), itemIdentity: itemString ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? (typeof item.nameSource === "string" ? item.nameSource : "WOWSYNC_V1_OBSERVED_NAME") : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, itemLevel: typeof item.itemLevel === "number" ? String(item.itemLevel) : undefined, ...itemEnchantFields(item), ...(Array.isArray(item.equipmentSets) && item.equipmentSets.every((setName) => typeof setName === "string") ? { equipmentSets: item.equipmentSets as string[] } : {}), ...(item.equipmentSetsState === "OBSERVED" || item.equipmentSetsState === "UNKNOWN" ? { equipmentSetsState: item.equipmentSetsState } : {}), provenance: identified ? provenance : "UNKNOWN" as const }];
   });
 }
 
 function structuredBags(section: Record<string, unknown> | undefined, fallback: ForeverInventoryLike["items"], provenance: ForeverSectionState): ForeverCarriedItem[] {
   const containers = object(section?.data)?.containers;
-  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, itemIdentity: item.itemRef ? "OBSERVED" : "UNKNOWN", name: item.name, nameSource: item.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: item.name ? "OBSERVED" : "UNKNOWN", quantity: item.qty, provenance }));
+  if (!containers || typeof containers !== "object") return fallback.map((item) => ({ itemRef: item.itemRef, itemIdentity: item.itemRef ? "OBSERVED" : "UNKNOWN", name: item.name, nameSource: item.name ? "WOWSYNC_V1_OBSERVED_NAME" : undefined, nameResolution: item.name ? "OBSERVED" : "UNKNOWN", quantity: item.qty, isEnchanted: "UNKNOWN" as const, provenance }));
   return entries(containers).flatMap(([containerKey, containerValue]) => {
     const container = object(containerValue);
     if (!container) return [];
@@ -184,7 +206,7 @@ function structuredBags(section: Record<string, unknown> | undefined, fallback: 
       const itemID = typeof item.itemID === "number" ? item.itemID : undefined;
       const name = typeof item.name === "string" && item.name.length > 0 ? item.name : undefined;
       const metadataObserved = item.itemMetadataState === "OBSERVED";
-      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? "C_Container.GetContainerItemInfo" : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, quantity: typeof item.count === "number" ? item.count : undefined, ...(typeof item.bound === "boolean" ? { bound: item.bound } : {}), ...(typeof item.bindingState === "string" ? { bindingState: item.bindingState } : {}), ...(item.itemMetadataState === "OBSERVED" || item.itemMetadataState === "UNKNOWN" ? { itemMetadataState: item.itemMetadataState } : {}), ...(metadataObserved ? { ...Object.fromEntries(["quality", "classID", "subClassID", "requiredLevel", "requiredSkill", "vendorCopper", "foodStackSize"].flatMap((key) => typeof item[key] === "number" ? [[key, item[key]]] : [])), ...(typeof item.equipLoc === "string" ? { equipLoc: item.equipLoc } : {}), ...(typeof item.requiredProfession === "string" ? { requiredProfession: item.requiredProfession } : {}), ...(typeof item.recipeAlreadyKnown === "boolean" ? { recipeAlreadyKnown: item.recipeAlreadyKnown } : {}), ...(typeof item.foodKind === "string" && ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(item.foodKind) ? { foodKind: item.foodKind as ForeverCarriedItem["foodKind"] } : {}), ...(typeof item.tooltipText === "string" ? { tooltipText: item.tooltipText } : {}), ...(typeof item.spellText === "string" ? { spellText: item.spellText } : {}) } : {}), provenance }];
+      return [{ container: typeof container.id === "number" ? container.id : Number(containerKey), slot: Number(slot), itemID, itemRef: typeof item.itemString === "string" ? item.itemString : itemID === undefined ? undefined : `item:${itemID}`, itemIdentity: typeof item.itemString === "string" ? "OBSERVED" as const : itemID === undefined ? "UNKNOWN" as const : "PARTIAL" as const, name, nameSource: name ? "C_Container.GetContainerItemInfo" : undefined, nameResolution: name ? "OBSERVED" as const : "UNKNOWN" as const, quantity: typeof item.count === "number" ? item.count : undefined, ...itemEnchantFields(item), ...(Array.isArray(item.equipmentSets) && item.equipmentSets.every((name) => typeof name === "string") ? { equipmentSets: item.equipmentSets as string[] } : {}), ...(item.equipmentSetsState === "OBSERVED" || item.equipmentSetsState === "UNKNOWN" ? { equipmentSetsState: item.equipmentSetsState } : {}), ...(typeof item.bound === "boolean" ? { bound: item.bound } : {}), ...(typeof item.bindingState === "string" ? { bindingState: item.bindingState } : {}), ...(item.itemMetadataState === "OBSERVED" || item.itemMetadataState === "UNKNOWN" ? { itemMetadataState: item.itemMetadataState } : {}), ...(metadataObserved ? { ...Object.fromEntries(["quality", "classID", "subClassID", "requiredLevel", "requiredSkill", "vendorCopper", "foodStackSize"].flatMap((key) => typeof item[key] === "number" ? [[key, item[key]]] : [])), ...(typeof item.equipLoc === "string" ? { equipLoc: item.equipLoc } : {}), ...(typeof item.requiredProfession === "string" ? { requiredProfession: item.requiredProfession } : {}), ...(typeof item.recipeAlreadyKnown === "boolean" ? { recipeAlreadyKnown: item.recipeAlreadyKnown } : {}), ...(typeof item.foodKind === "string" && ["FOOD", "DRINK", "BUFF_FOOD", "UNKNOWN"].includes(item.foodKind) ? { foodKind: item.foodKind as ForeverCarriedItem["foodKind"] } : {}), ...(typeof item.tooltipText === "string" ? { tooltipText: item.tooltipText } : {}), ...(typeof item.spellText === "string" ? { spellText: item.spellText } : {}) } : {}), provenance }];
     });
   });
 }
@@ -569,6 +591,7 @@ export function buildForeverGearObservation(input: {
     evaluationCandidates: { state: evaluationState, source: evidence?.source ?? "UNKNOWN", ...(typeof evidence?.observedAt === "number" ? { observedAt: evidence.observedAt, freshness: freshness(evidence.observedAt) } : {}), items: evaluationItems, unclassifiedItems, carriedBuckets, reason: evaluationReason, unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" } },
     unknowns: { eligibility: "UNKNOWN", suitability: "UNKNOWN", upgradeStatus: "UNKNOWN", transferability: "UNKNOWN" },
     bank: { state: useStructuredBank ? structuredState(structured?.bank) : bank.status.state, ...(bankAt !== undefined ? { observedAt: bankAt, freshness: freshness(bankAt) } : {}), source: useStructuredBank ? "Forever WoWSyncDB character bank tabs" : "WOWSYNC v1 character bank", items: bankItems, reason: bank.status.state === "UNKNOWN" && !useStructuredBank ? "Bank contents were not observed; unavailable is not empty." : undefined },
+    equipmentSets: structured?.equipmentSets?.data ?? { state: "UNKNOWN", reason: "Equipment set observations were not captured." },
     quests: buildForeverQuestObservation({ section: structured?.quests, profile: structured?.clientProfile ?? "UNKNOWN", identity: { identityKey: identity.identityKey, name: identity.name, realm: identity.realm }, now: input.now }),
     trainerEvidence: evidenceData?.trainerEvidence ?? { state: "UNKNOWN", reason: "The Forever trainer window has not been observed with raw service data." },
     metadataSource: structured?.itemMetadata ? "Forever WoWSyncDB itemMetadata" : "UNKNOWN",

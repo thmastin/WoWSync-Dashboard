@@ -359,6 +359,13 @@ export interface CharacterBagItemRead {
   name?: string;
   itemID?: number;
   itemRef?: string;
+  enchantID?: number;
+  enchantName?: string;
+  enchantNameState?: "OBSERVED" | "UNKNOWN";
+  gemIDs?: number[];
+  isEnchanted: boolean | "UNKNOWN";
+  equipmentSets?: string[];
+  equipmentSetsState?: "OBSERVED" | "UNKNOWN";
   quantity?: number;
   quality: { state: "UNKNOWN"; reason: string };
   bound: { state: "OBSERVED"; value: boolean } | { state: "UNKNOWN"; reason: string };
@@ -763,6 +770,15 @@ function metadataFor(ref: string | undefined, map: Map<number, ItemMetadataView>
   const id = itemIdFromItemRef(ref);
   const value = id === undefined ? undefined : map.get(id);
   return { itemRef: ref, state: value ? "KNOWN" as const : "UNKNOWN" as const, ...(value ? { value } : {}) };
+}
+function enchantedState(itemString: unknown, enchantID: unknown): boolean | "UNKNOWN" {
+  if (typeof itemString !== "string") return "UNKNOWN";
+  const fields = itemString.split(":");
+  if (fields[0] !== "item" || fields.length < 3) return "UNKNOWN";
+  if (typeof enchantID === "number" && Number.isSafeInteger(enchantID) && enchantID >= 0) return enchantID > 0;
+  if (fields[2] === "") return false;
+  const value = Number(fields[2]);
+  return Number.isSafeInteger(value) && value >= 0 ? value > 0 : "UNKNOWN";
 }
 function pageSharedObservation(observation: SharedObservationView | null, query: SharedStorageReadQuery, offset: number, limit: number): PagedSharedObservation | null {
   if (!observation) return null;
@@ -2770,11 +2786,28 @@ export class DashboardReadModel {
       const { offset, limit } = pageBounds(query.offset, query.limit);
       const items = section.items.slice(offset, offset + limit);
       const metadata = metadataByItemRef(this.store, query.version, items.map((item) => item.itemRef));
+      const foreverSection = query.version === "forever" ? snapshot?.parsed.foreverGearObservation?.[query.storage] as Record<string, any> | undefined : undefined;
+      const foreverContainers = foreverSection?.data?.containers;
+      const foreverRows = (Array.isArray(foreverContainers) ? foreverContainers : foreverContainers && typeof foreverContainers === "object" ? Object.values(foreverContainers) : [])
+        .flatMap((container: any) => {
+          const slots = container?.slots;
+          return Array.isArray(slots) ? slots : slots && typeof slots === "object" ? Object.values(slots) : [];
+        }).filter((row: any) => row && typeof row === "object");
+      const enrichedItems = query.version === "forever" ? items.map((item) => {
+        const structured = foreverRows.find((row: any) => typeof row.itemString === "string" && row.itemString === item.itemRef);
+        if (!structured) return { ...item, isEnchanted: "UNKNOWN" as const };
+        const enchantID = typeof structured.enchantID === "number" && Number.isSafeInteger(structured.enchantID) && structured.enchantID >= 0 ? structured.enchantID : undefined;
+        const rowItemString = typeof structured.itemString === "string" ? structured.itemString : undefined;
+        const fields = rowItemString?.split(":");
+        const inferredID = fields?.[0] === "item" && fields.length >= 3 && fields[2] !== "" ? Number(fields[2]) : undefined;
+        const finalEnchantID = enchantID ?? (inferredID !== undefined && Number.isSafeInteger(inferredID) && inferredID >= 0 ? inferredID : undefined);
+        return { ...item, ...(finalEnchantID !== undefined ? { enchantID: finalEnchantID } : {}), ...(typeof structured.enchantName === "string" ? { enchantName: structured.enchantName } : {}), ...(structured.enchantNameState === "OBSERVED" || structured.enchantNameState === "UNKNOWN" ? { enchantNameState: structured.enchantNameState } : {}), isEnchanted: enchantedState(rowItemString, finalEnchantID), ...(Array.isArray(structured.equipmentSets) ? { equipmentSets: structured.equipmentSets.filter((name: unknown): name is string => typeof name === "string") } : {}), ...(structured.equipmentSetsState === "OBSERVED" || structured.equipmentSetsState === "UNKNOWN" ? { equipmentSetsState: structured.equipmentSetsState } : {}) };
+      }) : items;
       const value: CharacterStorageContents = {
         storage: query.storage,
         sectionState: state,
         itemsKnownEmpty: section.itemsKnownEmpty,
-        ...(state === "UNKNOWN" ? {} : { items, containers: section.containers, ...(section.freeSlots !== undefined ? { freeSlots: section.freeSlots } : {}), ...(section.totalSlots !== undefined ? { totalSlots: section.totalSlots } : {}) }),
+        ...(state === "UNKNOWN" ? {} : { items: enrichedItems, containers: section.containers, ...(section.freeSlots !== undefined ? { freeSlots: section.freeSlots } : {}), ...(section.totalSlots !== undefined ? { totalSlots: section.totalSlots } : {}) }),
         metadata: items.map((item) => metadataFor(item.itemRef, metadata)),
         returnedCount: items.length,
         totalCount: section.items.length,
@@ -2843,7 +2876,7 @@ export class DashboardReadModel {
     }
     const items = bagRows.map((item) => {
       const itemID = itemIdFromItemRef(item.itemRef);
-      const structured = metadataRows.find((row: any) => row.itemID === itemID || row.itemString && row.itemString === item.itemRef);
+      const structured = metadataRows.find((row: any) => typeof row.itemString === "string" && row.itemString === item.itemRef);
       const itemMetadataState = structured?.itemMetadataState === "OBSERVED" ? "OBSERVED" as const : "UNKNOWN" as const;
       const recipeItem = /^Recipe:\s*/i.test(item.name ?? "");
       const requirement = recipeItem ? recipeLearningRequirement(query.version, itemID, item.name) : undefined;
@@ -2869,6 +2902,13 @@ export class DashboardReadModel {
       }
       return {
         ...(item.name !== undefined ? { name: item.name } : {}), ...(itemID !== undefined ? { itemID } : {}), ...(item.itemRef !== undefined ? { itemRef: item.itemRef } : {}), ...(item.qty !== undefined ? { quantity: item.qty } : {}),
+        ...(typeof structured?.enchantID === "number" && Number.isSafeInteger(structured.enchantID) && structured.enchantID >= 0 ? { enchantID: structured.enchantID } : {}),
+        ...(typeof structured?.enchantName === "string" ? { enchantName: structured.enchantName } : {}),
+        ...(structured?.enchantNameState === "OBSERVED" || structured?.enchantNameState === "UNKNOWN" ? { enchantNameState: structured.enchantNameState } : {}),
+        ...(Array.isArray(structured?.gemIDs) ? { gemIDs: structured.gemIDs.filter((id: unknown): id is number => typeof id === "number" && Number.isSafeInteger(id) && id >= 0) } : {}),
+        isEnchanted: enchantedState(structured?.itemString, structured?.enchantID),
+        ...(Array.isArray(structured?.equipmentSets) && structured.equipmentSets.every((name: unknown) => typeof name === "string") ? { equipmentSets: structured.equipmentSets } : {}),
+        ...(structured?.equipmentSetsState === "OBSERVED" || structured?.equipmentSetsState === "UNKNOWN" ? { equipmentSetsState: structured.equipmentSetsState } : {}),
         quality: itemMetadataState === "OBSERVED" && typeof structured.quality === "number" ? { state: "OBSERVED" as const, value: structured.quality } : { state: "UNKNOWN" as const, reason: "Bag-row quality metadata is UNKNOWN or unavailable." },
         classID: itemMetadataState === "OBSERVED" && typeof structured.classID === "number" ? { state: "OBSERVED" as const, value: structured.classID } : { state: "UNKNOWN" as const, reason: "Bag-row class metadata is UNKNOWN or unavailable." },
         subClassID: itemMetadataState === "OBSERVED" && typeof structured.subClassID === "number" ? { state: "OBSERVED" as const, value: structured.subClassID } : { state: "UNKNOWN" as const, reason: "Bag-row subclass metadata is UNKNOWN or unavailable." },

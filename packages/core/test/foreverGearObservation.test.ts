@@ -7,7 +7,7 @@ const equipment: EquipmentSection = { status: { state: "OBSERVED", observedAt: 1
 const bags: InventorySection = { status: { state: "OBSERVED", observedAt: 101 }, containers: [], itemsKnownEmpty: false, items: [{ itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade", qty: 1 }, { itemRef: "item:456:0:0:0:0:0:0:0:77:0:0:0", name: "Variant", qty: 2 }] };
 const bank: InventorySection = { status: { state: "UNKNOWN", reason: "Not captured" }, containers: [], itemsKnownEmpty: false, items: [] };
 const identity = { version: "forever" as const, identityKey: "forever::hallo::hero", name: "Hero", realm: "Hallo" };
-const sidecar: ForeverStructuredObservation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hero", realm: "Hallo", generatedAt: 99, sourceCharacterGuid: "Player-1-HERO", equipment: { observedAt: 100, completeness: "complete", data: { slots: { "16": { itemID: 999, itemString: "item:999:4:5", name: "Structured Blade", itemLevel: 2 } } } }, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString: "item:999:4:5", count: 2, name: "Structured Variant" } } }] } }, bank: { observedAt: 101, completeness: "unknown", reason: "not visited", data: {} }, itemMetadata: {} };
+const sidecar: ForeverStructuredObservation = { clientProfile: "Forever:1.60.1:70291:16001", name: "Hero", realm: "Hallo", generatedAt: 99, sourceCharacterGuid: "Player-1-HERO", equipment: { observedAt: 100, completeness: "complete", data: { slots: { "16": { itemID: 999, itemString: "item:999:4:5", name: "Structured Blade", itemLevel: 2, equipmentSets: ["Travel"], equipmentSetsState: "OBSERVED" } } } }, bags: { observedAt: 101, completeness: "partial", data: { containers: [{ id: 0, slots: { "1": { itemID: 999, itemString: "item:999:4:5", count: 2, name: "Structured Variant", enchantID: 4, enchantName: "Observed Green Line", gemIDs: [5], equipmentSets: ["Travel"], equipmentSetsState: "OBSERVED" }, "2": { itemID: 111, itemString: "item:111:0", count: 1 }, "3": { itemID: 112, name: "Missing exact link", count: 1 } } }] } }, bank: { observedAt: 101, completeness: "unknown", reason: "not visited", data: {} }, equipmentSets: { observedAt: 100, completeness: "complete", data: { state: "OBSERVED", sets: [{ setID: 7, name: "Travel", icon: 135637, isEquipped: true, itemLocations: [{ itemID: 999 }] }] } }, itemMetadata: {} };
 
 test("Forever structured sidecar is isolated by version, identity, profile, and export timestamp", () => {
   assert.ok(normalizeForeverStructuredObservation(sidecar, "forever", "Hero", "Hallo", 99));
@@ -58,6 +58,14 @@ test("Forever observation preserves exact variants and keeps evaluation claims U
   assert.equal(view.equipment.items[0]?.provenance, "OBSERVED");
   assert.equal(view.carried?.items?.[0]?.itemRef, "item:999:4:5", "structured bag rows stay paired with the structured bag timestamp");
   assert.equal(view.carried?.items?.[0]?.quantity, 2);
+  assert.equal((view.equipment.items[0] as any)?.isEnchanted, true, "equipped item enchant field is exposed to gear readers");
+  assert.equal((view.equipment.items[0] as any)?.equipmentSets?.[0], "Travel", "equipped item set names are exposed to gear readers");
+  assert.equal(view.carried?.items?.[0]?.enchantID, 4, "bag enchant ID is retained");
+  assert.equal(view.carried?.items?.[0]?.enchantName, "Observed Green Line", "only observed enchant name is surfaced");
+  assert.equal(view.carried?.items?.[0]?.isEnchanted, true);
+  assert.equal(view.carried?.items?.[1]?.isEnchanted, false, "present zero enchant ID means explicitly unenchanted");
+  assert.equal(view.carried?.items?.[2]?.isEnchanted, "UNKNOWN", "missing itemString means enchant state is UNKNOWN");
+  assert.equal((view.equipmentSets as any).sets[0].name, "Travel", "equipment-set observations reach gear read tools");
   assert.equal(view.evaluationCandidates.state, "UNKNOWN");
   assert.equal(view.evaluationCandidates.items.length, 0);
   assert.ok(view.evaluationCandidates.unclassifiedItems.some((item) => item.itemRef === "item:999:4:5"), "an observed carried variant with no item API record is retained as an unclassified evidence gap");
