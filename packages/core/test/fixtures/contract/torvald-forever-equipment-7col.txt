@@ -1,0 +1,22 @@
+[EQUIPMENT]
+State: OBSERVED; complete; observed=1789000000
+slot	itemRef	name	ilvl	requiredLevel	enchant	effectiveStats
+1:Head	item:6267:15:...	?	?	?	15	?
+2:Neck	EMPTY
+3:Shoulder	EMPTY
+4:Shirt	EMPTY
+5:Chest	EMPTY
+6:Waist	EMPTY
+7:Legs	EMPTY
+8:Feet	EMPTY
+9:Wrist	EMPTY
+10:Hands	EMPTY
+11:Finger 1	item:281322:15:...	?	?	?	15	?
+12:Finger 2	EMPTY
+13:Trinket 1	EMPTY
+14:Trinket 2	EMPTY
+15:Back	EMPTY
+16:Main Hand	item:3152:15:...	?	?	?	15	?
+17:Off Hand	EMPTY
+18:Ranged	EMPTY
+19:Tabard	EMPTY

@@ -1,10 +1,9 @@
 // Deterministic line/section parser for WOWSYNC v1 exports.
 //
 // This mirrors WoWSyncRender.lua exactly (see GearExport/WoWSyncRender.lua
-// and WOWSYNC_SCHEMA.md): the export is a fixed sequence of sections, each
-// with a known field order. We parse by walking known line shapes rather
-// than pattern-matching loosely, so malformed input fails with a specific,
-// actionable error instead of silently producing wrong data.
+// and WOWSYNC_SCHEMA.md): the export is a fixed sequence of sections with
+// named headers. We walk known line shapes and map evolving row layouts by
+// header, so malformed input fails clearly instead of silently shifting data.
 
 import { fieldNumber, fieldValue } from "./escape.ts";
 import { isForeverClient } from "./foreverProfile.ts";
@@ -292,13 +291,23 @@ function parseEquipment(lines: string[]): EquipmentSection {
   let i = next;
   if (status.state === "UNKNOWN") return { status, slots: [] };
 
-  splitRow(lines[i] ?? fail("Missing equipment header row"), 6, "[EQUIPMENT] header");
+  const headerLine = lines[i] ?? fail("Missing equipment header row");
+  const headers = splitFields(headerLine);
+  const required = ["slot", "itemRef", "name", "ilvl", "requiredLevel"];
+  if (headers.length < 5 || headers.length > 7 || new Set(headers).size !== headers.length
+    || headers.some((header) => !required.includes(header) && header !== "enchant" && header !== "effectiveStats")
+    || required.some((header) => !headers.includes(header))) {
+    fail("Malformed [EQUIPMENT] header: expected named columns slot, itemRef, name, ilvl, requiredLevel, [enchant,] effectiveStats", headerLine);
+  }
+  const column = Object.fromEntries(headers.map((header, index) => [header, index])) as Record<string, number>;
   i++;
 
   const slots: EquipmentSection["slots"] = [];
   while (i < lines.length) {
-    const cols = splitFields(lines[i]);
-    const [slotLabel, itemRef, name, ilvl, reqLevel, stats] = cols;
+    const cols = splitRow(lines[i], headers.length, "equipment row");
+    const value = (key: string) => cols[column[key]];
+    const slotLabel = value("slot");
+    const itemRef = value("itemRef");
     const sep = slotLabel.indexOf(":");
     if (sep < 0) fail("Malformed equipment slot label (expected \"<n>:<SlotName>\")", lines[i]);
     const slot = Number(slotLabel.slice(0, sep));
@@ -311,10 +320,12 @@ function parseEquipment(lines: string[]): EquipmentSection {
         slotName,
         empty: false,
         itemRef: fieldValue(itemRef),
-        name: fieldValue(name),
-        itemLevel: fieldValue(ilvl),
-        requiredLevel: fieldValue(reqLevel),
-        effectiveStats: fieldValue(stats),
+        name: fieldValue(value("name")),
+        itemLevel: fieldValue(value("ilvl")),
+        requiredLevel: fieldValue(value("requiredLevel")),
+        enchant: column.enchant === undefined || value("enchant") === undefined || value("enchant") === "?" || value("enchant") === ""
+          ? "UNKNOWN" : fieldValue(value("enchant")) ?? "UNKNOWN",
+        effectiveStats: fieldValue(value("effectiveStats")),
       });
     }
     i++;
@@ -647,19 +658,33 @@ function parseTrainer(lines: string[]): TrainerSection {
     const filters = fieldValue(get("Filters: "));
     const moneyAtVisitCopper = fieldNumber(get("MoneyAtVisitCopper: "));
 
-    splitRow(lines[i] ?? fail("Missing trainer services header row"), 7, "trainer services header");
+    const headerLine = lines[i] ?? fail("Missing trainer services header row");
+    const headers = splitFields(headerLine);
+    const baseHeaders = ["spellID", "ability", "rank", "statusAtVisit", "requiredLevel", "costCopper", "requirementsAtVisit"];
+    const currentHeaders = [...baseHeaders.slice(0, 6), "category", "type", "requirementsAtVisit"];
+    if ((headers.length !== baseHeaders.length && headers.length !== currentHeaders.length)
+      || new Set(headers).size !== headers.length
+      || headers.some((header) => !baseHeaders.includes(header) && header !== "category" && header !== "type")
+      || baseHeaders.some((header) => !headers.includes(header))
+      || (headers.includes("category") !== headers.includes("type"))) {
+      fail("Malformed trainer services header: expected the legacy 7-column or current 9-column named header", headerLine);
+    }
+    const column = Object.fromEntries(headers.map((header, index) => [header, index])) as Record<string, number>;
     i++;
     const services: TrainerCategorySnapshot["services"] = [];
     while (i < lines.length && !lines[i].startsWith("[")) {
-      const cols = splitRow(lines[i], 7, "trainer service row");
+      const cols = splitRow(lines[i], headers.length, "trainer service row");
+      const value = (key: string) => cols[column[key]];
       services.push({
-        spellID: fieldValue(cols[0]),
-        ability: fieldValue(cols[1]),
-        rank: cols[2] === "-" ? undefined : fieldValue(cols[2]),
-        statusAtVisit: fieldValue(cols[3]),
-        requiredLevel: fieldValue(cols[4]),
-        costCopper: fieldNumber(cols[5]),
-        requirementsAtVisit: cols[6] === "-" ? undefined : fieldValue(cols[6]),
+        spellID: fieldValue(value("spellID")),
+        ability: fieldValue(value("ability")),
+        rank: value("rank") === "-" ? undefined : fieldValue(value("rank")),
+        statusAtVisit: fieldValue(value("statusAtVisit")),
+        requiredLevel: fieldValue(value("requiredLevel")),
+        costCopper: fieldNumber(value("costCopper")),
+        category: column.category === undefined ? undefined : fieldValue(value("category")),
+        type: column.type === undefined ? undefined : fieldValue(value("type")),
+        requirementsAtVisit: value("requirementsAtVisit") === "-" ? undefined : fieldValue(value("requirementsAtVisit")),
       });
       i++;
     }
