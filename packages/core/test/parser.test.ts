@@ -236,6 +236,62 @@ test("an unvisited trainer renders UNKNOWN with a reason", () => {
   assert.equal(snapshot.trainer.categories.length, 0);
 });
 
+test("GearExport Forever trainer's named 9-column service rows and legacy 7-column rows parse by header", () => {
+  const legacy = parseWowSyncExport(buildWowSyncExport({ trainer: { categories: [{ category: "PROF_LEATHERWORKING", name: "Gretta Finespindle", trainerType: "profession", services: [{ ability: "Cured Light Hide", status: "available", requiredLevel: 35, cost: 50 }] }] } }));
+  assert.equal(legacy.trainer.categories[0]?.services[0]?.costCopper, 50);
+  assert.equal(legacy.trainer.categories[0]?.services[0]?.category, undefined);
+
+  const source = buildWowSyncExport({ character: { name: "Torvald", clientFamily: "Forever" }, trainer: { categories: [{ category: "PROF_LEATHERWORKING", name: "Gretta Finespindle", trainerType: "profession", services: [{ ability: "Embossed Leather Gloves", status: "available", requiredLevel: 40, cost: 150 }] }] } });
+  const current = source
+    .replace("spellID\tability\trank\tstatusAtVisit\trequiredLevel\tcostCopper\trequirementsAtVisit", "ability\tcategory\tspellID\ttype\tstatusAtVisit\tcostCopper\trequiredLevel\trequirementsAtVisit\trank")
+    .replace("?\tEmbossed Leather Gloves\t-\tavailable\t40\t150\t-", "Embossed Leather Gloves\tPROF_LEATHERWORKING\t?\tprofession\tavailable\t150\t40\t-\t-")
+    .replace("Filters: available=yes; unavailable=yes; known=yes", "Filters: available=?; unavailable=?; known=?");
+  const parsed = parseWowSyncExport(current).trainer.categories[0]!;
+  assert.equal(parsed.services[0]?.ability, "Embossed Leather Gloves");
+  assert.equal(parsed.services[0]?.requiredLevel, "40");
+  assert.equal(parsed.services[0]?.costCopper, 150);
+  assert.equal(parsed.services[0]?.category, "PROF_LEATHERWORKING");
+  assert.equal(parsed.services[0]?.type, "profession");
+  assert.equal(parsed.filters, "available=?; unavailable=?; known=?");
+});
+
+test("GearExport Forever 7-column Torvald equipment fixture and legacy equipment contract parse", () => {
+  const currentSection = readFileSync(new URL("./fixtures/contract/torvald-forever-equipment-7col.txt", import.meta.url), "utf8").trim();
+  const base = buildWowSyncExport({ character: { name: "Torvald", realm: "Forever", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70338" } });
+  const equipmentStart = base.indexOf("[EQUIPMENT]");
+  const bagsStart = base.indexOf("[BAGS]");
+  assert.ok(equipmentStart >= 0 && bagsStart > equipmentStart);
+  const raw = `${base.slice(0, equipmentStart)}${currentSection}\n\n${base.slice(bagsStart)}`;
+  const parsed = parseWowSyncExport(raw);
+  const bySlot = new Map(parsed.equipment.slots.map((slot) => [slot.slot, slot]));
+  for (const [slotNumber, itemRef] of [[1, "item:6267:15:..."], [11, "item:281322:15:..."], [16, "item:3152:15:..."]] as const) {
+    assert.equal(bySlot.get(slotNumber)?.itemRef, itemRef);
+    assert.equal(bySlot.get(slotNumber)?.enchant, "15");
+    assert.equal(bySlot.get(slotNumber)?.effectiveStats, undefined);
+  }
+  const unknownEnchantSection = currentSection.replace("1:Head\titem:6267:15:...\t?\t?\t?\t15\t?", "1:Head\titem:6267:15:...\t?\t?\t?\t?\t?");
+  const unknownEnchant = parseWowSyncExport(`${base.slice(0, equipmentStart)}${unknownEnchantSection}\n\n${base.slice(bagsStart)}`).equipment.slots[0]!;
+  assert.equal(unknownEnchant.enchant, "UNKNOWN", "? remains UNKNOWN and is never rewritten to empty or zero");
+  const unenchantedSection = currentSection.replace("1:Head\titem:6267:15:...\t?\t?\t?\t15\t?", "1:Head\titem:6267:0:...\t?\t?\t?\t-\t?");
+  const unenchanted = parseWowSyncExport(`${base.slice(0, equipmentStart)}${unenchantedSection}\n\n${base.slice(bagsStart)}`).equipment.slots[0]!;
+  assert.equal(unenchanted.enchant, "-", "known no-enchant remains the renderer's explicit dash, not zero or empty");
+
+  const legacy = parseWowSyncExport(buildWowSyncExport({ equipment: { slots: [{ slot: 5, slotName: "Chest", itemRef: "item:999:0", name: "Legacy chest", itemLevel: 10, requiredLevel: 1, effectiveStats: "Armor=5" }] } }));
+  const chest = legacy.equipment.slots.find((slot) => slot.slot === 5)!;
+  assert.equal(chest.name, "Legacy chest");
+  assert.equal(chest.effectiveStats, "Armor=5");
+  assert.equal(chest.enchant, "UNKNOWN", "legacy missing enchant is explicit UNKNOWN, never empty or zero");
+
+  const reorderedSection = currentSection
+    .replace("slot\titemRef\tname\tilvl\trequiredLevel\tenchant\teffectiveStats", "slot\tname\tenchant\titemRef\teffectiveStats\trequiredLevel\tilvl")
+    .replace("1:Head\titem:6267:15:...\t?\t?\t?\t15\t?", "1:Head\t?\t15\titem:6267:15:...\t?\t?\t?");
+  const reorderedRaw = `${base.slice(0, equipmentStart)}${reorderedSection}\n\n${base.slice(bagsStart)}`;
+  const reordered = parseWowSyncExport(reorderedRaw).equipment.slots[0]!;
+  assert.equal(reordered.itemRef, "item:6267:15:...");
+  assert.equal(reordered.enchant, "15");
+  assert.equal(reordered.itemLevel, undefined);
+});
+
 test("multiple independent trainer categories are preserved without collapsing", () => {
   const raw = buildWowSyncExport({
     trainer: {

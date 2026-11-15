@@ -72,6 +72,8 @@ export interface EquipmentSlot {
   nameSource?: string;
   itemLevel?: string;
   requiredLevel?: string;
+  /** Rendered WOWSYNC enchant display: UNKNOWN for ?, - for known none, otherwise the addon value. */
+  enchant?: string;
   effectiveStats?: string;
 }
 
@@ -205,6 +207,8 @@ export interface TrainerService {
   statusAtVisit?: string;
   requiredLevel?: string;
   costCopper?: number;
+  category?: string;
+  type?: string;
   requirementsAtVisit?: string;
 }
 

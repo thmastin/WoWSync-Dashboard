@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildForeverGearObservation, normalizeForeverStructuredObservation, type ForeverStructuredObservation } from "../src/foreverGearObservation.ts";
 import type { EquipmentSection, InventorySection } from "../src/types.ts";
 
-const equipment: EquipmentSection = { status: { state: "OBSERVED", observedAt: 100 }, slots: [{ slot: 16, slotName: "Main Hand", empty: false, itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade" }] };
+const equipment: EquipmentSection = { status: { state: "OBSERVED", observedAt: 100 }, slots: [{ slot: 16, slotName: "Main Hand", empty: false, itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade", enchant: "15" }] };
 const bags: InventorySection = { status: { state: "OBSERVED", observedAt: 101 }, containers: [], itemsKnownEmpty: false, items: [{ itemRef: "item:123:0:0:0:0:0:0:0", name: "Test Blade", qty: 1 }, { itemRef: "item:456:0:0:0:0:0:0:0:77:0:0:0", name: "Variant", qty: 2 }] };
 const bank: InventorySection = { status: { state: "UNKNOWN", reason: "Not captured" }, containers: [], itemsKnownEmpty: false, items: [] };
 const identity = { version: "forever" as const, identityKey: "forever::hallo::hero", name: "Hero", realm: "Hallo" };
@@ -59,6 +59,8 @@ test("Forever observation preserves exact variants and keeps evaluation claims U
   assert.equal(view.carried?.items?.[0]?.itemRef, "item:999:4:5", "structured bag rows stay paired with the structured bag timestamp");
   assert.equal(view.carried?.items?.[0]?.quantity, 2);
   assert.equal((view.equipment.items[0] as any)?.isEnchanted, true, "equipped item enchant field is exposed to gear readers");
+  assert.equal((view.equipment.items[0] as any)?.enchantID, 4, "the exact structured itemString supplies the canonical enchant ID");
+  assert.equal((view.equipment.items[0] as any)?.enchant, "4", "structured enchant evidence wins over a conflicting text projection");
   assert.equal((view.equipment.items[0] as any)?.equipmentSets?.[0], "Travel", "equipped item set names are exposed to gear readers");
   assert.equal(view.carried?.items?.[0]?.enchantID, 4, "bag enchant ID is retained");
   assert.equal(view.carried?.items?.[0]?.enchantName, "Observed Green Line", "only observed enchant name is surfaced");
@@ -93,6 +95,8 @@ test("Forever carried inventory exposes classified non-gear buckets and an UNKNO
 test("missing and stale structured observations remain explicit", () => {
   const missing = buildForeverGearObservation({ identity, snapshotId: 2, importedAt: 1000, equipment, bags, bank, now: 10_000_000 });
   assert.equal(missing.equipment.source, "WOWSYNC v1 equipment");
+  assert.equal(missing.equipment.items[0]?.enchant, "15", "text enchant remains the fallback when structured evidence is absent");
+  assert.equal(missing.equipment.items[0]?.isEnchanted, "UNKNOWN", "the display value alone does not upgrade tri-state enchant evidence");
   assert.equal(missing.equipment.freshness, "stale");
   assert.equal(missing.metadataSource, "UNKNOWN");
   assert.equal(missing.evaluationCandidates.state, "UNKNOWN");
