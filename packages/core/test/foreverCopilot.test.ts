@@ -308,8 +308,49 @@ test("missing Forever trainer evidence keeps the trainer read UNKNOWN", () => {
     if (read.status !== "FOUND") return;
     assert.equal(read.value.data?.sectionState, "UNKNOWN");
     assert.equal(read.value.provenance.state, "UNKNOWN");
-    assert.deepEqual(read.value.data?.categories, []);
-    assert.deepEqual(read.value.data?.services, []);
+    assert.equal(read.value.data?.categories, undefined, "UNKNOWN has no fabricated empty category list");
+    assert.equal(read.value.data?.services, undefined, "UNKNOWN has no fabricated zero-service result");
+    assert.equal(read.value.data?.totalCount, undefined, "UNKNOWN has no zero count");
+  } finally { store.close(); }
+});
+
+test("structured Forever trainer sidecar returns OBSERVED leatherworking and class visits", () => {
+  const generatedAt = NOW;
+  const { store } = stable([], (target) => {
+    const text = buildWowSyncExport({ generatedAt, character: { name: "Torvald Oldbeard", realm: "Forever Test", clientFamily: "Forever", clientVersion: "1.60.1", clientBuild: "70291", interface: "16001" } });
+    target.importSnapshot(text, { foreverGearObservation: {
+      clientProfile: "Forever:1.60.1:70291:16001", name: "Torvald Oldbeard", realm: "Forever Test", generatedAt,
+      trainer: { observedAt: generatedAt, completeness: "complete", data: { snapshots: {
+        "Gretta Finespindle": { capturedAt: generatedAt, name: "Gretta Finespindle", type: "profession", professionName: "Leatherworking", services: [
+          { name: "Embossed Leather Gloves", rank: "", status: "available", costCopper: 150, requiredSkill: { name: "Leatherworking", rank: 75 } },
+          { name: "Cured Light Hide", rank: "", status: "available", costCopper: 50, requiredSkill: { name: "Leatherworking", rank: 100 } },
+        ] },
+        "Druid Trainer": { capturedAt: generatedAt - 10, name: "Druid Trainer", type: "class", className: "Druid", services: [
+          { name: "Bear Form", status: "used", costCopper: 1000 },
+        ] },
+      } } },
+    } });
+  });
+  try {
+    const read = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Torvald Oldbeard", realm: "Forever Test", category: "Leatherworking" });
+    assert.equal(read.status, "FOUND");
+    if (read.status !== "FOUND") return;
+    const data = read.value.data!;
+    assert.equal(data.sectionState, "OBSERVED");
+    assert.equal(data.lastSeen, generatedAt);
+    assert.equal(read.value.provenance.state, "OBSERVED");
+    assert.equal(data.categories?.[0]?.trainerName, "Gretta Finespindle");
+    assert.equal(data.categories?.[0]?.category, "Leatherworking");
+    assert.equal(data.totalCount, 2);
+    assert.deepEqual(data.services?.map(({ ability, costCopper, statusAtVisit }) => [ability, costCopper, statusAtVisit]), [
+      ["Embossed Leather Gloves", 150, "available"], ["Cured Light Hide", 50, "available"],
+    ]);
+    const classRead = new DashboardReadModel(store, () => NOW).getCharacterTrainer({ version: "forever", name: "Torvald Oldbeard", realm: "Forever Test", category: "CLASS" });
+    assert.equal(classRead.status, "FOUND");
+    if (classRead.status === "FOUND") {
+      assert.equal(classRead.value.data?.categories?.[0]?.trainerName, "Druid Trainer");
+      assert.equal(classRead.value.data?.services?.[0]?.ability, "Bear Form");
+    }
   } finally { store.close(); }
 });
 
